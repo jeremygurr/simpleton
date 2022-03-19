@@ -43,5 +43,6 @@ ENV PAGER less
 COPY ./ /repo/simpleton/
 
 RUN ln -sf /repo/simpleton/sudoers /etc/
+RUN ln -sf /repo/simpleton/shell-start.sh /etc/profile.d/
 
 CMD /bin/bash /repo/simpleton/init
