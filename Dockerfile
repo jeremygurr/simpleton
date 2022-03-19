@@ -40,8 +40,8 @@ RUN chmod a+rwx /etc
 ENV HOME /home
 ENV PAGER less
 
-RUN ln -sf /repo/simpleton/sudoers /etc/
-
 COPY ./ /repo/simpleton/
+
+RUN ln -sf /repo/simpleton/sudoers /etc/
 
 CMD /bin/bash /repo/simpleton/init
