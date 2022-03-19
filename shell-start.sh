@@ -1,6 +1,8 @@
 export SIMPLETON_HOME=/repo/simpleton
 export PATH=$SIMPLETON_HOME/bin:$PATH
 
+alias x=simpleton-execute
+
 set -o vi
 set +H
 export SHELL="/bin/bash"
