@@ -35,8 +35,6 @@ RUN apk add \
   yq \
   yq-doc 
 
-COPY ./ /repo/simpleton/
-
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
 RUN chmod a+rwx /etc
 ENV HOME /home
@@ -44,4 +42,6 @@ ENV PAGER less
 
 RUN ln -sf /repo/simpleton/sudoers /etc/
 
-CMD /repo/simpleton/init
+COPY ./ /repo/simpleton/
+
+CMD /bin/bash /repo/simpleton/init
