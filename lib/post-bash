@@ -1067,12 +1067,6 @@ reserve_tmp_file() {
   eval "cleanup_on_exit+='rm ${internal_tmp_file}* &>/dev/null || true;'"
 }
 
-source_context() {
-  local f=$1 parent=${f%/*}
-  [ "${#parent}" -gt 1 ] && source_context "$parent"
-  [ -f "$f/context" ] && source "$f/context"
-}
-
 debug_start() {
   debug_dir=$PWD
   debug_display=${debug_display:-none}
@@ -1123,6 +1117,32 @@ get_overlap() {
     [ "${1:$i:1}" != "${2:$i:1}" ] && break
     result+=${1:$i:1}
   done
+}
+
+load_extensions() {
+  local extension_folder f=$1
+  if [ -d "$f/extensions" ]; then
+    for extension_folder in $(find "$f/extensions" -mindepth 1 -maxdepth 1 -type d | sort); do
+      [ "$extension_folder/handlers" ] && handler_path=( "$extension_folder/handlers" "${handler_path[@]}" )
+      [ "$extension_folder/archetypes" ] && archetype_path=( "$extension_folder/archetypes" "${archetype_path[@]}" )
+    done
+  fi
+}
+
+init_context() {
+  handler_path=( $SIMPLETON_HOME/handlers )
+  archetype_path=( $SIMPLETON_HOME/archetypes )
+  load_extensions "$SIMPLETON_HOME"
+}
+
+load_context() {
+  local f=$1 parent=${f%/*}
+  [ "${#parent}" -gt 1 ] && load_context "$parent"
+  load_extensions "$f"
+  if [ -d "$f/handlers" ]; then
+    handler_path=( "$f/handlers" "${handler_path[@]}" )
+  fi
+  [ -f "$f/context" ] && source "$f/context"
 }
 
 if [ "${debug:-f}" == t -o -n "${debug_search:-}" ]; then
