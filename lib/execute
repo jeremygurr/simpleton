@@ -1,58 +1,121 @@
 #!/bin/bash
 
-# usage: execute {target}
-#   executes the given target, which is a full path to a folder
+# usage: execute {subject}
+#   executes the given subject, which is a full path to a folder
 execute() {
 
-local target=$1
-if [ ! "$target" ]; then
-  target=$PWD
+local subject=$1
+if [ ! "$subject" ]; then
+  subject=$PWD
 fi
 
-trace "Executing target: $target"
+trace 0 "Executing subject: $subject"
 
 begin_function
 
-if [ ! -d "$target" ]; then
-  err "Target doesn't exist, or isn't a directory: $target"
+if [ ! -d "$subject" ]; then
+  err "Subject doesn't exist, or isn't a directory: $subject"
   fail
 fi
 
-if [ ! "$handler_path" ]; then
-  handler_path=( )
-  local remaining_path=$target
-  begin_while [ "${#remaining_path}" -gt 1 ]; doo
-    local h="$remaining_path/.simpleton/handlers"
-    if [ -d "$h" ]; then
-      handler_path+=( "$h" )
-    fi
-    remaining_path=${remaining_path%/*}
-  end_while
-  handler_path+=( $SIMPLETON_HOME/handlers )
+trace -5 "Sourcing context files"
+source_context "$subject" || fail
+
+trace -5 "Gathering handlers"
+get_handler_path
+
+trace -5 "Checking if subject needs to be executed"
+is_refresh_needed
+if [ $refresh_needed == f ]; then
+  trace 0 "Refresh not needed"
+  succeed
 fi
 
 local file_or_folder handler_to_try handler_path_to_try handler_found handler_name
-begin_for file_or_folder in $(find "$target" -mindepth 1 -maxdepth 1 -not -name ".*" | sort); doo
 
-  handler_found=
+trace 0 "Processing contents of $subject folder"
 
-  begin_for handler_path_to_try in "${handler_path[@]}"; doo
-    begin_for handler_to_try in $(find "${handler_path_to_try}" -mindepth 1 -maxdepth 1 -not -name ".*" -type f); doo
-      handler_name=${handler_to_try##*/}
-      if [ "${file_or_folder%$handler_name}" != "$file_or_folder" ]; then
-        handler_found=$handler_to_try
-        break 2
-      fi
-    end_for
-  end_for
+begin_for file_or_folder in $(find "$subject" -mindepth 1 -maxdepth 1 -not -name ".*" | sort); doo
+
+  trace 0 "Figuring out what to do with $file_or_folder"
+  find_handler || fail
 
   if [ "$handler_found" ]; then
-  else
+    trace -5 "Executing handler"
+    source "$handler_found" || fail
+    handle "$file_or_folder" || fail
+  else # no handler found
+    if [ -d "$file_or_folder" ]; then
+      execute "$file_or_folder" || fail
+    else
+      trace -5 "Ignoring file $file_or_folder"
+    fi
   fi
 
 end_for
 
+trace 0 "Subject executed successfully"
+touch "$subject/out"
+
 end_function
 handle_return
 
+}
+
+find_handler() {
+handler_found=
+for handler_path_to_try in "${handler_path[@]}"; do
+  for handler_to_try in $(find "${handler_path_to_try}" -mindepth 1 -maxdepth 1 -not -name ".*" -type f); do
+    handler_name=${handler_to_try##*/}
+    if [ "${file_or_folder%$handler_name}" != "$file_or_folder" ]; then
+      handler_found=$handler_to_try
+      trace -5 "Handler found: $handler_found"
+      break 2
+    fi
+  done
+done
+}
+
+get_handler_path() {
+if [ ! "$handler_path" ]; then
+  handler_path=( )
+  local remaining_path=$subject h
+  while [ "${#remaining_path}" -gt 1 ]; do
+    h="$remaining_path/handlers"
+    if [ -d "$h" ]; then
+      handler_path+=( "$h" )
+    fi
+    remaining_path=${remaining_path%/*}
+  done
+  handler_path+=( $SIMPLETON_HOME/handlers )
+fi
+}
+
+is_refresh_needed() {
+if [ ! -e "$subject/out" ]; then 
+  refresh_needed=t
+  return 0
+fi
+
+local newer_file_found=$(find "$subject" -mindepth 1 -not -name out -not -name .git -newer "$subject/out" -print -quit)
+if [ "$newer_file_found" ]; then 
+  trace -5 "Found file that is newer than out: $newer_file_found"
+  refresh_needed=t
+  return 0
+fi
+
+is_subject_fresh || return 1
+if [ $subject_fresh == f ]; then
+  trace -5 "Subject is not fresh enough"
+  refresh_needed=t
+  return 0
+fi
+
+refresh_needed=f
+return 0
+}
+
+# Intended to be overridden by subjects which have live external dependencies
+is_subject_fresh() {
+subject_fresh=t
 }
