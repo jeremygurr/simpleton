@@ -11,6 +11,8 @@ RUN apk add \
   bash-doc \
   bind-tools \
   curl \
+  findutils \
+  findutils-doc \
   git \
   git-doc \
   grep \

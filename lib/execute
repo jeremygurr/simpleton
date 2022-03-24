@@ -13,44 +13,24 @@ trace 0 "Executing subject: $subject"
 
 begin_function
 
-if [ ! -d "$subject" ]; then
-  err "Subject doesn't exist, or isn't a directory: $subject"
-  fail
-fi
+get_subject_type || fail
 
 trace -5 "Sourcing context files"
 init_context || fail
-load_context "$subject" || fail
+load_context "$subject_folder" || fail
 
-trace -5 "Checking if subject needs to be executed"
-is_refresh_needed
-if [ $refresh_needed == f ]; then
-  trace 0 "Refresh not needed"
-  succeed
-fi
+if [ $subject_type == folder ]; then
 
-local file_or_folder handler_to_try handler_path_to_try handler_found handler_name
-
-trace 0 "Processing contents of $subject folder"
-
-begin_for file_or_folder in $(find "$subject" -mindepth 1 -maxdepth 1 -not -name ".*" | sort); doo
-
-  trace 0 "Figuring out what to do with $file_or_folder"
-  find_handler || fail
-
-  if [ "$handler_found" ]; then
-    trace -5 "Executing handler"
-    source "$handler_found" || fail
-    handle "$file_or_folder" || fail
-  else # no handler found
-    if [ -d "$file_or_folder" ]; then
-      execute "$file_or_folder" || fail
-    else
-      trace -5 "Ignoring file $file_or_folder"
-    fi
+  trace -5 "Checking if subject needs to be executed"
+  is_refresh_needed "$subject_folder" || fail
+  if [ $refresh_needed == f ]; then
+    trace 0 "Refresh not needed"
+    succeed
   fi
 
-end_for
+fi
+
+deal_with "$subject" || fail
 
 trace 0 "Subject executed successfully"
 touch "$subject/out"
@@ -60,7 +40,58 @@ handle_return
 
 }
 
+get_subject_type() {
+begin_function
+local subject_type=folder
+local subject_folder=$subject
+if [ ! -d "$subject" ]; then
+  subject_folder="${subject%/*}"
+  if  [ ! -d "$subject_folder" ]; then
+    err "Subject doesn't exist: $subject"
+    fail
+  else
+    if [ -f "$subject" ]; then
+      subject_type=file
+    else
+      subject_type=implicit
+    fi
+  fi
+fi
+end_function
+handle_return
+}
+
+deal_with() {
+
+local file_or_folder handler_to_try handler_path_to_try handler_found handler_name
+trace 0 "Figuring out what to do with $file_or_folder"
+
+begin_function
+
+find_handler "$file_or_folder" || fail
+
+if [ "$handler_found" ]; then
+  trace -5 "Executing handler $handler_found"
+  source "$handler_found" || fail
+  handle "$file_or_folder" || fail
+else # no handler found
+  if [ -d "$file_or_folder" ]; then
+    trace 0 "Processing contents of $file_or_folder folder"
+    begin_for file_or_folder in $(find "$subject" -mindepth 1 -maxdepth 1 -not -name ".*" | sort); doo
+      execute "$file_or_folder" || fail
+    end_for
+  else
+    trace -5 "Ignoring file $file_or_folder"
+  fi
+fi
+
+end_function
+handle_return
+
+}
+
 find_handler() {
+local file_or_folder=$1
 handler_found=
 for handler_path_to_try in "${handler_path[@]}"; do
   for handler_to_try in $(find "${handler_path_to_try}" -mindepth 1 -maxdepth 1 -not -name ".*" -type f); do
@@ -90,19 +121,20 @@ fi
 }
 
 is_refresh_needed() {
-if [ ! -e "$subject/out" ]; then 
+local subject_folder=$1
+if [ ! -e "$subject_folder/out" ]; then 
   refresh_needed=t
   return 0
 fi
 
-local newer_file_found=$(find "$subject" -mindepth 1 -not -name out -not -name .git -newer "$subject/out" -print -quit)
+local newer_file_found=$(find "$subject_folder" -mindepth 1 -not -name out -not -name .git -newer "$subject_folder/out" -print -quit)
 if [ "$newer_file_found" ]; then 
   trace -5 "Found file that is newer than out: $newer_file_found"
   refresh_needed=t
   return 0
 fi
 
-is_subject_fresh || return 1
+is_subject_fresh "$subject_folder" || return 1
 if [ $subject_fresh == f ]; then
   trace -5 "Subject is not fresh enough"
   refresh_needed=t
