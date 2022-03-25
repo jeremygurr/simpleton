@@ -1,5 +1,5 @@
-export SIMPLETON_HOME=/repo/simpleton
-export PATH=$SIMPLETON_HOME/bin:$PATH
+export SIMPLETON_REPO=/repo/simpleton
+export PATH=$SIMPLETON_REPO/bin:$PATH
 
 alias x=simpleton-execute
 alias vi=vim
