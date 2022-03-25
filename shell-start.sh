@@ -3,6 +3,7 @@ export PATH=$SIMPLETON_HOME/bin:$PATH
 
 alias x=simpleton-execute
 alias vi=vim
+alias u='cd ..'
 
 set -o vi
 set +H
