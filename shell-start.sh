@@ -2,6 +2,7 @@ export SIMPLETON_HOME=/repo/simpleton
 export PATH=$SIMPLETON_HOME/bin:$PATH
 
 alias x=simpleton-execute
+alias vi=vim
 
 set -o vi
 set +H

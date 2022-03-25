@@ -11,6 +11,7 @@ RUN apk add \
   bash-doc \
   bind-tools \
   curl \
+  curl-doc \
   findutils \
   findutils-doc \
   git \
