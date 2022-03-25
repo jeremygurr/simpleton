@@ -30,6 +30,8 @@ RUN apk add \
   openssl \
   procps \
   procps-doc \
+  source-highlight \
+  source-highlight-doc \
   strace \
   strace-doc \
   sudo \
