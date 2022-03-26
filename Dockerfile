@@ -45,10 +45,9 @@ RUN chmod a+rwx /etc
 ENV HOME /home
 ENV PAGER less
 
-COPY ./ /repo/simpleton/
+RUN ln -sf /work/simpleton/sudoers /etc/
+RUN ln -sf /work/simpleton/shell-start.sh /etc/profile.d/
+RUN ln -sf /work/simpleton/inputrc /etc/inputrc
 
-RUN ln -sf /repo/simpleton/sudoers /etc/
-RUN ln -sf /repo/simpleton/shell-start.sh /etc/profile.d/
-RUN ln -sf /repo/simpleton/inputrc /etc/inputrc
+CMD /bin/bash /work/simpleton/init
 
-CMD /bin/bash /repo/simpleton/init

@@ -1119,12 +1119,17 @@ get_overlap() {
   done
 }
 
+load_extension() {
+  local extension_folder=$1
+  [ -d "$extension_folder/handlers" ] && handler_path=( "$extension_folder/handlers" "${handler_path[@]}" )
+  [ -d "$extension_folder/archetypes" ] && archetype_path=( "$extension_folder/archetypes" "${archetype_path[@]}" )
+}
+
 load_extensions() {
   local extension_folder f=$1
   if [ -d "$f/extensions" ]; then
     for extension_folder in $(find -L "$f/extensions" -mindepth 1 -maxdepth 1 -type d | sort); do
-      [ "$extension_folder/handlers" ] && handler_path=( "$extension_folder/handlers" "${handler_path[@]}" )
-      [ "$extension_folder/archetypes" ] && archetype_path=( "$extension_folder/archetypes" "${archetype_path[@]}" )
+      load_extension "$extension_folder"
     done
   fi
   return 0
@@ -1138,15 +1143,33 @@ init_context() {
 }
 
 load_context() {
+
   local f=$1 
   local parent=${f%/*}
-  [ "${#parent}" -gt 1 ] && load_context "$parent"
+  [ "${#parent}" -gt 1 ] && load_context "$parent" 
   load_extensions "$f"
+
   if [ -d "$f/handlers" ]; then
     handler_path=( "$f/handlers" "${handler_path[@]}" )
   fi
+
+  local extension_folder
+  if [ -f "$f/simpleton-extensions" ]; then
+    for extension_folder in $(<$f/simpleton-extensions); do
+      extension_folder="$SIMPLETON_REPO/../$extension_folder"
+      if [ -d "$extension_folder" ]; then
+        load_extension "$extension_folder" 
+      else
+        err "Missing extension: $extension_folder (required by $f/simpleton-extensions)"
+        return 1
+      fi
+    done
+  fi
+
   [ -f "$f/context" ] && source "$f/context"
+
   return 0
+
 }
 
 if [ "${debug:-f}" == t -o -n "${debug_search:-}" ]; then

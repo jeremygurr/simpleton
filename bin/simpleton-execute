@@ -2,11 +2,16 @@
 set -u
 
 source $SIMPLETON_REPO/lib/pre-bash "$0" "$@"
+set "${real_params[@]}"; shift
 
 optional_var trace           3             # 0 means no tracing output, higher numbers increases verbosity of tracing
 
 source $SIMPLETON_REPO/lib/post-bash
 source $SIMPLETON_REPO/lib/execute
+
+if [ ! "$1" ]; then
+  set "$PWD"
+fi
 
 for subject in "$@"; do
 
@@ -15,17 +20,25 @@ for subject in "$@"; do
       # already an absolute path
       ;;
     *)
-      subject="$PWD/$subject"
-      if [ ! -d "$subject" ]; then
-        err "Subject $subject is not a directory"
-        exit 1
+      subject_folder="$PWD/$subject"
+      subject_file=
+      if [ ! -d "$subject_folder" ]; then
+        subject_folder="${subject_folder%/*}"
+        subject_file="${subject##*/}"
+        if [ ! -d "$subject_folder" ]; then
+          err "Subject $subject is not a directory or is not in a folder"
+          exit 1
+        fi
       fi
-      cd "$subject" || exit 1
-      subject=$PWD
+      cd "$subject_folder" || exit 1
+      subject_folder=$PWD
       cd - || exit 1
+      subject="$subject_folder/$subject_file"
+      subject="${subject%/}"
       ;;
   esac
 
   execute "$subject" || exit 1
 
 done
+

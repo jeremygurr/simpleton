@@ -1,9 +1,12 @@
-export SIMPLETON_REPO=/repo/simpleton
+export SIMPLETON_REPO=/work/simpleton
 export PATH=$SIMPLETON_REPO/bin:$PATH
 
-alias x=simpleton-execute
-alias vi=vim
+alias l='ls -l'
+alias ll='ls -la'
+alias rmr='rm -rf'
 alias u='cd ..'
+alias vi=vim
+alias x=simpleton-execute
 
 set -o vi
 set +H
