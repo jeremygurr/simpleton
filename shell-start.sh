@@ -1,8 +1,8 @@
-export SIMPLETON_REPO=/work/simpleton
 export PATH=$SIMPLETON_REPO/bin:$PATH
 
-alias l='ls -l'
-alias ll='ls -la'
+alias ls='ls --color=auto'
+alias l='ls --color=auto -l'
+alias ll='ls --color=auto -la'
 alias rmr='rm -rf'
 alias u='cd ..'
 alias vi=vim

@@ -40,14 +40,20 @@ RUN apk add \
   yq \
   yq-doc 
 
-RUN adduser -h /home -s /bin/bash -D autouser -u 99999
-RUN chmod a+rwx /etc
 ENV HOME /home
 ENV PAGER less
+ENV SIMPLETON_REPO /simpleton
+ENV SIMPLETON_WORK /work
+ENV REPO_CACHE /home/.m2/repository
 
-RUN ln -sf /work/simpleton/sudoers /etc/
-RUN ln -sf /work/simpleton/shell-start.sh /etc/profile.d/
-RUN ln -sf /work/simpleton/inputrc /etc/inputrc
+RUN adduser -h /home -s /bin/bash -D autouser -u 99999
+RUN chmod a+rwx /etc
+COPY sudoers /etc/
+COPY shell-start.sh /etc/profile.d/
+COPY inputrc /etc/
+RUN chown root /etc/sudoers
+RUN mkdir -p $REPO_CACHE
 
-CMD /bin/bash /work/simpleton/init
+WORKDIR $SIMPLETON_WORK
+CMD /bin/bash $SIMPLETON_REPO/init
 

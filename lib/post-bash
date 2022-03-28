@@ -1,6 +1,9 @@
+#!/bin/bash
+
 # some required defaults
 tmp_folder="${tmp_folder:-/tmp}"
 trace=${trace:-5}
+importance=${importance:-0}
 trace_indent=${trace_indent:-f}
 trace_max=$trace
 trace_force=${trace_force:-f}
@@ -126,8 +129,10 @@ for ((n = 1; n < count; n++)) ; do
 done
 }
 
-alias verbose='trace=$((trace+10))'
-alias terse='trace=$((trace-10))'
+# put these in front of function calls to increase or decreasing importance of their logs
+# ex: verbose do_something_I_want_to_debug "Input1" "Input2"
+alias verbose='importance=$((importance+10))'
+alias terse='importance=$((importance-10))'
 
 # write output to standard error
 #   can be overridden to provide a different behavior
@@ -198,7 +203,8 @@ trace() {
     shift
   done
 
-  local importance=$1; shift
+  local importance=${importance:-0}
+  let importance+=$1; shift
 
   if [ $((trace+importance)) -gt 0 -o $trace_force == t ]; then
     if [ $nonewline == t ]; then
@@ -262,77 +268,76 @@ incomplete() {
   exit 1
 }
 
-# usage: lock {lock name (will be in /var/lock/)} [{max time in seconds to wait for lock}]
+# usage: lock {lock name} [{max time in seconds to wait for lock}]
 # if timeout is not given, then attempt will immediately fail if it can't get the lock right away
 #   otherwise it will keep trying until the timeout is reached or the lock is obtained.
 lock() {
-local location=$1; shift
-local timeout=${1:-}
-local lockfile=/var/lock/$location
 
-trace -5 "Attempting to obtain lock for $location"
+local lockfile=$1; shift
+local timeout=${1:-0}
+
+trace 0 "Attempting to obtain lock for $lockfile"
 begin_function
-  if [ -d $lockfile ]; then
-    out "Lock folder exists already: $lockfile"
+  if [ -d "$lockfile" ]; then
+    trace 0 "Lock folder exists already: $lockfile"
     pid=$(<$lockfile/pid)
     if [ "$pid" == $$ ]; then
       # this process already owns the lock
-      trace -5 "This process already owns the lock, so we are done."
-      break
+      trace 0 "This process already owns the lock, so we are done."
+      succeed
     fi
 
     # check to see if the process is still running
     if [ ! "$pid" ] || ! ps $pid &>/dev/null; then
-      rm -rf $lockfile
-      trace -5 "Removed stale lockfile: $lockfile with pid: $pid"
+      rm -rf "$lockfile" || fail
+      trace 0 "Removed stale lockfile: $lockfile with pid: $pid"
     fi
   fi
 
-  timeleft=$timeout
-  local success
-  while true; do
-    mkdir $lockfile &>/dev/null && success=true
-    if [ "${success:-}" ]; then
+  local timeleft=$timeout
+  local success=f
+
+  begin_while true; doo
+
+    mkdir "$lockfile" &>/dev/null && success=t
+    if [ $success == t ]; then
       echo $$ >$lockfile/pid
-      break
+      eval "cleanup_on_exit+='rm -rf \"${lockfile}\" &>/dev/null || true;'"
+      succeed
     fi
 
-    if [ ! "${timeout:-}" ]; then
-      break
+    sleep 1
+
+    timeleft=$((timeleft-1))
+    if [ $timeout -gt 0 ] && [ $timeleft -lt 0 ]; then
+      trace 0 "Timeout reached. Couldn't obtain the lock in time."
+      fail
     fi
 
-    trace -5 "Failed to obtain lock. Waiting 5 seconds before trying again."
-    sleep 5
-    timeleft=$((timeleft-5))
-    if [ "$timeleft" -lt 0 ]; then
-      trace -5 "Timeout reached. Couldn't obtain the lock in time."
-      break
-    fi
-  done
-
-  if [ ! "${success:-}" ]; then
-    # failed to obtain lock after timeout
-    out "Failed to obtain lock."
-    fail
-  fi
+  end_while
 
 end_function
 
-# lock obtained
-trace -5 "Succeeded in obtaining lock."
+if succeeded; then
+  trace 0 "Succeeded in obtaining lock"
+else
+  trace 5 "Failed to obtain lock"
+fi
+
 handle_return
+
 }
 
-# usage: unlock {lock name (will be in /var/lock/)}
+# usage: unlock {lock name}
 #   should only be used if this process actually owns this lock
 unlock() {
-local location=$1
-if [ ! "$location" ]; then
+local lockfile=$1
+if [ ! "$lockfile" ]; then
   err "Usage: unlock {lock name}"
   exit 1
 fi
 
-rm -rf /var/lock/$location
+rm -rf "$lockfile"
 }
 
 # usage: random {p=number of possibilities}
