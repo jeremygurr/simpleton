@@ -113,6 +113,7 @@ fi
 }
 
 stack_trace() {
+local start_frame=${start_frame:-1}
 set +x
 local count=${#FUNCNAME[*]}
 local p n
@@ -123,7 +124,7 @@ if [ ${tracing_midline:-f} == t ]; then
 fi
 
 echo "Stack trace:" >&$fd_original_err
-for ((n = 1; n < count; n++)) ; do
+for ((n = start_frame; n < count; n++)) ; do
   p=$((n - 1))
   echo "  ${BASH_SOURCE[$n]} ${FUNCNAME[$n]} ${BASH_LINENO[$p]}" >&2
 done
@@ -749,8 +750,10 @@ debug_trap() {
   fi
 
   local display_command=$debug_command
+  local raw_display_command=$display_command
   if [ $debug_step_to_next_line == t -o $debug_long_command == t ] && [ $debug_function != none ]; then
     display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
+    raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
   fi
 
   local debug_c debug_array
@@ -766,7 +769,7 @@ debug_trap() {
     echo -n " $GREEN$debug_function $RESET: $display_command" >&$fd_original_err
 
     debug_long_command=f
-    read -s -n1 debug_c <&4
+    read -s -n1 debug_c <&$fd_original_in
 
     if [ "$debug_c" != l -a "$debug_c" != L ]; then
       debug_list_offset=0
@@ -792,7 +795,7 @@ debug_trap() {
     #else
       case "$debug_c" in
         a)
-          read -p "Name of array variable: " debug_array <&4
+          read -p "Name of array variable: " debug_array <&$fd_original_in
           set +u
           local i size
           eval "size=\${#${debug_array}[*]}"
@@ -816,7 +819,7 @@ debug_trap() {
           debug_long_command=t
           ;;
         d)
-          read -p "Display: " debug_display <&4
+          read -e -p "Display: " debug_display <&$fd_original_in
           set +u
           eval "echo \"[$debug_display]\"" >&$fd_original_err
           set -u
@@ -827,7 +830,7 @@ debug_trap() {
           set -u
           ;;
         e)
-          read -p "Eval: " debug_expression <&4
+          read -p "Eval: " debug_expression <&$fd_original_in
           set +u
           eval "$debug_expression" >&$fd_original_err
           set -u
@@ -838,7 +841,7 @@ debug_trap() {
           set -u
           ;;
         f)
-          read -p "Deep Find: " debug_search <&4
+          read -p "Deep Find: " debug_search <&$fd_original_in
           if [ "${debug_search:-}" ]; then
             debug_search=${debug_search//\\/\\\\}
             debug_search=${debug_search//\$/\\\$}
@@ -873,7 +876,7 @@ debug_trap() {
           debug_max_depth=$((debug_current_depth+1))
           ;;
         j)
-          read -p "Shallow Find: " debug_search <&4
+          read -p "Shallow Find: " debug_search <&$fd_original_in
           if [ "${debug_search:-}" ]; then
             debug_search=${debug_search//\\/\\\\}
             debug_search=${debug_search//\$/\\\$}
@@ -918,10 +921,22 @@ debug_trap() {
           ;;
         p)
           local fixed_command
-          fixed_command=${display_command}
+          fixed_command=${raw_display_command}
           fixed_command=${fixed_command//\\\$/\\\\\$}
           fixed_command=${fixed_command//\$(/\\\$(}
           fixed_command=${fixed_command//\"/\\\"}
+          set +u
+          eval "echo \"$fixed_command\"" >&$fd_original_err
+          set -u
+          ;;
+        P)
+          local fixed_command
+          fixed_command=${raw_display_command}
+          fixed_command=${fixed_command//\\\$/\\\\\$}
+          fixed_command=${fixed_command//\"/\\\"}
+          fixed_command=${fixed_command//\$/\\\$}
+          fixed_command=${fixed_command//\[/\$(\[}
+          fixed_command=${fixed_command//]/] && echo true || echo false)}
           set +u
           eval "echo \"$fixed_command\"" >&$fd_original_err
           set -u
@@ -947,7 +962,7 @@ debug_trap() {
           start_frame=2 stack_trace
           ;;
         w)
-          read -p "Watch: " debug_watch <&4
+          read -p "Watch: " debug_watch <&$fd_original_in
           ;;
         x)
           if [ $debug_expansion == 1 ]; then
@@ -1009,6 +1024,7 @@ debug_trap() {
           echo "N  continue executing until we reach a line later than the current line, completing loops if needed" >&$fd_original_err
           echo "o  step out from the current function" >&$fd_original_err
           echo "p  print evaluated variables" >&$fd_original_err
+          echo "P  print evaluated conditional tests" >&$fd_original_err
           echo "q  quit: exit the program entirely" >&$fd_original_err
           echo "r  rewind: go back to the start of the last looping / try block" >&$fd_original_err
           echo "s  execute next small statement, even if multiple statements are on a line," >&$fd_original_err
@@ -1064,9 +1080,9 @@ reserve_tmp_file() {
   local var=$1; shift
   local base=${1:-$var}; shift
   
-  local internal_tmp_file=$(mktemp $tmp_folder/$base.$$.XXXX)
+  local internal_tmp_file=$(mktemp $tmp_folder/$base.$$.XXXXXX)
   eval "$var=$internal_tmp_file"
-  eval "cleanup_on_exit+='rm ${internal_tmp_file}* &>/dev/null || true;'"
+  eval "cleanup_on_exit+='rm ${internal_tmp_file} &>/dev/null || true;'"
 }
 
 debug_start() {
