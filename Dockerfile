@@ -12,6 +12,9 @@ RUN apk add \
   bind-tools \
   curl \
   curl-doc \
+  dnsmasq \
+  dnsmasq-doc \
+  file \
   findutils \
   findutils-doc \
   git \
@@ -21,6 +24,7 @@ RUN apk add \
   jq-doc \
   less \
   less-doc \
+#  man-db \
   man-pages \
   mandoc \
   net-tools \
@@ -36,6 +40,7 @@ RUN apk add \
   strace-doc \
   sudo \
   sudo-doc \
+  tar \
   vim \
   yq \
   yq-doc 
