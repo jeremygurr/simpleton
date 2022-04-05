@@ -1,0 +1,58 @@
+#!/bin/bash
+
+SIMPLETON_EXTENSIONS=${SIMPLETON_EXTENSIONS:-$SIMPLETON_REPO/..}
+
+load_extension() {
+  local extension_folder=$1
+  [ -d "$extension_folder/simpleton-handlers" ] && handler_path=( "$extension_folder/simpleton-handlers" "${handler_path[@]}" )
+  [ -d "$extension_folder/simpleton-archetypes" ] && archetype_path=( "$extension_folder/simpleton-archetypes" "${archetype_path[@]}" )
+}
+
+load_extensions() {
+
+  local extension_folder f=$1
+  if [ -d "$f/simpleton-extensions" ]; then
+    for extension_folder in $(find -L "$f/simpleton-extensions" -mindepth 1 -maxdepth 1 -type d | sort); do
+      load_extension "$extension_folder"
+    done
+  elif [ -f "$f/simpleton-extensions" ]; then
+    for extension_folder in $(<$f/simpleton-extensions); do
+      extension_folder="$SIMPLETON_EXTENSIONS/$extension_folder"
+      if [ -d "$extension_folder" ]; then
+        absolute_path extension_folder || return 1
+        load_extension "$extension_folder" 
+      else
+        err "Missing extension: $extension_folder (required by $f/simpleton-extensions)"
+        return 1
+      fi
+    done
+  fi
+
+  return 0
+
+}
+
+init_context() {
+  handler_path=( "$SIMPLETON_REPO/simpleton-handlers" )
+  archetype_path=( "$SIMPLETON_REPO/simpleton-archetypes" )
+  load_extensions "$SIMPLETON_REPO"
+  return 0
+}
+
+load_context() {
+
+  local f=$1 
+  local parent=${f%/*}
+  [ "${#parent}" -gt 1 ] && { load_context "$parent" || return 1; }
+  load_extensions "$f"
+
+  if [ -d "$f/simpleton-handlers" ]; then
+    handler_path=( "$f/simpleton-handlers" "${handler_path[@]}" )
+  fi
+
+  [ -f "$f/simpleton-context" ] && source "$f/simpleton-context"
+
+  return 0
+
+}
+

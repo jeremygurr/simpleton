@@ -604,61 +604,15 @@ get_overlap() {
   done
 }
 
-load_extension() {
-  local extension_folder=$1
-  [ -d "$extension_folder/handlers" ] && handler_path=( "$extension_folder/handlers" "${handler_path[@]}" )
-  [ -d "$extension_folder/archetypes" ] && archetype_path=( "$extension_folder/archetypes" "${archetype_path[@]}" )
-}
-
-load_extensions() {
-  local extension_folder f=$1
-  if [ -d "$f/extensions" ]; then
-    for extension_folder in $(find -L "$f/extensions" -mindepth 1 -maxdepth 1 -type d | sort); do
-      load_extension "$extension_folder"
-    done
-  fi
-  return 0
-}
-
-init_context() {
-  handler_path=( "$SIMPLETON_REPO/handlers" )
-  archetype_path=( "$SIMPLETON_REPO/archetypes" )
-  load_extensions "$SIMPLETON_REPO"
-  return 0
-}
-
-load_context() {
-
-  local f=$1 
-  local parent=${f%/*}
-  [ "${#parent}" -gt 1 ] && { load_context "$parent" || return 1; }
-  load_extensions "$f"
-
-  if [ -d "$f/handlers" ]; then
-    handler_path=( "$f/handlers" "${handler_path[@]}" )
-  fi
-
-  local extension_folder
-  if [ -f "$f/simpleton-extensions" ]; then
-    for extension_folder in $(<$f/simpleton-extensions); do
-      extension_folder="$SIMPLETON_REPO/../$extension_folder"
-      if [ -d "$extension_folder" ]; then
-        cd "$extension_folder" || return 1
-        extension_folder=$PWD
-        cd - || return 1
-        load_extension "$extension_folder" 
-      else
-        err "Missing extension: $extension_folder (required by $f/simpleton-extensions)"
-        return 1
-      fi
-    done
-  fi
-
-  [ -f "$f/context" ] && source "$f/context"
-
-  return 0
-
+# usage: normalize_path {variable name containing a path}
+#   will replace .. in the path with a non-relative path
+#   alters the given variable with the new value
+absolute_path() {
+cd -L "${!$1}" || return 1
+eval "$1=\"$PWD\""
+cd - || return 1
 }
 
 source $SIMPLETON_REPO/lib/bash-debugger
+
 

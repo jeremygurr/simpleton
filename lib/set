@@ -1,0 +1,188 @@
+#!/bin/bash
+
+# usage: cell_set {subject}
+#   executes the given subject, which is a full path to a folder
+cell_set() {
+
+local subject=$1
+local lock_timeout=${lock_timeout:-0}
+local handler_path=( )
+local archetype_path=( )
+
+trace 0 "Executing subject: $small_subject"
+
+begin_function
+
+local small_subject="${subject#$SIMPLETON_WORK/}"
+if [ "$small_subject" == "$subject" ]; then
+  err "Subject ($subject) is not in the simpleton workspace ($SIMPLETON_WORK)"
+  return 1
+fi
+
+local subject_info="$SIMPLETON_WORK/$small_subject/cell-info"
+
+if [ -d "$subject_info" ]; then
+
+  local handler_found
+  if [ -d "$subject_info/handler" ]; then
+    handler_found="$subject_info/handler"
+    absolute_path handler_found || fail
+  else
+    find_handler "$subject" || fail
+  fi
+
+  if [ "$handler_found" ]; then
+
+    ln -sf "$handler_found" "$subject_info/handler" || fail
+
+    trace -5 "Sourcing context files"
+    local subject_out="$SIMPLETON_WORK/$small_subject/cell-out"
+    local subject_log="$SIMPLETON_WORK/$small_subject/cell-info/log"
+    init_context || fail
+    load_context "$subject" || fail
+
+    trace -5 "Checking if subject needs to be executed"
+    is_refresh_needed "$subject" || fail
+    if [ $refresh_needed == f ]; then
+      trace 0 "Refresh is not needed"
+      succeed
+    else
+      trace 0 "Refresh is needed"
+    fi
+
+    mkdir -p "$subject_out" || fail
+    mkdir -p "$subject_log" || fail
+    mkdir -p "$subject_info" || fail
+    lock "$subject_info/lock" $lock_timeout || fail
+    touch "$subject_info/last-run-began" || fail
+
+    trace -5 "Executing handler $handler_found"
+    source "$handler_found" || fail
+
+    [ $subject_type == folder ] && tee_output_to "$subject_log/log-current"
+
+    local handler_failed=f
+    handle "$subject" || handler_failed=t
+
+    if [ $subject_type == folder ]; then
+      untee_output
+      touch "$subject_info/last-run-ended" || fail
+      unlock "$subject_info/lock"
+      if [ "$handler_failed" == f ]; then
+        touch -r "$subject_info/last-run-began" "$subject_info/last-success-began" || fail
+        mv "$subject_log/log-current" "$subject_log/log-last-error"
+        ln -s "$subject_log/log-last-error" "$subject_log/log-previous"
+      else
+        mv "$subject_log/log-current" "$subject_log/log-last-success"
+        ln -s "$subject_log/log-last-success" "$subject_log/log-previous"
+      fi
+    fi
+
+  else # no handler found
+    ....
+  fi
+
+else # subject-info missing
+  if [ -d "$subject" ]; then
+    trace 0 "Processing contents of $subject folder"
+    local f
+    begin_for f in $(find "$subject" -mindepth 1 -maxdepth 1 -not -name ".*" | sort); doo
+      execute "$f" || fail
+    end_for
+  else
+    trace -5 "Ignoring file $subject"
+  fi
+fi
+
+trace 0 "Subject executed successfully"
+
+end_function
+handle_return
+
+}
+
+get_subject_type() {
+begin_function
+subject_type=folder
+subject_folder=$subject
+if [ ! -d "$subject" ]; then
+  subject_folder="${subject%/*}"
+  if  [ ! -d "$subject_folder" ]; then
+    err "Subject doesn't exist: $small_subject"
+    fail
+  else
+    if [ -f "$subject" ]; then
+      subject_type=file
+    else
+      subject_type=implicit
+    fi
+  fi
+fi
+end_function
+handle_return
+}
+
+find_handler() {
+local handler_to_try handler_path_to_try handler_name
+local folder=$1
+local folder_base=${folder##*/}
+handler_found=
+for handler_path_to_try in "${handler_path[@]}"; do
+  for handler_to_try in $(find "${handler_path_to_try}" -mindepth 1 -maxdepth 1 -not -name ".*" -type f); do
+    handler_name=${handler_to_try##*/}
+    if [ "${folder_base%$handler_name}" != "$folder_base" ]; then
+      handler_found=$handler_to_try
+      trace -5 "Handler found: $handler_found"
+      break 2
+    fi
+  done
+done
+}
+
+is_refresh_needed() {
+local subject=$1
+
+if [ ! -e "$subject_info/last-success-began" ]; then 
+  refresh_needed=t
+  return 0
+fi
+
+local newer_file_found=$(
+  find "$subject_folder" -mindepth 1 \
+    -not -name 'cell-*' -not -name 'simpleton-*' -not -name '.*' \
+    -newer "$subject_info/last-success-began" -print -quit
+  )
+if [ "$newer_file_found" ]; then 
+  trace -5 "Found file that is newer than out: $newer_file_found"
+  refresh_needed=t
+  return 0
+fi
+
+is_subject_fresh "$subject_folder" || return 1
+if [ $subject_fresh == f ]; then
+  trace -5 "Subject is not fresh enough"
+  refresh_needed=t
+  return 0
+fi
+
+refresh_needed=f
+return 0
+}
+
+# Intended to be overridden by subjects which have live external dependencies
+is_subject_fresh() {
+subject_fresh=t
+}
+
+tee_output_to() {
+local target=$1
+exec 1> >(tee "$target")
+exec 2> >(tee -a "$target")
+eval "exec $fd_trace> >(tee -a '$target')"
+}
+
+untee_output() {
+exec 1>&$fd_original_out
+exec 2>&$fd_original_err
+eval "exec $fd_trace>&$fd_original_trace"
+}
