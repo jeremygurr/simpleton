@@ -1,8 +1,15 @@
-FROM alpine:latest 
+ARG ALPINE_IMAGE=alpine:latest
+
+FROM $ALPINE_IMAGE
 
 USER root
 
-# RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@https://ci-repo.aexp.com/repository/alpine-raw/@g" /etc/apk/repositories 
+ARG NO_PROXY=""
+ARG HTTPS_PROXY=""
+ARG HTTP_PROXY=""
+ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine/
+
+RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@$ALPINE_REPO@g" /etc/apk/repositories 
 RUN apk update 
 RUN apk add \
   bash \
@@ -56,6 +63,7 @@ RUN chmod a+rwx /etc
 COPY sudoers /etc/
 COPY shell-start.sh /etc/profile.d/
 COPY inputrc /etc/
+COPY ./ /simpleton/
 RUN chown root /etc/sudoers
 RUN mkdir -p $REPO_CACHE
 
