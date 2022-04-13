@@ -11,6 +11,7 @@ ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine/
 
 RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@$ALPINE_REPO@g" /etc/apk/repositories 
 RUN apk update 
+
 RUN apk add \
   bash \
   bash-completion \
@@ -24,6 +25,9 @@ RUN apk add \
   file \
   findutils \
   findutils-doc \
+  $nothing
+
+RUN apk add \
   git \
   git-doc \
   grep \
@@ -31,7 +35,6 @@ RUN apk add \
   jq-doc \
   less \
   less-doc \
-#  man-db \
   man-pages \
   mandoc \
   net-tools \
@@ -45,12 +48,18 @@ RUN apk add \
   source-highlight-doc \
   strace \
   strace-doc \
+  $nothing
+
+RUN apk add \
   sudo \
   sudo-doc \
   tar \
+  util-linux \
+  util-linux-doc \
   vim \
   yq \
-  yq-doc 
+  yq-doc \
+  $nothing
 
 ENV HOME /home
 ENV PAGER less
@@ -60,10 +69,10 @@ ENV REPO_CACHE /home/.m2/repository
 
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
 RUN chmod a+rwx /etc
+COPY ./ $SIMPLETON_REPO/
+RUN ln -sf $SIMPLETON_REPO/shell-start.sh /etc/profile.d/
+RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
 COPY sudoers /etc/
-COPY shell-start.sh /etc/profile.d/
-COPY inputrc /etc/
-COPY ./ /simpleton/
 RUN chown root /etc/sudoers
 RUN mkdir -p $REPO_CACHE
 
