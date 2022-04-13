@@ -1,3 +1,4 @@
+echo "shell-start"
 export PATH=$SIMPLETON_REPO/bin:$PATH
 
 prompt_name=${prompt_name:-simpleton}
@@ -128,9 +129,9 @@ parse_git_branch() {
     if [ -d $p/.git ]; then
       local r=$(cat $p/.git/HEAD)
       if [[ "$r" =~ refs/heads ]]; then
-        echo "$r" | sed -E 's/.*\/(.*)/ \[\1\]/'
+        echo "$r" | sed -E 's/.*refs\/heads\/(.*)/\[\1\]/ '
       else
-        git branch 2>/dev/null | sed -e '/^[^*]/d' -e 's/* \(.*\)/ \[\1\]/'
+        git branch 2>/dev/null | sed -e '/^[^*]/d' -e 's/.* \(.*\)/\[\1\] /'
       fi
       break
     fi
@@ -158,8 +159,8 @@ if [ ! "$BASH" ]; then
   return 0
 fi
 
-export PS1="${LIGHT_GREEN}$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status)
-$PURPLE\u $LIGHT_RED\W$LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR \\\$ "
+export PS1="${LIGHT_GREEN}$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)
+$PURPLE\u $LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
 export PS2='> '
 export PS4='+ '
 }
