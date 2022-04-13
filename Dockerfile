@@ -20,6 +20,8 @@ RUN apk add \
   bind-tools \
   curl \
   curl-doc \
+  coreutils \
+  coreutils-doc \ 
   dnsmasq \
   dnsmasq-doc \
   file \

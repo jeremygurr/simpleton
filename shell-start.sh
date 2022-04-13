@@ -1,5 +1,8 @@
 export PATH=$SIMPLETON_REPO/bin:$PATH
 
+prompt_name=${prompt_name:-simpleton}
+NL=$'\n'
+
 alias ls='ls --color=auto'
 alias l='ls --color=auto -l'
 alias ll='ls --color=auto -la'
@@ -135,23 +138,28 @@ parse_git_branch() {
   done
 }
 
+RED="\[\033[0;31m\]"
+LIGHT_RED="\[\033[1;31m\]"
+NO_COLOUR="\[\033[0m\]"
+BLUE="\[\033[0;34m\]"
+LIGHT_BLUE="\[\033[1;34m\]"
+PURPLE="\[\033[0;35m\]"
+LIGHT_PURPLE="\[\033[1;35m\]"
+CYAN="\[\033[0;36m\]"
+LIGHT_GREEN=$'\033[0;32m'
+
+custom_prompt_status() {
+  :
+}
+
 unset beautify_prompt
 beautify_prompt() {
 if [ ! "$BASH" ]; then
   return 0
 fi
-local RED="\[\033[0;31m\]"
-local LIGHT_RED="\[\033[1;31m\]"
-local NO_COLOUR="\[\033[0m\]"
-local BLUE="\[\033[0;34m\]"
-local LIGHT_BLUE="\[\033[1;34m\]"
-local PURPLE="\[\033[0;35m\]"
-local LIGHT_PURPLE="\[\033[1;35m\]"
-local CYAN="\[\033[0;36m\]"
-local LIGHT_GREEN=$'\033[0;32m'
 
-#export PS1="${LIGHT_GREEN}simpleton: $LIGHT_BLUE\d \A $PURPLE\u $LIGHT_RED\W$LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR \\\$ "
-export PS1="${LIGHT_GREEN}simpleton $PURPLE\u $LIGHT_RED\W$LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR \\\$ "
+export PS1="${LIGHT_GREEN}$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status)
+$PURPLE\u $LIGHT_RED\W$LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR \\\$ "
 export PS2='> '
 export PS4='+ '
 }
