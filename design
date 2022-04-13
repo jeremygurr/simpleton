@@ -86,12 +86,22 @@ etcd key vs etcd blob file: separate cells
 links should be relative so structure could be saved?
   not need if run in docker container
   but it does make it more moveable
+cell as a non-caching service vs cell as a cache
+  transient cell vs persistent
+  should we even allow this?
+  need to be able to clear out caches in an intelligent and automated way
+    based on cost-tier
+    low cost, oldest first, until it is cleared, then next tier
+    cell free command will do this
+  cost_tier defined by cell
+    0 is no cost, and isn't cached at all
+    1 is lowest cost to be cached
+    2...
 ----------------------------------------------------------------------------------------------------
 example case
   one-data/
     etcd/
       as-file/
-      key/
       function/
         current-version/
           up/
@@ -108,28 +118,39 @@ example case
         dependency-service-map/
         shallow-dependencies/
         deep-dependencies/
+      key/
     mvs/pod/function/loaded-version/
     mvs/pod/function/is-loaded/
       intention/
+        # optional (if missing, will NOT be created)
+        # any of these can be vectorized or not
         up/
         down/
         in/
         out/*/
-        status/*/
         log/*/
         lock/*/
         key/
+        # required, will be created if needed
+        # vectorized if more than one row
+        status/*/
+        # must exist or this folder isn't considered a cell
+        # never vectorized
         meta/
-          handler ->
+          handler/
+            update
+              update() {}
+            status
+              status() {}
           context
-          measures
-            versions
-          dimensions
-            env      
-            project    one-data
-            service    all
-            pod        all
-            function   all
+            measures="versions"
+            dimensions=( 
+              "env _"
+              "project one-data"
+              "service all"
+              "pod all"
+              "function all"
+              )
       apply/
       expectation/
       fix/
@@ -145,6 +166,7 @@ test
 
 commands
   edit
+  free      # clear out caches based on cost_tier and amount of space to free, defaulting to clearing out 50% with cost_tier=auto
   status
   update
     cell_max_load=10

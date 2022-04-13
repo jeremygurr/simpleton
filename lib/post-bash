@@ -25,25 +25,32 @@ bash_trace=${bash_trace:-100}
 
 if [ $trace -gt $bash_trace ]; then
   alias begin_function='let trace--; [ $trace -lt $bash_trace ] && set +x || set -x; local return_value=0; while true; do'
-  alias    begin_while='let trace--; [ $trace -lt $bash_trace ] && set +x || set -x;       return_value=0; while'
-  alias      begin_for='let trace--; [ $trace -lt $bash_trace ] && set +x || set -x;       return_value=0; for'
+  alias    begin_while='             [ $trace -lt $bash_trace ] && set +x || set -x;       return_value=0; while'
+  alias      begin_for='             [ $trace -lt $bash_trace ] && set +x || set -x;       return_value=0; for'
   alias   end_function='break; done; [ $trace -ge $bash_trace ] && set -x; let trace++'
-  alias      end_while='       done; [ $trace -ge $bash_trace ] && set -x; let trace++; [ $return_value != 0 ] && break'
-  alias        end_for='       done; [ $trace -ge $bash_trace ] && set -x; let trace++; [ $return_value != 0 ] && break'
+  alias      end_while='       done; [ $trace -ge $bash_trace ] && set -x; [ $return_value != 0 ] && break'
+  alias        end_for='       done; [ $trace -ge $bash_trace ] && set -x; [ $return_value != 0 ] && break'
 else
   alias begin_function='let trace--; local return_value=0; while true; do'
-  alias    begin_while='let trace--; return_value=0; while'
-  alias      begin_for='let trace--; return_value=0; for'
+  alias    begin_while='             return_value=0; while'
+  alias      begin_for='             return_value=0; for'
   alias   end_function='break; done; let trace++'
-  alias      end_while='       done; let trace++; [ $return_value != 0 ] && break'
-  alias        end_for='       done; let trace++; [ $return_value != 0 ] && break'
+  alias      end_while='       done;              [ $return_value != 0 ] && break'
+  alias        end_for='       done;              [ $return_value != 0 ] && break'
 fi
 
 # to avoid bash syntax parsing problems
 alias doo='do'
 
+# used after a direct command which may fail: cd /somewhere || fail
 alias fail='{ return_value=1; break; }'
+
+# used to check if something failed: failed && break
 alias failed='[ $return_value -gt 0 ]'
+
+# used when a subshell or pipeline may fail: value=$(cat /tmp/f | jq .value); or_fail
+alias or_fail='[ "${PIPESTATUS[-1]}" -gt 0 ] && { return_value=1; break; }'
+
 alias succeed='{ return_value=0; break; }'
 alias succeeded='[ $return_value -eq 0 ]'
 
@@ -602,15 +609,6 @@ get_overlap() {
     [ "${1:$i:1}" != "${2:$i:1}" ] && break
     result+=${1:$i:1}
   done
-}
-
-# usage: normalize_path {variable name containing a path}
-#   will replace .. in the path with a non-relative path
-#   alters the given variable with the new value
-absolute_path() {
-cd -L "${!$1}" || return 1
-eval "$1=\"$PWD\""
-cd - || return 1
 }
 
 source $SIMPLETON_REPO/lib/bash-debugger
