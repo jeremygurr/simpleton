@@ -63,6 +63,10 @@ RUN apk add \
   yq-doc \
   $nothing
 
+RUN apk add \
+  alpine-conf \
+  $nothing
+
 ENV HOME /home
 ENV PAGER less
 ENV SIMPLETON_REPO /simpleton
@@ -77,6 +81,9 @@ RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
 COPY sudoers /etc/
 RUN chown root /etc/sudoers
 RUN mkdir -p $REPO_CACHE
+
+ARG TIME_ZONE=UTC
+RUN setup-timezone -z $TIME_ZONE
 
 WORKDIR $SIMPLETON_WORK
 CMD /bin/bash $SIMPLETON_REPO/init
