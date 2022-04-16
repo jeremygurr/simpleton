@@ -11,29 +11,155 @@ end_function
 handle_return
 }
 
+load_context() {
+local f=$1 
+local parent=${f%/*}
+[ "${#parent}" -gt 1 ] && { load_pre_context "$parent" || return 1; }
+[ -f "$f/pre-context" ] && source "$f/pre-context"
+[ -f "$f/post-context" ] && source "$f/post-context"
+[ "${#parent}" -gt 1 ] && { load_post_context "$parent" || return 1; }
+return 0
+}
+
+load_pre_context() {
+local f=$1 
+local parent=${f%/*}
+[ "${#parent}" -gt 1 ] && { load_pre_context "$parent" || return 1; }
+[ -f "$f/pre-context" ] && source "$f/pre-context"
+return 0
+}
+
+load_post_context() {
+local f=$1 
+local parent=${f%/*}
+[ -f "$f/post-context" ] && source "$f/post-context"
+[ "${#parent}" -gt 1 ] && { load_post_context "$parent" || return 1; }
+return 0
+}
+
+derive_row_id() {
+local dimension_count="${#dimensions[*]}" 
+if [ $dimension_count -gt 0 ]; then
+  local dimension default dimension_with_default
+  row_id=
+  for dimension_with_default in "${dimensions[@]}"; do
+    read dimension default <<<$dimension_with_default
+    local var_defined=t
+    declare -p "$dimension" &>/dev/null || var_defined=f
+    if [ $var_defined == f ]; then
+      if [ "$default" ]; then
+        eval "$dimension='$default'"
+      else
+        err "Required var $dimension not defined, and no default was provided."
+        fail
+      fi
+    fi
+    if [[ "${!dimension}" =~ [$TAB$NL\ :] ]]; then
+      err "Dimension $dimension contains invalid characters: [${!dimension}]. It must not contain white space or colons."
+      fail
+    fi
+    row_id+="${!dimension}:"
+  done
+  row_id=${row_id%:}
+  row_path="/$row_id"
+else
+  row_id="only"
+  row_path=""
+fi
+}
+
 cell_update_single() {
 local current_cell=$1
 trace "Updating $current_cell"
 begin_function
-  # does it need update?
-    # compare in/ vs out/
-    # check for fresh var
-  local needs_update=f
-  begin_breakable
-    if [ -d "$current_cell/out" ]; then
-      if [ -d "$current_cell/in" ]; then
-        if [ "$current_cell/in" -nt "$current_cell/out" ]; then
-          needs_update=t
-          break
+
+  load_context "$current_cell" || fail
+  # todo: if there are multiple rows, need to parallelize them also
+  #   need to be able to compute member groups
+  derive_row_id || fail
+  # todo: but we do need dep phase even if build phase is skipped
+  # todo: cell needs update if update is possible AND something changed (including deps)
+  #   so dep analysis must happen before determining if this cell needs to update
+  #   do we need to lock the cell if we are doing dep analysis?
+
+
+  local needs_update
+  does_cell_need_update || fail
+  if [ $needs_update == t ]; then
+    local cell_max_load=${cell_max_load:-10}
+    local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
+    wait_for_low_load || fail
+    if [ -d "$current_cell/lock" ]; then
+      local lock_timeout=${lock_timeout:-30}
+      local lock_fail_code=33
+      local return_code
+      flock -x -E $lock_fail_code -n "$current_cell/lock" cell_update_after_write_lock
+      return_code=$?
+      if [ $return_code == $lock_fail_code ]; then
+        trace 5 "Waiting for write lock on $current_cell/lock"
+        flock -x -E $lock_fail_code -w $lock_timeout "$current_cell/lock" cell_update_after_write_lock || failed_to_get_lock=t
+        return_code=$?
+        if [ $return_code == $lock_fail_code ]; then
+          err "Could not get lock ($current_cell/lock) within time limit of $lock_timeout seconds"
+          fail
+        elif [ $return_code -gt 0 ]; then
+          fail
         fi
+      elif [ $return_code -gt 0 ]; then
+        fail
       fi
-      if [ "${fresh:-}" ]; then
-      fi
+    else
+      cell_update_after_write_lock || fail
     fi
-  end_breakable
-  # write lock for cell
-  # update status
+  fi
+end_function
+handle_return
+}
+
+wait_for_low_load() {
+local current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
+if [ $current_load -gt $cell_max_load ]; then
+  trace 5 "Load average is too high ($current_load > $cell_max_load), waiting until things cool down first."
+  local time_waited=0
+  while [ $current_load -gt $cell_max_load ]; do
+    current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
+    sleep 5; let time_waited+=5
+    if [ "$cell_load_wait_timeout" -gt 0 -a $time_waited -ge $cell_load_wait_timeout ]; then
+      err "Timed out waiting for cpu load to be low enough. Aborting"
+      return 1
+    fi
+  done
+fi
+return 0
+}
+
+tee_output_to() {
+local target=$1
+exec 1> >(tee "$target")
+exec 2> >(tee -a "$target")
+eval "exec $fd_trace> >(tee -a '$target')"
+}
+
+untee_output() {
+exec 1>&$fd_original_out
+exec 2>&$fd_original_err
+eval "exec $fd_trace>&$fd_original_trace"
+}
+
+cell_update_after_write_lock() {
+begin_function
+
+  init_status || fail
+  new_status begin_update || fail
+  if [ -d "$current_cell/log" ]; then
+    tee_output_to "$current_cell/log/current"
+  fi
+  local update_successful=f
+  
+  local parallel_execution=${parallel_execution:-${parallel:-t}}
   # each dependency, in parallel
+  # validate parameters (some require any)
+  # use ionice and nice
     # is it -any?
     # yes: choose which to lock or update
     # does it need update?
@@ -42,8 +168,69 @@ begin_function
     # read lock
   # wait for parallel dependencies
   # update status
-  # release read locks on deps
-  # release write lock?
+  # execute local update
+
+  if [ $update_successful == t ]; then
+    trace "Update successful."
+    new_status succeeded || fail
+  else
+    trace "Update failed."
+    new_status failed || fail
+  fi
+
+  if [ -d "$current_cell/log" ]; then
+    untee_output
+    if [ $update_successful == t ]; then
+      mv "$current_cell/log/current_cell" "$current_cell/log/last_success"
+    else
+      mv "$current_cell/log/current_cell" "$current_cell/log/last_failure"
+    fi
+  fi
+
+end_function
+handle_return
+}
+
+init_status() {
+mkdir -p "$current_cell/status"
+rm "$current_cell/status/begin_update"
+}
+
+new_status() {
+touch "$current_cell/status/$1"
+}
+
+does_cell_need_update() {
+begin_function
+
+  needs_update=f
+  if [ -d "$current_cell/out$row_path" ]; then
+
+    # nothing needs to be done in execution phase if execute function isn't defined
+    type execute &>/dev/null || succeed
+
+    if [ -d "$current_cell/in" ]; then
+      if [ "$current_cell/in" -nt "$current_cell/out$row_path" ]; then
+        trace "Local changes were made, needs update"
+        needs_update=t
+        succeed
+      fi
+    fi
+
+    if [ "${fresh:-}" ]; then
+      local fresh_seconds
+      convert_to_seconds $fresh fresh_seconds || fail
+      local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
+      local out_timestamp=$(date -r "$current_cell/out$row_path" +%s)
+      if [ $out_timestamp -lt $fresh_cutoff ]; then
+        trace "Freshness requirement ($fresh) not met, needs update"
+        needs_update=t
+        succeed
+      fi
+    fi
+
+  fi
+
 end_function
 handle_return
 }

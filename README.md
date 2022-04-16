@@ -28,6 +28,16 @@ cell help         # will list commands that can be executed
 cell status help  # get details about how to use a command
 ```
 
+## Update Phases
+
+Cell updates have three phases: context, dependency, and execution. 
+
+### Context phase
+
+### Dependency Phase
+
+### Execution Phase
+
 ## Caching Information
 
 ## Viewing Logs
@@ -47,6 +57,8 @@ cell status help  # get details about how to use a command
 ## Using the Debugger
 
 ## Vector vs Scalar Cells
+
+### Dimensions and Measures
 
 ## Multiple Choice
 

@@ -97,7 +97,21 @@ cell as a non-caching service vs cell as a cache
     0 is no cost, and isn't cached at all
     1 is lowest cost to be cached
     2...
+should multi-cells on the commandline also run in parallel?
+  no, explicitly serialize them
+we must also parallelize multi-row updates
+  when computing key, must split up all
+    also other aliased groups of members (e3, e3i)
+  need way to compute all members of a dimension
+do we need read locks of deps before write lock of cell?
+  how do we hold the read locks? Are we stacking many forked processes to do it?
+  yes, but can we do it without forking?
+  write lock can be obtained after determination of change needed
 ----------------------------------------------------------------------------------------------------
+how to fetch dim members
+  many are constants, but some can be dependents on cells
+  [ ] always require member list dependencies
+  [ ] don't need list of pods unless all is chosen
 example case
   one-data/
     etcd/
@@ -130,36 +144,32 @@ example case
       intention/
         # if fresh is set, will check out folder against that limit
         # optional (if missing, will NOT be created)
-        # any of these can be vectorized or not
         up/
         down/
         # if no in folder, no internal check for freshness
         in/
-        # should always have out
+        # any of these can be vectorized or not
+        # if no out folder, there's no product, and no build process
         out/*/
         log/*/
         lock/*/
         key/
-        # required, will be created if needed
+        # must exist or this folder isn't considered a cell
         # vectorized if more than one row
         status/*/
-        # must exist or this folder isn't considered a cell
-        # never vectorized
-        meta/
-          handler/
-            update
-              update() {}
-            status
-              status() {}
-          context
-            measures="versions"
-            dimensions=( 
-              "env _"
-              "project one-data"
-              "service all"
-              "pod all"
-              "function all"
-              )
+        # can't be vectorized because it's a file
+        pre-context
+          execute() {}
+          measures="versions"
+          dimensions=( 
+            "env"
+            "project one-data"
+            "service all"
+            "pod all"
+            "function all"
+            )
+          get_member_list() {}
+        post-context
       apply/
       expectation/
       fix/

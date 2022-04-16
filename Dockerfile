@@ -64,7 +64,59 @@ RUN apk add \
   $nothing
 
 RUN apk add \
+  ifupdown-ng \
+  openrc \
   alpine-conf \
+  openrc-bash-completion \
+  utmps-openrc \
+  mandoc-doc \
+  utmps-doc \
+  busybox-doc \
+  fstrm-doc \
+  apk-tools-doc \
+  $nothing
+
+RUN apk add \
+  ca-certificates-doc \
+  pkgconf-doc \
+  openrc-doc \
+  libxml2-doc \
+  ifupdown-ng-doc \
+  libretls-doc \
+  skalibs-doc \
+  zlib-doc \
+  readline-doc \
+  json-c-doc \
+  file-doc \
+  $nothing
+
+RUN apk add \
+  texinfo \
+  texinfo-doc \
+  $nothing
+
+RUN apk add \
+  expat-doc \
+  pcre2-doc \
+  pcre-doc \
+  grep-doc \
+  libedit-doc \
+  tar-doc \
+  perl \
+  perl-doc \
+  perl-error \
+  perl-error-doc \
+  perl-git \
+  git-perl \
+  libeconf-doc \
+  linux-pam-doc \
+  util-linux-openrc \
+  libcap-ng-doc \
+  vim-doc \
+  $nothing
+
+RUN apk add \
+  docs \
   $nothing
 
 ENV HOME /home
