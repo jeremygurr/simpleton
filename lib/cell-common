@@ -40,3 +40,100 @@ init_context() {
   return 0
 }
 
+init_status_context() {
+
+  # override this in cells to support aliases, dimension groups, and defaults
+  # should store values in plural form of var, and only plural form should be used after this
+  expand_dimension() {
+  local dimension_plural=$1; shift
+  local value=$1
+  eval "$dimension_plural=\$value"
+  return 0
+  }
+
+}
+
+normalize_dimensions() {
+trace -5 "Normalizing dimensions"
+begin_function
+
+  local dimension cell=$1 value dimension_plural
+  dimensions=( )
+  if [ -d "$cell/dimension" ]; then
+    for dimension in $(find "$cell/dimension" -mindepth 1 -maxdepth 1 -type d); do
+      dimension=${dimension##*/}
+      dimension_plural=${dimension}s
+      value=${!dimension_plural:-${!dimension:-}}
+      if [ "$value" ]; then
+        dimension+=( $dimension )
+        expand_dimension "$dimension_plural" "$value" || return 1
+      else
+        err "Missing value for dimension $dimension. You must set this in an env var."
+        return 1
+      fi
+    done
+  fi
+
+end_function
+handle_return
+}
+
+
+init_update_context() {
+return 0
+}
+
+load_status_context() {
+init_status_context || return 1
+local f=$1 
+local parent=${f%/*}
+[ "${#parent}" -gt 1 ] && { load_status_context_before "$parent" || return 1; }
+[ -f "$f/status-context" ] && source "$f/status-context"
+[ -f "$f/status-context-after" ] && source "$f/status-context-after"
+[ "${#parent}" -gt 1 ] && { load_status_context_after "$parent" || return 1; }
+return 0
+}
+
+load_status_context_before() {
+local f=$1 
+local parent=${f%/*}
+[ "${#parent}" -gt 1 ] && { load_status_context_before "$parent" || return 1; }
+[ -f "$f/status-context" ] && source "$f/status-context"
+return 0
+}
+
+load_status_context_after() {
+local f=$1 
+local parent=${f%/*}
+[ -f "$f/status-context-after" ] && source "$f/status-context-after"
+[ "${#parent}" -gt 1 ] && { load_status_context_after "$parent" || return 1; }
+return 0
+}
+
+load_update_context() {
+init_update_context || return 1
+local f=$1 
+local parent=${f%/*}
+[ "${#parent}" -gt 1 ] && { load_update_context_before "$parent" || return 1; }
+[ -f "$f/update-context" ] && source "$f/update-context"
+[ -f "$f/update-context-after" ] && source "$f/update-context-after"
+[ "${#parent}" -gt 1 ] && { load_update_context_after "$parent" || return 1; }
+return 0
+}
+
+load_update_context_before() {
+local f=$1 
+local parent=${f%/*}
+[ "${#parent}" -gt 1 ] && { load_update_context_before "$parent" || return 1; }
+[ -f "$f/update-context" ] && source "$f/update-context"
+return 0
+}
+
+load_update_context_after() {
+local f=$1 
+local parent=${f%/*}
+[ -f "$f/update-context-after" ] && source "$f/update-context-after"
+[ "${#parent}" -gt 1 ] && { load_update_context_after "$parent" || return 1; }
+return 0
+}
+
