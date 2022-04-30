@@ -117,6 +117,8 @@ RUN apk add \
 
 RUN apk add \
   docs \
+  tzdata \
+  alpina-conf \
   $nothing
 
 ENV HOME /home
@@ -125,6 +127,7 @@ ENV SIMPLETON_REPO /simpleton
 ENV SIMPLETON_WORK /work
 ENV REPO_CACHE /home/.m2/repository
 
+RUN setup-timezone -z US/Arizona
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
 RUN chmod a+rwx /etc
 COPY ./ $SIMPLETON_REPO/

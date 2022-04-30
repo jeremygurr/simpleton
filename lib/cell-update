@@ -1,19 +1,21 @@
 #!/bin/bash
 
 cell_update() {
-trace "Updating cells"
+trace 0 "Updating cells"
 begin_function
   local subject
   begin_while subject in "$@"; doo
-    cell_update_single "$subject" || fail
+    cell_update_array "$subject" || fail
   end_while
 end_function
 handle_return
 }
 
-cell_update_single() {
+cell_update_array() {
+
 local current_cell=$1
-trace "Updating $current_cell"
+local parallel_execution=${parallel_execution:-${par:-t}}
+trace 0 "Updating array of $current_cell"
 begin_function
 
   if [ ! -d "$current_cell/status" ]; then
@@ -31,8 +33,91 @@ begin_function
     fail
   fi
 
-  derive_row_ids || fail
-  # todo: but we do need dep phase even if build phase is skipped
+  cell_update_row_set "$current_cell" "${dimensions[@]}" || fail
+
+end_function
+handle_return
+
+}
+
+cell_update_row_set() {
+
+local current_cell=$1; shift
+local first_dimension=${1}s; shift
+local dimensions_remaining=( "$@" )
+
+local values="${!first_dimension:-}"
+trace 0 "Updating rows of $current_cell: $first_dimension=[ $values ]"
+begin_function
+
+  if [ ! "$values" ]; then
+    err "Missing value for dimension $first_dimension"
+    fail
+  fi
+
+  values=( $values )
+  local value processes
+  local parallel=f
+  [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
+
+  for value in "${values[@]}"; do
+    eval "$first_dimension='$value'"
+    if [ "$dimensions_remaining" ]; then
+      if [ $parallel == t ]; then
+        cell_update_row_set "$current_cell" "${dimensions_remaining[@]}" &
+        processes+=" $!"
+      else
+        cell_update_row_set "$current_cell" "${dimensions_remaining[@]}" || fail
+      fi
+    else
+      if [ $parallel == t ]; then
+        cell_update_row_set "$current_cell" "${dimensions_remaining[@]}" &
+        cell_update_row "$current_cell" &
+        processes+=" $!"
+      else
+        cell_update_row "$current_cell" || fail
+      fi
+    fi
+  done
+
+  if [ $parallel == t ]; then
+    local process
+    trace 0 "Waiting for sub processes to complete"
+    begin_for process in $processes; doo
+      wait $process || fail
+    end_for
+  fi
+
+end_function
+handle_return
+
+}
+
+cell_update_row() {
+
+local current_cell=$1
+
+local dim dim_string=""
+for dim in "${dimensions[@]}"; do
+  dim=${dim}s
+  dim_string+="$dim=[ ${!dim:-} ] "
+done
+trace 0 "Updating row of $current_cell: $dim_string"
+
+begin_function
+
+  # we need dep phase even if build phase is skipped
+
+  # freshness check first
+  local needs_update
+  does_cell_need_update || fail
+  if [ $needs_update == f ]; then
+    trace 0 "Update not needed"
+    succeed
+  fi
+
+  wait_for_low_load || fail
+
   # todo: cell needs update if update is possible AND something changed (including deps)
   #   so dep analysis must happen before determining if this cell needs to update
   #   do we need to lock the cell if we are doing dep analysis?
@@ -40,12 +125,6 @@ begin_function
   # each update needs the full dimension vars for each row, the row id for each won't work, 
   #   need to loop over all possibilities
 
-  local needs_update
-  does_cell_need_update || fail
-  if [ $needs_update == t ]; then
-    local cell_max_load=${cell_max_load:-10}
-    local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
-    wait_for_low_load || fail
     if [ -d "$current_cell/lock" ]; then
       local lock_timeout=${lock_timeout:-30}
       local lock_fail_code=33
@@ -68,7 +147,6 @@ begin_function
     else
       cell_update_after_write_lock || fail
     fi
-  fi
 
 end_function
 handle_return
@@ -108,6 +186,8 @@ fi
 }
 
 wait_for_low_load() {
+local cell_max_load=${cell_max_load:-10}
+local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
 local current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
 if [ $current_load -gt $cell_max_load ]; then
   trace 5 "Load average is too high ($current_load > $cell_max_load), waiting until things cool down first."
@@ -163,10 +243,10 @@ begin_function
   # execute local update
 
   if [ $update_successful == t ]; then
-    trace "Update successful."
+    trace 0 "Update successful."
     new_status succeeded || fail
   else
-    trace "Update failed."
+    trace 0 "Update failed."
     new_status failed || fail
   fi
 
@@ -203,7 +283,15 @@ begin_function
 
     if [ -d "$current_cell/in" ]; then
       if [ "$current_cell/in" -nt "$current_cell/out$row_path" ]; then
-        trace "Local changes were made, needs update"
+        trace 0 "Local changes were made, needs update"
+        needs_update=t
+        succeed
+      fi
+    fi
+
+    if [ -d "$current_cell/up" ]; then
+      if [ "$current_cell/up" -nt "$current_cell/out$row_path" ]; then
+        trace 0 "Upstream changes were made, needs update"
         needs_update=t
         succeed
       fi
@@ -215,7 +303,7 @@ begin_function
       local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
       local out_timestamp=$(date -r "$current_cell/out$row_path" +%s)
       if [ $out_timestamp -lt $fresh_cutoff ]; then
-        trace "Freshness requirement ($fresh) not met, needs update"
+        trace 0 "Freshness requirement ($fresh) not met, needs update"
         needs_update=t
         succeed
       fi

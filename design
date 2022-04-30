@@ -11,21 +11,12 @@ handlers if we already have class?
       set up handler link 
 vector cells vs scalar
   envs/services/pods/functions/deployed
-    cell-info/dimensions file (default is second column)
-      env(s)      
-      project(s)    one-data
-      service(s)    all
-      pod(s)        all
-      function(s)   all
   dimension members
-    accept all/any
+    accept all/any/none
     no : in members
   dimensions are separate from cell path
     mvs/pod/info
     mvs/pod/function
-  if vector: locks and values are per key
-    cell-out/one-data:e31/pods
-    cell-info/lock/one-data:e31
   what if a vector is very big?
     cell-out/a0/00/01:red
     no don't support this yet, solve when we really need it
@@ -63,6 +54,7 @@ auto management of secret files
   add-key adds a key to an existing secret
 status dependencies may be different than update dependencies
   status of pod list requires oc get pods, but update requires ssh to osm
+  no, status is not about reading remote data, but always reporting on immediate information stored locally, never requiring a lock
 dependencies
   freshness requirement?
   value requirement: oc project
@@ -80,8 +72,6 @@ all/any consistency
   [ ] require count level: -any, -all for each
   [*] count level optional: -any, -all, -none, -2, -3, anything else is single cell
   [ ] have a separate config file
-folders optionally are divided by row_id
-  check first for row_id, otherwise use direct folder
 etcd key vs etcd blob file: separate cells
 links should be relative so structure could be saved?
   not need if run in docker container
@@ -123,7 +113,7 @@ do we need to load the full context for each dim cell and up cell?
   need to separate update context from status context
   status context must not change vars, just add some functions (no defaults?)
 supporting nested any/all cells
-  something./
+  something/
   something?/
     g1/
       c1/
@@ -131,7 +121,7 @@ supporting nested any/all cells
       g3?/
         c6/
         c7/
-      g3./
+      g3/
     g2/
       c4/
       c5/
@@ -142,10 +132,18 @@ do we need to recursively lock deps?
 phases
   context
   dimension
+    normalize
     validate
-  dependency
-  freshness
-  execution
+  for each row:
+    dependency (must do this even if cell doesn't need update)
+      lock read for each
+      update 'down' dependencies if needed
+    freshness / change check
+      does change check need to see if deps have changed?
+        for compiler type actions, a small change should trigger an update
+        make the change push it out
+    lock write
+    execution
 example case
   one-data/
     etcd/
@@ -178,6 +176,7 @@ example case
       intention/
         # if fresh is set, will check out folder against that limit
         # optional (if missing, will NOT be created)
+        # this folder timestamp is updated if any deps are modified
         up/
         down/
         dimension/
@@ -190,7 +189,7 @@ example case
         # if no in folder, no internal check for freshness
         in/
         # any of these can be vectorized or not
-        # if no out folder, there's no product, and no build process
+        # out folder is created if missing
         out/*/
         log/*/
         lock/*/
