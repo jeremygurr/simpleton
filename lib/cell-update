@@ -86,7 +86,11 @@ wait_for_sub_processes() {
 if [ $parallel == t ]; then
   local process
   for process in $processes; do
-    wait $process || return 1
+    wait $process &>/dev/null
+    if [ $? -gt 0 -a $? -lt 127 ]; then
+      trace 0 "Subprocess failed to terminate successfully"
+      return 1
+    fi
   done
 fi
 }
@@ -118,7 +122,7 @@ end_function
 handle_return
 }
 
-cell_update_subs() {
+cell_update_deps() {
 trace 0 "Updating subs of $current_cell"
 begin_function
 
@@ -126,7 +130,6 @@ begin_function
   local parallel=f processes
   [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
 
-  # todo: need to select any's
   local any_folder
   begin_for any_folder in $(find "$current_cell/up" -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
     
@@ -158,11 +161,27 @@ begin_function
   end_for
 
   begin_for dep in $(find "$current_cell/up" -not -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
+    local down_path="$dep/down/${current_cell##*/}"
+    if [ ! -e "$down_path" ]; then
+      ln -sf "$current_cell" "$down_path" || fail
+    elif [ "$(realpath "$down_path")" != "$current_cell" ]; then
+      local variant=2
+      begin_while true; doo
+        if [ ! -e "$down_path$variant" ]; then
+          ln -sf "$current_cell" "$down_path$variant" || fail
+          break
+        elif [ "$(realpath "$down_path$variant")" == "$current_cell" ]; then
+          break
+        fi
+        let variant++
+      end_while
+    fi
+
     if [ $parallel == t ]; then
-      cell_update_array "$dep" &
+      cell_update_row "$dep" &
       processes+=" $!"
     else
-      cell_update_array "$dep" || fail
+      cell_update_row "$dep" || fail
     fi
   end_for
 
@@ -172,20 +191,36 @@ end_function
 handle_return
 }
 
-read_lock_subs() {
+read_lock_deps() {
 trace 0 "Obtaining read locks for subs of $current_cell"
 begin_function
 
-  local dep
+  local dep lock_fd
   begin_for dep in $(find "$current_cell/up" -mindepth 1 -maxdepth 1 -not -name '*\?' -type d | sort); doo
-    # how to handle row_path?
-    #   need to execute status context
-    #   generate row path
-    if [ -d "$current_cell/up/lock" ]; then
+    init_and_load_status_context_a
+    if [ -d "$dep/lock" ]; then
+      exec {lock_fd}<"$dep/lock" || fail
+      flock -s -w $lock_timeout $lock_fd || {
+        err "Failed to get read lock for dep $dep of $current_cell"
+        fail
+        }
     fi
   end_for
 
-  wait_for_sub_processes || fail
+end_function
+handle_return
+}
+
+write_lock_cell() {
+trace 0 "Obtaining write lock for $current_cell"
+begin_function
+
+  local lock_fd
+  exec {lock_fd}<"$current_cell/lock" || fail
+  flock -x -w $lock_timeout $lock_fd || {
+    err "Failed to get write lock for $current_cell"
+    fail
+    }
 
 end_function
 handle_return
@@ -219,42 +254,23 @@ begin_function
     succeed
   fi
 
+  local lock_timeout=${lock_timeout:-30}
+
+  local read_locks=''
   if [ -d "$current_cell/up" ]; then
-    cell_update_subs || fail
-    read_lock_subs || fail
+    cell_update_deps || fail
+    read_lock_deps || fail
   fi
 
-  # todo: cell needs update if update is possible AND something changed (including deps)
-  #   so dep analysis must happen before determining if this cell needs to update
-  #   do we need to lock the cell if we are doing dep analysis?
-
-  # each update needs the full dimension vars for each row, the row id for each won't work, 
-  #   need to loop over all possibilities
-
   wait_for_low_load || fail
+  if [ -d "$current_cell/lock" ]; then
+    write_lock_cell || fail
+  fi
 
-    if [ -d "$current_cell/lock" ]; then
-      local lock_timeout=${lock_timeout:-30}
-      local lock_fail_code=33
-      local return_code
-      flock -x -E $lock_fail_code -n "$current_cell/lock" cell_update_after_write_lock
-      return_code=$?
-      if [ $return_code == $lock_fail_code ]; then
-        trace 5 "Waiting for write lock on $current_cell/lock"
-        flock -x -E $lock_fail_code -w $lock_timeout "$current_cell/lock" cell_update_after_write_lock || failed_to_get_lock=t
-        return_code=$?
-        if [ $return_code == $lock_fail_code ]; then
-          err "Could not get lock ($current_cell/lock) within time limit of $lock_timeout seconds"
-          fail
-        elif [ $return_code -gt 0 ]; then
-          fail
-        fi
-      elif [ $return_code -gt 0 ]; then
-        fail
-      fi
-    else
-      cell_update_after_write_lock || fail
-    fi
+  init_and_load_update_context_a
+  local start_time=$EPOCHSECONDS
+  execute_update || fail
+  touch -d @$start_time "$out_path" || fail
 
 end_function
 handle_return
