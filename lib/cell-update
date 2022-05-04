@@ -21,19 +21,14 @@ begin_function
   if [ ! -d "$current_cell/status" ]; then
     local folder
     # check subfolders for cells
-    for folder in $(find $current_cell -mindepth 1 -maxdepth 1 -type d); do
-      cell_update_single "$folder" || fail
+    for folder in $(find "$current_cell" -mindepth 1 -maxdepth 1 -type d | sort); do
+      # todo: support parallel execution here?
+      cell_update_row_set "$folder" "${dimensions[@]}" || fail
     done
+  else
+    init_and_load_status_context_a
+    cell_update_row_set "$current_cell" "${dimensions[@]}" || fail
   fi
-
-  load_status_context "$current_cell" || fail
-
-  if ! normalize_dimensions "$current_cell"; then
-    err "Dimension normalization failed. One of the dimensions must be invalid."
-    fail
-  fi
-
-  cell_update_row_set "$current_cell" "${dimensions[@]}" || fail
 
 end_function
 handle_return
@@ -60,7 +55,7 @@ begin_function
   local parallel=f
   [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
 
-  for value in "${values[@]}"; do
+  begin_for value in "${values[@]}"; doo
     eval "$first_dimension='$value'"
     if [ "$dimensions_remaining" ]; then
       if [ $parallel == t ]; then
@@ -71,26 +66,129 @@ begin_function
       fi
     else
       if [ $parallel == t ]; then
-        cell_update_row_set "$current_cell" "${dimensions_remaining[@]}" &
         cell_update_row "$current_cell" &
         processes+=" $!"
       else
         cell_update_row "$current_cell" || fail
       fi
     fi
-  done
+  end_for
 
-  if [ $parallel == t ]; then
-    local process
-    trace 0 "Waiting for sub processes to complete"
-    begin_for process in $processes; doo
-      wait $process || fail
-    end_for
-  fi
+  wait_for_sub_processes || fail
 
 end_function
 handle_return
 
+}
+
+wait_for_sub_processes() {
+[ $parallel == t ] && trace 0 "Waiting for sub processes to complete"
+if [ $parallel == t ]; then
+  local process
+  for process in $processes; do
+    wait $process || return 1
+  done
+fi
+}
+
+select_any_cell() {
+local current_cell=$1
+trace 0 "Testing 'any' cell $current_cell"
+begin_function
+
+  init_and_load_status_context_a
+  local needs_update
+  does_cell_need_update || fail
+  if [ $needs_update == t ]; then
+    trace 0 "Update needed"
+    fail
+  fi
+
+end_function
+handle_return
+}
+
+update_any_cell() {
+local current_cell=$1
+trace 0 "Updating 'any' cell $current_cell"
+begin_function
+  init_and_load_status_context_a
+  cell_update_row "$current_cell" || fail
+end_function
+handle_return
+}
+
+cell_update_subs() {
+trace 0 "Updating subs of $current_cell"
+begin_function
+
+  local dep
+  local parallel=f processes
+  [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
+
+  # todo: need to select any's
+  local any_folder
+  begin_for any_folder in $(find "$current_cell/up" -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
+    
+    # check if any cells are already complete
+    local any_selected=
+    local options=$(find "$any_folder" -mindepth 1 -maxdepth 1 -type d | sort)
+    begin_for dep in $options; doo
+      select_any_cell "$dep" && { any_selected=$dep; break; }
+    end_for
+
+    # of those that are valid, try to update one by one until successful
+    if [ ! "${any_selected:-}" ]; then
+      begin_for dep in $options; doo
+        update_any_cell "$dep" && { any_selected=$dep; break; }
+      end_for
+    fi
+
+    # link any cell to parent folder
+    if [ "${any_selected:-}" ]; then
+      local selected_folder=$any_selected
+      [[ $selected_folder =~ .*/(.*/.*) ]] || fail
+      selected_folder=${BASH_REMATCH[1]}
+      ln -sf "$selected_folder" "$current_cell/up/${any_folder%?}" || fail
+    else
+      trace -5 "Failed to find valid dependency for $any_folder"
+      fail
+    fi
+
+  end_for
+
+  begin_for dep in $(find "$current_cell/up" -not -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
+    if [ $parallel == t ]; then
+      cell_update_array "$dep" &
+      processes+=" $!"
+    else
+      cell_update_array "$dep" || fail
+    fi
+  end_for
+
+  wait_for_sub_processes || fail
+
+end_function
+handle_return
+}
+
+read_lock_subs() {
+trace 0 "Obtaining read locks for subs of $current_cell"
+begin_function
+
+  local dep
+  begin_for dep in $(find "$current_cell/up" -mindepth 1 -maxdepth 1 -not -name '*\?' -type d | sort); doo
+    # how to handle row_path?
+    #   need to execute status context
+    #   generate row path
+    if [ -d "$current_cell/up/lock" ]; then
+    fi
+  end_for
+
+  wait_for_sub_processes || fail
+
+end_function
+handle_return
 }
 
 cell_update_row() {
@@ -106,7 +204,12 @@ trace 0 "Updating row of $current_cell: $dim_string"
 
 begin_function
 
-  # we need dep phase even if build phase is skipped
+  # out folder must exist
+  local out_path="$current_cell/out$row_path"
+  if [ ! -d "$out_path" ]; then
+    mkdir -p "$out_path" || fail
+    touch -t 197001010000 "$out_path" || fail
+  fi
 
   # freshness check first
   local needs_update
@@ -116,7 +219,10 @@ begin_function
     succeed
   fi
 
-  wait_for_low_load || fail
+  if [ -d "$current_cell/up" ]; then
+    cell_update_subs || fail
+    read_lock_subs || fail
+  fi
 
   # todo: cell needs update if update is possible AND something changed (including deps)
   #   so dep analysis must happen before determining if this cell needs to update
@@ -124,6 +230,8 @@ begin_function
 
   # each update needs the full dimension vars for each row, the row id for each won't work, 
   #   need to loop over all possibilities
+
+  wait_for_low_load || fail
 
     if [ -d "$current_cell/lock" ]; then
       local lock_timeout=${lock_timeout:-30}
@@ -276,39 +384,36 @@ does_cell_need_update() {
 begin_function
 
   needs_update=f
-  if [ -d "$current_cell/out$row_path" ]; then
 
-    # nothing needs to be done in execution phase if execute function isn't defined
-    type execute &>/dev/null || succeed
+  # nothing needs to be done in execution phase if execute function isn't defined
+  type execute &>/dev/null || succeed
 
-    if [ -d "$current_cell/in" ]; then
-      if [ "$current_cell/in" -nt "$current_cell/out$row_path" ]; then
-        trace 0 "Local changes were made, needs update"
-        needs_update=t
-        succeed
-      fi
+  if [ -d "$current_cell/in" ]; then
+    if [ "$current_cell/in" -nt "$current_cell/out$row_path" ]; then
+      trace 0 "Local changes were made, needs update"
+      needs_update=t
+      succeed
     fi
+  fi
 
-    if [ -d "$current_cell/up" ]; then
-      if [ "$current_cell/up" -nt "$current_cell/out$row_path" ]; then
-        trace 0 "Upstream changes were made, needs update"
-        needs_update=t
-        succeed
-      fi
+  if [ -d "$current_cell/up" ]; then
+    if [ "$current_cell/up" -nt "$current_cell/out$row_path" ]; then
+      trace 0 "Upstream changes were made, needs update"
+      needs_update=t
+      succeed
     fi
+  fi
 
-    if [ "${fresh:-}" ]; then
-      local fresh_seconds
-      convert_to_seconds $fresh fresh_seconds || fail
-      local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
-      local out_timestamp=$(date -r "$current_cell/out$row_path" +%s)
-      if [ $out_timestamp -lt $fresh_cutoff ]; then
-        trace 0 "Freshness requirement ($fresh) not met, needs update"
-        needs_update=t
-        succeed
-      fi
+  if [ "${fresh:-}" ]; then
+    local fresh_seconds
+    convert_to_seconds $fresh fresh_seconds || fail
+    local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
+    local out_timestamp=$(date -r "$current_cell/out$row_path" +%s)
+    if [ $out_timestamp -lt $fresh_cutoff ]; then
+      trace 0 "Freshness requirement ($fresh) not met, needs update"
+      needs_update=t
+      succeed
     fi
-
   fi
 
 end_function

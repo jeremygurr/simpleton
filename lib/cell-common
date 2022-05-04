@@ -40,13 +40,41 @@ init_context() {
   return 0
 }
 
+# current_cell must be set before this is used
+alias init_and_load_status_context_a='
+  init_status_context "$current_cell" || fail
+  eval "$localize_dim_vars"
+  load_status_context "$current_cell" || fail
+
+  if ! normalize_dimensions "$current_cell"; then
+    trace 5 "Dimension normalization failed. One of the dimensions must be invalid."
+    fail
+  fi
+'
+
 init_status_context() {
+
+  local current_cell=$1
+
+  # this var should be used by the calling function to localize dim vars (prevent changes to them 
+  #  from altering higher call stack values)
+  localize_dim_vars=""
+  if [ -d "$current_cell/dimension" ]; then
+    for dimension_folder in $(find "$current_cell/dimension" -mindepth 1 -maxdepth 1 -type d); do
+      dimension=${dimension_folder##*/}
+      dimension_plural=${dimension}s
+      localize_dim_vars+="local $dimension $dimension_plural; "
+    done
+  fi
 
   # override this in cells to support aliases, dimension groups, and defaults
   # should store values in plural form of var, and only plural form should be used after this
+  # should fail (return 1) if any values are invalid, or if required value is missing
   expand_dimension() {
+  local dimension_folder=$1; shift  # ignored here, but can be used in overridden functions to compute values from a cell
   local dimension_plural=$1; shift
   local value=$1
+  [ -z "$value" ] && return 1
   eval "$dimension_plural=\$value"
   return 0
   }
@@ -57,16 +85,16 @@ normalize_dimensions() {
 trace -5 "Normalizing dimensions"
 begin_function
 
-  local dimension cell=$1 value dimension_plural
+  local dimension current_cell=$1 value dimension_plural dimension_folder
   dimensions=( )
-  if [ -d "$cell/dimension" ]; then
-    for dimension in $(find "$cell/dimension" -mindepth 1 -maxdepth 1 -type d); do
-      dimension=${dimension##*/}
+  if [ -d "$current_cell/dimension" ]; then
+    for dimension_folder in $(find "$current_cell/dimension" -mindepth 1 -maxdepth 1 -type d); do
+      dimension=${dimension_folder##*/}
       dimension_plural=${dimension}s
       value=${!dimension_plural:-${!dimension:-}}
       if [ "$value" ]; then
         dimension+=( $dimension )
-        expand_dimension "$dimension_plural" "$value" || return 1
+        expand_dimension "$dimension_folder" "$dimension_plural" "$value" || fail
       else
         err "Missing value for dimension $dimension. You must set this in an env var."
         return 1
@@ -76,11 +104,6 @@ begin_function
 
 end_function
 handle_return
-}
-
-
-init_update_context() {
-return 0
 }
 
 load_status_context() {
@@ -107,6 +130,10 @@ local f=$1
 local parent=${f%/*}
 [ -f "$f/status-context-after" ] && source "$f/status-context-after"
 [ "${#parent}" -gt 1 ] && { load_status_context_after "$parent" || return 1; }
+return 0
+}
+
+init_update_context() {
 return 0
 }
 
