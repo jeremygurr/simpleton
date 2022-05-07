@@ -14,7 +14,9 @@ handle_return
 cell_update_array() {
 
 local current_cell=$1
-local parallel_execution=${parallel_execution:-${par:-t}}
+local parallel_default=t
+[ $debug == t ] && parallel_default=f
+local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 trace 0 "Updating array of $current_cell"
 begin_function
 
@@ -263,20 +265,62 @@ begin_function
   fi
 
   wait_for_low_load || fail
-  if [ -d "$current_cell/lock" ]; then
+  if [ -d "$current_cell/lock$row_path" ]; then
     write_lock_cell || fail
   fi
 
   init_and_load_update_context_a
+
+  init_status || fail
+  new_status begin_update || fail
+
+  if [ -d "$current_cell/log" ]; then
+    local log_path="$current_cell/log$row_path"
+    tee_output_to "$log_path/current"
+  fi
+
   local start_time=$EPOCHSECONDS
-  execute_update || fail
-  touch -d @$start_time "$out_path" || fail
+  local update_successful=f
+  execute_update && update_successful=t
+
+  if [ $update_successful == t ]; then
+
+    trace 0 "Update successful."
+    new_status succeeded || fail
+
+    if [ -d "$out_path.new" -a $update_successful == t ]; then
+      if ! diff -r "$out_path" "$out_path.new" >/dev/null; then
+        mv "$out_path.new" "$out_path" || fail
+      else
+        rm -rf "$out_path.new" || fail
+      fi
+    fi
+
+    touch -d @$start_time "$out_path" || fail
+
+    if [ -d "$current_cell/log" ]; then
+      untee_output
+      mv "$log_path/current_cell" "$log_path/last_success" || fail
+    fi
+
+  else
+
+    trace 0 "Update failed."
+    new_status failed || fail
+
+    if [ -d "$current_cell/log" ]; then
+      untee_output
+      mv "$log_path/current_cell" "$log_path/last_failure" || fail
+    fi
+
+  fi
 
 end_function
 handle_return
 
 }
 
+# not used?
 derive_row_ids() {
 # todo: needs to be fixed to support multiple rows and use plural dims
 local dimension_count="${#dimensions[*]}" 
@@ -341,59 +385,13 @@ exec 2>&$fd_original_err
 eval "exec $fd_trace>&$fd_original_trace"
 }
 
-cell_update_after_write_lock() {
-begin_function
-
-  load_update_context "$current_cell" || fail
-  init_status || fail
-  new_status begin_update || fail
-  if [ -d "$current_cell/log" ]; then
-    tee_output_to "$current_cell/log/current"
-  fi
-  local update_successful=f
-  
-  local parallel_execution=${parallel_execution:-${parallel:-t}}
-  # each dependency, in parallel
-  # validate parameters (some require any)
-  # use ionice and nice
-    # is it -any?
-    # yes: choose which to lock or update
-    # does it need update?
-    # yes: update cell
-    # update down if missing
-    # read lock
-  # wait for parallel dependencies
-  # update status
-  # execute local update
-
-  if [ $update_successful == t ]; then
-    trace 0 "Update successful."
-    new_status succeeded || fail
-  else
-    trace 0 "Update failed."
-    new_status failed || fail
-  fi
-
-  if [ -d "$current_cell/log" ]; then
-    untee_output
-    if [ $update_successful == t ]; then
-      mv "$current_cell/log/current_cell" "$current_cell/log/last_success"
-    else
-      mv "$current_cell/log/current_cell" "$current_cell/log/last_failure"
-    fi
-  fi
-
-end_function
-handle_return
-}
-
 init_status() {
-mkdir -p "$current_cell/status"
-rm "$current_cell/status/begin_update"
+mkdir -p "$current_cell/status$row_path"
+rm "$current_cell/status$row_path/begin_update"
 }
 
 new_status() {
-touch "$current_cell/status/$1"
+touch "$current_cell/status$row_path/$1"
 }
 
 does_cell_need_update() {

@@ -131,7 +131,6 @@ do we need to recursively lock deps?
 can a cell row depend on more than one cell row of another?
   usually the other way around
   support only one->one or many->one deps for now
-----------------------------------------------------------------------------------------------------
 phases
   context
   dimension
@@ -147,6 +146,25 @@ phases
       update 'down' dependencies if needed
     lock write
     execution
+how to handle recursive cells like function-dep-web
+  either produce all mappings in a single cell row, or make a on-demand generator of the info
+  but no support for dynamic dependencies
+----------------------------------------------------------------------------------------------------
+should write new data to out.new and move at end
+  only move out.new to out if it's actually changed
+  no need to touch out
+pull new status from cell_update_after_write_lock
+add status command
+  stage function and status
+  stages
+    loading status context
+    waiting for locks
+    waiting for deps
+    waiting for execution
+after completion:
+  move log to last-success or last-failure
+  update status
+  update execution log
 example case
   one-data/
     etcd/
@@ -185,16 +203,16 @@ example case
         down/
         dimension/
           {name}/
-            context
-              get_members  # includes get_default
-              validate     # if missing, always valid
-              expand       # if missing, nothing to expand
+            status-context
+            out/
             out/members  # optional
         # if no in folder, no internal check for freshness
         in/
         # any of these can be vectorized or not
         # out folder is created if missing
         out/*/
+        # where new data should be written to
+        out/*.new
         log/*/
         lock/*/
         key/
@@ -204,8 +222,8 @@ example case
         # can't be vectorized because it's a file
         status-context # used when only status is being checked
           measures="versions"
-          get_member_list() {}
-          normalize_dimension() {
+          expand_dimension() {
+            # expand_dimension {dim_folder} {dim_plural} {value}
             # unaliases
             # expands
             # sets defaults
@@ -213,7 +231,7 @@ example case
           }
         status-context-after
         update-context 
-          execute() {}
+          execute_update() {}
         update-context-after
       apply/
       expectation/
@@ -234,19 +252,4 @@ commands
   status
   update
     cell_max_load=10
-
-special folders/files
-  cell-out
-  cell-info
-    log/
-    status/
-      last_update_began
-      last_update_ended
-    handler -> ...
-    handlers/
-    extensions/
-    archetypes/
-    context
-    keys/
-    lock/
 
