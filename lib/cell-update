@@ -20,7 +20,7 @@ local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 trace 0 "Updating array of $current_cell"
 begin_function
 
-  if [ ! -d "$current_cell/status" ]; then
+  if [ ! -d "$current_cell/out" ]; then
     local folder
     # check subfolders for cells
     for folder in $(find "$current_cell" -mindepth 1 -maxdepth 1 -type d | sort); do
@@ -241,6 +241,14 @@ trace 0 "Updating row of $current_cell: $dim_string"
 
 begin_function
 
+  init_status || fail
+  new_status begin-update || fail
+
+  if [ -d "$current_cell/log" ]; then
+    local log_path="$current_cell/log$row_path"
+    tee_output_to "$log_path/current"
+  fi
+
   # out folder must exist
   local out_path="$current_cell/out$row_path"
   if [ ! -d "$out_path" ]; then
@@ -248,6 +256,7 @@ begin_function
     touch -t 197001010000 "$out_path" || fail
   fi
 
+  new_status check-needs-update || fail
   # freshness check first
   local needs_update
   does_cell_need_update || fail
@@ -260,28 +269,32 @@ begin_function
 
   local read_locks=''
   if [ -d "$current_cell/up" ]; then
+    new_status update-deps || fail
     cell_update_deps || fail
+
+    new_status read-locks || fail
     read_lock_deps || fail
   fi
 
+  new_status wait-for-load || fail
   wait_for_low_load || fail
+
+  new_status write-lock || fail
   if [ -d "$current_cell/lock$row_path" ]; then
     write_lock_cell || fail
   fi
 
+  new_status load-update-context || fail
   init_and_load_update_context_a
 
-  init_status || fail
-  new_status begin_update || fail
-
-  if [ -d "$current_cell/log" ]; then
-    local log_path="$current_cell/log$row_path"
-    tee_output_to "$log_path/current"
-  fi
-
+  new_status execute-update || fail
   local start_time=$EPOCHSECONDS
   local update_successful=f
   execute_update && update_successful=t
+  local duration_of_update=$((EPOCHSECONDS-start_time))
+  local success_string=good
+  [ $update_successful == f ] && success_string=bad
+  echo "$start_time $duration_of_update $success_string" >>$log_path/history || fail
 
   if [ $update_successful == t ]; then
 
@@ -291,8 +304,10 @@ begin_function
     if [ -d "$out_path.new" -a $update_successful == t ]; then
       if ! diff -r "$out_path" "$out_path.new" >/dev/null; then
         mv "$out_path.new" "$out_path" || fail
+        mv "$current_cell/status$row_path/current" "$current/status$row_path/last-success-changed" || fail
       else
         rm -rf "$out_path.new" || fail
+        mv "$current_cell/status$row_path/current" "$current/status$row_path/last-success-not-changed" || fail
       fi
     fi
 
@@ -300,17 +315,21 @@ begin_function
 
     if [ -d "$current_cell/log" ]; then
       untee_output
-      mv "$log_path/current_cell" "$log_path/last_success" || fail
+      mv "$log_path/current" "$log_path/last_success" || fail
     fi
+
+    # todo: push update to dependencies
 
   else
 
     trace 0 "Update failed."
     new_status failed || fail
 
+    mv "$current_cell/status$row_path/current" "$current/status$row_path/last-failure" || fail
+
     if [ -d "$current_cell/log" ]; then
       untee_output
-      mv "$log_path/current_cell" "$log_path/last_failure" || fail
+      mv "$log_path/current" "$log_path/last_failure" || fail
     fi
 
   fi
@@ -387,11 +406,11 @@ eval "exec $fd_trace>&$fd_original_trace"
 
 init_status() {
 mkdir -p "$current_cell/status$row_path"
-rm "$current_cell/status$row_path/begin_update"
+rm "$current_cell/status$row_path/current" 2>/dev/null
 }
 
 new_status() {
-touch "$current_cell/status$row_path/$1"
+echo "$1 $EPOCHSECONDS" >>"$current_cell/status$row_path/current"
 }
 
 does_cell_need_update() {
