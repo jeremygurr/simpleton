@@ -288,6 +288,9 @@ begin_function
   init_and_load_update_context_a
 
   new_status execute-update || fail
+
+  mkdir -p "$out_path.new" || fail
+
   local start_time=$EPOCHSECONDS
   local update_successful=f
   execute_update && update_successful=t
@@ -303,6 +306,8 @@ begin_function
 
     if [ -d "$out_path.new" -a $update_successful == t ]; then
       if ! diff -r "$out_path" "$out_path.new" >/dev/null; then
+        [ -d "$out_path.old" ] && rm -rf "$out_path.old" 2>/dev/null
+        mv "$out_path" "$out_path.old" || fail
         mv "$out_path.new" "$out_path" || fail
         mv "$current_cell/status$row_path/current" "$current/status$row_path/last-success-changed" || fail
       else
@@ -332,6 +337,10 @@ begin_function
       mv "$log_path/current" "$log_path/last_failure" || fail
     fi
 
+  fi
+
+  if [ -d "$current_cell/tmp$row_path" ]; then
+    rm -rf "$current_cell/tmp$row_path" || fail
   fi
 
 end_function
@@ -422,7 +431,7 @@ begin_function
   type execute &>/dev/null || succeed
 
   if [ -d "$current_cell/in" ]; then
-    if [ "$current_cell/in" -nt "$current_cell/out$row_path" ]; then
+    if [ "$current_cell/in" -nt "$current_cell/out$row_path" -o "$current_cell/in$row_path" -nt "$current_cell/out$row_path" ]; then
       trace 0 "Local changes were made, needs update"
       needs_update=t
       succeed
