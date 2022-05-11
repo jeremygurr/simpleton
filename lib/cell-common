@@ -141,13 +141,7 @@ return 0
 init_update_context() {
 # this should write to out.new or out/{row}.new
 execute_update() { 
-  if [ -d "$current_cell/in" ]; then
-    local from="$current_cell/in"
-    if [ -d "$current_cell/in$row_path" ]; then
-      from="$current_cell/in$row_path"
-    fi
-    rsync -a "$from/" "$out_path.new/" || return 1
-  fi
+  rsync -a "$in_path/" "$out_path.new/" || return 1
   return 0
 }
 }
@@ -177,5 +171,38 @@ local parent=${f%/*}
 [ -f "$f/update-context-after" ] && source "$f/update-context-after"
 [ "${#parent}" -gt 1 ] && { load_update_context_after "$parent" || return 1; }
 return 0
+}
+
+decrypt_file() {
+
+local from=$1; shift
+local to=$1; shift
+
+trace 0 "Decrypting $from"
+begin_function
+
+  mkdir -p "$tmp_path" || fail
+
+  if [ ! -f "$current_cell/key/key.$USER" ]; then
+    err "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
+    find $current_cell/key -name "key.*" >&2
+    fail
+  fi
+
+  # extract the master key
+  openssl pkeyutl -decrypt -inkey ~/.ssh/id_rsa -in "$current_cell/key/key.$USER" -out $tmp_path/master || {
+    err "Failed to decrypt master key." 
+    fail
+  }
+
+  # decrypt the secret file
+  openssl enc -aes256 -in $from -out $to -d -pass file:$tmp_path/master || {
+    err "Failed to decrypt secret file." 
+    fail
+  }
+
+end_function
+handle_return
+
 }
 

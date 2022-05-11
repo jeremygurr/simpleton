@@ -180,10 +180,10 @@ begin_function
     fi
 
     if [ $parallel == t ]; then
-      cell_update_row "$dep" &
+      called_from=$short_cell/up cell_update_row "$dep" &
       processes+=" $!"
     else
-      cell_update_row "$dep" || fail
+      called_from=$short_cell/up cell_update_row "$dep" || fail
     fi
   end_for
 
@@ -287,9 +287,32 @@ begin_function
   new_status load-update-context || fail
   init_and_load_update_context_a
 
-  new_status execute-update || fail
+  local in_path="$current_cell/in"
+  [ -n "$row_path" ] && [ -d "$current_cell/in$row_path" ] && in_path="$current_cell/in$row_path"
+
+  local tmp_path="$current_cell/tmp$row_path"
 
   mkdir -p "$out_path.new" || fail
+
+  local need_decrypt file
+  begin_for file in $(find "$in_path" -name '*.crypt' -type f); doo
+    file=${file#$in_path}
+    file=${file%.crypt}
+    if [ -f "$out_path/$file" ]; then
+      cp "$out_path/$file" "$out_path.new/$file" || fail
+    else
+      need_decrypt+="$file "
+    fi
+  end_for
+
+  if [ "$need_decrypt" ]; then
+    new_status decrypt || fail
+    begin_for file in $need_decrypt; doo
+      decrypt_file "$in_path/$file.crypt" "$out_path.new/$file" || fail
+    end_for
+  fi
+
+  new_status execute-update || fail
 
   local start_time=$EPOCHSECONDS
   local update_successful=f
@@ -297,7 +320,7 @@ begin_function
   local duration_of_update=$((EPOCHSECONDS-start_time))
   local success_string=good
   [ $update_successful == f ] && success_string=bad
-  echo "$start_time $duration_of_update $success_string" >>$log_path/history || fail
+  echo "start:$start_time duration:$duration_of_update from:$called_from result:$success_string" >>$log_path/history || fail
 
   if [ $update_successful == t ]; then
 
@@ -339,8 +362,8 @@ begin_function
 
   fi
 
-  if [ -d "$current_cell/tmp$row_path" ]; then
-    rm -rf "$current_cell/tmp$row_path" || fail
+  if [ -d "$tmp_path" ]; then
+    rm -rf "$tmp_path" || fail
   fi
 
 end_function
