@@ -23,14 +23,23 @@ begin_function
   if [ ! -d "$current_cell/out" ]; then
     local folder
     # check subfolders for cells
-    for folder in $(find "$current_cell" -mindepth 1 -maxdepth 1 -type d | sort); do
-      # todo: support parallel execution here?
-      cell_update_row_set "$folder" "${dimensions[@]}" || fail
+    local parallel=f processes=
+    local values=( $(find "$current_cell" -mindepth 1 -maxdepth 1 -type d | sort) )
+    [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
+    for folder in "${values[@]}"; do
+      if [ $parallel == t ]; then
+        cell_update_array "$folder" &
+        processes+=" $!"
+      else
+        cell_update_array "$folder" || fail
+      fi
     done
   else
     init_and_load_status_context_a
     cell_update_row_set "$current_cell" "${dimensions[@]}" || fail
   fi
+
+  wait_for_sub_processes || fail
 
 end_function
 handle_return
