@@ -42,10 +42,15 @@ init_context() {
 
 # current_cell must be set before this is used
 alias init_and_load_status_context_a='
+  local dimensions=( )
   init_status_context "$current_cell" || fail
   eval "$localize_dim_vars"
   load_status_context "$current_cell" || fail
+'
 
+# this must be done after dim is updated
+# this probably isn't needed, since we do normalization as part of dim update
+alias normalize_dims_a='
   if ! normalize_dimensions "$current_cell"; then
     trace 5 "Dimension normalization failed. One of the dimensions must be invalid."
     fail
@@ -59,7 +64,7 @@ alias init_and_load_update_context_a='
 
 init_status_context() {
 
-  local current_cell=$1
+  local current_cell=$1 dimension dimension_folder dimension_plural
 
   # this var should be used by the calling function to localize dim vars (prevent changes to them 
   #  from altering higher call stack values)
@@ -69,19 +74,36 @@ init_status_context() {
       dimension=${dimension_folder##*/}
       dimension_plural=${dimension}s
       localize_dim_vars+="local $dimension $dimension_plural; "
+      dimensions+=( $dimension )
     done
   fi
+
+  reset_expand_dim
+
+}
+
+reset_expand_dim() {
 
   # override this in cells to support aliases, dimension groups, and defaults
   # should store values in plural form of var, and only plural form should be used after this
   # should fail (return 1) if any values are invalid, or if required value is missing
-  expand_dimension() {
-  local dimension_folder=$1; shift  # ignored here, but can be used in overridden functions to compute values from a cell
-  local dimension_plural=$1; shift
-  local value=$1
+  expand_dim() {
+  local dimension=$1; shift
+  local dimension_plural=${dimension_plural}s; shift
+  local value=${!dimension_plural:-${!dimension:-}}
   [ -z "$value" ] && return 1
   eval "$dimension_plural=\$value"
   return 0
+  }
+
+  # usually this doesn't need to be overridden, since it uses expand_dim to determine if it's valid
+  validate_dims() {
+    for dim in "${dimensions[@]}"; do
+      if ! expand_dim "$dim"; then
+        return 1
+      fi
+    done
+    return 0
   }
 
 }
@@ -93,13 +115,12 @@ begin_function
   local dimension current_cell=$1 value dimension_plural dimension_folder
   dimensions=( )
   if [ -d "$current_cell/dimension" ]; then
-    for dimension_folder in $(find "$current_cell/dimension" -mindepth 1 -maxdepth 1 -type d); do
+    begin_for dimension_folder in $(find "$current_cell/dimension" -mindepth 1 -maxdepth 1 -type d); doo
       dimension=${dimension_folder##*/}
       dimension_plural=${dimension}s
       value=${!dimension_plural:-${!dimension:-}}
-      dimension+=( $dimension )
       expand_dimension "$dimension_folder" "$dimension_plural" "$value" || fail
-    done
+    end_for
   fi
 
 end_function

@@ -36,10 +36,40 @@ begin_function
     done
   else
     init_and_load_status_context_a
+    if [ -d "$current_cell/dimension" ]; then
+      cell_update_dims || fail
+    fi
     cell_update_row_set "$current_cell" "${dimensions[@]}" || fail
   fi
 
   wait_for_sub_processes || fail
+
+end_function
+handle_return
+
+}
+
+cell_update_dims() {
+
+trace 0 "Updating dims $current_cell"
+begin_function
+
+  begin_for dimension_folder in $(find "$current_cell/dimension" -mindepth 1 -maxdepth 1 -type d); doo
+
+    dimension=${dimension_folder##*/}
+    dimension_plural=${dimension}s
+    # not parallel, must execute sequentially
+    cell_update_array "$dimension_folder" || fail
+
+    if [ -f "$dimension_folder/out/functions" ]; then
+      source "$dimension_folder/out/functions" || fail
+      expand_dim $dimension_plural || fail
+      reset_expand_dim
+    else
+      expand_dim $dimension_plural || fail
+    fi
+
+  end_for
 
 end_function
 handle_return
@@ -112,6 +142,7 @@ trace 0 "Testing 'any' cell $current_cell"
 begin_function
 
   init_and_load_status_context_a
+  validate_dims || fail
   local needs_update
   does_cell_need_update || fail
   if [ $needs_update == t ]; then
@@ -128,7 +159,7 @@ local current_cell=$1
 trace 0 "Updating 'any' cell $current_cell"
 begin_function
   init_and_load_status_context_a
-  cell_update_row "$current_cell" || fail
+  cell_update_array "$current_cell" || fail
 end_function
 handle_return
 }
@@ -147,15 +178,15 @@ begin_function
     # check if any cells are already complete
     local any_selected=
     local options=$(find "$any_folder" -mindepth 1 -maxdepth 1 -type d | sort)
-    begin_for dep in $options; doo
+    for dep in $options; do
       select_any_cell "$dep" && { any_selected=$dep; break; }
-    end_for
+    done
 
     # of those that are valid, try to update one by one until successful
     if [ ! "${any_selected:-}" ]; then
-      begin_for dep in $options; doo
+      for dep in $options; do
         update_any_cell "$dep" && { any_selected=$dep; break; }
-      end_for
+      done
     fi
 
     # link any cell to parent folder
@@ -459,8 +490,8 @@ begin_function
 
   needs_update=f
 
-  # nothing needs to be done in execution phase if execute function isn't defined
-  type execute &>/dev/null || succeed
+  # nothing needs to be done in execution phase if execute_update function isn't defined
+  type execute_update &>/dev/null || succeed
 
   if [ -d "$current_cell/in" ]; then
     if [ "$current_cell/in" -nt "$current_cell/out$row_path" -o "$current_cell/in$row_path" -nt "$current_cell/out$row_path" ]; then
