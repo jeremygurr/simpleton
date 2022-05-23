@@ -14,9 +14,6 @@ exec {fd_original_trace}>&$fd_trace
 
 tmp_folder=${tmp_folder:-/tmp}
 
-# make sure that all functions can be stepped through for debugging
-set -T
-
 COLUMNS=${COLUMNS:-120}
 
 debug_expansion_clean() {
@@ -131,11 +128,6 @@ debug_trap() {
 
   [ $debug_r == 0 ] && return 0
 
-  debug_last_location="$debug_path_to_source_file $debug_line_num"
-  debug_prev_line="$debug_line_num"
-  debug_prev_function=$debug_function
-  debug_step_to_next_function=f
-
   if [ $debug_highlight == t ]; then
 
     local previous_dir=$PWD
@@ -149,6 +141,18 @@ debug_trap() {
     debug_path_to_source_file=$highlighted_source
 
   fi
+
+  local backlog=
+  if [ "$debug_prev_function" == "$debug_function" -a "$((debug_prev_line+1))" -lt "$debug_line_num" ]; then
+    local start_line=$((debug_prev_line+1))
+    local end_line=$((debug_line_num-1))
+    backlog=$(sed -n "$start_line,${end_line}p;${end_line}q" "$debug_path_to_source_file")
+  fi
+
+  debug_last_location="$debug_path_to_source_file $debug_line_num"
+  debug_prev_line="$debug_line_num"
+  debug_prev_function=$debug_function
+  debug_step_to_next_function=f
 
   if [ $debug_expansion == 1 -a $debug_long_command == f ] || [ $debug_expansion == 2 ]; then
     if [ -f "$debug_out_path" ]; then
@@ -173,6 +177,12 @@ debug_trap() {
   while [ $debug_r == -1 ]; do
 
     echo >&$fd_original_err
+
+    if [ "$backlog" ]; then
+      echo "$backlog"
+      backlog=
+    fi
+
     set +u
     [ "$debug_watch" ] && eval "echo \"\$debug_watch=[$debug_watch]\"" >&$fd_original_err
     set -u
@@ -203,256 +213,253 @@ debug_trap() {
       echo -n "$CLEAR_SCREEN" >&$fd_original_err
     fi
 
-    #if [ $debug_function == none ] && [[ "$debug_c" =~ (c|l|L) ]] ; then
-    #  echo "We are outside of a function. Can't display source." >&$fd_original_err
-    #else
-      case "$debug_c" in
-        a)
-          read -e -p "Name of array variable: " debug_array <&$fd_original_in >&$fd_original_err
-          set +u
-          local i size
-          eval "size=\${#${debug_array}[*]}"
-          echo "size=$size" >&$fd_original_err
-          for ((i=0; i<size; i++)); do
-            eval "echo \"$i: \\\"\${$debug_array[$i]}\\\"\"" >&$fd_original_err
-          done
-          set -u
-          ;;
-        c)
-          echo >&$fd_original_err
-          let debug_list_offset=-9
-          debug_display_source
-          debug_list_dir=forwards
-          let debug_list_offset+=20
-          ;;
-        C)
-          echo "Continuing..." >&$fd_original_err
-          trap - DEBUG
+    case "$debug_c" in
+      a)
+        read -e -p "Name of array variable: " debug_array <&$fd_original_in >&$fd_original_err
+        set +u
+        local i size
+        eval "size=\${#${debug_array}[*]}"
+        echo "size=$size" >&$fd_original_err
+        for ((i=0; i<size; i++)); do
+          eval "echo \"$i: \\\"\${$debug_array[$i]}\\\"\"" >&$fd_original_err
+        done
+        set -u
+        ;;
+      c)
+        echo >&$fd_original_err
+        let debug_list_offset=-9
+        debug_display_source
+        debug_list_dir=forwards
+        let debug_list_offset+=20
+        ;;
+      C)
+        echo "Continuing..." >&$fd_original_err
+        trap - DEBUG
+        debug_r=0
+        debug_long_command=t
+        ;;
+      d)
+        read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
+        set +u
+        eval "echo \"[$debug_display]\"" >&$fd_original_err
+        set -u
+        ;;
+      D)
+        set +u
+        eval "echo \"[$debug_display]\"" >&$fd_original_err
+        set -u
+        ;;
+      e)
+        read -e -p "Eval: " debug_expression <&$fd_original_in >&$fd_original_err
+        set +u
+        eval "$debug_expression" >&$fd_original_err
+        set -u
+        ;;
+      E)
+        set +u
+        eval "$debug_expression" >&$fd_original_err
+        set -u
+        ;;
+      f)
+        read -e -p "Deep Find: " debug_search <&$fd_original_in >&$fd_original_err
+        if [ "${debug_search:-}" ]; then
+          debug_search=${debug_search//\\/\\\\}
+          debug_search=${debug_search//\$/\\\$}
+          debug_search=${debug_search//[/\\[}
+          debug_prev_search=$debug_search
+          debug_search_deep=t
           debug_r=0
           debug_long_command=t
-          ;;
-        d)
-          read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
-          set +u
-          eval "echo \"[$debug_display]\"" >&$fd_original_err
-          set -u
-          ;;
-        D)
-          set +u
-          eval "echo \"[$debug_display]\"" >&$fd_original_err
-          set -u
-          ;;
-        e)
-          read -e -p "Eval: " debug_expression <&$fd_original_in >&$fd_original_err
-          set +u
-          eval "$debug_expression" >&$fd_original_err
-          set -u
-          ;;
-        E)
-          set +u
-          eval "$debug_expression" >&$fd_original_err
-          set -u
-          ;;
-        f)
-          read -e -p "Deep Find: " debug_search <&$fd_original_in >&$fd_original_err
-          if [ "${debug_search:-}" ]; then
-            debug_search=${debug_search//\\/\\\\}
-            debug_search=${debug_search//\$/\\\$}
-            debug_search=${debug_search//[/\\[}
-            debug_prev_search=$debug_search
-            debug_search_deep=t
-            debug_r=0
-            debug_long_command=t
-          fi
-          ;;
-        F)
-          if [ $debug_expanded_search == t ]; then
-            echo "Expanded search is now off" >&$fd_original_err
-            debug_expanded_search=f
-          else
-            echo "Expanded search is now on" >&$fd_original_err
-            debug_expanded_search=t
-          fi
-          ;;
-        h)
-          if [ $debug_highlight == t ]; then
-            echo "Syntax highlighting is now off" >&$fd_original_err
-            debug_path_to_source_file=$raw_debug_path_to_source_file
-            debug_highlight=f
-          else
-            echo "Syntax highlighting is now on" >&$fd_original_err
-            debug_path_to_source_file=$highlighted_source
-            debug_highlight=t
-          fi
-          ;;
-        i)
-          debug_r=0
-          debug_max_depth=$((debug_current_depth+1))
-          ;;
-        j)
-          read -e -p "Shallow Find: " debug_search <&$fd_original_in >&$fd_original_err
-          if [ "${debug_search:-}" ]; then
-            debug_search=${debug_search//\\/\\\\}
-            debug_search=${debug_search//\$/\\\$}
-            debug_prev_search=$debug_search
-            debug_search_deep=f
-            debug_r=0
-            debug_long_command=t
-          fi
-          ;;
-        k)
-          echo "Skipping..." >&$fd_original_err
-          debug_r=1
-          ;;
-        l)
-          [ $debug_list_dir == none ] && echo >&$fd_original_err
-          [ $debug_list_dir == backwards ] && let debug_list_offset+=20
-          debug_display_source
-          let debug_list_offset+=20
-          debug_list_dir=forwards
-          ;;
-        L)
-          [ $debug_list_dir == forwards ] && let debug_list_offset-=20
-          let debug_list_offset-=20
-          debug_display_source
-          debug_list_dir=backwards
-          ;;
-        n)
-          debug_r=0
-          debug_max_depth=$debug_current_depth
-          debug_step_to_next_line=t
-          ;;
-        N)
-          debug_r=0
-          debug_max_depth=$debug_current_depth
-          debug_step_to_later_line=t
-          ;;
-        o)
-          echo "Stepping out of current function..." >&$fd_original_err
-          debug_max_depth=$((debug_current_depth-1))
+        fi
+        ;;
+      F)
+        if [ $debug_expanded_search == t ]; then
+          echo "Expanded search is now off" >&$fd_original_err
+          debug_expanded_search=f
+        else
+          echo "Expanded search is now on" >&$fd_original_err
+          debug_expanded_search=t
+        fi
+        ;;
+      h)
+        if [ $debug_highlight == t ]; then
+          echo "Syntax highlighting is now off" >&$fd_original_err
+          debug_path_to_source_file=$raw_debug_path_to_source_file
+          debug_highlight=f
+        else
+          echo "Syntax highlighting is now on" >&$fd_original_err
+          debug_path_to_source_file=$highlighted_source
+          debug_highlight=t
+        fi
+        ;;
+      i)
+        debug_r=0
+        debug_max_depth=$((debug_current_depth+1))
+        debug_subshell=t
+        ;;
+      j)
+        read -e -p "Shallow Find: " debug_search <&$fd_original_in >&$fd_original_err
+        if [ "${debug_search:-}" ]; then
+          debug_search=${debug_search//\\/\\\\}
+          debug_search=${debug_search//\$/\\\$}
+          debug_prev_search=$debug_search
+          debug_search_deep=f
           debug_r=0
           debug_long_command=t
-          ;;
-        p)
-          local fixed_command
-          fixed_command=${raw_display_command}
-          fixed_command=${fixed_command//\\\$/\\\\\$}
-          fixed_command=${fixed_command//\$(/\\\$(}
-          fixed_command=${fixed_command//\"/\\\"}
-          set +u
-          eval "echo \"$fixed_command\"" >&$fd_original_err
-          set -u
-          ;;
-        P)
-          local fixed_command
-          fixed_command=${raw_display_command}
-          fixed_command=${fixed_command//\\\$/\\\\\$}
-          #fixed_command=${fixed_command//\"/\\\"}
-          fixed_command=${fixed_command//\[ /\$(\[ }
-          fixed_command=${fixed_command// ]/ ] && echo true || echo false)}
-          #echo "echo \"$fixed_command\"" >&$fd_original_err
-          set +u
-          eval "echo \"$fixed_command\"" >&$fd_original_err
-          set -u
-          ;;
-        q) 
-          debug_exit=t
-          if [ -f "$debug_out_path" ]; then
-            rm "$debug_out_path"
-          fi
-          exit 1
-          ;;
-        r)
-          echo "Rewinding..." >&$fd_original_err
-          debug_rewind=t
-          debug_r=0
-          ;;
-        s)
-          debug_r=0
-          debug_max_depth=$debug_current_depth
-          debug_step_to_next_line=f
-          ;;
-        S)
-          start_frame=2 stack_trace
-          ;;
-        w)
-          read -e -p "Watch: " debug_watch <&$fd_original_in >&$fd_original_err
-          ;;
-        x)
-          if [ $debug_expansion == 1 ]; then
-            echo "Command expansion is now off" >&$fd_original_err
-            debug_expansion=0
-          else
-            echo "Short command expansion is now on" >&$fd_original_err
-            debug_expansion=1
-          fi
-          ;;
-        X)
-          if [ $debug_expansion == 2 ]; then
-            echo "Command expansion is now off" >&$fd_original_err
-            debug_expansion=0
-          else
-            echo "Extended command expansion is now on" >&$fd_original_err
-            debug_expansion=2
-          fi
-          ;;
-        =)
-          debug_stop_at="$raw_debug_path_to_source_file $debug_line_num"
+        fi
+        ;;
+      k)
+        echo "Skipping..." >&$fd_original_err
+        debug_r=1
+        ;;
+      l)
+        [ $debug_list_dir == none ] && echo >&$fd_original_err
+        [ $debug_list_dir == backwards ] && let debug_list_offset+=20
+        debug_display_source
+        let debug_list_offset+=20
+        debug_list_dir=forwards
+        ;;
+      L)
+        [ $debug_list_dir == forwards ] && let debug_list_offset-=20
+        let debug_list_offset-=20
+        debug_display_source
+        debug_list_dir=backwards
+        ;;
+      n)
+        debug_r=0
+        debug_max_depth=$debug_current_depth
+        debug_step_to_next_line=t
+        ;;
+      N)
+        debug_r=0
+        debug_max_depth=$debug_current_depth
+        debug_step_to_later_line=t
+        ;;
+      o)
+        echo "Stepping out of current function..." >&$fd_original_err
+        debug_max_depth=$((debug_current_depth-1))
+        debug_r=0
+        debug_long_command=t
+        ;;
+      p)
+        local fixed_command
+        fixed_command=${raw_display_command}
+        fixed_command=${fixed_command//\\\$/\\\\\$}
+        fixed_command=${fixed_command//\$(/\\\$(}
+        fixed_command=${fixed_command//\"/\\\"}
+        set +u
+        eval "echo \"$fixed_command\"" >&$fd_original_err
+        set -u
+        ;;
+      P)
+        local fixed_command
+        fixed_command=${raw_display_command}
+        fixed_command=${fixed_command//\\\$/\\\\\$}
+        #fixed_command=${fixed_command//\"/\\\"}
+        fixed_command=${fixed_command//\[ /\$(\[ }
+        fixed_command=${fixed_command// ]/ ] && echo true || echo false)}
+        #echo "echo \"$fixed_command\"" >&$fd_original_err
+        set +u
+        eval "echo \"$fixed_command\"" >&$fd_original_err
+        set -u
+        ;;
+      q) 
+        debug_exit=t
+        if [ -f "$debug_out_path" ]; then
+          rm "$debug_out_path"
+        fi
+        exit 1
+        ;;
+      r)
+        echo "Rewinding..." >&$fd_original_err
+        debug_rewind=t
+        debug_r=0
+        ;;
+      s)
+        debug_r=0
+        debug_max_depth=$debug_current_depth
+        debug_step_to_next_line=f
+        ;;
+      S)
+        start_frame=2 stack_trace
+        ;;
+      w)
+        read -e -p "Watch: " debug_watch <&$fd_original_in >&$fd_original_err
+        ;;
+      x)
+        if [ $debug_expansion == 1 ]; then
+          echo "Command expansion is now off" >&$fd_original_err
+          debug_expansion=0
+        else
+          echo "Short command expansion is now on" >&$fd_original_err
+          debug_expansion=1
+        fi
+        ;;
+      X)
+        if [ $debug_expansion == 2 ]; then
+          echo "Command expansion is now off" >&$fd_original_err
+          debug_expansion=0
+        else
+          echo "Extended command expansion is now on" >&$fd_original_err
+          debug_expansion=2
+        fi
+        ;;
+      =)
+        debug_stop_at="$raw_debug_path_to_source_file $debug_line_num"
+        debug_r=0
+        debug_long_command=t
+        debug_step_to_next_line=f
+        ;;
+      \])
+        let debug_max_depth=debug_current_depth+10
+        debug_step_to_next_function=t
+        debug_r=0
+        ;;
+      .)
+        if [ "${debug_prev_search:-}" ]; then
+          debug_search=${debug_prev_search:-}
           debug_r=0
           debug_long_command=t
-          debug_step_to_next_line=f
-          ;;
-        \])
-          let debug_max_depth=debug_current_depth+10
-          debug_step_to_next_function=t
-          debug_r=0
-          ;;
-        .)
-          if [ "${debug_prev_search:-}" ]; then
-            debug_search=${debug_prev_search:-}
-            debug_r=0
-            debug_long_command=t
-          else
-            echo "No previous search." >&$fd_original_err
-          fi
-          ;;
-        *)
-          echo >&$fd_original_err
-          echo "a  display array" >&$fd_original_err
-          echo "c  list 10 lines of source code before and after current line" >&$fd_original_err
-          echo "C  continue execution without stopping" >&$fd_original_err
-          echo "d  display an expression with variables substituted" >&$fd_original_err
-          echo "D  repeat last display command" >&$fd_original_err
-          echo "e  evaluate an expression" >&$fd_original_err
-          echo "E  repeat last eval expression command" >&$fd_original_err
-          echo "f  continue until a line contains the substring given" >&$fd_original_err
-          echo "F  toggle expanded search mode, which enables searching on evaluated string expressions" >&$fd_original_err
-          echo "h  toggle syntax highlighting" >&$fd_original_err
-          echo "i  next instruction, stepping into function calls" >&$fd_original_err
-          echo "j  jump ahead: shallow substring find" >&$fd_original_err
-          echo "k  skip current command" >&$fd_original_err
-          echo "l  list next 20 lines of source code" >&$fd_original_err
-          echo "L  list previous 20 lines of source code" >&$fd_original_err
-          echo "n  next line of code (even if it resolves to several different statements)," >&$fd_original_err
-          echo "     not stepping into function calls" >&$fd_original_err
-          echo "N  continue executing until we reach a line later than the current line, completing loops if needed" >&$fd_original_err
-          echo "o  step out from the current function" >&$fd_original_err
-          echo "p  print variables in current line" >&$fd_original_err
-          echo "P  print conditional test results of current line" >&$fd_original_err
-          echo "q  quit: exit the program entirely" >&$fd_original_err
-          echo "r  rewind: go back to the start of the last looping / try block" >&$fd_original_err
-          echo "s  execute next small statement, even if multiple statements are on a line," >&$fd_original_err
-          echo "     not stepping into function calls" >&$fd_original_err
-          echo "S  show stack trace" >&$fd_original_err
-          echo "w  set or clear current watched variable" >&$fd_original_err
-          echo "x  toggle expanded command mode. If on, will expand each *short* command that is executed" >&$fd_original_err
-          echo "X  toggle extended expanded command mode. If on, will expand *all* commands that are executed" >&$fd_original_err
-          echo "=  continue until the current line is reached again" >&$fd_original_err
-          echo "]  continue until we reach a different function" >&$fd_original_err
-          echo ".  continue until a line contains the previously searched substring given" >&$fd_original_err
-          ;;
-      esac
-    #fi
+        else
+          echo "No previous search." >&$fd_original_err
+        fi
+        ;;
+      *)
+        echo >&$fd_original_err
+        echo "a  display array" >&$fd_original_err
+        echo "c  list 10 lines of source code before and after current line" >&$fd_original_err
+        echo "C  continue execution without stopping" >&$fd_original_err
+        echo "d  display an expression with variables substituted" >&$fd_original_err
+        echo "D  repeat last display command" >&$fd_original_err
+        echo "e  evaluate an expression" >&$fd_original_err
+        echo "E  repeat last eval expression command" >&$fd_original_err
+        echo "f  continue until a line contains the substring given" >&$fd_original_err
+        echo "F  toggle expanded search mode, which enables searching on evaluated string expressions" >&$fd_original_err
+        echo "h  toggle syntax highlighting" >&$fd_original_err
+        echo "i  next instruction, stepping into function calls" >&$fd_original_err
+        echo "j  jump ahead: shallow substring find" >&$fd_original_err
+        echo "k  skip current command" >&$fd_original_err
+        echo "l  list next 20 lines of source code" >&$fd_original_err
+        echo "L  list previous 20 lines of source code" >&$fd_original_err
+        echo "n  next line of code (even if it resolves to several different statements)," >&$fd_original_err
+        echo "     not stepping into function calls" >&$fd_original_err
+        echo "N  continue executing until we reach a line later than the current line, completing loops if needed" >&$fd_original_err
+        echo "o  step out from the current function" >&$fd_original_err
+        echo "p  print variables in current line" >&$fd_original_err
+        echo "P  print conditional test results of current line" >&$fd_original_err
+        echo "q  quit: exit the program entirely" >&$fd_original_err
+        echo "r  rewind: go back to the start of the last looping / try block" >&$fd_original_err
+        echo "s  execute next small statement, even if multiple statements are on a line," >&$fd_original_err
+        echo "     not stepping into function calls" >&$fd_original_err
+        echo "S  show stack trace" >&$fd_original_err
+        echo "w  set or clear current watched variable" >&$fd_original_err
+        echo "x  toggle expanded command mode. If on, will expand each *short* command that is executed" >&$fd_original_err
+        echo "X  toggle extended expanded command mode. If on, will expand *all* commands that are executed" >&$fd_original_err
+        echo "=  continue until the current line is reached again" >&$fd_original_err
+        echo "]  continue until we reach a different function" >&$fd_original_err
+        echo ".  continue until a line contains the previously searched substring given" >&$fd_original_err
+        ;;
+    esac
   done
 
   if [ $debug_expansion -gt 0 ]; then
@@ -502,11 +509,13 @@ reserve_tmp_file() {
 debugging=f
 debug_start() {
   if [ $debugging == f ]; then
+    debugging=t
+
     debug_dir=$PWD
     debug_display=${debug_display:-none}
     debug_exit=${debug_exit:-f}
     debug_expanded_search=${debug_expanded_search:-f}
-    debug_expansion=${debug_expansion:-0}
+    debug_expansion=${debug_expansion:-1}
     debug_expression=${debug_expression:-echo none}
     debug_last_location=${debug_last_location:-}
     debug_list_dir=${debug_list_dir:-none}
@@ -523,6 +532,7 @@ debug_start() {
     debug_step_to_later_line=${debug_step_to_later_line:-f}
     debug_step_to_next_function=${debug_step_to_next_function:-f}
     debug_stop_at=${debug_stop_at:-}
+    debug_subshell=f
     debug_watch=${debug_watch:-}
 
     reserve_tmp_file debug_fifo_path || exit 1
@@ -537,12 +547,13 @@ debug_start() {
            [ $debug_rewind == t ] && continue
            [ $debug_exit == t ] && exit 1
            [ $debug_expansion -gt 0 -a -n "${debug_expansion_pid:-}" ] && set -x
+           [ $debug_subshell == t ] && set -T || set +T
+           debug_subshell=f
            set_return_code $debug_rc
          else
            true
          fi
          ' DEBUG
-    debugging=t
   fi
 }
 
