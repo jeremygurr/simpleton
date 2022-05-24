@@ -60,7 +60,7 @@ debug_trap() {
   fi
 
   local debug_line_num=$1; shift
-  let debug_line_num-=3
+  let debug_line_num-=5
   local debug_function=$1; shift
   local debug_command=$1; shift
 
@@ -132,7 +132,6 @@ debug_trap() {
 
   if [ $debug_highlight == t ]; then
 
-    local previous_dir=$PWD
     debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
     local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
     if [ ! -f "$highlighted_source" ]; then
@@ -173,6 +172,8 @@ debug_trap() {
     display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
     raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
   fi
+
+  debug_prev_command=$raw_display_command
 
   local debug_c debug_array
   while [ $debug_r == -1 ]; do
@@ -523,6 +524,7 @@ debug_start() {
     debug_list_offset=${debug_list_offset:-0}
     debug_long_command=${debug_long_command:-f}
     debug_max_depth=${debug_max_depth:-99}
+    debug_prev_command=${debug_prev_command:-none}
     debug_prev_line=${debug_prev_line:-0}
     debug_prev_search=${debug_prev_search:-}
     debug_prev_function=${debug_prev_function:-none}
@@ -542,18 +544,23 @@ debug_start() {
     shopt -s extdebug
     trap '
          set +x
-         if [[ ! "${FUNCNAME[0]:-none}" =~ ^(echo_align|trace|run|out|err)$ ]]; then
+         set +T
+         # if [[ ! "${FUNCNAME[0]:-none}" =~ ^(echo_align|trace|run|out|err)$ ]]; then
+           echo debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" >>/tmp/debug-out
            debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@"
            debug_rc=$?
            [ $debug_rewind == t ] && continue
            [ $debug_exit == t ] && exit 1
-           [ $debug_expansion -gt 0 -a -n "${debug_expansion_pid:-}" ] && set -x
-           [ $debug_subshell == t ] && set -T || set +T
+           if [ $debug_expansion -gt 0 -a -n "${debug_expansion_pid:-}" ]; then
+             [ $debug_expansion == 1 ] && [[ ! " $debug_prev_command " =~ \ (echo_align|trace|run|out|err)\  ]] && set -x
+             [ $debug_expansion -gt 1 ] && set -x
+           fi
+           [ $debug_subshell == t ] && set -T
            debug_subshell=f
            set_return_code $debug_rc
-         else
-           true
-         fi
+         # else
+         #   true
+         # fi
          ' DEBUG
   fi
 }
