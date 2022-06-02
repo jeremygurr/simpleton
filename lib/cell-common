@@ -90,28 +90,92 @@ handle_return
 
 load_context() {
 local f=$1 
-local parent=${f%/*}
-[ "${#parent}" -gt 1 ] && { load_context_before "$parent" || return 1; }
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_physical_context_before "$physical_parent" || return 1
+    load_logical_context_before "$physical_parent" || return 1
+  else
+    load_physical_context_before "$logical_parent" || return 1
+  fi
+fi
+
 [ -f "$f/cube-context" ] && source "$f/cube-context"
 [ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
-[ "${#parent}" -gt 1 ] && { load_context_after "$parent" || return 1; }
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_logical_context_after "$physical_parent" || return 1
+    load_physical_context_after "$physical_parent" || return 1
+  else
+    load_physical_context_after "$logical_parent" || return 1
+  fi
+fi
+
 return 0
 }
 
-load_context_before() {
+load_physical_context_before() {
 local f=$1 
-local parent=${f%/*}
-[ "${#parent}" -gt 1 ] && { load_context_before "$parent" || return 1; }
+local physical_parent=${f%/*}
+if [ "${#physical_parent}" -gt 1 ]; then
+  load_context_before "$physical_parent" || return 1
+fi
 [ -f "$f/cube-context" ] && source "$f/cube-context"
 return 0
 }
 
-load_context_after() {
+load_physical_context_after() {
 local f=$1 
-local parent=${f%/*}
+local physical_parent=${f%/*}
 [ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
-[ "${#parent}" -gt 1 ] && { load_context_after "$parent" || return 1; }
+if [ "${#physical_parent}" -gt 1 ]; then
+  load_context_after "$physical_parent" || return 1
+fi
 return 0
+}
+
+load_logical_context_before() {
+
+local f=$1 
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_physical_context_before "$physical_parent" || return 1
+    load_logical_context_before "$physical_parent" || return 1
+  else
+    load_physical_context_before "$logical_parent" || return 1
+  fi
+fi
+
+[ -f "$f/cube-context" ] && source "$f/cube-context"
+return 0
+
+}
+
+load_logical_context_after() {
+
+local f=$1 
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_logical_context_after "$physical_parent" || return 1
+    load_physical_context_after "$physical_parent" || return 1
+  else
+    load_physical_context_after "$logical_parent" || return 1
+  fi
+fi
+
+return 0
+
 }
 
 decrypt_file() {

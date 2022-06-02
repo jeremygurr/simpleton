@@ -14,6 +14,9 @@ begin_function
 
   init_and_load_context_a
 
+  # TODO: touchup if cube folder date > context date
+  # TODO: delete replay file if it's not fresh enough
+
   # need to collect dimensions even though we haven't expanded the members yet
   local dimension
   if [ -d "$current_cube/dim" ]; then
@@ -23,11 +26,15 @@ begin_function
     end_for
   fi
 
+  # TODO: record parameters of this cube update
+
   if [ ${#dimensions[*]} == 0 ]; then
     cell_update "$current_cube" || fail
   else
     cube_update_pivot "$current_cube" "${dimensions[@]}" || fail
   fi
+
+  # TODO: delete replay file if update is complete
 
 end_function
 handle_return
@@ -67,6 +74,7 @@ begin_function
   values=( $values )
   local value processes
   local parallel=f
+  # TODO: before launching parallel processes, wait for load/process count
   [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
 
   begin_for value in "${values[@]}"; doo
@@ -144,6 +152,7 @@ begin_function
   local dep
   local parallel=f processes
   local dependencies=( $(find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d | sort) )
+  # TODO: before launching parallel processes, wait for load/process count
   [[ ${#dependencies[*]} > 1 && $parallel_execution == t ]] && parallel=t
 
   local any_folder
@@ -176,6 +185,7 @@ begin_function
 
   end_for
 
+  # TODO: if dep starts with a number, it must be executed sequentially. The rest are in parallel
   begin_for dep in $(find "$current_cube/up" -not -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
     local down_path="$dep/down/${current_cube##*/}"
     if [ ! -e "$down_path" ]; then
@@ -255,20 +265,26 @@ trace 0 "Updating row of $current_cube: $dim_string"
 
 begin_function
 
+  # TODO: If cell recently failed, wait until cooldown period is complete
+  # TODO: cell_id should include hash if high_volume_cube=t
+  # TODO: skip this if high_volume_cube=t and replay file already contains this
+
   init_status || fail
   new_status begin-update || fail
 
   if [ -d "$current_cube/log" ]; then
-    local log_path="$current_cube/log$row_path"
+    local log_path="$current_cube/log$cell_id"
     tee_output_to "$log_path/current"
   fi
 
   # out folder must exist
-  local out_path="$current_cube/out$row_path"
+  local out_path="$current_cube/out$cell_id"
   if [ ! -d "$out_path" ]; then
     mkdir -p "$out_path" || fail
     touch -t 197001010000 "$out_path" || fail
   fi
+
+  # TODO: readlock before needs-update check
 
   new_status check-needs-update || fail
   # freshness check first
@@ -284,7 +300,7 @@ begin_function
   local read_locks=''
   if [ -d "$current_cube/up" ]; then
     new_status update-deps || fail
-    cube_update_deps || fail
+    cell_update_deps || fail
 
     new_status read-locks || fail
     read_lock_deps || fail
@@ -294,17 +310,19 @@ begin_function
   wait_for_low_load || fail
 
   new_status write-lock || fail
-  if [ -d "$current_cube/lock$row_path" ]; then
+  if [ -d "$current_cube/lock$cell_id" ]; then
     write_lock_cube || fail
   fi
+
+  # TODO: obtain resources
 
   new_status load-update-context || fail
   init_and_load_update_context_a
 
   local in_path="$current_cube/in"
-  [ -n "$row_path" ] && [ -d "$current_cube/in$row_path" ] && in_path="$current_cube/in$row_path"
+  [ -n "$cell_id" ] && [ -d "$current_cube/in$cell_id" ] && in_path="$current_cube/in$cell_id"
 
-  local tmp_path="$current_cube/tmp$row_path"
+  local tmp_path="$current_cube/tmp$cell_id"
 
   mkdir -p "$out_path.new" || fail
 
@@ -346,10 +364,10 @@ begin_function
         [ -d "$out_path.old" ] && rm -rf "$out_path.old" 2>/dev/null
         mv "$out_path" "$out_path.old" || fail
         mv "$out_path.new" "$out_path" || fail
-        mv "$current_cube/status$row_path/current" "$current/status$row_path/last-success-changed" || fail
+        mv "$current_cube/status$cell_id/current" "$current/status$cell_id/last-success-changed" || fail
       else
         rm -rf "$out_path.new" || fail
-        mv "$current_cube/status$row_path/current" "$current/status$row_path/last-success-not-changed" || fail
+        mv "$current_cube/status$cell_id/current" "$current/status$cell_id/last-success-not-changed" || fail
       fi
     fi
 
@@ -360,14 +378,15 @@ begin_function
       mv "$log_path/current" "$log_path/last_success" || fail
     fi
 
-    # todo: push update to dependencies
+    # TODO: push update to dependencies
+    # TODO: record successful updates in replay file if high_volume_cube=t
 
   else
 
     trace 0 "Update failed."
     new_status failed || fail
 
-    mv "$current_cube/status$row_path/current" "$current/status$row_path/last-failure" || fail
+    mv "$current_cube/status$cell_id/current" "$current/status$cell_id/last-failure" || fail
 
     if [ -d "$current_cube/log" ]; then
       untee_output
@@ -411,10 +430,10 @@ if [ $dimension_count -gt 0 ]; then
     row_id+="${!dimension}:"
   done
   row_id=${row_id%:}
-  row_path="/$row_id"
+  cell_id="/$row_id"
 else
   row_id="only"
-  row_path=""
+  cell_id=""
 fi
 }
 
@@ -451,12 +470,12 @@ eval "exec $fd_trace>&$fd_original_trace"
 }
 
 init_status() {
-mkdir -p "$current_cube/status$row_path"
-rm "$current_cube/status$row_path/current" 2>/dev/null
+mkdir -p "$current_cube/status$cell_id"
+rm "$current_cube/status$cell_id/current" 2>/dev/null
 }
 
 new_status() {
-echo "$1 $EPOCHSECONDS" >>"$current_cube/status$row_path/current"
+echo "$1 $EPOCHSECONDS" >>"$current_cube/status$cell_id/current"
 }
 
 does_cube_need_update() {
@@ -468,7 +487,7 @@ begin_function
   type execute_update &>/dev/null || succeed
 
   if [ -d "$current_cube/in" ]; then
-    if [ "$current_cube/in" -nt "$current_cube/out$row_path" -o "$current_cube/in$row_path" -nt "$current_cube/out$row_path" ]; then
+    if [ "$current_cube/in" -nt "$current_cube/out$cell_id" -o "$current_cube/in$cell_id" -nt "$current_cube/out$cell_id" ]; then
       trace 0 "Local changes were made, needs update"
       needs_update=t
       succeed
@@ -476,7 +495,7 @@ begin_function
   fi
 
   if [ -d "$current_cube/up" ]; then
-    if [ "$current_cube/up" -nt "$current_cube/out$row_path" ]; then
+    if [ "$current_cube/up" -nt "$current_cube/out$cell_id" ]; then
       trace 0 "Upstream changes were made, needs update"
       needs_update=t
       succeed
@@ -487,7 +506,7 @@ begin_function
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
-    local out_timestamp=$(date -r "$current_cube/out$row_path" +%s)
+    local out_timestamp=$(date -r "$current_cube/out$cell_id" +%s)
     if [ $out_timestamp -lt $fresh_cutoff ]; then
       trace 0 "Freshness requirement ($fresh) not met, needs update"
       needs_update=t
