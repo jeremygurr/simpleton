@@ -210,12 +210,138 @@ volume=high / low : allow selection of different strategies
   low: cache only one key
 tracking broken strategies
   cache break for a certain amount of time
+how can volume=high favor cached option?
+  put cached version first, and make it invalid if volume=low
+    unless it already has an adequate cache loaded?
+    can be decided by cache manager when validation function is executed
+how can an upstream any dep be chosen differently by different rows?
+  ( ) vectorize up
+  (*) choose which path to take each time update happens
+      does required row exist in this cell?
+      does fresh cache exist?
+      is this ok for volume level?
+      needs to set a variable with the right path chosen
+can we avoid caching for some cells?
+  for high cardinality dimensions: etcd key fetching
+  dont_cache_result=t/f/d
+  update decides if it writes anything to out
+  update should return result
+  get_from_cache function 
+  get_cache_freshness function
+verify = before / after / both
+test = none / quick / balanced / deep
+autorepair = t
+integrate intend/expect/observe into base cells
+  don't really need expect, just allow update to be the fix command
+supporting high volume cubes output/locks/logs/etc
+  locks should just be files that get deleted when done
+    will create race conditions. Better to just keep the file around
+    cell_locks=t (default)
+  historical logs should not be in separate folders but aggregated across the whole class, only last success / failure across all kept. while running logs are for each instance
+    cell_logs=f (default)
+  very large dirs
+    use simple names first, and then hash if too many / simple name can't be found
+    configure as high_volume=t for cell
+      determines if we use hashes
+what is required for a cell?
+  context-status
+do we really need separation between update and status?
+  only have update context
+terminology: cell vs cube
+  cube contains many cells
+terminology: static cell vs dynamic
+  static cell is only ever changed locally, so freshness is irrelevant. As long as source isn't changed more frequently, it never needs to be updated
+all cell info should only be user readable
+need to make the expand function localized somehow
+  but how do we get output from a cell? must use out folder
+  subshell
+static vs dynamic cubes
+  process is fairly different
+  (*) keep same process, just control using default freshness (unset means no requirement)
+  ( ) split into two processes: static vs dynamic
+      static doesn't need to check or update freshness
+      not really that big of a deal?
+lower level cubes organized into low/ folders, so they aren't visible as part of high level
 ----------------------------------------------------------------------------------------------------
+for simplicity: no dirs are auto-created
+  if they are required, the update should fail with the proper message
+  try not to require anything
+how can a cube update continue where it left off if it's iterating over a large set of cells?
+  
+before launching parallel processes: wait for process count / load to be low enough
+  use a standardized function for this
+both physical and logical context read?
+  if physical and logical parents are different, do physical first then logical
+how to support multi-stage cubes
+  ( ) chained dependencies
+      how can we skip steps in this case?
+  ( ) aggregation cube with stages
+      easier to follow
+  (*) all cubes have aggregation support
+      parallel execution is already supported with normal deps (up/)
+      if up folders are prefixed with a number and hyphen, will execute those sequentially, others will execute in parallel
+        01-undeploy-from-target
+        02-deploy-function-to-target
+        03-update-etcd
+        04-confirm-envoy-update
+        05-undeploy-from-source
+      parallel first then seq
+some cubes have no out or in, only up (they are aggregation cubes)
+  status is fresh-success, stale-success, fresh-failure, stale-failure, running
+debug_log=/tmp/debug
+  see detail trace info in separate file
+prep_required can be set by various dependencies, and should be searched at the beginning to make sure it is done, before starting the real process
+support allocating/locking resources (tunnels)
+  resource cubes have a dimension that is arbitrary (requestors will ask for `any` of that)
+  how to wait for resource to become available if available pool is empty?
+    also, the lock must be exclusive, not read only like normal deps
+    ( ) make resources different than dependencies (they don't need an update anyway? actually they probably do)
+        exclusive lock
+        availability=free|in-use|broken
+        res/
+env/dc/zone/region
+  env: e1 e2 e3
+  dc: ipc1 ipc2 bom blr
+  zone: r1 r2
+  region: us india
+  shortcuts:
+    env=e31i -> env=e3 dc=bom zone=r1 region=india
 example case
+  get etcd value
+    path: one-data/etcd/value
+    value: env project key 
+    derived: service_domain, certs
+  single key fetch: one-data/etcd/single-value-loader
+  cached version of etcd key: one-data/etcd/dump-loader
+  deploy fsm 
+    # need to set up tunnels beforehand (maybe 3 tunnels?)
+    up
+      01-undeploy-function-from-target
+        up
+          functions-endpoint
+      02-deploy-function-to-target
+        res
+          openshift-controller-tunnel
+      03-update-etcd
+        up
+          etcdctl-setup
+            up
+              etcd-certs
+              etcd-endpoint
+      04-confirm-envoy-update
+        up
+          access-to-envoy-config
+      05-undeploy-from-source
+        up
+          functions-endpoint
+if cell update recently failed, must wait until cooldown period has completed before trying again
+  calc_cooldown() { } default takes recent_failure_count (in status/) and generates a delay based on that
+folder
   one-data/
     etcd/
-      server-access/
-        dimension/
+      service-access/
+        dim/ 
+          # dimension names must be singular, since it can be easily changed to plural later
           env/
             in/
               get_members
@@ -255,63 +381,58 @@ example case
       key/
     mvs/pod/function/loaded-version/
     mvs/pod/function/is-loaded/
-      intention/
-        # if fresh is set, will check out folder against that limit
-        # optional (if missing, will NOT be created)
-        # this folder timestamp is updated if any deps are modified
-        up/
-        # auto created and populated 
-        down/
-        dimension/
-          {name}/
-            status-context
-            out/
-            out/members  # optional
-        # if no in folder, no internal check for freshness
-        # optionally row specific
-        in/*?/
-          # special files that are encrypted
-          secret/
-        # any of these can be vectorized or not
-        # if out folder is missing, then this is not a cell
-        out/*/
-        # where new data should be written to
-        out/*.new/
-          # is NOT cleared after cell update completes
-          secret/
-        # is cleared after cell update completes, created if needed
-        tmp/*/
-        # if this doesn't exist, logs won't be written
-        log/*/
-        # if this doesn't exist, locks won't be held. Cell is assumed to be effectively immutable
-        lock/*/
-        # used to unlock secrets
-        key/
-        # will be created if needed
-        status/*/
-          # file containing current execution stages and timestamps
-          current
-          previous-success
-          previous-failure
-        # can't be vectorized because it's a file
-        status-context # used when only status is being checked
-          measures="versions"
-          expand_dimension() {
-            # expand_dimension {dim_folder} {dim_plural} {value}
-            # unaliases
-            # expands
-            # sets defaults
-            # returns true or false depending on whether dimension members are valid
-          }
-        status-context-after
-        update-context 
-          execute_update() {}
-        update-context-after
-      apply/
-      expectation/
-      fix/
-      observation/
-        
+      # if fresh is set, will check out folder against that limit
+      # optional (if missing, will NOT be created)
+      # this folder timestamp is updated if any deps are modified
+      up/
+        # 'any' folders. Any of the cubes inside may be used to satisfy dependency
+        *?/
+      # just like up dependencies, except they are temporarily allocated resources
+      res/
+      # auto created and updated when a dependency is added with the 'cell add up' command
+      down/
+      dim/
+        {name}/
+          # should not do anything cell specific, but may have functions which do
+          cube-context
+          out/
+          out/members  # optional
+      # if no in folder, no internal check for freshness
+      in/*/
+        # special files that are encrypted
+        secret/
+      # any of these can be vectorized or not
+      # if out folder is missing, then this is not a cell
+      # is NOT saved in repo
+      out/*/
+        *.new/
+        *.old/
+        # is NOT cleared after cell update completes
+        secret/
+      # where new data should be written to
+      # is cleared after cell update completes, created if needed
+      # ignored by repo
+      tmp/*/
+      # if this doesn't exist, logs won't be written
+      # logs can be cell or cube level
+      log/*/
+      # if this doesn't exist, locks won't be held. Cell is assumed to be effectively immutable
+      # locks can be cube or cell level, selected by cell_logs=t
+      lock/*/
+      # used to unlock secrets
+      key/
+      # can't be vectorized because it's a file
+      cube-context # used when only status is being checked
+        measures="versions"
+        expand_dimension() {
+          # expand_dimension {dim_folder} {dim_plural} {value}
+          # unaliases
+          # expands
+          # sets defaults
+          # returns true or false depending on whether dimension members are valid
+        }
+        execute_update() {}
+
 help command
   each folder has a README, created from the template
 new command  

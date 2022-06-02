@@ -14,32 +14,39 @@ command=$1; shift
 subjects=( )
 
 for subject in "$@"; do
-
-  if [ ! -d "$subject/meta" ]; then
-    err "Subject $subject is not a cell. Subject must be a folder which contains a meta folder."
+  subject=$(realpath "$subject")
+  if [ ! -d "$subject" ]; then
+    err "Subject does not exist or is not a folder: $subject"
     exit 1
   fi
-
-  subject=$(realpath "$subject")
-
   subjects+=( "$subject" )
-
 done
 
 if [ ! "${subjects:-}" ]; then
   subjects=( $PWD )
 fi
 
+for subject in "${subjects[@]}"; do
+  if [ ! -d "$subject/cube-context" ]; then
+    err "Subject $subject is not a cube. Subject must be a folder which contains a cube-context file."
+    exit 1
+  fi
+done
+
 called_from=cli
 
 case $command in 
   status)
     source $SIMPLETON_REPO/lib/cell-status
-    cell_status "${subjects[@]}" || exit 1
+    begin_while subject in "${subjects[@]}"; doo
+      cube_status "$subject" || exit 1
+    end_while
     ;;
   update)
     source $SIMPLETON_REPO/lib/cell-update
-    cell_update "${subjects[@]}" || exit 1
+    begin_while subject in "${subjects[@]}"; doo
+      cube_update "$subject" || exit 1
+    end_while
     ;;
   *)
     err "Unknown command: $command"

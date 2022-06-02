@@ -2,75 +2,36 @@
 
 SIMPLETON_EXTENSIONS=${SIMPLETON_EXTENSIONS:-$SIMPLETON_REPO/..}
 
-load_extension() {
-  local extension_folder=$1
-  [ -d "$extension_folder/simpleton-handlers" ] && handler_path=( "$extension_folder/simpleton-handlers" "${handler_path[@]}" )
-  [ -d "$extension_folder/simpleton-archetypes" ] && archetype_path=( "$extension_folder/simpleton-archetypes" "${archetype_path[@]}" )
-}
+# don't let other users read any files written by these scripts
+umask 0077
 
-load_extensions() {
-
-  local extension_folder f=$1
-  if [ -d "$f/simpleton-extensions" ]; then
-    for extension_folder in $(find -L "$f/simpleton-extensions" -mindepth 1 -maxdepth 1 -type d | sort); do
-      load_extension "$extension_folder"
-    done
-  elif [ -f "$f/simpleton-extensions" ]; then
-    for extension_folder in $(<$f/simpleton-extensions); do
-      extension_folder="$SIMPLETON_EXTENSIONS/$extension_folder"
-      if [ -d "$extension_folder" ]; then
-        absolute_path extension_folder || return 1
-        load_extension "$extension_folder" 
-      else
-        err "Missing extension: $extension_folder (required by $f/simpleton-extensions)"
-        return 1
-      fi
-    done
-  fi
-
-  return 0
-
-}
-
-# not sure if this is needed
-init_context() {
-  handler_path=( "$SIMPLETON_REPO/simpleton-handlers" )
-  archetype_path=( "$SIMPLETON_REPO/simpleton-archetypes" )
-  load_extensions "$SIMPLETON_REPO"
-  return 0
-}
-
-# current_cell must be set before this is used
-alias init_and_load_status_context_a='
+# current_cube must be set before this is used
+alias init_and_load_context_a='
   local dimensions=( )
-  init_status_context "$current_cell" || fail
+  init_context "$current_cube" || fail
   eval "$localize_dim_vars"
-  load_status_context "$current_cell" || fail
+  load_context "$current_cube" || fail
 '
 
 # this must be done after dim is updated
 # this probably isn't needed, since we do normalization as part of dim update
 alias normalize_dims_a='
-  if ! normalize_dimensions "$current_cell"; then
+  if ! normalize_dimensions "$current_cube"; then
     trace 5 "Dimension normalization failed. One of the dimensions must be invalid."
     fail
   fi
 '
 
-alias init_and_load_update_context_a='
-  init_update_context || fail
-  load_update_context || fail
-'
+init_context() {
 
-init_status_context() {
-
-  local current_cell=$1 dimension dimension_folder dimension_plural
+  local current_cube=$1 dimension dimension_folder dimension_plural high_volume=f \
+    cell_locks=t cell_logs=f
 
   # this var should be used by the calling function to localize dim vars (prevent changes to them 
   #  from altering higher call stack values)
   localize_dim_vars=""
-  if [ -d "$current_cell/dimension" ]; then
-    for dimension_folder in $(find "$current_cell/dimension" -mindepth 1 -maxdepth 1 -type d); do
+  if [ -d "$current_cube/dimension" ]; then
+    for dimension_folder in $(find "$current_cube/dimension" -mindepth 1 -maxdepth 1 -type d); do
       dimension=${dimension_folder##*/}
       dimension_plural=${dimension}s
       localize_dim_vars+="local $dimension $dimension_plural; "
@@ -84,16 +45,16 @@ init_status_context() {
 
 reset_expand_dim() {
 
-  # override this in cells to support aliases, dimension groups, and defaults
+  # override this in cubes to support aliases, dimension groups, and defaults
   # should store values in plural form of var, and only plural form should be used after this
   # should fail (return 1) if any values are invalid, or if required value is missing
   expand_dim() {
-  local dimension=$1; shift
-  local dimension_plural=${dimension_plural}s; shift
-  local value=${!dimension_plural:-${!dimension:-}}
-  [ -z "$value" ] && return 1
-  eval "$dimension_plural=\$value"
-  return 0
+    local dimension=$1; shift
+    local dimension_plural=${dimension_plural}s; shift
+    local value=${!dimension_plural:-${!dimension:-}}
+    [ -z "$value" ] && return 1
+    eval "$dimension_plural=\$value"
+    return 0
   }
 
   # usually this doesn't need to be overridden, since it uses expand_dim to determine if it's valid
@@ -112,10 +73,10 @@ normalize_dimensions() {
 trace -5 "Normalizing dimensions"
 begin_function
 
-  local dimension current_cell=$1 value dimension_plural dimension_folder
+  local dimension current_cube=$1 value dimension_plural dimension_folder
   dimensions=( )
-  if [ -d "$current_cell/dimension" ]; then
-    begin_for dimension_folder in $(find "$current_cell/dimension" -mindepth 1 -maxdepth 1 -type d); doo
+  if [ -d "$current_cube/dimension" ]; then
+    begin_for dimension_folder in $(find "$current_cube/dimension" -mindepth 1 -maxdepth 1 -type d); doo
       dimension=${dimension_folder##*/}
       dimension_plural=${dimension}s
       value=${!dimension_plural:-${!dimension:-}}
@@ -127,65 +88,29 @@ end_function
 handle_return
 }
 
-load_status_context() {
-init_status_context || return 1
+load_context() {
 local f=$1 
 local parent=${f%/*}
-[ "${#parent}" -gt 1 ] && { load_status_context_before "$parent" || return 1; }
-[ -f "$f/status-context" ] && source "$f/status-context"
-[ -f "$f/status-context-after" ] && source "$f/status-context-after"
-[ "${#parent}" -gt 1 ] && { load_status_context_after "$parent" || return 1; }
+[ "${#parent}" -gt 1 ] && { load_context_before "$parent" || return 1; }
+[ -f "$f/cube-context" ] && source "$f/cube-context"
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+[ "${#parent}" -gt 1 ] && { load_context_after "$parent" || return 1; }
 return 0
 }
 
-load_status_context_before() {
+load_context_before() {
 local f=$1 
 local parent=${f%/*}
-[ "${#parent}" -gt 1 ] && { load_status_context_before "$parent" || return 1; }
-[ -f "$f/status-context" ] && source "$f/status-context"
+[ "${#parent}" -gt 1 ] && { load_context_before "$parent" || return 1; }
+[ -f "$f/cube-context" ] && source "$f/cube-context"
 return 0
 }
 
-load_status_context_after() {
+load_context_after() {
 local f=$1 
 local parent=${f%/*}
-[ -f "$f/status-context-after" ] && source "$f/status-context-after"
-[ "${#parent}" -gt 1 ] && { load_status_context_after "$parent" || return 1; }
-return 0
-}
-
-init_update_context() {
-# this should write to out.new or out/{row}.new
-execute_update() { 
-  rsync -a "$in_path/" "$out_path.new/" || return 1
-  return 0
-}
-}
-
-load_update_context() {
-init_update_context || return 1
-local f=$1 
-local parent=${f%/*}
-[ "${#parent}" -gt 1 ] && { load_update_context_before "$parent" || return 1; }
-[ -f "$f/update-context" ] && source "$f/update-context"
-[ -f "$f/update-context-after" ] && source "$f/update-context-after"
-[ "${#parent}" -gt 1 ] && { load_update_context_after "$parent" || return 1; }
-return 0
-}
-
-load_update_context_before() {
-local f=$1 
-local parent=${f%/*}
-[ "${#parent}" -gt 1 ] && { load_update_context_before "$parent" || return 1; }
-[ -f "$f/update-context" ] && source "$f/update-context"
-return 0
-}
-
-load_update_context_after() {
-local f=$1 
-local parent=${f%/*}
-[ -f "$f/update-context-after" ] && source "$f/update-context-after"
-[ "${#parent}" -gt 1 ] && { load_update_context_after "$parent" || return 1; }
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+[ "${#parent}" -gt 1 ] && { load_context_after "$parent" || return 1; }
 return 0
 }
 
@@ -199,14 +124,14 @@ begin_function
 
   mkdir -p "$tmp_path" || fail
 
-  if [ ! -f "$current_cell/key/key.$USER" ]; then
-    err "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
-    find $current_cell/key -name "key.*" >&2
+  if [ ! -f "$current_cube/key/key.$USER" ]; then
+    err "You don't have a key for this cube ($USER). Ask someone who does to add you. Existing keys:" 
+    find $current_cube/key -name "key.*" >&2
     fail
   fi
 
   # extract the master key
-  openssl pkeyutl -decrypt -inkey ~/.ssh/id_rsa -in "$current_cell/key/key.$USER" -out $tmp_path/master || {
+  openssl pkeyutl -decrypt -inkey ~/.ssh/id_rsa -in "$current_cube/key/key.$USER" -out $tmp_path/master || {
     err "Failed to decrypt master key." 
     fail
   }

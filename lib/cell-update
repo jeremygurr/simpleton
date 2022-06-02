@@ -1,90 +1,63 @@
 #!/bin/bash
 
-cell_update() {
-trace 0 "Updating cells"
-begin_function
-  local subject
-  begin_while subject in "$@"; doo
-    cell_update_array "$subject" || fail
-  end_while
-end_function
-handle_return
-}
+# Notice that it has parentheses after function name instead of braces. This means it launches in a
+# subshell, localizing the variables it changes
+cube_update() (
 
-cell_update_array() {
-
-local current_cell=$1
+local current_cube=$1
 local parallel_default=t
 [ $debug == t ] && parallel_default=f
 local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
-trace 0 "Updating array of $current_cell"
+
+trace 0 "Updating cube $current_cube"
 begin_function
 
-  if [ ! -d "$current_cell/out" ]; then
-    local folder
-    # check subfolders for cells
-    local parallel=f processes=
-    local values=( $(find "$current_cell" -mindepth 1 -maxdepth 1 -type d | sort) )
-    [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
-    for folder in "${values[@]}"; do
-      if [ $parallel == t ]; then
-        cell_update_array "$folder" &
-        processes+=" $!"
-      else
-        cell_update_array "$folder" || fail
-      fi
-    done
-  else
-    init_and_load_status_context_a
-    if [ -d "$current_cell/dimension" ]; then
-      cell_update_dims || fail
-    fi
-    cell_update_row_set "$current_cell" "${dimensions[@]}" || fail
+  init_and_load_context_a
+
+  # need to collect dimensions even though we haven't expanded the members yet
+  local dimension
+  if [ -d "$current_cube/dim" ]; then
+    begin_for dimension_folder in $(find "$current_cube/dim" -mindepth 1 -maxdepth 1 -type d); doo
+      dimension=${dimension_folder##*/}
+      dimensions+=( $dimension )
+    end_for
   fi
 
-  wait_for_sub_processes || fail
+  if [ ${#dimensions[*]} == 0 ]; then
+    cell_update "$current_cube" || fail
+  else
+    cube_update_pivot "$current_cube" "${dimensions[@]}" || fail
+  fi
 
 end_function
 handle_return
 
-}
+)
 
-cell_update_dims() {
+# should only be called if there are dimensions remaining to be pivoted. Otherwise cell_update should be called.
+cube_update_pivot() {
 
-trace 0 "Updating dims $current_cell"
-begin_function
-
-  begin_for dimension_folder in $(find "$current_cell/dimension" -mindepth 1 -maxdepth 1 -type d); doo
-
-    dimension=${dimension_folder##*/}
-    dimension_plural=${dimension}s
-    # not parallel, must execute sequentially
-    cell_update_array "$dimension_folder" || fail
-
-    if [ -f "$dimension_folder/out/functions" ]; then
-      source "$dimension_folder/out/functions" || fail
-      expand_dim $dimension_plural || fail
-      reset_expand_dim
-    else
-      expand_dim $dimension_plural || fail
-    fi
-
-  end_for
-
-end_function
-handle_return
-
-}
-
-cell_update_row_set() {
-
-local current_cell=$1; shift
+local current_cube=$1; shift
 local first_dimension=${1}s; shift
 local dimensions_remaining=( "$@" )
 
-local values="${!first_dimension:-}"
-trace 0 "Updating rows of $current_cell: $first_dimension=[ $values ]"
+trace 0 "Pivoting $current_cube: $first_dimension"
 begin_function
+
+  local dimension_folder=$current_cube/dim/$first_dimension
+  if [ ! -d "$dimension_folder" ]; then
+    err "Internal error: cube_update_pivot was called with a dimension that isn't in the dim folder"
+    fail
+  fi
+
+  cube_update "$dimension_folder" || fail
+  if [ ! -d "$dimension_folder/out/functions" ]; then
+    err "Missing functions file in $dimension_folder/out. It must contain the expand_dim function."
+    fail
+  fi
+  source "$dimension_folder/out/function" || fail
+  expand_dim $first_dimension || fail
+  local values="${!first_dimension:-}"
 
   if [ ! "$values" ]; then
     err "Missing value for dimension $first_dimension"
@@ -100,17 +73,17 @@ begin_function
     eval "$first_dimension='$value'"
     if [ "$dimensions_remaining" ]; then
       if [ $parallel == t ]; then
-        cell_update_row_set "$current_cell" "${dimensions_remaining[@]}" &
+        cube_update_pivot "$current_cube" "${dimensions_remaining[@]}" &
         processes+=" $!"
       else
-        cell_update_row_set "$current_cell" "${dimensions_remaining[@]}" || fail
+        cube_update_pivot "$current_cube" "${dimensions_remaining[@]}" || fail
       fi
     else
       if [ $parallel == t ]; then
-        cell_update_row "$current_cell" &
+        cell_update "$current_cube" &
         processes+=" $!"
       else
-        cell_update_row "$current_cell" || fail
+        cell_update "$current_cube" || fail
       fi
     fi
   end_for
@@ -123,28 +96,28 @@ handle_return
 }
 
 wait_for_sub_processes() {
-[ $parallel == t ] && trace 0 "Waiting for sub processes to complete"
 if [ $parallel == t ]; then
+  trace 0 "Waiting for sub processes to complete"
   local process
   for process in $processes; do
     wait $process &>/dev/null
     if [ $? -gt 0 -a $? -lt 127 ]; then
-      trace 0 "Subprocess failed to terminate successfully"
+      trace 0 "Subprocess $process failed to terminate successfully"
       return 1
     fi
   done
 fi
 }
 
-select_any_cell() {
-local current_cell=$1
-trace 0 "Testing 'any' cell $current_cell"
+select_any_cube() {
+local current_cube=$1
+trace 0 "Testing 'any' cube $current_cube"
 begin_function
 
   init_and_load_status_context_a
   validate_dims || fail
   local needs_update
-  does_cell_need_update || fail
+  does_cube_need_update || fail
   if [ $needs_update == t ]; then
     trace 0 "Update needed"
     fail
@@ -154,47 +127,48 @@ end_function
 handle_return
 }
 
-update_any_cell() {
-local current_cell=$1
-trace 0 "Updating 'any' cell $current_cell"
+update_any_cube() {
+local current_cube=$1
+trace 0 "Updating 'any' cube $current_cube"
 begin_function
   init_and_load_status_context_a
-  cell_update_array "$current_cell" || fail
+  cube_update_array "$current_cube" || fail
 end_function
 handle_return
 }
 
 cell_update_deps() {
-trace 0 "Updating subs of $current_cell"
+trace 0 "Updating subs of $current_cube"
 begin_function
 
   local dep
   local parallel=f processes
-  [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
+  local dependencies=( $(find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d | sort) )
+  [[ ${#dependencies[*]} > 1 && $parallel_execution == t ]] && parallel=t
 
   local any_folder
-  begin_for any_folder in $(find "$current_cell/up" -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
+  begin_for any_folder in ; doo
     
-    # check if any cells are already complete
+    # check if any cubes are already complete
     local any_selected=
     local options=$(find "$any_folder" -mindepth 1 -maxdepth 1 -type d | sort)
     for dep in $options; do
-      select_any_cell "$dep" && { any_selected=$dep; break; }
+      select_any_cube "$dep" && { any_selected=$dep; break; }
     done
 
     # of those that are valid, try to update one by one until successful
     if [ ! "${any_selected:-}" ]; then
       for dep in $options; do
-        update_any_cell "$dep" && { any_selected=$dep; break; }
+        update_any_cube "$dep" && { any_selected=$dep; break; }
       done
     fi
 
-    # link any cell to parent folder
+    # link any cube to parent folder
     if [ "${any_selected:-}" ]; then
       local selected_folder=$any_selected
       [[ $selected_folder =~ .*/(.*/.*) ]] || fail
       selected_folder=${BASH_REMATCH[1]}
-      ln -sf "$selected_folder" "$current_cell/up/${any_folder%?}" || fail
+      ln -sf "$selected_folder" "$current_cube/up/${any_folder%?}" || fail
     else
       trace -5 "Failed to find valid dependency for $any_folder"
       fail
@@ -202,17 +176,17 @@ begin_function
 
   end_for
 
-  begin_for dep in $(find "$current_cell/up" -not -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
-    local down_path="$dep/down/${current_cell##*/}"
+  begin_for dep in $(find "$current_cube/up" -not -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
+    local down_path="$dep/down/${current_cube##*/}"
     if [ ! -e "$down_path" ]; then
-      ln -sf "$current_cell" "$down_path" || fail
-    elif [ "$(realpath "$down_path")" != "$current_cell" ]; then
+      ln -sf "$current_cube" "$down_path" || fail
+    elif [ "$(realpath "$down_path")" != "$current_cube" ]; then
       local variant=2
       begin_while true; doo
         if [ ! -e "$down_path$variant" ]; then
-          ln -sf "$current_cell" "$down_path$variant" || fail
+          ln -sf "$current_cube" "$down_path$variant" || fail
           break
-        elif [ "$(realpath "$down_path$variant")" == "$current_cell" ]; then
+        elif [ "$(realpath "$down_path$variant")" == "$current_cube" ]; then
           break
         fi
         let variant++
@@ -220,10 +194,10 @@ begin_function
     fi
 
     if [ $parallel == t ]; then
-      called_from=$short_cell/up cell_update_row "$dep" &
+      called_from=$short_cube/up cube_update_row "$dep" &
       processes+=" $!"
     else
-      called_from=$short_cell/up cell_update_row "$dep" || fail
+      called_from=$short_cube/up cube_update_row "$dep" || fail
     fi
   end_for
 
@@ -234,16 +208,16 @@ handle_return
 }
 
 read_lock_deps() {
-trace 0 "Obtaining read locks for subs of $current_cell"
+trace 0 "Obtaining read locks for subs of $current_cube"
 begin_function
 
   local dep lock_fd
-  begin_for dep in $(find "$current_cell/up" -mindepth 1 -maxdepth 1 -not -name '*\?' -type d | sort); doo
+  begin_for dep in $(find "$current_cube/up" -mindepth 1 -maxdepth 1 -not -name '*\?' -type d | sort); doo
     init_and_load_status_context_a
     if [ -d "$dep/lock" ]; then
       exec {lock_fd}<"$dep/lock" || fail
       flock -s -w $lock_timeout $lock_fd || {
-        err "Failed to get read lock for dep $dep of $current_cell"
+        err "Failed to get read lock for dep $dep of $current_cube"
         fail
         }
     fi
@@ -253,14 +227,14 @@ end_function
 handle_return
 }
 
-write_lock_cell() {
-trace 0 "Obtaining write lock for $current_cell"
+write_lock_cube() {
+trace 0 "Obtaining write lock for $current_cube"
 begin_function
 
   local lock_fd
-  exec {lock_fd}<"$current_cell/lock" || fail
+  exec {lock_fd}<"$current_cube/lock" || fail
   flock -x -w $lock_timeout $lock_fd || {
-    err "Failed to get write lock for $current_cell"
+    err "Failed to get write lock for $current_cube"
     fail
     }
 
@@ -268,29 +242,29 @@ end_function
 handle_return
 }
 
-cell_update_row() {
+cell_update() {
 
-local current_cell=$1
+local current_cube=$1
 
 local dim dim_string=""
 for dim in "${dimensions[@]}"; do
   dim=${dim}s
   dim_string+="$dim=[ ${!dim:-} ] "
 done
-trace 0 "Updating row of $current_cell: $dim_string"
+trace 0 "Updating row of $current_cube: $dim_string"
 
 begin_function
 
   init_status || fail
   new_status begin-update || fail
 
-  if [ -d "$current_cell/log" ]; then
-    local log_path="$current_cell/log$row_path"
+  if [ -d "$current_cube/log" ]; then
+    local log_path="$current_cube/log$row_path"
     tee_output_to "$log_path/current"
   fi
 
   # out folder must exist
-  local out_path="$current_cell/out$row_path"
+  local out_path="$current_cube/out$row_path"
   if [ ! -d "$out_path" ]; then
     mkdir -p "$out_path" || fail
     touch -t 197001010000 "$out_path" || fail
@@ -299,7 +273,7 @@ begin_function
   new_status check-needs-update || fail
   # freshness check first
   local needs_update
-  does_cell_need_update || fail
+  does_cube_need_update || fail
   if [ $needs_update == f ]; then
     trace 0 "Update not needed"
     succeed
@@ -308,9 +282,9 @@ begin_function
   local lock_timeout=${lock_timeout:-30}
 
   local read_locks=''
-  if [ -d "$current_cell/up" ]; then
+  if [ -d "$current_cube/up" ]; then
     new_status update-deps || fail
-    cell_update_deps || fail
+    cube_update_deps || fail
 
     new_status read-locks || fail
     read_lock_deps || fail
@@ -320,17 +294,17 @@ begin_function
   wait_for_low_load || fail
 
   new_status write-lock || fail
-  if [ -d "$current_cell/lock$row_path" ]; then
-    write_lock_cell || fail
+  if [ -d "$current_cube/lock$row_path" ]; then
+    write_lock_cube || fail
   fi
 
   new_status load-update-context || fail
   init_and_load_update_context_a
 
-  local in_path="$current_cell/in"
-  [ -n "$row_path" ] && [ -d "$current_cell/in$row_path" ] && in_path="$current_cell/in$row_path"
+  local in_path="$current_cube/in"
+  [ -n "$row_path" ] && [ -d "$current_cube/in$row_path" ] && in_path="$current_cube/in$row_path"
 
-  local tmp_path="$current_cell/tmp$row_path"
+  local tmp_path="$current_cube/tmp$row_path"
 
   mkdir -p "$out_path.new" || fail
 
@@ -372,16 +346,16 @@ begin_function
         [ -d "$out_path.old" ] && rm -rf "$out_path.old" 2>/dev/null
         mv "$out_path" "$out_path.old" || fail
         mv "$out_path.new" "$out_path" || fail
-        mv "$current_cell/status$row_path/current" "$current/status$row_path/last-success-changed" || fail
+        mv "$current_cube/status$row_path/current" "$current/status$row_path/last-success-changed" || fail
       else
         rm -rf "$out_path.new" || fail
-        mv "$current_cell/status$row_path/current" "$current/status$row_path/last-success-not-changed" || fail
+        mv "$current_cube/status$row_path/current" "$current/status$row_path/last-success-not-changed" || fail
       fi
     fi
 
     touch -d @$start_time "$out_path" || fail
 
-    if [ -d "$current_cell/log" ]; then
+    if [ -d "$current_cube/log" ]; then
       untee_output
       mv "$log_path/current" "$log_path/last_success" || fail
     fi
@@ -393,9 +367,9 @@ begin_function
     trace 0 "Update failed."
     new_status failed || fail
 
-    mv "$current_cell/status$row_path/current" "$current/status$row_path/last-failure" || fail
+    mv "$current_cube/status$row_path/current" "$current/status$row_path/last-failure" || fail
 
-    if [ -d "$current_cell/log" ]; then
+    if [ -d "$current_cube/log" ]; then
       untee_output
       mv "$log_path/current" "$log_path/last_failure" || fail
     fi
@@ -445,16 +419,16 @@ fi
 }
 
 wait_for_low_load() {
-local cell_max_load=${cell_max_load:-10}
-local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
+local cube_max_load=${cube_max_load:-10}
+local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
 local current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
-if [ $current_load -gt $cell_max_load ]; then
-  trace 5 "Load average is too high ($current_load > $cell_max_load), waiting until things cool down first."
+if [ $current_load -gt $cube_max_load ]; then
+  trace 5 "Load average is too high ($current_load > $cube_max_load), waiting until things cool down first."
   local time_waited=0
-  while [ $current_load -gt $cell_max_load ]; do
+  while [ $current_load -gt $cube_max_load ]; do
     current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
     sleep 5; let time_waited+=5
-    if [ "$cell_load_wait_timeout" -gt 0 -a $time_waited -ge $cell_load_wait_timeout ]; then
+    if [ "$cube_load_wait_timeout" -gt 0 -a $time_waited -ge $cube_load_wait_timeout ]; then
       err "Timed out waiting for cpu load to be low enough. Aborting"
       return 1
     fi
@@ -477,15 +451,15 @@ eval "exec $fd_trace>&$fd_original_trace"
 }
 
 init_status() {
-mkdir -p "$current_cell/status$row_path"
-rm "$current_cell/status$row_path/current" 2>/dev/null
+mkdir -p "$current_cube/status$row_path"
+rm "$current_cube/status$row_path/current" 2>/dev/null
 }
 
 new_status() {
-echo "$1 $EPOCHSECONDS" >>"$current_cell/status$row_path/current"
+echo "$1 $EPOCHSECONDS" >>"$current_cube/status$row_path/current"
 }
 
-does_cell_need_update() {
+does_cube_need_update() {
 begin_function
 
   needs_update=f
@@ -493,16 +467,16 @@ begin_function
   # nothing needs to be done in execution phase if execute_update function isn't defined
   type execute_update &>/dev/null || succeed
 
-  if [ -d "$current_cell/in" ]; then
-    if [ "$current_cell/in" -nt "$current_cell/out$row_path" -o "$current_cell/in$row_path" -nt "$current_cell/out$row_path" ]; then
+  if [ -d "$current_cube/in" ]; then
+    if [ "$current_cube/in" -nt "$current_cube/out$row_path" -o "$current_cube/in$row_path" -nt "$current_cube/out$row_path" ]; then
       trace 0 "Local changes were made, needs update"
       needs_update=t
       succeed
     fi
   fi
 
-  if [ -d "$current_cell/up" ]; then
-    if [ "$current_cell/up" -nt "$current_cell/out$row_path" ]; then
+  if [ -d "$current_cube/up" ]; then
+    if [ "$current_cube/up" -nt "$current_cube/out$row_path" ]; then
       trace 0 "Upstream changes were made, needs update"
       needs_update=t
       succeed
@@ -513,7 +487,7 @@ begin_function
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
-    local out_timestamp=$(date -r "$current_cell/out$row_path" +%s)
+    local out_timestamp=$(date -r "$current_cube/out$row_path" +%s)
     if [ $out_timestamp -lt $fresh_cutoff ]; then
       trace 0 "Freshness requirement ($fresh) not met, needs update"
       needs_update=t
