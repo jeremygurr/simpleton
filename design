@@ -268,6 +268,8 @@ some cubes have no out or in, only up (they are aggregation cubes)
 debug_log=/tmp/debug
   see detail trace info in separate file
 prep_required can be set by various dependencies, and should be searched at the beginning to make sure it is done, before starting the real process
+  this isn't really needed, resource management used instead. Cell update fails if resource is unavailable, and user must make it available
+  maybe resources can be checked before starting?
 support allocating/locking resources (tunnels)
   resource cubes have a dimension that is arbitrary (requestors will ask for `any` of that)
   how to wait for resource to become available if available pool is empty?
@@ -304,7 +306,24 @@ how to quickly debug an issue?
 inputs of every update should be recorded
 if cell update recently failed, must wait until cooldown period has completed before trying again
   calc_cooldown() { } default takes recent_failure_count (in status/) and generates a delay based on that
+record timestamps of failures and successes and build ids in execution log
+get build id from failures/successes
+debug folder stores detailed info
+handlers
+  look in in/ for folder patterns and execute based on them
+  in/src/java compiles to out/main/classes
+  in/lib/java pulls in external libs needed to out/lib/java
+  in/**.bash-template get hydrated
+  sourced before local context
+do we really want the folder creation thing?
+  (*) folder never auto-created
+    - have to check for the folder each time it is read or written
+  ( ) all folders always exist
+    - only have to update once, no checks later
+    - miss flexibility of enabling / disabling features
+  ( ) folders get created on demand
 ----------------------------------------------------------------------------------------------------
+can we promote real lock to write lock?
 example case
   get etcd value
     path: one-data/etcd/value
@@ -334,6 +353,9 @@ example case
         up
           functions-endpoint
 folder
+  ecp/
+    openshift-tunnel/
+      
   one-data/
     etcd/
       service-access/
@@ -384,10 +406,10 @@ folder
       up/
         # 'any' folders. Any of the cubes inside may be used to satisfy dependency
         *?/
-      # just like up dependencies, except they are temporarily allocated resources
-      res/
       # auto created and updated when a dependency is added with the 'cell add up' command
       down/
+      # just like up dependencies, except they are temporarily allocated resources
+      res/
       dim/
         {name}/
           # should not do anything cell specific, but may have functions which do
@@ -399,7 +421,6 @@ folder
         # special files that are encrypted
         secret/
       # any of these can be vectorized or not
-      # if out folder is missing, then this is not a cell
       # is NOT saved in repo
       out/*/
         *.new/
@@ -413,6 +434,9 @@ folder
       # if this doesn't exist, logs won't be written
       # logs can be cell or cube level
       log/*/
+      # detailed debugging info
+      debug/*/
+      status/*/
       # if this doesn't exist, locks won't be held. Cell is assumed to be effectively immutable
       # locks can be cube or cell level, selected by cell_logs=t
       lock/*/

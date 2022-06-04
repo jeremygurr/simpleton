@@ -1,93 +1,140 @@
 #!/bin/bash
 
 # Notice that it has parentheses after function name instead of braces. This means it launches in a
-# subshell, localizing the variables it changes
+# subshell, localizing the variables and function changes
 cube_update() (
 
-local current_cube=$1
-local parallel_default=t
-[ $debug == t ] && parallel_default=f
-local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
+current_cube=$1
 
-trace 0 "Updating cube $current_cube"
+if [[ ! -f "$current_cube/cube-contexxt" ]]; then
+  err "cube_update called on $current_cube which is not a cube"
+  return 1
+fi
+
+parallel_default=t
+[ $debug == t ] && parallel_default=f
+parallel_execution=${parallel_execution:-${par:-$parallel_default}}
+dimensions=( ) dimension_folders=( )
+
+# need to collect dimensions even though we haven't expanded the members yet
+gather_dims || return 1
+
+local dim dims dim_string=""
+for dim in "${dimensions[@]}"; do
+  dims=${dim}s
+  if [[ "${!dims:-}" ]]; then
+    dim_string+="$dims=[ ${!dims:-} ] "
+  else
+    dim_string+="$dim=${!dim:-} "
+  fi
+done
+trace 0 "Updating cube $current_cube $dim_string"
+
 begin_function
 
   init_and_load_context_a
 
-  # TODO: touchup if cube folder date > context date
-  # TODO: delete replay file if it's not fresh enough
-
-  # need to collect dimensions even though we haven't expanded the members yet
-  local dimension
-  if [ -d "$current_cube/dim" ]; then
-    begin_for dimension_folder in $(find "$current_cube/dim" -mindepth 1 -maxdepth 1 -type d); doo
-      dimension=${dimension_folder##*/}
-      dimensions+=( $dimension )
-    end_for
+  if [[ "$current_cube" -nt "$current_cube/cube-context" ]]; then
+    touchup_cube || fail
   fi
-
-  # TODO: record parameters of this cube update
 
   if [ ${#dimensions[*]} == 0 ]; then
     cell_update "$current_cube" || fail
   else
-    cube_update_pivot "$current_cube" "${dimensions[@]}" || fail
+    cube_update_pivot 0 || fail
   fi
-
-  # TODO: delete replay file if update is complete
 
 end_function
 handle_return
 
 )
 
+gather_dims() {
+trace 0 "Gathering dimensions for $current_cube"
+begin_function
+  if [ -d "$current_cube/dim" ]; then
+    begin_for dimension_folder in 
+      $(find "$current_cube/dim" -mindepth 1 -maxdepth 1 -type d | sort); doo
+      dimension=${dimension_folder##*/}
+      if [[ "$dimension" =~ ^[0-9]+- ]]; then
+        dimension=${dimension#*-}
+      fi
+      if [[ ! "$dimension_folder" =~ ^[a-zA-Z0-9_]+$ ]]; then
+        err "Invalid dimension name [$dimension] derived from folder $dimension_folder"
+        err "Dimensions must only have alphanumeric or _ characters in it."
+        fail
+      fi
+      dimensions+=( $dimension )
+      dimension_folders+=( "$dimension_folder" )
+    end_for
+  fi
+end_function
+handle_return
+}
+
+touchup_cube() {
+trace 0 "Touching up $current_cube"
+local f
+begin_function
+  begin_for f in up res down in out tmp log lock key status; doo
+    if [ -f "$current_cube/$f" ]; then
+      rm "$current_cube/$f" || fail
+      mkdir "$current_cube/$f" || fail
+    fi
+  end_for
+  touch "$current_cube/cube-context"
+end_function
+handle_return
+}
+
 # should only be called if there are dimensions remaining to be pivoted. Otherwise cell_update should be called.
 cube_update_pivot() {
 
-local current_cube=$1; shift
-local first_dimension=${1}s; shift
-local dimensions_remaining=( "$@" )
+local index=$1
+local dim=${dimensions[$index]} 
+local dim_folder=${dimension_folders[$index]}
 
-trace 0 "Pivoting $current_cube: $first_dimension"
+trace 0 "Pivoting $current_cube: $dim"
 begin_function
 
-  local dimension_folder=$current_cube/dim/$first_dimension
-  if [ ! -d "$dimension_folder" ]; then
-    err "Internal error: cube_update_pivot was called with a dimension that isn't in the dim folder"
+  if [[ ! -d "$dim_folder" ]]; then
+    err "Internal error: cube_update_pivot was called with an index which doesn't corrospond with a dimension folder: $dim_folder"
     fail
   fi
 
-  cube_update "$dimension_folder" || fail
-  if [ ! -d "$dimension_folder/out/functions" ]; then
+  cube_update "$dim_folder" || fail
+  if [[ ! -f "$dim_folder/out/functions" ]]; then
     err "Missing functions file in $dimension_folder/out. It must contain the expand_dim function."
     fail
   fi
-  source "$dimension_folder/out/function" || fail
-  expand_dim $first_dimension || fail
-  local values="${!first_dimension:-}"
+  source "$dim_folder/out/functions" || fail
+  expand_dim $dim || fail
+  local dims=${dim}s
+  local values=( ${!dims:-} )
 
-  if [ ! "$values" ]; then
-    err "Missing value for dimension $first_dimension"
+  if [[ ! "$values" ]]; then
+    err "Missing value for dimension $dim"
     fail
   fi
 
-  values=( $values )
   local value processes
   local parallel=f
-  # TODO: before launching parallel processes, wait for load/process count
-  [ "${#values[*]}" -gt 1 -a "$parallel_execution" == t ] && parallel=t
+  if [[ "${#values[*]}" > 1 && "$parallel_execution" == t ]]; then
+    parallel=t
+    wait_for_low_load || fail
+  fi
 
   begin_for value in "${values[@]}"; doo
-    eval "$first_dimension='$value'"
-    if [ "$dimensions_remaining" ]; then
-      if [ $parallel == t ]; then
-        cube_update_pivot "$current_cube" "${dimensions_remaining[@]}" &
+    eval "$dim='$value'"
+    if [[ ${#dim[*]} > $((index + 1)) ]]; then
+      if [[ $parallel == t ]]; then
+        cube_update_pivot $((index + 1)) &
         processes+=" $!"
       else
-        cube_update_pivot "$current_cube" "${dimensions_remaining[@]}" || fail
+        cube_update_pivot $((index + 1)) || fail
       fi
     else
-      if [ $parallel == t ]; then
+      if [[ $parallel == t ]]; then
         cell_update "$current_cube" &
         processes+=" $!"
       else
@@ -252,41 +299,101 @@ end_function
 handle_return
 }
 
+write_persist_file() {
+  echo "
+update_id=$update_id
+cooldown_delay=$cooldown_delay
+consecutive_failures=$consecutive_failures
+" >$status_path/persist || fail
+}
+
+maybe_apply_cooldown() {
+begin_function
+  # If cell recently failed, wait until cooldown period is complete
+  if [[ $consecutive_failures > 0 ]]; then
+    get_cooldown_delay || fail
+    if [[ $cooldown_delay > 0 ]]; then
+      trace 0 "Too many errors have occurred, waiting for cooldown period of $cooldown_delay seconds"
+      new_stage cooldown || fail
+      sleep $cooldown_delay
+    fi
+  else
+    cooldown_delay=1
+  fi
+end_function
+handle_return
+}
+
 cell_update() {
 
 local current_cube=$1
 
-local dim dim_string=""
+local dim dims dim_string="" update_id cell_id= cell_dim_part value stage_start_time previous_stage
 for dim in "${dimensions[@]}"; do
-  dim=${dim}s
-  dim_string+="$dim=[ ${!dim:-} ] "
+  value="${!dim}"
+  dim_string+="$dim=$value "
+  cell_dim_part+="$value:"
 done
-trace 0 "Updating row of $current_cube: $dim_string"
+
+local log_path= status_path= out_path=
+
+if [[ -d $current_cube/log ]]; then
+  log_path=$current_cube/log$cell_id
+  [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
+  tee_output_to $log_path/current-update-log
+fi
+
+if [[ -d $current_cube/status ]]; then
+  status_path=$current_cube/status$cell_id
+  [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
+fi
+
+if [[ -d $current_cube/out ]]; then
+  out_path=$current_cube/out$cell_id
+  if [[ ! -d $out_path ]]; then
+    mkdir $out_path || fail
+    touch -t 197001010000 $out_path || fail
+  fi
+fi
+
+trace 0 "Updating cell $current_cube $dim_string"
 
 begin_function
 
-  # TODO: If cell recently failed, wait until cooldown period is complete
-  # TODO: cell_id should include hash if high_volume_cube=t
-  # TODO: skip this if high_volume_cube=t and replay file already contains this
-
-  init_status || fail
-  new_status begin-update || fail
-
-  if [ -d "$current_cube/log" ]; then
-    local log_path="$current_cube/log$cell_id"
-    tee_output_to "$log_path/current"
+  if [[ "$cell_dim_part" ]]; then
+    cell_dim_part=${cell_dim_part%:}
+    cell_id=/$cell_dim_part
+    if [[ ${high_volume_cube:-f} == t ]]; then
+      local hash=$(echo "$cell_dim_part" | cksum) 
+      hash=${hash:0:2}
+      cell_id+=/$hash
+    fi
   fi
 
-  # out folder must exist
-  local out_path="$current_cube/out$cell_id"
-  if [ ! -d "$out_path" ]; then
-    mkdir -p "$out_path" || fail
-    touch -t 197001010000 "$out_path" || fail
+  init_stage || fail
+  new_stage begin-update || fail
+
+  if [[ "$status_path" ]]; then
+
+    local consecutive_failures=${consecutive_failures:-0}
+    [[ -f "$status_path/persist" ]] && { source "$status_path/persist" || fail; }
+
+    if [[ "${update_id:-}" ]]; then
+      let update_id++
+    else
+      update_id=1000
+    fi
+
+    maybe_apply_cooldown || fail
+    write_persist_file || fail
+
+  else
+    update_id=1000
   fi
 
   # TODO: readlock before needs-update check
 
-  new_status check-needs-update || fail
+  new_stage check-needs-update || fail
   # freshness check first
   local needs_update
   does_cube_need_update || fail
@@ -295,34 +402,41 @@ begin_function
     succeed
   fi
 
+  # TODO: check all dep resources to ensure they will be available when we start
+
   local lock_timeout=${lock_timeout:-30}
 
   local read_locks=''
   if [ -d "$current_cube/up" ]; then
-    new_status update-deps || fail
+    new_stage update-deps || fail
     cell_update_deps || fail
 
-    new_status read-locks || fail
+    new_stage read-locks || fail
     read_lock_deps || fail
   fi
 
-  new_status wait-for-load || fail
+  new_stage wait-for-load || fail
   wait_for_low_load || fail
 
-  new_status write-lock || fail
+  new_stage write-lock || fail
   if [ -d "$current_cube/lock$cell_id" ]; then
     write_lock_cube || fail
   fi
 
   # TODO: obtain resources
 
-  new_status load-update-context || fail
+  new_stage load-update-context || fail
   init_and_load_update_context_a
 
   local in_path="$current_cube/in"
   [ -n "$cell_id" ] && [ -d "$current_cube/in$cell_id" ] && in_path="$current_cube/in$cell_id"
 
+  # TODO: only use tmp path here if folder exists, otherwise use system tmp folder
   local tmp_path="$current_cube/tmp$cell_id"
+  if [ -d "$tmp_path" ]; then
+    rm -rf "$tmp_path" || fail
+  fi
+  mkdir "$tmp_path" || fail
 
   mkdir -p "$out_path.new" || fail
 
@@ -338,13 +452,13 @@ begin_function
   end_for
 
   if [ "$need_decrypt" ]; then
-    new_status decrypt || fail
+    new_stage decrypt || fail
     begin_for file in $need_decrypt; doo
       decrypt_file "$in_path/$file.crypt" "$out_path.new/$file" || fail
     end_for
   fi
 
-  new_status execute-update || fail
+  new_stage execute-update || fail
 
   local start_time=$EPOCHSECONDS
   local update_successful=f
@@ -354,10 +468,11 @@ begin_function
   [ $update_successful == f ] && success_string=bad
   echo "start:$start_time duration:$duration_of_update from:$called_from result:$success_string" >>$log_path/history || fail
 
+  mv $log_path/update-log-current $log_path/update-log-$update_id || fail
   if [ $update_successful == t ]; then
 
     trace 0 "Update successful."
-    new_status succeeded || fail
+    new_stage succeeded || fail
 
     if [ -d "$out_path.new" -a $update_successful == t ]; then
       if ! diff -r "$out_path" "$out_path.new" >/dev/null; then
@@ -375,28 +490,37 @@ begin_function
 
     if [ -d "$current_cube/log" ]; then
       untee_output
-      mv "$log_path/current" "$log_path/last_success" || fail
+      ln -s $log_path/update-log-last-success $log_path/update-log-$update_id || fail
+      # TODO: save all logs if debug folder exists
     fi
 
     # TODO: push update to dependencies
-    # TODO: record successful updates in replay file if high_volume_cube=t
+    # TODO: record successful updates in execution log (cell, update id and timestamp)
+
+    if [ -d "$tmp_path" ]; then
+      rm -rf "$tmp_path" || fail
+    fi
+
+    consecutive_failures=0
+    write_persist_file
 
   else
 
     trace 0 "Update failed."
-    new_status failed || fail
+    new_stage failed || fail
 
     mv "$current_cube/status$cell_id/current" "$current/status$cell_id/last-failure" || fail
 
     if [ -d "$current_cube/log" ]; then
       untee_output
-      mv "$log_path/current" "$log_path/last_failure" || fail
+      ln -s $log_path/update-log-last-failure $log_path/update-log-$update_id || fail
+      # TODO: save all logs if debug folder exists
     fi
+    # TODO: record failed updates in execution log (cell, update id and timestamp)
 
-  fi
+    let consecutive_failures++
+    write_persist_file
 
-  if [ -d "$tmp_path" ]; then
-    rm -rf "$tmp_path" || fail
   fi
 
 end_function
@@ -469,13 +593,20 @@ exec 2>&$fd_original_err
 eval "exec $fd_trace>&$fd_original_trace"
 }
 
-init_status() {
-mkdir -p "$current_cube/status$cell_id"
-rm "$current_cube/status$cell_id/current" 2>/dev/null
+init_stage() {
+previous_stage=
+start_time=
 }
 
-new_status() {
-echo "$1 $EPOCHSECONDS" >>"$current_cube/status$cell_id/current"
+new_stage() {
+local stage=$1
+if [ "${previous_stage:-}" ]; then
+  trace 5 "Finished stage $previous_stage (took $(echo '$EPOCHSECONDS - $stage_start_time' | bc) seconds)"
+fi
+echo "$stage $EPOCHSECONDS" >>"$log_path/current-stages"
+trace 5 "Starting stage $stage"
+stage_start_time=$EPOCHSECONDS
+previous_stage=$stage
 }
 
 does_cube_need_update() {
