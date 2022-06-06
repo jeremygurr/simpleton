@@ -1,45 +1,43 @@
 #!/bin/bash
 
-# Notice that it has parentheses after function name instead of braces. This means it launches in a
-# subshell, localizing the variables and function changes
-cube_update() (
+cube_update() {
 
-current_cube=$1
+local current_cube=$1
+# set this before calling this function to maintain a read lock even
+#   after this update completes. Used for upstream dependency locking. 
+local keep_read_locks=${keep_read_locks:-f}
+local keep_write_locks=${keep_write_locks:-f}
 
 if [[ ! -f "$current_cube/cube-contexxt" ]]; then
   err "cube_update called on $current_cube which is not a cube"
   return 1
 fi
 
-parallel_default=t
+local parallel_default=t
 [ $debug == t ] && parallel_default=f
-parallel_execution=${parallel_execution:-${par:-$parallel_default}}
-dimensions=( ) dimension_folders=( )
+local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
+local save_cell_id_to_var=${save_cell_id_to_var:-} save_cell_path_to_var=${save_cell_path_to_var:-}
+local dimensions=() dimension_folders=() localize_dim_vars dim_string="" fd
 
 # need to collect dimensions even though we haven't expanded the members yet
 gather_dims || return 1
 
-local dim dims dim_string=""
-for dim in "${dimensions[@]}"; do
-  dims=${dim}s
-  if [[ "${!dims:-}" ]]; then
-    dim_string+="$dims=[ ${!dims:-} ] "
-  else
-    dim_string+="$dim=${!dim:-} "
-  fi
-done
 trace 0 "Updating cube $current_cube $dim_string"
 
 begin_function
-
-  init_and_load_context_a
 
   if [[ "$current_cube" -nt "$current_cube/cube-context" ]]; then
     touchup_cube || fail
   fi
 
+  eval "$localize_dim_vars" || fail
+
   if [ ${#dimensions[*]} == 0 ]; then
-    cell_update "$current_cube" || fail
+    if [[ -d $current_cube/lock && ($keep_read_locks == t || $keep_write_locks == t) ]]; then
+      exec {fd}<$current_cube/lock
+    fi
+    get_cell_id || return 1
+    outer_lock_fd=$fd cell_update "$current_cube" || fail
   else
     cube_update_pivot 0 || fail
   fi
@@ -47,10 +45,11 @@ begin_function
 end_function
 handle_return
 
-)
+}
 
 gather_dims() {
 trace 0 "Gathering dimensions for $current_cube"
+local dimension dimension_folder dimension_plural
 begin_function
   if [ -d "$current_cube/dim" ]; then
     begin_for dimension_folder in 
@@ -64,8 +63,15 @@ begin_function
         err "Dimensions must only have alphanumeric or _ characters in it."
         fail
       fi
+      dimension_plural=${dimension}s
       dimensions+=( $dimension )
       dimension_folders+=( "$dimension_folder" )
+      localize_dim_vars+="local $dimension $dimension_plural; "
+      if [[ "${!dimensions:-}" ]]; then
+        dim_string+="$dimensions=[ ${!dimensions:-} ] "
+      else
+        dim_string+="$dimension=${!dimension:-} "
+      fi
     end_for
   fi
 end_function
@@ -134,11 +140,17 @@ begin_function
         cube_update_pivot $((index + 1)) || fail
       fi
     else
+      local fd=
+      local cell_id dim_string
+      get_cell_id || fail
+      if [[ -d $current_cube/lock && ($keep_read_locks == t || $keep_write_locks == t) ]]; then
+        exec {fd}<$current_cube/lock$cell_id || fail
+      fi
       if [[ $parallel == t ]]; then
-        cell_update "$current_cube" &
+        outer_lock_fd=$fd cell_update "$current_cube" &
         processes+=" $!"
       else
-        cell_update "$current_cube" || fail
+        outer_lock_fd=$fd cell_update "$current_cube" || fail
       fi
     fi
   end_for
@@ -151,12 +163,12 @@ handle_return
 }
 
 wait_for_sub_processes() {
-if [ $parallel == t ]; then
+if [[ $parallel == t && "$processes" ]]; then
   trace 0 "Waiting for sub processes to complete"
   local process
   for process in $processes; do
     wait $process &>/dev/null
-    if [ $? -gt 0 -a $? -lt 127 ]; then
+    if [[ $? > 0 && $? < 127 ]]; then
       trace 0 "Subprocess $process failed to terminate successfully"
       return 1
     fi
@@ -192,71 +204,39 @@ end_function
 handle_return
 }
 
-cell_update_deps() {
-trace 0 "Updating subs of $current_cube"
+cell_get_resources() {
+trace 0 "Getting resources for $current_cube"
 begin_function
 
-  local dep
+  local res dep_fd
   local parallel=f processes
-  local dependencies=( $(find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d | sort) )
-  # TODO: before launching parallel processes, wait for load/process count
-  [[ ${#dependencies[*]} > 1 && $parallel_execution == t ]] && parallel=t
+  local parallel_resources=( $(
+    find "$current_cube/res" -mindepth 1 -maxdepth 1 -type d \
+      -not -regex "$current_cube/res/[0-9]+-.*" 
+    ) )
+  local serial_resources=( $(
+    find "$current_cube/res" -mindepth 1 -maxdepth 1 -type d \
+      -regex "$current_cube/res/[0-9]+-.*" \
+    | sort) )
 
-  local any_folder
-  begin_for any_folder in ; doo
-    
-    # check if any cubes are already complete
-    local any_selected=
-    local options=$(find "$any_folder" -mindepth 1 -maxdepth 1 -type d | sort)
-    for dep in $options; do
-      select_any_cube "$dep" && { any_selected=$dep; break; }
-    done
+  local total_parallel=${#parallel_resources[*]}
+  [[ "$sequential_resources" ]] && let total_parallel++
 
-    # of those that are valid, try to update one by one until successful
-    if [ ! "${any_selected:-}" ]; then
-      for dep in $options; do
-        update_any_cube "$dep" && { any_selected=$dep; break; }
-      done
-    fi
+  if [[ $total_parallel > 1 && $parallel_execution == t ]]; then
+    parallel=t
+    wait_for_low_load || fail
+  fi
 
-    # link any cube to parent folder
-    if [ "${any_selected:-}" ]; then
-      local selected_folder=$any_selected
-      [[ $selected_folder =~ .*/(.*/.*) ]] || fail
-      selected_folder=${BASH_REMATCH[1]}
-      ln -sf "$selected_folder" "$current_cube/up/${any_folder%?}" || fail
-    else
-      trace -5 "Failed to find valid dependency for $any_folder"
-      fail
-    fi
-
+  local saved_id= saved_path= res_name
+  begin_for res in ${parallel_resources[*]}; doo
+    update_resource "$res" &
   end_for
 
-  # TODO: if dep starts with a number, it must be executed sequentially. The rest are in parallel
-  begin_for dep in $(find "$current_cube/up" -not -name '*\?' -mindepth 1 -maxdepth 1 -type d | sort); doo
-    local down_path="$dep/down/${current_cube##*/}"
-    if [ ! -e "$down_path" ]; then
-      ln -sf "$current_cube" "$down_path" || fail
-    elif [ "$(realpath "$down_path")" != "$current_cube" ]; then
-      local variant=2
-      begin_while true; doo
-        if [ ! -e "$down_path$variant" ]; then
-          ln -sf "$current_cube" "$down_path$variant" || fail
-          break
-        elif [ "$(realpath "$down_path$variant")" == "$current_cube" ]; then
-          break
-        fi
-        let variant++
-      end_while
-    fi
-
-    if [ $parallel == t ]; then
-      called_from=$short_cube/up cube_update_row "$dep" &
-      processes+=" $!"
-    else
-      called_from=$short_cube/up cube_update_row "$dep" || fail
-    fi
-  end_for
+  if [[ $parallel == t ]]; then
+    update_serial_resources &
+  else
+    update_serial_resources || fail
+  fi
 
   wait_for_sub_processes || fail
 
@@ -264,39 +244,99 @@ end_function
 handle_return
 }
 
-read_lock_deps() {
-trace 0 "Obtaining read locks for subs of $current_cube"
+update_resource() {
+local res=$1
+save_cell_id_to_var=saved_id save_cell_path_to_var=saved_path keep_write_locks=t cube_update $res || return 1
+local res_name=${res##*/}
+# This can be used in later code to fetch which resource was allocated
+eval "res_id_$res_name=$saved_id"
+eval "res_path_$res_name=$saved_path"
+return 0
+}
+
+update_serial_resources() {
+begin_for res in ${serial_resources[*]}; doo
+  update_resource $res || return 1
+end_for
+return 0
+}
+
+cell_update_deps() {
+trace 0 "Updating upstream cells of $current_cube"
 begin_function
 
-  local dep lock_fd
-  begin_for dep in $(find "$current_cube/up" -mindepth 1 -maxdepth 1 -not -name '*\?' -type d | sort); doo
-    init_and_load_status_context_a
-    if [ -d "$dep/lock" ]; then
-      exec {lock_fd}<"$dep/lock" || fail
-      flock -s -w $lock_timeout $lock_fd || {
-        err "Failed to get read lock for dep $dep of $current_cube"
-        fail
-        }
-    fi
+  local dep 
+  local parallel=f processes
+  local parallel_deps=( $(
+    find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d \
+      -not -regex "$current_cube/up/[0-9]+-.*" 
+    ) )
+  local serial_deps=( $(
+    find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d \
+      -regex "$current_cube/up/[0-9]+-.*" \
+    | sort) )
+
+  local total_parallel=${#parallel_deps[*]}
+  [[ "$sequential_deps" ]] && let total_parallel++
+
+  if [[ $total_parallel > 1 && $parallel_execution == t ]]; then
+    parallel=t
+    wait_for_low_load || fail
+  fi
+
+  begin_for dep in ${parallel_deps[*]}; doo
+    update_dep "$dep" &
   end_for
+
+  if [[ $parallel == t ]]; then
+    update_serial_deps &
+  else
+    update_serial_deps || fail
+  fi
+
+  wait_for_sub_processes || fail
 
 end_function
 handle_return
 }
 
-write_lock_cube() {
-trace 0 "Obtaining write lock for $current_cube"
-begin_function
+update_serial_deps() {
+begin_for dep in "${serial_deps[@]}"; doo
+  update_dep "$dep" || return 1
+end_for
+return 0
+}
 
-  local lock_fd
-  exec {lock_fd}<"$current_cube/lock" || fail
-  flock -x -w $lock_timeout $lock_fd || {
-    err "Failed to get write lock for $current_cube"
-    fail
-    }
+update_dep() {
+local dep=$1
+save_cell_id_to_var=saved_id save_cell_path_to_var=saved_path keep_read_locks=t cube_update $dep || return 1
+local dep_name=${dep##*/}
+# This can be used in later code to fetch which dep was found (may be multiple possibilities if 'any' is used)
+eval "dep_id_$dep_name=$saved_id"
+eval "dep_path_$dep_name=$saved_path"
+return 0
+}
 
-end_function
-handle_return
+get_read_lock() {
+local lock_path=$1
+local timeout=${2:-$lock_timeout}
+flock -s -w $lock_timeout $lock_fd || {
+  err "Failed to get read lock for $lock_path within $timeout seconds"
+  return 1
+  }
+}
+
+get_write_lock() {
+local lock_path=$1
+local timeout=${2:-$lock_timeout}
+flock -e -w $lock_timeout $lock_fd || {
+  err "Failed to get write lock for $lock_path within $timeout seconds"
+  return 1
+  }
+}
+
+unlock() {
+flock -u $lock_fd
 }
 
 write_persist_file() {
@@ -324,49 +364,104 @@ end_function
 handle_return
 }
 
-cell_update() {
-
-local current_cube=$1
-
-local dim dims dim_string="" update_id cell_id= cell_dim_part value stage_start_time previous_stage
+# produces: cell_id, dim_string
+get_cell_id() {
+local dim dims cell_dim_part value
+# TODO compute hashed path
 for dim in "${dimensions[@]}"; do
   value="${!dim}"
   dim_string+="$dim=$value "
   cell_dim_part+="$value:"
 done
 
-local log_path= status_path= out_path=
-
-if [[ -d $current_cube/log ]]; then
-  log_path=$current_cube/log$cell_id
-  [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
-  tee_output_to $log_path/current-update-log
-fi
-
-if [[ -d $current_cube/status ]]; then
-  status_path=$current_cube/status$cell_id
-  [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
-fi
-
-if [[ -d $current_cube/out ]]; then
-  out_path=$current_cube/out$cell_id
-  if [[ ! -d $out_path ]]; then
-    mkdir $out_path || fail
-    touch -t 197001010000 $out_path || fail
+if [[ "$cell_dim_part" ]]; then
+  # TODO validate dim part, no spaces or / or : or other special chars
+  cell_dim_part=${cell_dim_part%:}
+  cell_id=/$cell_dim_part
+  if [[ ${high_volume_cube:-f} == t ]]; then
+    local hash=$(echo "$cell_dim_part" | cksum) 
+    hash=${hash:0:2}
+    cell_id+=/$hash
   fi
 fi
+
+if [[ "${save_cell_id_to_var:-}" ]]; then
+  eval "$save_cell_id_to_var=$cell_id"
+  save_cell_id_to_var=
+fi
+
+if [[ "${save_cell_path_to_var:-}" ]]; then
+  eval "$save_cell_path_to_var=$current_cube"
+  save_cell_path_to_var=
+fi
+
+return 0
+}
+
+# Notice that it has parentheses after function name instead of braces. This means it launches in a
+# subshell, localizing the variables and function changes
+cell_update_inner() (
+
+local current_cube=$1; shift
+local cell_id=$1; shift
+local dim_string=$1; shift
+
+local update_id stage_start_time previous_stage
+
+local in_path= lock_path= log_path= status_path= out_path= up_path= res_path=
+local lock_fd
 
 trace 0 "Updating cell $current_cube $dim_string"
 
 begin_function
 
-  if [[ "$cell_dim_part" ]]; then
-    cell_dim_part=${cell_dim_part%:}
-    cell_id=/$cell_dim_part
-    if [[ ${high_volume_cube:-f} == t ]]; then
-      local hash=$(echo "$cell_dim_part" | cksum) 
-      hash=${hash:0:2}
-      cell_id+=/$hash
+  init_and_load_context_a
+
+  if [[ -d $current_cube/in ]]; then
+    in_path=$current_cube/in$cell_id
+    [[ ! -f $in_path ]] && in_path=$current_cube/in
+  fi
+
+  if [[ -d $current_cube/lock ]]; then
+    lock_path=$current_cube/lock$cell_id
+    [[ ! -f $lock_path ]] && { touch $lock_path || fail; }
+    if [[ "$outer_lock_fd" ]]; then
+      lock_fd=$outer_lock_fd
+    else
+      exec {lock_fd}<>"$lock_path" || fail
+    fi
+  fi
+
+  if [[ -d $current_cube/log ]]; then
+    log_path=$current_cube/log$cell_id
+    [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
+    tee_output_to $log_path/current-update-log
+  fi
+
+  if [[ -d $current_cube/status ]]; then
+    status_path=$current_cube/status$cell_id
+    [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
+  fi
+
+  if [[ -d $current_cube/out ]]; then
+    out_path=$current_cube/out$cell_id
+    if [[ ! -d $out_path ]]; then
+      mkdir $out_path || fail
+      touch -t 197001010000 $out_path || fail
+    fi
+  fi
+
+  if [[ -d $current_cube/up ]]; then
+    up_path=$current_cube/up$cell_id
+    if [[ ! -d $up_path ]]; then
+      up_path=$current_cube/up || fail
+    fi
+  fi
+
+  if [[ -d $current_cube/res ]]; then
+    res_path=$current_cube/res$cell_id
+    if [[ ! -d $res_path ]]; then
+      res_path=$current_cube/res || fail
     fi
   fi
 
@@ -391,39 +486,43 @@ begin_function
     update_id=1000
   fi
 
-  # TODO: readlock before needs-update check
+  local lock_timeout=${lock_timeout:-30}
 
+  if [[ "$lock_path" ]]; then
+    trace 0 "Getting read lock for cell"
+    new_stage read-lock-cell || fail
+    get_read_lock "$lock_path" || fail
+  fi
+
+  trace 0 "Checking if update is needed"
   new_stage check-needs-update || fail
   # freshness check first
   local needs_update
   does_cube_need_update || fail
-  if [ $needs_update == f ]; then
+  if [[ $needs_update == f ]]; then
     trace 0 "Update not needed"
     succeed
   fi
 
-  # TODO: check all dep resources to ensure they will be available when we start
-
-  local lock_timeout=${lock_timeout:-30}
-
-  local read_locks=''
-  if [ -d "$current_cube/up" ]; then
+  if [[ "$up_path" ]]; then
     new_stage update-deps || fail
     cell_update_deps || fail
-
-    new_stage read-locks || fail
-    read_lock_deps || fail
   fi
-
-  new_stage wait-for-load || fail
-  wait_for_low_load || fail
 
   new_stage write-lock || fail
-  if [ -d "$current_cube/lock$cell_id" ]; then
-    write_lock_cube || fail
+  if [[ "$lock_path" ]]; then
+    trace 0 "Getting write lock for cell"
+    new_stage write-lock-cell || fail
+    get_write_lock "$lock_path" || fail
   fi
 
-  # TODO: obtain resources
+  # TODO: obtain resources: keep_write_locks, res_id=any
+  #   use realpath to fetch cell_id of allocated cell
+  if [[ "$res_path" ]]; then
+    trace 0 "Getting resources for cell"
+    new_stage get-resources || fail
+    cell_get_resources "$res_path" || fail
+  fi
 
   new_stage load-update-context || fail
   init_and_load_update_context_a
@@ -523,10 +622,19 @@ begin_function
 
   fi
 
+  if [[ "$outer_lock_fd" ]]; then
+    if [[ $keep_write_locks == f ]]; then
+      # convert back to read lock so it doesn't change when downstream update is proceeding
+      get_read_lock "$lock_path" || fail
+    fi
+  else
+    unlock || fail
+  fi
+
 end_function
 handle_return
 
-}
+)
 
 # not used?
 derive_row_ids() {
@@ -566,7 +674,7 @@ local cube_max_load=${cube_max_load:-10}
 local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
 local current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
 if [ $current_load -gt $cube_max_load ]; then
-  trace 5 "Load average is too high ($current_load > $cube_max_load), waiting until things cool down first."
+  trace 0 "Load average is too high ($current_load > $cube_max_load), waiting until things cool down first."
   local time_waited=0
   while [ $current_load -gt $cube_max_load ]; do
     current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
@@ -612,23 +720,23 @@ previous_stage=$stage
 does_cube_need_update() {
 begin_function
 
-  needs_update=f
+  needs_update=t
 
-  # nothing needs to be done in execution phase if execute_update function isn't defined
-  type execute_update &>/dev/null || succeed
-
-  if [ -d "$current_cube/in" ]; then
-    if [ "$current_cube/in" -nt "$current_cube/out$cell_id" -o "$current_cube/in$cell_id" -nt "$current_cube/out$cell_id" ]; then
+  [[ ! "$out_path" ]] && succeed
+  
+  if [[ "$in_path" ]]; then
+    if [[ "$in_path" -nt "$out_path" ]]; then
       trace 0 "Local changes were made, needs update"
-      needs_update=t
       succeed
     fi
   fi
 
-  if [ -d "$current_cube/up" ]; then
-    if [ "$current_cube/up" -nt "$current_cube/out$cell_id" ]; then
+  # nothing needs to be done in execution phase if execute_update function isn't defined
+  type execute_update &>/dev/null || succeed
+
+  if [[ "$up_path" ]]; then
+    if [[ "$up_path" -nt "$out_path" ]]; then
       trace 0 "Upstream changes were made, needs update"
-      needs_update=t
       succeed
     fi
   fi
@@ -637,13 +745,14 @@ begin_function
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
-    local out_timestamp=$(date -r "$current_cube/out$cell_id" +%s)
+    local out_timestamp=$(date -r "$out_path" +%s)
     if [ $out_timestamp -lt $fresh_cutoff ]; then
       trace 0 "Freshness requirement ($fresh) not met, needs update"
-      needs_update=t
       succeed
     fi
   fi
+
+  needs_update=f
 
 end_function
 handle_return

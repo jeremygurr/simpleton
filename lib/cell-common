@@ -7,9 +7,7 @@ umask 0077
 
 # current_cube must be set before this is used
 alias init_and_load_context_a='
-  local dimensions=( )
   init_context "$current_cube" || fail
-  eval "$localize_dim_vars"
   load_context "$current_cube" || fail
 '
 
@@ -24,20 +22,7 @@ alias normalize_dims_a='
 
 init_context() {
 
-  local current_cube=$1 dimension dimension_folder dimension_plural high_volume=f \
-    cell_locks=t cell_logs=f
-
-  # this var should be used by the calling function to localize dim vars (prevent changes to them 
-  #  from altering higher call stack values)
-  localize_dim_vars=""
-  if [ -d "$current_cube/dimension" ]; then
-    for dimension_folder in $(find "$current_cube/dimension" -mindepth 1 -maxdepth 1 -type d); do
-      dimension=${dimension_folder##*/}
-      dimension_plural=${dimension}s
-      localize_dim_vars+="local $dimension $dimension_plural; "
-      dimensions+=( $dimension )
-    done
-  fi
+  local current_cube=$1 high_volume=f cell_locks=t cell_logs=f
 
   reset_expand_dim
 
@@ -49,11 +34,13 @@ init_context() {
 
 }
 
+# TODO rename to something more accurate
 reset_expand_dim() {
 
   # override this in cubes to support aliases, dimension groups, and defaults
   # should store values in plural form of var, and only plural form should be used after this
   # should fail (return 1) if any values are invalid, or if required value is missing
+  # TODO rename these to members
   expand_dim() {
     local dimension=$1; shift
     local dimension_plural=${dimension_plural}s; shift
@@ -73,20 +60,23 @@ reset_expand_dim() {
     return 0
   }
 
+  # TODO default hash
+
 }
 
+# TODO not used
 normalize_dimensions() {
 trace -5 "Normalizing dimensions"
 begin_function
 
   local dimension current_cube=$1 value dimension_plural dimension_folder
-  dimensions=( )
+  dimensions=()
   if [ -d "$current_cube/dimension" ]; then
     begin_for dimension_folder in $(find "$current_cube/dimension" -mindepth 1 -maxdepth 1 -type d); doo
       dimension=${dimension_folder##*/}
       dimension_plural=${dimension}s
       value=${!dimension_plural:-${!dimension:-}}
-      expand_dimension "$dimension_folder" "$dimension_plural" "$value" || fail
+      expand_dimension "$dimension" "$value" || fail
     end_for
   fi
 

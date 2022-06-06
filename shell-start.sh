@@ -154,7 +154,8 @@ custom_prompt_status() {
 }
 
 prompt_error_string() {
-[[ $? > 0 ]] && echo -n "^fail^ "
+local rc=$?
+[[ $rc > 0 ]] && echo -n "err $rc "
 }
 
 big_prompt() {
