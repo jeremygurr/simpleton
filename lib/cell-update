@@ -16,7 +16,7 @@ fi
 local parallel_default=t
 [ $debug == t ] && parallel_default=f
 local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
-local save_cell_id_to_var=${save_cell_id_to_var:-} save_cell_path_to_var=${save_cell_path_to_var:-}
+local save_prefix=${save_prefix:-}
 local dimensions=() dimension_folders=() localize_dim_vars dim_string="" 
 
 # need to collect dimensions even though we haven't expanded the members yet
@@ -186,16 +186,6 @@ end_function
 handle_return
 }
 
-update_any_cube() {
-local current_cube=$1
-trace 0 "Updating 'any' cube $current_cube"
-begin_function
-  init_and_load_status_context_a
-  cube_update_array "$current_cube" || fail
-end_function
-handle_return
-}
-
 cell_get_resources() {
 trace 0 "Getting resources for $current_cube"
 begin_function
@@ -238,12 +228,8 @@ handle_return
 
 update_resource() {
 local res=$1
-save_cell_id_to_var=saved_id save_cell_path_to_var=saved_path keep_write_locks=t cube_update $res || return 1
 local res_name=${res##*/}
-# This can be used in later code to fetch which resource was allocated
-eval "res_id_$res_name=$saved_id"
-eval "res_path_$res_name=$saved_path"
-return 0
+save_prefix=res_$res_name keep_write_locks=t cube_update $res
 }
 
 update_serial_resources() {
@@ -301,12 +287,8 @@ return 0
 
 update_dep() {
 local dep=$1
-save_cell_id_to_var=saved_id save_cell_path_to_var=saved_path keep_read_locks=t cube_update $dep || return 1
 local dep_name=${dep##*/}
-# This can be used in later code to fetch which dep was found (may be multiple possibilities if 'any' is used)
-eval "dep_id_$dep_name=$saved_id"
-eval "dep_path_$dep_name=$saved_path"
-return 0
+save_prefix=dep_$dep_name keep_read_locks=t cube_update $dep
 }
 
 get_read_lock() {
@@ -377,14 +359,10 @@ if [[ "$cell_dim_part" ]]; then
   fi
 fi
 
-if [[ "${save_cell_id_to_var:-}" ]]; then
-  eval "$save_cell_id_to_var=$cell_id"
-  save_cell_id_to_var=
-fi
-
-if [[ "${save_cell_path_to_var:-}" ]]; then
-  eval "$save_cell_path_to_var=$current_cube"
-  save_cell_path_to_var=
+if [[ "${save_prefix:-}" ]]; then
+  eval "${save_prefix}_id=$cell_id"
+  eval "${save_prefix}_path=$current_cube"
+  save_prefix=
 fi
 
 return 0
