@@ -84,7 +84,7 @@ touchup_cube() {
 trace 0 "Touching up $current_cube"
 local f
 begin_function
-  begin_for f in up res down in out tmp log lock key status; doo
+  begin_for f debug in up res down in out tmp log lock key status; doo
     if [ -f "$current_cube/$f" ]; then
       rm "$current_cube/$f" || fail
       mkdir "$current_cube/$f" || fail
@@ -110,12 +110,20 @@ begin_function
     fail
   fi
 
-  cube_update "$dim_folder" || fail
-  if [[ ! -f "$dim_folder/out/functions" ]]; then
-    err "Missing functions file in $dimension_folder/out. It must contain the expand_dim function."
+  save_prefix=dim cube_update "$dim_folder" || fail
+
+  if [[ ! -f "$dim_folder/out$dim_id/functions" ]]; then
+    err "Missing functions file in $dim_folder/out$dim_id. It must contain the expand_dim function."
     fail
   fi
-  source "$dim_folder/out/functions" || fail
+
+  source "$dim_folder/out$dim_id/functions" || fail
+
+  if ! type expand_dim &>/dev/null; then
+    err "$dim_folder/out$dim_id/functions does not contain expand_dim function"
+    fail
+  fi
+
   expand_dim $dim || fail
   local dims=${dim}s
   local values=( ${!dims:-} )
@@ -630,11 +638,16 @@ begin_function
 
     if [[ "$debug_path" ]]; then
       mv $log_path/update-log-id-* $debug_path/ &>/dev/null
+      mv $log_path/stage-timing-id-* $debug_path/ &>/dev/null
     else
       rm $log_path/update-log-id-* &>/dev/null
+      mv $log_path/stage-timing-id-* &>/dev/null
     fi
+
     mv $log_path/update-log-current $log_path/update-log-id-$update_id || fail
     ln $log_path/update-log-id-$update_id $log_path/update-log-last-$success_string || fail
+    mv $log_path/stage-timing-current $log_path/stage-timing-id-$update_id || fail
+    ln $log_path/stage-timing-id-$update_id $log_path/stage-timing-last-$success_string || fail
 
   fi
 
@@ -660,13 +673,14 @@ wait_for_low_load() {
 local cube_max_load=${cube_max_load:-10}
 local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
 local current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
-if [ $current_load -gt $cube_max_load ]; then
-  trace 0 "Load average is too high ($current_load > $cube_max_load), waiting until things cool down first."
+if [[ $current_load > $cube_max_load ]]; then
+  trace 0 "Load average is too high ($current_load > $cube_max_load)," \
+    "waiting until things cool down first."
   local time_waited=0
-  while [ $current_load -gt $cube_max_load ]; do
+  while [[ $current_load > $cube_max_load ]]; do
     current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
     sleep 5; let time_waited+=5
-    if [ "$cube_load_wait_timeout" -gt 0 -a $time_waited -ge $cube_load_wait_timeout ]; then
+    if [[ "$cube_load_wait_timeout" > 0 && ! $time_waited < $cube_load_wait_timeout ]]; then
       err "Timed out waiting for cpu load to be low enough. Aborting"
       return 1
     fi
@@ -695,10 +709,11 @@ start_time=
 
 new_stage() {
 local stage=$1
-if [ "${previous_stage:-}" ]; then
-  trace 5 "Finished stage $previous_stage (took $(echo '$EPOCHSECONDS - $stage_start_time' | bc) seconds)"
+if [[ "${previous_stage:-}" ]]; then
+  trace 5 "Finished stage $previous_stage" \
+    "took $(echo '$EPOCHSECONDS - $stage_start_time' | bc) seconds)"
 fi
-echo "$stage $EPOCHSECONDS" >>"$log_path/current-stages"
+[[ "$log_path" ]] && echo "$stage $EPOCHSECONDS" >>"$log_path/stage-timing-current"
 trace 5 "Starting stage $stage"
 stage_start_time=$EPOCHSECONDS
 previous_stage=$stage
