@@ -13,113 +13,92 @@ RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@$ALPINE_REPO@g" /etc/apk/re
 RUN apk update 
 
 RUN apk add \
+  alpine-conf \
+  alpine-conf \
+  apk-tools-doc \
   bash \
   bash-completion \
   bash-completion-doc \
   bash-doc \
   bind-tools \
-  curl \
-  curl-doc \
+  busybox-doc \
+  ca-certificates-doc \
   coreutils \
   coreutils-doc \ 
+  curl \
+  curl-doc \
   dnsmasq \
   dnsmasq-doc \
+  docs \
+  expat-doc \
   file \
+  file-doc \
   findutils \
   findutils-doc \
-  $nothing
-
-RUN apk add \
+  fstrm-doc \
   git \
   git-doc \
+  git-perl \
   grep \
+  grep-doc \
+  ifupdown-ng \
+  ifupdown-ng-doc \
   jq \
   jq-doc \
+  json-c-doc \
   less \
   less-doc \
+  libcap-ng-doc \
+  libeconf-doc \
+  libedit-doc \
+  libretls-doc \
+  libxml2-doc \
+  linux-pam-doc \
   man-pages \
   mandoc \
+  mandoc-doc \
   net-tools \
   net-tools-doc \
+  openrc \
+  openrc-bash-completion \
+  openrc-doc \
   openssh \
   openssh-doc \
   openssl \
-  procps \
-  procps-doc \
-  source-highlight \
-  source-highlight-doc \
-  strace \
-  strace-doc \
-  $nothing
-
-RUN apk add \
-  sudo \
-  sudo-doc \
-  tar \
-  util-linux \
-  util-linux-doc \
-  vim \
-  yq \
-  yq-doc \
-  $nothing
-
-RUN apk add \
-  ifupdown-ng \
-  openrc \
-  alpine-conf \
-  openrc-bash-completion \
-  utmps-openrc \
-  mandoc-doc \
-  utmps-doc \
-  busybox-doc \
-  fstrm-doc \
-  apk-tools-doc \
-  $nothing
-
-RUN apk add \
-  ca-certificates-doc \
-  pkgconf-doc \
-  openrc-doc \
-  libxml2-doc \
-  ifupdown-ng-doc \
-  libretls-doc \
-  skalibs-doc \
-  zlib-doc \
-  readline-doc \
-  json-c-doc \
-  file-doc \
-  $nothing
-
-RUN apk add \
-  texinfo \
-  texinfo-doc \
-  $nothing
-
-RUN apk add \
-  expat-doc \
-  pcre2-doc \
   pcre-doc \
-  grep-doc \
-  libedit-doc \
-  tar-doc \
+  pcre2-doc \
   perl \
   perl-doc \
   perl-error \
   perl-error-doc \
   perl-git \
-  git-perl \
-  libeconf-doc \
-  linux-pam-doc \
-  util-linux-openrc \
-  libcap-ng-doc \
-  vim-doc \
-  $nothing
-
-RUN apk add \
-  docs \
-  tzdata \
-  alpine-conf \
+  pkgconf-doc \
+  procps \
+  procps-doc \
+  readline-doc \
   rsync \
+  skalibs-doc \
+  source-highlight \
+  source-highlight-doc \
+  strace \
+  strace-doc \
+  sudo \
+  sudo-doc \
+  tar \
+  tar-doc \
+  texinfo \
+  texinfo-doc \
+  tzdata \
+  util-linux \
+  util-linux-doc \
+  util-linux-openrc \
+  utmps-doc \
+  utmps-openrc \
+  vim \
+  vim-doc \
+  yq \
+  yq-doc \
+  zlib-doc \
   $nothing
 
 ENV HOME /home
