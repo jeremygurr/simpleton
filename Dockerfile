@@ -115,6 +115,7 @@ RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
 COPY sudoers /etc/
 RUN chown root /etc/sudoers
 RUN mkdir -p $REPO_CACHE
+COPY vimrc /home/.vimrc
 
 ARG TIME_ZONE=UTC
 RUN setup-timezone -z $TIME_ZONE

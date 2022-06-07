@@ -9,51 +9,64 @@ optional_var trace           3             # 0 means no tracing output, higher n
 source $SIMPLETON_REPO/lib/post-bash
 source $SIMPLETON_REPO/lib/cell-common
 
-command=$1; shift
+command=${1:-help}; shift
 
-subjects=( )
+parameters="$*"
 
-for subject in "$@"; do
-  subject=$(realpath "$subject")
-  if [ ! -d "$subject" ]; then
-    err "Subject does not exist or is not a folder: $subject"
-    exit 1
+load_subjects() {
+  subjects=()
+  for subject in "$parameters"; do
+    subject=$(realpath "$subject")
+    if [ ! -d "$subject" ]; then
+      err "Subject does not exist or is not a folder: $subject"
+      exit 1
+    fi
+    subjects+=( "$subject" )
+  done
+
+  if [ ! "${subjects:-}" ]; then
+    subjects=( $PWD )
   fi
-  subjects+=( "$subject" )
-done
 
-if [ ! "${subjects:-}" ]; then
-  subjects=( $PWD )
-fi
-
-for subject in "${subjects[@]}"; do
-  if [ ! -d "$subject/cube-context" ]; then
-    err "Subject $subject is not a cube. Subject must be a folder which contains a cube-context file."
-    exit 1
-  fi
-done
+  for subject in "${subjects[@]}"; do
+    if [ ! -d "$subject/cube-context" ]; then
+      err "Subject $subject is not a cube. Subject must be a folder which contains a cube-context file."
+      exit 1
+    fi
+  done
+}
 
 called_from=cli
 
+show_usage() {
+  warn "Usage: cell {command} [{parameters}]"
+  warn "  commands:"
+  warn "    status [{path to cell(s)}]      gets the status of the given cell"
+  warn "    update [{path to cell(s)}]      updates the given cell"
+}
+
 case $command in 
   status)
-    source $SIMPLETON_REPO/lib/cell-status
+    load_subjects || exit 1
+    source $SIMPLETON_REPO/lib/cell-status || exit 1
     begin_while subject in "${subjects[@]}"; doo
       cube_status "$subject" || exit 1
     end_while
     ;;
   update)
-    source $SIMPLETON_REPO/lib/cell-update
+    load_subjects || exit 1
+    source $SIMPLETON_REPO/lib/cell-update || exit 1
     begin_while subject in "${subjects[@]}"; doo
       cube_update "$subject" || exit 1
     end_while
     ;;
+  help)
+    show_usage
+    exit 1
+    ;;
   *)
     err "Unknown command: $command"
-    warn "Usage: cell {command} [{parameters}]"
-    warn "  commands:"
-    warn "    status [{path to cell(s)}]      gets the status of the given cell"
-    warn "    update [{path to cell(s)}]      updates the given cell"
+    show_usage
     exit 1
     ;;
 esac
