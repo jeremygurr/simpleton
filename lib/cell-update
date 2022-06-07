@@ -183,6 +183,7 @@ fi
 }
 
 select_any_cube() {
+
 local current_cube=$1
 trace 0 "Selecting an 'any' cube from $current_cube"
 begin_function
@@ -211,6 +212,7 @@ begin_function
 
 end_function
 handle_return
+
 }
 
 cell_get_resources() {
@@ -414,7 +416,7 @@ return 0
 # subshell, localizing the variables and function changes
 cell_update_inner() (
 
-local update_id stage_start_time previous_stage
+local lock_timeout=${lock_timeout:-30} update_id stage_start_time previous_stage
 local lock_fd quick_check=${quick_check:-f} 
 local allow_slow_updates=${allow_slow_updates:-t} update_is_slow=f
 local debug_path= down_path= in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path=
@@ -427,72 +429,8 @@ begin_function
   local start_time=$EPOCHSECONDS
   init_and_load_context_a
 
-  if [[ $allow_slow_updates == f && $update_is_slow == t ]]; then
-    trace 0 "Update is too slow to meet requirements, let's try a different strategy"
-    fail
-  fi
-
-  if [[ -d $current_cube/debug ]]; then
-    debug_path=$current_cube/debug$cell_id
-    [[ ! -d $debug_path ]] && { mkdir $debug_path || fail; }
-  fi
-
-  if [[ -d $current_cube/down ]]; then
-    down_path=$current_cube/down$cell_id
-    if [[ ! -d $down_path ]]; then
-      down_path=$current_cube/down || fail
-    fi
-  fi
-
-  if [[ -d $current_cube/in ]]; then
-    in_path=$current_cube/in$cell_id
-    [[ ! -f $in_path ]] && in_path=$current_cube/in
-  fi
-
-  if [[ -d $current_cube/lock ]]; then
-    lock_path=$current_cube/lock$cell_id
-    [[ ! -f $lock_path ]] && { touch $lock_path || fail; }
-    if [[ "$outer_lock_fd" ]]; then
-      lock_fd=$outer_lock_fd
-    else
-      exec {lock_fd}<>"$lock_path" || fail
-    fi
-  fi
-
-  if [[ -d $current_cube/status ]]; then
-    status_path=$current_cube/status$cell_id
-    [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
-  fi
-
-  if [[ -d $current_cube/out ]]; then
-    out_path=$current_cube/out$cell_id
-    if [[ ! -d $out_path ]]; then
-      mkdir $out_path || fail
-      touch -t 197001010000 $out_path || fail
-    fi
-  fi
-
-  if [[ -d $current_cube/tmp ]]; then
-    tmp_path=$current_cube/tmp$cell_id
-    [[ ! -d $tmp_path ]] && { mkdir $tmp_path || fail; }
-    tmp_folder=$tmp_path
-  fi
-
-  if [[ -d $current_cube/up ]]; then
-    up_path=$current_cube/up$cell_id
-    if [[ ! -d $up_path ]]; then
-      up_path=$current_cube/up || fail
-    fi
-  fi
-
-  if [[ -d $current_cube/res ]]; then
-    res_path=$current_cube/res$cell_id
-    if [[ ! -d $res_path ]]; then
-      res_path=$current_cube/res || fail
-    fi
-  fi
-
-  local lock_timeout=${lock_timeout:-30}
+  cell_validate || fail
+  cell_feature_setup || fail
 
   if [[ "$lock_path" ]]; then
     trace 0 "Getting read lock for cell"
@@ -518,70 +456,7 @@ begin_function
     fail
   fi
 
-  init_stage || fail
-  new_stage begin-update || fail
-
-  if [[ -d $current_cube/log ]]; then
-    log_path=$current_cube/log$cell_id
-    [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
-    tee_output_to $log_path/update-log-current
-  fi
-
-  if [[ "$status_path" ]]; then
-
-    local consecutive_failures=${consecutive_failures:-0}
-    [[ -f "$status_path/persist" ]] && { source "$status_path/persist" || fail; }
-
-    if [[ "${update_id:-}" ]]; then
-      let update_id++
-    else
-      update_id=1000
-    fi
-
-    maybe_apply_cooldown || fail
-    write_persist_file || fail
-
-  else
-    update_id=1000
-  fi
-
-  if [[ "$up_path" ]]; then
-    new_stage update-deps || fail
-    cell_update_deps || fail
-  fi
-
-  if [[ "$res_path" ]]; then
-    trace 0 "Getting resources for cell"
-    new_stage get-resources || fail
-    cell_get_resources "$res_path" || fail
-  fi
-
-  new_stage write-lock || fail
-  if [[ "$lock_path" ]]; then
-    trace 0 "Getting write lock for cell"
-    new_stage write-lock-cell || fail
-    get_write_lock "$lock_path" || fail
-  fi
-
-  if [[ "$out_path" ]]; then
-    if [[ -d $out_path.new ]]; then 
-      rm -rf $out_path.new || fail
-    fi
-    mkdir $out_path.new || fail
-  fi
-
-  if [[ "$in_path" && "$out_path" ]]; then
-    local need_decrypt file
-    begin_for file in $(find "$in_path" -name '*.safe' -type f); doo
-      file=${file#$in_path}
-      file=${file%.safe}
-      if [[ -f $out_path/$file && $out_path/$file -nt $in_path/$file ]]; then
-        ln $out_path/$file $out_path.new/$file || fail
-      else
-        decrypt_file "$in_path/$file.safe" "$out_path.new/$file" || fail
-      fi
-    end_for
-  fi
+  cell_pre_update || fail
 
   local update_successful=t
 
@@ -589,6 +464,19 @@ begin_function
     new_stage execute-update || fail
     execute_update || update_successful=f
   fi
+
+  cell_post_update || fail
+
+  # unlocks happen automatically when this subprocess closes, in addition to filehandle closing
+
+end_function
+handle_return
+
+)
+
+cell_post_update() {
+
+begin_function
 
   new_stage complete || fail
   local end_time=$EPOCHSECONDS
@@ -659,12 +547,172 @@ begin_function
     get_read_lock "$lock_path" || fail
   fi
 
-  # unlocks happen automatically when this subprocess closes, in addition to filehandle closing
+end_function
+handle_return
+
+}
+
+cell_pre_update() {
+
+begin_function
+
+  init_stage || fail
+  new_stage begin-update || fail
+
+  if [[ -d $current_cube/log ]]; then
+    log_path=$current_cube/log$cell_id
+    [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
+    tee_output_to $log_path/update-log-current
+  fi
+
+  if [[ "$status_path" ]]; then
+
+    local consecutive_failures=${consecutive_failures:-0}
+    [[ -f "$status_path/persist" ]] && { source "$status_path/persist" || fail; }
+
+    if [[ "${update_id:-}" ]]; then
+      let update_id++
+    else
+      update_id=1000
+    fi
+
+    maybe_apply_cooldown || fail
+    write_persist_file || fail
+
+  else
+    update_id=1000
+  fi
+
+  if [[ "$up_path" ]]; then
+    new_stage update-deps || fail
+    cell_update_deps || fail
+  fi
+
+  if [[ "$res_path" ]]; then
+    trace 0 "Getting resources for cell"
+    new_stage get-resources || fail
+    cell_get_resources "$res_path" || fail
+  fi
+
+  new_stage write-lock || fail
+  if [[ "$lock_path" ]]; then
+    trace 0 "Getting write lock for cell"
+    new_stage write-lock-cell || fail
+    get_write_lock "$lock_path" || fail
+  fi
+
+  if [[ "$out_path" ]]; then
+    if [[ -d $out_path.new ]]; then 
+      rm -rf $out_path.new || fail
+    fi
+    mkdir $out_path.new || fail
+  fi
+
+  if [[ "$in_path" && "$out_path" ]]; then
+    local need_decrypt file
+    begin_for file in $(find "$in_path" -name '*.safe' -type f); doo
+      file=${file#$in_path}
+      file=${file%.safe}
+      if [[ -f $out_path/$file && $out_path/$file -nt $in_path/$file ]]; then
+        ln $out_path/$file $out_path.new/$file || fail
+      else
+        decrypt_file "$in_path/$file.safe" "$out_path.new/$file" || fail
+      fi
+    end_for
+  fi
 
 end_function
 handle_return
 
-)
+}
+
+cell_validate() {
+
+begin_function
+
+  if ! validate_dims; then
+    trace 0 "Dims for this cube aren't valid. Maybe we can try another."
+    fail
+  fi
+
+  if [[ $allow_slow_updates == f && $update_is_slow == t ]]; then
+    trace 0 "Update is too slow to meet requirements, let's try a different strategy"
+    fail
+  fi
+
+end_function
+handle_return
+
+}
+
+cell_feature_setup() {
+
+begin_function
+
+  if [[ -d $current_cube/debug ]]; then
+    debug_path=$current_cube/debug$cell_id
+    [[ ! -d $debug_path ]] && { mkdir $debug_path || fail; }
+  fi
+
+  if [[ -d $current_cube/down ]]; then
+    down_path=$current_cube/down$cell_id
+    if [[ ! -d $down_path ]]; then
+      down_path=$current_cube/down || fail
+    fi
+  fi
+
+  if [[ -d $current_cube/in ]]; then
+    in_path=$current_cube/in$cell_id
+    [[ ! -f $in_path ]] && in_path=$current_cube/in
+  fi
+
+  if [[ -d $current_cube/lock ]]; then
+    lock_path=$current_cube/lock$cell_id
+    [[ ! -f $lock_path ]] && { touch $lock_path || fail; }
+    if [[ "$outer_lock_fd" ]]; then
+      lock_fd=$outer_lock_fd
+    else
+      exec {lock_fd}<>"$lock_path" || fail
+    fi
+  fi
+
+  if [[ -d $current_cube/status ]]; then
+    status_path=$current_cube/status$cell_id
+    [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
+  fi
+
+  if [[ -d $current_cube/out ]]; then
+    out_path=$current_cube/out$cell_id
+    if [[ ! -d $out_path ]]; then
+      mkdir $out_path || fail
+      touch -t 197001010000 $out_path || fail
+    fi
+  fi
+
+  if [[ -d $current_cube/tmp ]]; then
+    tmp_path=$current_cube/tmp$cell_id
+    [[ ! -d $tmp_path ]] && { mkdir $tmp_path || fail; }
+    tmp_folder=$tmp_path
+  fi
+
+  if [[ -d $current_cube/up ]]; then
+    up_path=$current_cube/up$cell_id
+    if [[ ! -d $up_path ]]; then
+      up_path=$current_cube/up || fail
+    fi
+  fi
+
+  if [[ -d $current_cube/res ]]; then
+    res_path=$current_cube/res$cell_id
+    if [[ ! -d $res_path ]]; then
+      res_path=$current_cube/res || fail
+    fi
+  fi
+
+end_function
+handle_return
+
+}
 
 wait_for_low_load() {
 local cube_max_load=${cube_max_load:-10}
