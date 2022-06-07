@@ -369,7 +369,7 @@ for dim in "${dimensions[@]}"; do
     cell_dim_part+="$value,"
   else
     hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
-    cell_dim_part+="${hash:0:8}"
+    cell_dim_part+="${hash:0:8},"
   fi
 done
 
@@ -409,7 +409,7 @@ cell_update_inner() (
 local update_id stage_start_time previous_stage
 local lock_fd quick_check=${quick_check:-f} 
 local allow_slow_updates=${allow_slow_updates:-t} update_is_slow=f
-local in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path=
+local debug_path= down_path= in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path=
 local tmp_folder=${tmp_folder:-/tmp}
 
 trace 0 "Updating cell $current_cube $dim_string"
@@ -422,6 +422,18 @@ begin_function
   if [[ $allow_slow_updates == f && $update_is_slow == t ]]; then
     trace 0 "Update is too slow to meet requirements, let's try a different strategy"
     fail
+  fi
+
+  if [[ -d $current_cube/debug ]]; then
+    debug_path=$current_cube/debug$cell_id
+    [[ ! -d $debug_path ]] && { mkdir $debug_path || fail; }
+  fi
+
+  if [[ -d $current_cube/down ]]; then
+    down_path=$current_cube/down$cell_id
+    if [[ ! -d $down_path ]]; then
+      down_path=$current_cube/down || fail
+    fi
   fi
 
   if [[ -d $current_cube/in ]]; then
@@ -534,6 +546,13 @@ begin_function
     get_write_lock "$lock_path" || fail
   fi
 
+  if [[ "$out_path" ]]; then
+    if [[ -d $out_path.new ]]; then 
+      rm -rf $out_path.new || fail
+    fi
+    mkdir $out_path.new || fail
+  fi
+
   if [[ "$res_path" ]]; then
     trace 0 "Getting resources for cell"
     new_stage get-resources || fail
@@ -561,6 +580,7 @@ begin_function
   fi
 
   new_stage complete || fail
+  local end_time=$EPOCHSECONDS
 
   if [[ $update_successful == t ]]; then
     trace 0 "Update successful."
@@ -568,71 +588,64 @@ begin_function
     trace 0 "Update failed."
   fi
 
-  if [[ "$log_path" ]]; then
-
-    local success_string=good
-    [[ $update_successful == f ]] && success_string=bad
-    local end_time=$EPOCHSECONDS
-    local duration_of_update=$((end_time-start_time))
-    echo "start=$start_time duration=$duration_of_update from=$called_from" \
-      "result=$success_string" >>$log_path/history || fail
-
-    mv $log_path/update-log-current $log_path/update-log-$update_id || fail
-
-  fi
-
   if [ $update_successful == t ]; then
 
-    if [ -d "$out_path.new" -a $update_successful == t ]; then
+    if [[ -d "$out_path.new" ]]; then
       if ! diff -r "$out_path" "$out_path.new" >/dev/null; then
-        [ -d "$out_path.old" ] && rm -rf "$out_path.old" 2>/dev/null
+        [[ -d "$out_path.old" ]] && rm -rf "$out_path.old"
         mv "$out_path" "$out_path.old" || fail
         mv "$out_path.new" "$out_path" || fail
-        mv "$current_cube/status$cell_id/current" "$current/status$cell_id/last-success-changed" || fail
       else
         rm -rf "$out_path.new" || fail
-        mv "$current_cube/status$cell_id/current" "$current/status$cell_id/last-success-not-changed" || fail
       fi
     fi
 
-    touch -d @$start_time "$out_path" || fail
-
-    if [ -d "$current_cube/log" ]; then
-      untee_output
-      ln -s $log_path/update-log-last-success $log_path/update-log-$update_id || fail
-      # TODO: save all logs if debug folder exists
+    if [[ "$out_path" ]]; then 
+      touch -d @$start_time "$out_path" || fail
     fi
-
-    # TODO: push update to dependencies
-    # TODO: record successful updates in execution log (cell, update id and timestamp)
 
     if [ -d "$tmp_path" ]; then
       rm -rf "$tmp_path" || fail
     fi
 
     consecutive_failures=0
-    write_persist_file
 
   else
 
-    mv "$current_cube/status$cell_id/current" "$current/status$cell_id/last-failure" || fail
-
-    if [ -d "$current_cube/log" ]; then
-      untee_output
-      ln -s $log_path/update-log-last-failure $log_path/update-log-$update_id || fail
-      # TODO: save all logs if debug folder exists
-    fi
-    # TODO: record failed updates in execution log (cell, update id and timestamp)
-
     let consecutive_failures++
-    write_persist_file
+
+  fi
+
+  write_persist_file || fail
+
+  if [[ "$log_path" ]]; then
+
+    local success_string=good
+    [[ $update_successful == f ]] && success_string=bad
+    local duration_of_update=$((end_time-start_time))
+    echo "update_id=$update_id start=$start_time duration=$duration_of_update from=$called_from" \
+      "result=$success_string $dim_string" >>$log_path/history || fail
+
+    untee_output || fail
+
+    if [[ "$debug_path" ]]; then
+      mv $log_path/update-log-id-* $debug_path/ &>/dev/null
+    else
+      rm $log_path/update-log-id-* &>/dev/null
+    fi
+    mv $log_path/update-log-current $log_path/update-log-id-$update_id || fail
+    ln $log_path/update-log-id-$update_id $log_path/update-log-last-$success_string || fail
 
   fi
 
   if [[ "$outer_lock_fd" ]]; then
     if [[ $keep_write_locks == f ]]; then
-      # convert back to read lock so it doesn't change when downstream update is proceeding
-      get_read_lock "$lock_path" || fail
+      if [[ $keep_read_locks == t ]]; then
+        # convert back to read lock so it doesn't change when downstream update is proceeding
+        get_read_lock "$lock_path" || fail
+      else
+        unlock || fail
+      fi
     fi
   else
     unlock || fail
@@ -642,39 +655,6 @@ end_function
 handle_return
 
 )
-
-# not used?
-derive_row_ids() {
-# todo: needs to be fixed to support multiple rows and use plural dims
-local dimension_count="${#dimensions[*]}" 
-if [ $dimension_count -gt 0 ]; then
-  local dimension default dimension_with_default
-  row_id=
-  for dimension_with_default in "${dimensions[@]}"; do
-    read dimension default <<<$dimension_with_default
-    local var_defined=t
-    declare -p "$dimension" &>/dev/null || var_defined=f
-    if [ $var_defined == f ]; then
-      if [ "$default" ]; then
-        eval "$dimension='$default'"
-      else
-        err "Required var $dimension not defined, and no default was provided."
-        fail
-      fi
-    fi
-    if [[ "${!dimension}" =~ [$TAB$NL\ :] ]]; then
-      err "Dimension $dimension contains invalid characters: [${!dimension}]. It must not contain white space or colons."
-      fail
-    fi
-    row_id+="${!dimension}:"
-  done
-  row_id=${row_id%:}
-  cell_id="/$row_id"
-else
-  row_id="only"
-  cell_id=""
-fi
-}
 
 wait_for_low_load() {
 local cube_max_load=${cube_max_load:-10}
@@ -731,6 +711,8 @@ begin_function
 
   [[ ! "$out_path" ]] && succeed
   
+  # TODO deps need to be checked for changes also
+
   if [[ "$in_path" ]]; then
     if [[ "$in_path" -nt "$out_path" ]]; then
       trace 0 "Local changes were made, needs update"

@@ -119,6 +119,7 @@ RUN apk add \
   docs \
   tzdata \
   alpine-conf \
+  rsync \
   $nothing
 
 ENV HOME /home
