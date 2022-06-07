@@ -8,11 +8,6 @@ local current_cube=$1
 local keep_read_locks=${keep_read_locks:-f}
 local keep_write_locks=${keep_write_locks:-f}
 
-if [[ ! -f "$current_cube/cube-context" ]]; then
-  err "cube_update called on $current_cube which is not a cube"
-  return 1
-fi
-
 local parallel_default=t
 [ $debug == t ] && parallel_default=f
 local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
@@ -25,6 +20,17 @@ gather_dims || return 1
 trace 0 "Updating cube $current_cube $dim_string"
 
 begin_function
+
+  # is this an 'any' cell?
+  if [[ ${current_cube%?} != $current_cube ]]; then
+    select_any_cube || fail
+    succeed
+  fi
+
+  if [[ ! -f "$current_cube/cube-context" ]]; then
+    err "cube_update called on $current_cube which is not a cube"
+    fail
+  fi
 
   if [[ "$current_cube" -nt "$current_cube/cube-context" ]]; then
     touchup_cube || fail
@@ -170,15 +176,28 @@ fi
 
 select_any_cube() {
 local current_cube=$1
-trace 0 "Testing 'any' cube $current_cube"
+trace 0 "Selecting an 'any' cube from $current_cube"
 begin_function
 
-  init_and_load_status_context_a
-  validate_dims || fail
-  local needs_update
-  does_cube_need_update || fail
-  if [ $needs_update == t ]; then
-    trace 0 "Update needed"
+  local found= f
+  local subs="$(find $current_cube -mindepth 1 -maxdepth 1 -type d | sort)"
+
+  begin_for f in $subs; doo
+    quick_check=t cube_update $f && {
+      found=$f
+      succeed
+    }
+  end_for
+
+  [[ ! "$found" ]] && begin_for f in $subs; doo
+    cube_update $f && {
+      found=$f
+      succeed
+    }
+  end_for
+
+  if [[ ! "$found" ]]; then
+    err "Couldn't find a valid 'any' cube for $current_cube"
     fail
   fi
 
@@ -288,7 +307,7 @@ return 0
 update_dep() {
 local dep=$1
 local dep_name=${dep##*/}
-save_prefix=dep_$dep_name keep_read_locks=t cube_update $dep
+save_prefix=up_$dep_name keep_read_locks=t cube_update $dep
 }
 
 get_read_lock() {
@@ -340,32 +359,37 @@ handle_return
 
 # produces: cell_id, dim_string
 get_cell_id() {
-local dim dims cell_dim_part value
-# TODO compute hashed path
+
+local dim dims cell_dim_part= value hash dim_string=
+
 for dim in "${dimensions[@]}"; do
   value="${!dim}"
   dim_string+="$dim=$value "
-  cell_dim_part+="$value:"
+  if [[ ${#value} < 32 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
+    cell_dim_part+="$value,"
+  else
+    hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
+    cell_dim_part+="${hash:0:8}"
+  fi
 done
 
 if [[ "$cell_dim_part" ]]; then
-  # TODO validate dim part, no spaces or / or : or other special chars
   cell_dim_part=${cell_dim_part%:}
   cell_id=/$cell_dim_part
   if [[ ${high_volume_cube:-f} == t ]]; then
-    local hash=$(echo "$cell_dim_part" | cksum) 
+    hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
     hash=${hash:0:2}
-    cell_id+=/$hash
+    cell_id=/$hash/$cell_dim_part
   fi
 fi
 
 if [[ "${save_prefix:-}" ]]; then
   eval "${save_prefix}_id=$cell_id"
   eval "${save_prefix}_path=$current_cube"
-  save_prefix=
 fi
 
 return 0
+
 }
 
 cell_update() {
@@ -383,15 +407,22 @@ return 0
 cell_update_inner() (
 
 local update_id stage_start_time previous_stage
-
-local in_path= lock_path= log_path= status_path= out_path= up_path= res_path=
-local lock_fd
+local lock_fd quick_check=${quick_check:-f} 
+local allow_slow_updates=${allow_slow_updates:-t} update_is_slow=f
+local in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path=
+local tmp_folder=${tmp_folder:-/tmp}
 
 trace 0 "Updating cell $current_cube $dim_string"
 
 begin_function
 
+  local start_time=$EPOCHSECONDS
   init_and_load_context_a
+
+  if [[ $allow_slow_updates == f && $update_is_slow == t ]]; then
+    trace 0 "Update is too slow to meet requirements, let's try a different strategy"
+    fail
+  fi
 
   if [[ -d $current_cube/in ]]; then
     in_path=$current_cube/in$cell_id
@@ -411,7 +442,7 @@ begin_function
   if [[ -d $current_cube/log ]]; then
     log_path=$current_cube/log$cell_id
     [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
-    tee_output_to $log_path/current-update-log
+    tee_output_to $log_path/update-log-current
   fi
 
   if [[ -d $current_cube/status ]]; then
@@ -425,6 +456,12 @@ begin_function
       mkdir $out_path || fail
       touch -t 197001010000 $out_path || fail
     fi
+  fi
+
+  if [[ -d $current_cube/tmp ]]; then
+    tmp_path=$current_cube/tmp$cell_id
+    [[ ! -d $tmp_path ]] && { mkdir $tmp_path || fail; }
+    tmp_folder=$tmp_path
   fi
 
   if [[ -d $current_cube/up ]]; then
@@ -480,6 +517,11 @@ begin_function
     succeed
   fi
 
+  if [[ $quick_check == t ]]; then
+    trace 5 "Quick check finished"
+    fail
+  fi
+
   if [[ "$up_path" ]]; then
     new_stage update-deps || fail
     cell_update_deps || fail
@@ -492,62 +534,54 @@ begin_function
     get_write_lock "$lock_path" || fail
   fi
 
-  # TODO: obtain resources: keep_write_locks, res_id=any
-  #   use realpath to fetch cell_id of allocated cell
   if [[ "$res_path" ]]; then
     trace 0 "Getting resources for cell"
     new_stage get-resources || fail
     cell_get_resources "$res_path" || fail
   fi
 
-  new_stage load-update-context || fail
-  init_and_load_update_context_a
-
-  local in_path="$current_cube/in"
-  [ -n "$cell_id" ] && [ -d "$current_cube/in$cell_id" ] && in_path="$current_cube/in$cell_id"
-
-  # TODO: only use tmp path here if folder exists, otherwise use system tmp folder
-  local tmp_path="$current_cube/tmp$cell_id"
-  if [ -d "$tmp_path" ]; then
-    rm -rf "$tmp_path" || fail
-  fi
-  mkdir "$tmp_path" || fail
-
-  mkdir -p "$out_path.new" || fail
-
-  local need_decrypt file
-  begin_for file in $(find "$in_path" -name '*.crypt' -type f); doo
-    file=${file#$in_path}
-    file=${file%.crypt}
-    if [ -f "$out_path/$file" ]; then
-      cp "$out_path/$file" "$out_path.new/$file" || fail
-    else
-      need_decrypt+="$file "
-    fi
-  end_for
-
-  if [ "$need_decrypt" ]; then
-    new_stage decrypt || fail
-    begin_for file in $need_decrypt; doo
-      decrypt_file "$in_path/$file.crypt" "$out_path.new/$file" || fail
+  if [[ "$in_path" && "$out_path" ]]; then
+    local need_decrypt file
+    begin_for file in $(find "$in_path" -name '*.safe' -type f); doo
+      file=${file#$in_path}
+      file=${file%.safe}
+      if [[ -f $out_path/$file && $out_path/$file -nt $in_path/$file ]]; then
+        ln $out_path/$file $out_path.new/$file || fail
+      else
+        decrypt_file "$in_path/$file.safe" "$out_path.new/$file" || fail
+      fi
     end_for
   fi
 
-  new_stage execute-update || fail
+  local update_successful=t
 
-  local start_time=$EPOCHSECONDS
-  local update_successful=f
-  execute_update && update_successful=t
-  local duration_of_update=$((EPOCHSECONDS-start_time))
-  local success_string=good
-  [ $update_successful == f ] && success_string=bad
-  echo "start:$start_time duration:$duration_of_update from:$called_from result:$success_string" >>$log_path/history || fail
+  if type execute_update &>/dev/null; then
+    new_stage execute-update || fail
+    execute_update || update_successful=f
+  fi
 
-  mv $log_path/update-log-current $log_path/update-log-$update_id || fail
-  if [ $update_successful == t ]; then
+  new_stage complete || fail
 
+  if [[ $update_successful == t ]]; then
     trace 0 "Update successful."
-    new_stage succeeded || fail
+  else
+    trace 0 "Update failed."
+  fi
+
+  if [[ "$log_path" ]]; then
+
+    local success_string=good
+    [[ $update_successful == f ]] && success_string=bad
+    local end_time=$EPOCHSECONDS
+    local duration_of_update=$((end_time-start_time))
+    echo "start=$start_time duration=$duration_of_update from=$called_from" \
+      "result=$success_string" >>$log_path/history || fail
+
+    mv $log_path/update-log-current $log_path/update-log-$update_id || fail
+
+  fi
+
+  if [ $update_successful == t ]; then
 
     if [ -d "$out_path.new" -a $update_successful == t ]; then
       if ! diff -r "$out_path" "$out_path.new" >/dev/null; then
@@ -580,9 +614,6 @@ begin_function
     write_persist_file
 
   else
-
-    trace 0 "Update failed."
-    new_stage failed || fail
 
     mv "$current_cube/status$cell_id/current" "$current/status$cell_id/last-failure" || fail
 
