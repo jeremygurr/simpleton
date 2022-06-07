@@ -405,7 +405,6 @@ local fd= extra_fds=
 get_cell_id || return 1
 if [[ -d $current_cube/lock$cell_id && ($keep_read_locks == t || $keep_write_locks == t) ]]; then
   exec {fd}<$current_cube/lock$cell_id || return 1
-  extra_fds+="$fd "
 fi
 outer_lock_fd=$fd cell_update_inner || return 1
 return 0
@@ -457,14 +456,7 @@ begin_function
       lock_fd=$outer_lock_fd
     else
       exec {lock_fd}<>"$lock_path" || fail
-      extra_fds+="$lock_fd "
     fi
-  fi
-
-  if [[ -d $current_cube/log ]]; then
-    log_path=$current_cube/log$cell_id
-    [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
-    tee_output_to $log_path/update-log-current
   fi
 
   if [[ -d $current_cube/status ]]; then
@@ -500,8 +492,40 @@ begin_function
     fi
   fi
 
+  local lock_timeout=${lock_timeout:-30}
+
+  if [[ "$lock_path" ]]; then
+    trace 0 "Getting read lock for cell"
+    get_read_lock "$lock_path" || fail
+  fi
+
+  trace 0 "Checking if update is needed"
+
+  # freshness check first
+  local needs_update
+  does_cube_need_update || fail
+  if [[ $needs_update == f ]]; then
+    if [[ $quick_check == t ]]; then
+      trace 5 "Quick check finished: Update not needed"
+    else
+      trace 0 "Update not needed"
+    fi
+    succeed
+  fi
+
+  if [[ $quick_check == t ]]; then
+    trace 5 "Quick check finished: Update needed"
+    fail
+  fi
+
   init_stage || fail
   new_stage begin-update || fail
+
+  if [[ -d $current_cube/log ]]; then
+    log_path=$current_cube/log$cell_id
+    [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
+    tee_output_to $log_path/update-log-current
+  fi
 
   if [[ "$status_path" ]]; then
 
@@ -519,33 +543,6 @@ begin_function
 
   else
     update_id=1000
-  fi
-
-  local lock_timeout=${lock_timeout:-30}
-
-  if [[ "$lock_path" ]]; then
-    trace 0 "Getting read lock for cell"
-    new_stage read-lock-cell || fail
-    get_read_lock "$lock_path" || fail
-  fi
-
-  trace 0 "Checking if update is needed"
-  new_stage check-needs-update || fail
-  # freshness check first
-  local needs_update
-  does_cube_need_update || fail
-  if [[ $needs_update == f ]]; then
-    if [[ $quick_check == t ]]; then
-      trace 5 "Quick check finished: Update not needed"
-    else
-      trace 0 "Update not needed"
-    fi
-    succeed
-  fi
-
-  if [[ $quick_check == t ]]; then
-    trace 5 "Quick check finished: Update needed"
-    fail
   fi
 
   if [[ "$up_path" ]]; then
@@ -657,28 +654,12 @@ begin_function
 
   fi
 
-  local do_unlocks=f
-  if [[ "$outer_lock_fd" ]]; then
-    if [[ $keep_write_locks == f ]]; then
-      if [[ $keep_read_locks == t ]]; then
-        # convert back to read lock so it doesn't change when downstream update is proceeding
-        get_read_lock "$lock_path" || fail
-      else
-        do_unlocks=t
-      fi
-    fi
-  else
-    do_unlocks=t
+  if [[ "$outer_lock_fd" && $keep_write_locks == f && $keep_read_locks == t ]]; then
+    # convert back to read lock so it doesn't change when downstream update is proceeding
+    get_read_lock "$lock_path" || fail
   fi
 
-  if [[ $do_unlocks == t ]]; then
-    trace 5 "Releasing locks"
-    local fd
-    begin_for fd in $extra_fds; doo
-      unlock $fd || fail
-      eval "exec $fd>&-" || fail
-    end_for
-  fi
+  # unlocks happen automatically when this subprocess closes, in addition to filehandle closing
 
 end_function
 handle_return
