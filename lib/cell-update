@@ -112,14 +112,14 @@ begin_function
 
   local value processes
   local parallel=f
-  if [[ "${#values[*]}" > 1 && "$parallel_execution" == t ]]; then
+  if [[ "${#values[*]}" -gt 1 && "$parallel_execution" == t ]]; then
     parallel=t
     wait_for_low_load || fail
   fi
 
   begin_for value in "${values[@]}"; doo
     eval "$dim='$value'"
-    if [[ ${#dim[*]} > $((index + 1)) ]]; then
+    if [[ ${#dim[*]} -gt $((index + 1)) ]]; then
       if [[ $parallel == t ]]; then
         cube_update_pivot $((index + 1)) &
         processes+=" $!"
@@ -151,7 +151,7 @@ if [[ $parallel == t && "$processes" ]]; then
   local process
   for process in $processes; do
     wait $process &>/dev/null
-    if [[ $? > 0 && $? < 127 ]]; then
+    if [[ $? -gt 0 && $? -lt 127 ]]; then
       trace 0 "Subprocess $process failed to terminate successfully"
       return 1
     fi
@@ -209,7 +209,7 @@ begin_function
   local total_parallel=${#parallel_resources[*]}
   [[ "$sequential_resources" ]] && let total_parallel++
 
-  if [[ $total_parallel > 1 && $parallel_execution == t ]]; then
+  if [[ $total_parallel -gt 1 && $parallel_execution == t ]]; then
     parallel=t
     wait_for_low_load || fail
   fi
@@ -262,7 +262,7 @@ begin_function
   local total_parallel=${#parallel_deps[*]}
   [[ "$sequential_deps" ]] && let total_parallel++
 
-  if [[ $total_parallel > 1 && $parallel_execution == t ]]; then
+  if [[ $total_parallel -gt 1 && $parallel_execution == t ]]; then
     parallel=t
     wait_for_low_load || fail
   fi
@@ -329,9 +329,9 @@ consecutive_failures=$consecutive_failures
 maybe_apply_cooldown() {
 begin_function
   # If cell recently failed, wait until cooldown period is complete
-  if [[ $consecutive_failures > 0 ]]; then
+  if [[ $consecutive_failures -gt 0 ]]; then
     get_cooldown_delay || fail
-    if [[ $cooldown_delay > 0 ]]; then
+    if [[ $cooldown_delay -gt 0 ]]; then
       trace 0 "Too many errors have occurred, waiting for cooldown period of $cooldown_delay seconds"
       new_stage cooldown || fail
       sleep $cooldown_delay
@@ -646,14 +646,14 @@ wait_for_low_load() {
 local cube_max_load=${cube_max_load:-10}
 local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
 local current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
-if [[ $current_load > $cube_max_load ]]; then
+if [[ $current_load -gt $cube_max_load ]]; then
   trace 0 "Load average is too high ($current_load > $cube_max_load)," \
     "waiting until things cool down first."
   local time_waited=0
-  while [[ $current_load > $cube_max_load ]]; do
+  while [[ $current_load -gt $cube_max_load ]]; do
     current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
     sleep 5; let time_waited+=5
-    if [[ "$cube_load_wait_timeout" > 0 && ! $time_waited < $cube_load_wait_timeout ]]; then
+    if [[ "$cube_load_wait_timeout" -gt 0 && $time_waited -ge $cube_load_wait_timeout ]]; then
       err "Timed out waiting for cpu load to be low enough. Aborting"
       return 1
     fi
