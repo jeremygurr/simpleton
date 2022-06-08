@@ -2,6 +2,12 @@
 
 type -t cube_update >/dev/null && return 0
 
+# current_cube must be set before this is used
+alias init_and_load_context_a='
+  init_context "$current_cube" || fail
+  load_context "$current_cube" || fail
+'
+
 cube_update() {
 
 local current_cube=$1
@@ -24,7 +30,7 @@ trace 0 "Updating cube $current_cube $dim_string"
 begin_function
 
   # is this an 'any' cell?
-  if [[ ${current_cube%?} != $current_cube ]]; then
+  if [[ ${current_cube%\?} != $current_cube ]]; then
     select_any_cube || fail
     succeed
   fi
@@ -54,6 +60,7 @@ handle_return
 gather_dims() {
 trace 0 "Gathering dimensions for $current_cube"
 local dimension dimension_folder dimension_plural
+localize_dim_vars=
 begin_function
   if [ -d "$current_cube/dim" ]; then
     begin_for dimension_folder in \
@@ -371,7 +378,9 @@ handle_return
 # produces: cell_id, dim_string
 get_cell_id() {
 
-local dim dims cell_dim_part= value hash dim_string=
+local dim dims cell_dim_part= value hash 
+dim_string=
+cell_id=
 
 for dim in "${dimensions[@]}"; do
   value="${!dim}"
@@ -773,7 +782,7 @@ begin_function
     fi
   fi
 
-  if [ "${fresh:-}" ]; then
+  if [[ "${fresh:-}" ]]; then
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
@@ -784,27 +793,23 @@ begin_function
     fi
   fi
 
-  local deps=( $(find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d) )
-  local dep
-  begin_for dep in ${deps[*]}; doo
-    if ! quick_check=t cube_update "$dep"; then
-      # if cube_update fails, then an update is needed
-      trace 5 "Upstream $dep needs update"
-      succeed 
-    fi
-  end_for
+  if [[ "$up_path" ]]; then
+    local deps=( $(find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d) )
+    local dep
+    begin_for dep in ${deps[*]}; doo
+      if ! quick_check=t cube_update "$dep"; then
+        # if cube_update fails, then an update is needed
+        trace 5 "Upstream $dep needs update"
+        succeed 
+      fi
+    end_for
+  fi
 
   needs_update=f
 
 end_function
 handle_return
 }
-
-# current_cube must be set before this is used
-alias init_and_load_context_a='
-  init_context "$current_cube" || fail
-  load_context "$current_cube" || fail
-'
 
 init_context() {
 
@@ -910,7 +915,7 @@ load_physical_context_before() {
 local f=$1 
 local physical_parent=${f%/*}
 if [ "${#physical_parent}" -gt 1 ]; then
-  load_context_before "$physical_parent" || return 1
+  load_physical_context_before "$physical_parent" || return 1
 fi
 [ -f "$f/cube-context" ] && source "$f/cube-context"
 return 0
@@ -922,7 +927,7 @@ local physical_parent=${f%/*}
 [ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
 [ -d "$f/handlers" ] && handler_folders+=( "$f/handlers" )
 if [ "${#physical_parent}" -gt 1 ]; then
-  load_context_after "$physical_parent" || return 1
+  load_physical_context_after "$physical_parent" || return 1
 fi
 return 0
 }
