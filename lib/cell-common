@@ -41,6 +41,12 @@ local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 trace 0 "Decrypting $from to $to"
 begin_function
 
+  if [[ ! -f "$user_private_key" ]]; then
+    err "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
+    err "You may create one using: ssh-keygen -mPEM"
+    fail
+  fi
+
   if [[ ! -d "$tmp_path" ]]; then
     err "tmp_path must be set to a directory before calling decrypt_file."
     fail
@@ -85,6 +91,12 @@ local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 trace 0 "Encrypting $from to $to"
 begin_function
 
+  if [[ ! -f "$user_private_key" ]]; then
+    err "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
+    err "You may create one using: ssh-keygen -mPEM"
+    fail
+  fi
+
   if [[ ! -d "$tmp_path" ]]; then
     err "tmp_path must be set to a directory before calling decrypt_file."
     fail
@@ -93,6 +105,10 @@ begin_function
   if [[ ! -d "$current_cube" ]]; then
     err "current_cube must be set before calling decrypt_file"
     fail
+  fi
+
+  if [[ -d $current_cube/key ]]; then
+    mkdir $current_cube/key || fail
   fi
 
   if [[ ! -f "$current_cube/key/key.$USER" ]]; then
@@ -157,7 +173,7 @@ cell_id=
 for dim in "${dimensions[@]}"; do
   value="${!dim}"
   dim_string+="$dim=$value "
-  if [[ ${#value} < 32 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
+  if [[ ${#value} < 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
     cell_dim_part+="$value,"
   else
     hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
@@ -166,7 +182,7 @@ for dim in "${dimensions[@]}"; do
 done
 
 if [[ "$cell_dim_part" ]]; then
-  cell_dim_part=${cell_dim_part%:}
+  cell_dim_part=${cell_dim_part%,}
   cell_id=/$cell_dim_part
   if [[ ${high_volume_cube:-f} == t ]]; then
     hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
@@ -279,7 +295,7 @@ return 0
 }
 
 gather_dims() {
-trace 0 "Gathering dimensions for $current_cube"
+trace 0 "Gathering dimensions for ${current_cube##*/work/}"
 local dimension dimension_folder dimension_plural
 localize_dim_vars=
 begin_function
