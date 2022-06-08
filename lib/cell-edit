@@ -1,0 +1,61 @@
+#!/bin/bash
+
+type -t cube_edit >/dev/null && return 0
+
+cube_edit() {
+
+local subject=$1              # which file to edit
+local current_cube=
+
+get_current_cube $subject || {
+  err "Can't edit $subject because it's not in a cube"
+  return 1
+}
+
+trace 0 "Editing ${subject%$current_cube} of cube ${current_cube%%*/work/}"
+begin_function
+  
+  local file=${subject##*/}
+  local tmp_path
+  get_tmp_path "$current_cube" || fail
+  local old_file=$subject
+  local new_file=$subject.new
+  local changed=f
+
+  if [[ ${subject%.safe} != $subject ]]; then
+    err "not supported yet"
+  else
+
+    if [[ -f $new_file ]]; then
+      err "$new_file already exists, delete that first if you want to edit $file"
+      fail
+    fi
+
+    [[ -f $old_file ]] && { 
+      cp $old_file $new_file || fail 
+    }
+
+    $EDITOR $new_file || fail
+
+    if [[ -f $old_file ]]; then
+      if files_are_different $old_file $new_file; then
+        changed=t
+      else
+        rm $new_file || fail
+      fi
+    else
+      changed=t
+    fi
+
+    if [[ $changed == t ]]; then
+      mv $new_file $old_file || fail
+      update_modify_times "${new_file%/*}" "${current_cube}" || fail
+    fi
+
+  fi
+
+end_function
+handle_return
+
+}
+
