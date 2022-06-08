@@ -147,3 +147,166 @@ handle_return
 
 }
 
+# produces: cell_id, dim_string
+get_cell_id() {
+
+local dim dims cell_dim_part= value hash 
+dim_string=
+cell_id=
+
+for dim in "${dimensions[@]}"; do
+  value="${!dim}"
+  dim_string+="$dim=$value "
+  if [[ ${#value} < 32 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
+    cell_dim_part+="$value,"
+  else
+    hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
+    cell_dim_part+="${hash:0:8},"
+  fi
+done
+
+if [[ "$cell_dim_part" ]]; then
+  cell_dim_part=${cell_dim_part%:}
+  cell_id=/$cell_dim_part
+  if [[ ${high_volume_cube:-f} == t ]]; then
+    hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
+    hash=${hash:0:2}
+    cell_id=/$hash/$cell_dim_part
+  fi
+fi
+
+if [[ "${save_prefix:-}" ]]; then
+  eval "${save_prefix}_id=$cell_id"
+  eval "${save_prefix}_path=$current_cube"
+fi
+
+return 0
+
+}
+
+load_context() {
+local f=$1 
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+handler_folders=( )
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_physical_context_before "$physical_parent" || return 1
+    load_logical_context_before "$physical_parent" || return 1
+  else
+    load_physical_context_before "$logical_parent" || return 1
+  fi
+fi
+
+[ -f "$f/cube-context" ] && source "$f/cube-context"
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+[ -d "$f/handlers" ] && handler_folders+=( "$f/handlers" )
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_logical_context_after "$physical_parent" || return 1
+    load_physical_context_after "$physical_parent" || return 1
+  else
+    load_physical_context_after "$logical_parent" || return 1
+  fi
+fi
+
+return 0
+}
+
+load_physical_context_before() {
+local f=$1 
+local physical_parent=${f%/*}
+if [ "${#physical_parent}" -gt 1 ]; then
+  load_physical_context_before "$physical_parent" || return 1
+fi
+[ -f "$f/cube-context" ] && source "$f/cube-context"
+return 0
+}
+
+load_physical_context_after() {
+local f=$1 
+local physical_parent=${f%/*}
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+[ -d "$f/handlers" ] && handler_folders+=( "$f/handlers" )
+if [ "${#physical_parent}" -gt 1 ]; then
+  load_physical_context_after "$physical_parent" || return 1
+fi
+return 0
+}
+
+load_logical_context_before() {
+
+local f=$1 
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_physical_context_before "$physical_parent" || return 1
+    load_logical_context_before "$physical_parent" || return 1
+  else
+    load_physical_context_before "$logical_parent" || return 1
+  fi
+fi
+
+[ -f "$f/cube-context" ] && source "$f/cube-context"
+return 0
+
+}
+
+load_logical_context_after() {
+
+local f=$1 
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+[ -d "$f/handlers" ] && handler_folders+=( "$f/handlers" )
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_logical_context_after "$physical_parent" || return 1
+    load_physical_context_after "$physical_parent" || return 1
+  else
+    load_physical_context_after "$logical_parent" || return 1
+  fi
+fi
+
+return 0
+
+}
+
+gather_dims() {
+trace 0 "Gathering dimensions for $current_cube"
+local dimension dimension_folder dimension_plural
+localize_dim_vars=
+begin_function
+  if [ -d "$current_cube/dim" ]; then
+    begin_for dimension_folder in \
+      $(find "$current_cube/dim" -mindepth 1 -maxdepth 1 -type d | sort); doo
+      dimension=${dimension_folder##*/}
+      if [[ "$dimension" =~ ^[0-9]+- ]]; then
+        dimension=${dimension#*-}
+      fi
+      if [[ ! "$dimension" =~ ^[a-zA-Z0-9_]+$ ]]; then
+        err "Invalid dimension name [$dimension] derived from folder $dimension_folder"
+        err "Dimensions must only have alphanumeric or _ characters in it."
+        fail
+      fi
+      dimension_plural=${dimension}s
+      dimensions+=( $dimension )
+      dimension_folders+=( "$dimension_folder" )
+      localize_dim_vars+="local $dimension $dimension_plural; "
+      if [[ "${!dimensions:-}" ]]; then
+        dim_string+="$dimensions=[ ${!dimensions:-} ] "
+      else
+        dim_string+="$dimension=${!dimension:-} "
+      fi
+    end_for
+  fi
+end_function
+handle_return
+}
+
