@@ -23,39 +23,85 @@ begin_function
   local changed=f
 
   if [[ ${subject%.safe} != $subject ]]; then
-    err "not supported yet"
+    handle_secure_edit || fail
   else
-
-    if [[ -f $new_file ]]; then
-      err "$new_file already exists, delete that first if you want to edit $file"
-      fail
-    fi
-
-    [[ -f $old_file ]] && { 
-      cp $old_file $new_file || fail 
-    }
-
-    $EDITOR $new_file || fail
-
-    if [[ -f $old_file ]]; then
-      if files_are_different $old_file $new_file; then
-        changed=t
-      else
-        rm $new_file || fail
-      fi
-    else
-      changed=t
-    fi
-
-    if [[ $changed == t ]]; then
-      mv $new_file $old_file || fail
-      update_modify_times "${new_file%/*}" "${current_cube}" || fail
-    fi
-
+    handle_insecure_edit || fail
   fi
 
 end_function
 handle_return
 
+}
+
+handle_secure_edit() {
+begin_function
+
+  local unsafe_file=${file%.safe}
+  local new_unsafe_file=$tmp_path/$unsafe_file.new
+  local old_unsafe_file=$tmp_path/$unsafe_file.old
+
+  if [[ -f $new_unsafe_file ]]; then
+    err "$new_unsafe_file already exists, delete that first if you want to edit $file"
+    fail
+  fi
+
+  if [[ -f $old_file ]]; then
+    decrypt_file $old_file $old_unsafe_file || fail
+  fi
+
+  $EDITOR $new_unsafe_file || fail
+
+  # old stuff
+  if [[ -f $old_unsafe_file ]]; then
+    if files_are_different $old_unsafe_file $new_unsafe_file; then
+      changed=t
+    else
+      rm $new_unsafe_file || fail
+    fi
+  else
+    changed=t
+  fi
+
+  if [[ $changed == t ]]; then
+    encrypt_file $new_unsafe_file $new_file || fail
+    mv $new_file $old_file || fail
+    update_modify_times "${new_file%/*}" "${current_cube}" || fail
+  fi
+
+end_function
+handle_return
+}
+
+handle_insecure_edit() {
+begin_function
+
+  if [[ -f $new_file ]]; then
+    err "$new_file already exists, delete that first if you want to edit $file"
+    fail
+  fi
+
+  [[ -f $old_file ]] && { 
+    cp $old_file $new_file || fail 
+  }
+
+  $EDITOR $new_file || fail
+
+  if [[ -f $old_file ]]; then
+    if files_are_different $old_file $new_file; then
+      changed=t
+    else
+      rm $new_file || fail
+    fi
+  else
+    changed=t
+  fi
+
+  if [[ $changed == t ]]; then
+    mv $new_file $old_file || fail
+    update_modify_times "${new_file%/*}" "${current_cube}" || fail
+  fi
+
+end_function
+handle_return
 }
 

@@ -30,3 +30,120 @@ fi
 return 0
 }
 
+decrypt_file() {
+
+local from=$1; shift
+local to=$1; shift
+local tmp_path=$tmp_path
+local current_cube=$current_cube
+local user_private_key=${user_private_key:-~/.ssh/id_rsa}
+
+trace 0 "Decrypting $from to $to"
+begin_function
+
+  if [[ ! -d "$tmp_path" ]]; then
+    err "tmp_path must be set to a directory before calling decrypt_file."
+    fail
+  fi
+
+  if [[ ! -d "$current_cube" ]]; then
+    err "current_cube must be set before calling decrypt_file"
+    fail
+  fi
+
+  if [[ ! -f "$current_cube/key/key.$USER" ]]; then
+    err "You don't have a key for this cube ($USER). Ask someone who does to add you. Existing keys:" 
+    find $current_cube/key -name "key.*" >&2
+    fail
+  fi
+
+  # extract the main key
+  if ! openssl pkeyutl -decrypt -inkey $user_private_key -in "$current_cube/key/key.$USER" -out $tmp_path/main; then
+    err "Failed to decrypt main key." 
+    fail
+  fi
+
+  # decrypt the secret file
+  if ! openssl enc -aes256 -in $from -out $to -d -pass file:$tmp_path/main; then 
+    err "Failed to decrypt secret file." 
+    fail
+  fi
+
+end_function
+handle_return
+
+}
+
+encrypt_file() {
+
+local from=$1; shift
+local to=$1; shift
+local tmp_path=$tmp_path
+local current_cube=$current_cube
+local user_private_key=${user_private_key:-~/.ssh/id_rsa}
+
+trace 0 "Encrypting $from to $to"
+begin_function
+
+  if [[ ! -d "$tmp_path" ]]; then
+    err "tmp_path must be set to a directory before calling decrypt_file."
+    fail
+  fi
+
+  if [[ ! -d "$current_cube" ]]; then
+    err "current_cube must be set before calling decrypt_file"
+    fail
+  fi
+
+  if [[ ! -f "$current_cube/key/key.$USER" ]]; then
+
+    local key_count=$(find $current_cube/key -mindepth 1 -maxdepth 1 -name 'key.*' -type f | wc -l)
+
+    if [[ $key_count > 0 ]]; then
+
+      err "You don't have a key for this cube ($USER). Ask someone who does to add you. Existing keys:" 
+      find $current_cube/key -name "key.*" >&2
+      fail
+
+    else
+
+      trace 0 "There are no keys for this cube yet. Will create a new key."
+
+      # create a new main key
+      if ! openssl rand -base64 40 >$tmp_path/main; then
+        err "Failed to generate new main key."
+        fail
+      fi
+
+      # create a compatible public key from the user's private key
+      if ! openssl pkey -in $user_private_key -out $tmp_path/public -pubout; then 
+        err "Failed to convert private key to public key."
+        fail
+      fi
+
+      # encrypt main key with given user key
+      if ! openssl pkeyutl -encrypt -pubin -inkey $tmp_path/public -in $tmp_path/main -out $current_cube/key/key.$USER; then
+        err "Failed to encrypt main key."
+        fail
+      fi
+
+    fi
+  else 
+    # extract the main key
+    if ! openssl pkeyutl -decrypt -inkey $user_private_key -in $current_cube/key/key.$USER -out $tmp_path/main; then
+      err "Failed to decrypt main key." 
+      fail
+    fi
+  fi
+    
+  # encrypt the file with main key
+  if ! openssl enc -aes256 -in $from -out $to -pass file:$tmp_path/main; then
+    err "Failed to create new secret file."
+    fail
+  fi
+
+end_function
+handle_return
+
+}
+
