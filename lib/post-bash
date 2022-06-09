@@ -2,6 +2,8 @@
 
 # some required defaults
 tmp_folder="${tmp_folder:-/tmp}"
+tracing=${tracing:-f}
+no_trace_depth=${no_trace_depth:-0}
 trace=${trace:-5}
 importance=${importance:-0}
 trace_indent=${trace_indent:-f}
@@ -10,6 +12,9 @@ trace_force=${trace_force:-f}
 bash_trace=${bash_trace:-100}
 debug=${debug:-f}
 EDITOR=${EDITOR:-vim}
+
+alias begin_no_tracing_zone='[[ $no_trace_depth == 0 && $tracing == t ]] && set +x; let no_trace_depth++'
+alias end_no_tracing_zone='let no_trace_depth--; [[ $no_trace_depth -le 0 && $tracing == t ]] && set -x'
 
 # usage example:
 #   do_stuff() {
@@ -126,8 +131,8 @@ fi
 }
 
 stack_trace() {
+begin_no_tracing_zone
 local start_frame=${start_frame:-1}
-set +x
 local count=${#FUNCNAME[*]}
 local p n
 
@@ -141,6 +146,8 @@ for ((n = start_frame; n < count; n++)) ; do
   p=$((n - 1))
   echo "  ${BASH_SOURCE[$n]} ${FUNCNAME[$n]} ${BASH_LINENO[$p]}" >&2
 done
+end_no_tracing_zone
+return 0
 }
 
 # put these in front of function calls to increase or decreasing importance of their logs
@@ -151,6 +158,7 @@ alias terse='importance=$((importance-10))'
 # write output to standard error
 #   can be overridden to provide a different behavior
 err() {
+  begin_no_tracing_zone
   local flags=
   if [ "$1" == -n ]; then
     flags=-n
@@ -169,9 +177,12 @@ err() {
   fi
 
   echo $flags "${RED:-}$1${RESET:-}" >&2
+  end_no_tracing_zone
+  return 0
 }
 
 warn() {
+  begin_no_tracing_zone
   local flags=
   if [ "$1" == -n ]; then
     flags=-n
@@ -190,6 +201,7 @@ warn() {
   fi
 
   echo $flags "${YELLOW:-}$1${RESET:-}" >&2
+  end_no_tracing_zone
 }
 
 # are we tracing in the middle of a line, or are we at the beginning of a new line?
@@ -200,6 +212,7 @@ tracing_midline=f
 #   -a uses echo_align to align columns
 #   -n skips newline at end
 trace() {
+  begin_no_tracing_zone
   local nonewline=f
   local align=f
   while true; do
@@ -257,18 +270,23 @@ trace() {
     fi
   fi
 
+  end_no_tracing_zone
   return 0
 }
 
 out() {
+  begin_no_tracing_zone
   if [ ${tracing_midline:-f} == t ]; then
     tracing_midline=f
     echo >&$fd_trace
   fi
   echo "$@"
+  end_no_tracing_zone
+  return 0
 }
 
 incomplete() {
+  begin_no_tracing_zone
   if [ ${tracing_midline:-f} == t ]; then
     tracing_midline=f
     echo >&$fd_trace
@@ -279,85 +297,14 @@ incomplete() {
     echo "Not implemented yet." >&2
   fi
   stack_trace
+  end_no_tracing_zone
   exit 1
-}
-
-# usage: lock {lock name} [{max time in seconds to wait for lock}]
-# if timeout is not given, then attempt will immediately fail if it can't get the lock right away
-#   otherwise it will keep trying until the timeout is reached or the lock is obtained.
-lock() {
-
-local lockfile=$1; shift
-local timeout=${1:-0}
-
-trace 0 "Attempting to obtain lock for $lockfile"
-begin_function
-  if [ -d "$lockfile" ]; then
-    trace 0 "Lock folder exists already: $lockfile"
-    pid=$(<$lockfile/pid)
-    if [ "$pid" == $$ ]; then
-      # this process already owns the lock
-      trace 0 "This process already owns the lock, so we are done."
-      succeed
-    fi
-
-    # check to see if the process is still running
-    if [ ! "$pid" ] || ! ps $pid &>/dev/null; then
-      rm -rf "$lockfile" || fail
-      trace 0 "Removed stale lockfile: $lockfile with pid: $pid"
-    fi
-  fi
-
-  local timeleft=$timeout
-  local success=f
-
-  begin_while true; doo
-
-    mkdir "$lockfile" &>/dev/null && success=t
-    if [ $success == t ]; then
-      echo $$ >$lockfile/pid
-      defer "rm -rf \"${lockfile}\""
-      succeed
-    fi
-
-    sleep 1
-
-    timeleft=$((timeleft-1))
-    if [ $timeout -gt 0 ] && [ $timeleft -lt 0 ]; then
-      trace 0 "Timeout reached. Couldn't obtain the lock in time."
-      fail
-    fi
-
-  end_while
-
-end_function
-
-if succeeded; then
-  trace 0 "Succeeded in obtaining lock"
-else
-  trace 5 "Failed to obtain lock"
-fi
-
-handle_return
-
 }
 
 # should pass in a single command or a { } block of commands
 # will run this command after script terminates (whether successfully or in error)
 defer() {
 eval "cleanup_on_exit+='$1 &>/dev/null || true;'"
-}
-
-# usage: unlock {lock name}
-#   should only be used if this process actually owns this lock
-unlock() {
-local lockfile=$1
-if [ ! "$lockfile" ]; then
-  err "Usage: unlock {lock name}"
-  exit 1
-fi
-
-rm -rf "$lockfile"
 }
 
 # usage: random {p=number of possibilities}
@@ -468,6 +415,7 @@ convert_to_seconds() {
 #   echo_columns=( 20 10 40 )
 
 echo_align() {
+begin_no_tracing_zone
 local output=()
 local no_new_line no_new_column silent block=
 local append
@@ -568,6 +516,7 @@ else
   echo_previous_column_size=0
 fi
 
+end_no_tracing_zone
 return 0
 }
 
@@ -585,18 +534,22 @@ echo "echo_current_column=${echo_current_column:-0}"
 
 # example: {complex command} | echo_align_stream 
 echo_align_stream() {
+begin_no_tracing_zone
 local line line_array
 while IFS= read -r line || [ "${line:-}" ]; do
   line_array=( $line )
   echo_align "${line_array[@]}"
   unset line
 done
+end_no_tracing_zone
+return 0
 }
 
 # example: {complex command} | echo_align_block
 # will read the whole input at once, and determine alignment, then output it
 # this is the opposite of echo_align_stream
 echo_align_block() {
+begin_no_tracing_zone
 local line line_array block=()
 while IFS= read -r line || [ "${line:-}" ]; do
   line_array=( $line )
@@ -605,6 +558,8 @@ while IFS= read -r line || [ "${line:-}" ]; do
 done
 
 echo_align_dump
+end_no_tracing_zone
+return 0
 }
 
 echo_align_dump() {

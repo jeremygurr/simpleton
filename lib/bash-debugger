@@ -204,7 +204,11 @@ debug_trap() {
     if [ "$debug_watch" ]; then
       local w
       for w in $debug_watch; do
-        eval "echo -n \"\$w=[$w]\" " >&$fd_original_err
+        if [ $debug_watch_style == compact ]; then
+          eval "echo -n \"$w \"" >&$fd_original_err
+        else
+          eval "echo -n \"\$w=[$w] \"" >&$fd_original_err
+        fi
       done
       echo >&$fd_original_err
     fi
@@ -372,7 +376,11 @@ debug_trap() {
         local fixed_command
         fixed_command=${raw_display_command}
         fixed_command=${fixed_command//\\\$/\\\\\$}
+        # temporarily hide this so we can keep $(( but transform $(
+        fixed_command=${fixed_command//\$((/{{{}
         fixed_command=${fixed_command//\$(/\\\$(}
+        # restore {{{ to $((
+        fixed_command=${fixed_command//{{{/\$((}
         fixed_command=${fixed_command//\"/\\\"}
         set +u
         eval "echo \"$fixed_command\"" >&$fd_original_err
@@ -382,10 +390,8 @@ debug_trap() {
         local fixed_command
         fixed_command=${raw_display_command}
         fixed_command=${fixed_command//\\\$/\\\\\$}
-        #fixed_command=${fixed_command//\"/\\\"}
         fixed_command=${fixed_command//\[ /\$(\[ }
         fixed_command=${fixed_command// ]/ ] && echo true || echo false)}
-        #echo "echo \"$fixed_command\"" >&$fd_original_err
         set +u
         eval "echo \"$fixed_command\"" >&$fd_original_err
         set -u
@@ -421,6 +427,14 @@ debug_trap() {
         ;;
       w)
         read -e -p "Watch: " debug_watch <&$fd_original_in >&$fd_original_err
+        ;;
+      W)
+        if [ $debug_watch_style == wide ]; then
+          debug_watch_style=compact
+        else
+          debug_watch_style=wide
+        fi
+        echo "Debug watch style is now $debug_watch_style" >&$fd_original_err
         ;;
       x)
         if [ $debug_expansion == 1 ]; then
@@ -498,6 +512,7 @@ debug_trap() {
         echo "S  show stack trace" >&$fd_original_err
         echo "t  add timestamps to each debug trace line" >&$fd_original_err
         echo "w  set or clear current watched variable" >&$fd_original_err
+        echo "W  toggle debug watch style" >&$fd_original_err
         echo "x  toggle expanded command mode. If on, will expand each *short* command that is executed" >&$fd_original_err
         echo "X  toggle extended expanded command mode. If on, will expand *all* commands that are executed" >&$fd_original_err
         echo "=  continue until the current line is reached again" >&$fd_original_err
@@ -587,6 +602,7 @@ debug_start() {
     debug_stop_at=${debug_stop_at:-}
     debug_subshell=${debug_subshell:-f}
     debug_watch=${debug_watch:-}
+    debug_watch_style=${debug_watch_style:-wide}
 
     reserve_tmp_file debug_fifo_path || exit 1
     reserve_tmp_file debug_out_path || exit 1
