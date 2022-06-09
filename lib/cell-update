@@ -40,7 +40,7 @@ begin_function
     fail
   fi
 
-  if [[ "$current_cube" -nt "$current_cube/cube-context" ]]; then
+  if [[ "$current_cube" -ot "$current_cube/cube-context" ]]; then
     touchup_cube || fail
   fi
 
@@ -67,7 +67,7 @@ begin_function
       mkdir "$current_cube/$f" || fail
     fi
   end_for
-  touch "$current_cube/cube-context"
+  touch "$current_cube"
 end_function
 handle_return
 }
@@ -79,7 +79,7 @@ local index=$1
 local dim=${dimensions[$index]} 
 local dim_folder=${dimension_folders[$index]}
 
-trace 0 "Pivoting $current_cube: $dim"
+trace 0 "Pivoting ${current_cube##*/work/}: $dim"
 begin_function
 
   if [[ ! -d "$dim_folder" ]]; then
@@ -319,11 +319,11 @@ flock -u $1
 }
 
 write_persist_file() {
-  echo "
+echo "
 update_id=$update_id
-cooldown_delay=$cooldown_delay
+cooldown_delay=${cooldown_delay:-0}
 consecutive_failures=$consecutive_failures
-" >$status_path/persist || fail
+" >$status_path/persist
 }
 
 maybe_apply_cooldown() {
@@ -456,7 +456,9 @@ begin_function
 
   fi
 
-  write_persist_file || fail
+  if [[ "$status_path" ]]; then
+    write_persist_file || fail
+  fi
 
   if [[ "$log_path" ]]; then
 
@@ -678,7 +680,7 @@ new_stage() {
 local stage=$1
 if [[ "${previous_stage:-}" ]]; then
   trace 5 "Finished stage $previous_stage" \
-    "took $(echo "$EPOCHSECONDS - $stage_start_time" | bc) seconds)"
+    "in $(echo "$EPOCHSECONDS - $stage_start_time" | bc) seconds"
 fi
 [[ "$log_path" ]] && echo "$stage $EPOCHSECONDS" >>"$log_path/stage-timing-current"
 trace 5 "Starting stage $stage"
