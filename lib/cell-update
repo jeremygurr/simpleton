@@ -101,7 +101,11 @@ begin_function
     fail
   fi
 
-  expand_dim $dim || fail
+  if ! expand_dim $dim; then
+    err "Dim $dim has invalid value '${!dim:-}'"
+    fail
+  fi
+
   local dims=${dim}s
   local values=( ${!dims:-} )
 
@@ -119,7 +123,7 @@ begin_function
 
   begin_for value in "${values[@]}"; doo
     eval "$dim='$value'"
-    if [[ ${#dim[*]} -gt $((index + 1)) ]]; then
+    if [[ ${#dimensions[*]} -gt $((index + 1)) ]]; then
       if [[ $parallel == t ]]; then
         cube_update_pivot $((index + 1)) &
         processes+=" $!"
@@ -756,19 +760,21 @@ init_context() {
   }
 
   execute_update_decrypt() {
-    if [[ "$in_path" && "$out_path" ]]; then
-      local need_decrypt file
-      begin_for file in $(find "$in_path" -name '*.safe' -type f); doo
-        file=${file#$in_path}
-        file=${file%.safe}
-        if [[ -f $out_path/$file && $out_path/$file -nt $in_path/$file ]]; then
-          ln $out_path/$file $out_path.new/$file || fail
-        else
-          decrypt_file "$in_path/$file.safe" "$out_path.new/$file" || fail
-        fi
-      end_for
-    fi
-    return 0
+    begin_function
+      if [[ "$in_path" && "$out_path" ]]; then
+        local need_decrypt file
+        begin_for file in $(find "$in_path" -name '*.safe' -type f); doo
+          file=${file#$in_path}
+          file=${file%.safe}
+          if [[ -f $out_path/$file && $out_path/$file -nt $in_path/$file ]]; then
+            ln $out_path/$file $out_path.new/$file || fail
+          else
+            decrypt_file "$in_path/$file.safe" "$out_path.new/$file" || fail
+          fi
+        end_for
+      fi
+    end_function
+    handle_return
   }
 
   execute_update_copy() {
@@ -793,7 +799,7 @@ reset_expand_dim() {
   # should fail (return 1) if any values are invalid, or if required value is missing
   expand_dim() {
     local dimension=$1; shift
-    local dimension_plural=${dimension_plural}s; shift
+    local dimension_plural=${dimension}s; shift
     local value=${!dimension:-${!dimension_plural:-}}
     [ -z "$value" ] && return 1
     eval "$dimension_plural=\$value"
