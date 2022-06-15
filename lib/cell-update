@@ -72,14 +72,9 @@ end_function
 handle_return
 }
 
-# should only be called if there are dimensions remaining to be pivoted. Otherwise cell_update should be called.
-cube_update_pivot() {
-
-local index=$1
-local dim=${dimensions[$index]} 
-local dim_folder=${dimension_folders[$index]}
-
-trace 0 "Pivoting ${current_cube##*/work/}: $dim"
+# requires dim and dim_folder
+get_dim_functions() {
+trace 0 "Getting dim functions for $dim"
 begin_function
 
   if [[ ! -d "$dim_folder" ]]; then
@@ -90,32 +85,69 @@ begin_function
   save_prefix=dim cube_update "$dim_folder" || fail
 
   if [[ ! -f "$dim_folder/out$dim_id/functions" ]]; then
-    err "Missing functions file in $dim_folder/out$dim_id. It must contain the expand_dim function."
+    err "Missing functions file in $dim_folder/out$dim_id. It must contain the expand_members function."
     fail
   fi
 
   source "$dim_folder/out$dim_id/functions" || fail
 
-  if ! type expand_dim &>/dev/null; then
-    err "$dim_folder/out$dim_id/functions does not contain expand_dim function"
+  if ! type expand_members &>/dev/null; then
+    err "$dim_folder/out$dim_id/functions does not contain expand_members function"
     fail
   fi
 
-  if ! expand_dim $dim; then
-    err "Dim $dim has invalid value '${!dim:-}'"
-    fail
-  fi
+end_function
+handle_return
+}
+
+# input: values dim
+# output: values
+expand_values() {
+trace 0 "Expanding values for $dim"
+begin_function
+
+  # convert the possibly aliased or grouped values into individual values
+  local new_value_list= new_values new_value value
+  begin_for value in "${values[@]}"; doo
+    if ! expand_members $value new_values; then
+      err "Dim $dim has invalid value '$value'"
+      fail
+    fi
+    for new_value in $new_values; do
+      if [[ ! $new_value_list =~ \ $new_value\  ]]; then
+        new_value_list+=" $new_value "
+      fi
+    done
+  end_for
+  values=( $new_value_list )
+
+end_function
+handle_return
+}
+
+# should only be called if there are dimensions remaining to be pivoted. 
+# Otherwise cell_update should be called.
+cube_update_pivot() {
+
+local index=$1
+local dim=${dimensions[$index]} 
+local dim_folder=${dimension_folders[$index]}
+
+trace 0 "Pivoting ${current_cube##*/work/}: $dim"
+begin_function
 
   local dims=${dim}s
-  local values=( ${!dims:-} )
+  local values=( ${!dim:-${dims:-}} )
 
   if [[ ! "$values" ]]; then
     err "Missing value for dimension $dim"
     fail
   fi
 
-  local value processes
-  local parallel=f
+  get_dim_functions || fail
+  expand_values || fail
+
+  local processes parallel=f
   if [[ "${#values[*]}" -gt 1 && "$parallel_execution" == t ]]; then
     parallel=t
     wait_for_low_load || fail
@@ -146,7 +178,6 @@ begin_function
 
 end_function
 handle_return
-
 }
 
 wait_for_sub_processes() {
@@ -364,7 +395,7 @@ cell_update_inner() (
 local lock_timeout=${lock_timeout:-30} update_id stage_start_time previous_stage
 local lock_fd quick_check=${quick_check:-f} 
 local allow_slow_updates=${allow_slow_updates:-t} update_is_slow=f
-local debug_path= down_path= in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path=
+local debug_path= down_path= in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path= dim_path=
 
 trace 0 "Updating cell ${current_cube##*/work/} $dim_string"
 
@@ -586,6 +617,10 @@ begin_function
     [[ ! -d $debug_path ]] && { mkdir $debug_path || fail; }
   fi
 
+  if [[ -d $current_cube/dim ]]; then
+    dim_path=$current_cube/dim
+  fi
+
   if [[ -d $current_cube/down ]]; then
     down_path=$current_cube/down$cell_id
     if [[ ! -d $down_path ]]; then
@@ -727,8 +762,20 @@ begin_function
     succeed
   fi
 
+  if [[ "$dim_path" ]]; then
+    local dims=( $(find $dim_path -mindepth 1 -maxdepth 1 -type d) )
+    local dim
+    begin_for dim in ${dims[*]}; doo
+      if ! quick_check=t cube_update "$dim"; then
+        # if cube_update fails, then an update is needed
+        trace 5 "Dim $dim needs update"
+        succeed 
+      fi
+    end_for
+  fi
+
   if [[ "$up_path" ]]; then
-    local deps=( $(find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d) )
+    local deps=( $(find $up_path -mindepth 1 -maxdepth 1 -type d) )
     local dep
     begin_for dep in ${deps[*]}; doo
       if ! quick_check=t cube_update "$dep"; then
@@ -790,12 +837,12 @@ init_context() {
 
 }
 
-reset_expand_dim() {
+reset_expand_members() {
 
   # override this in cubes to support aliases, dimension groups, and defaults
   # should store values in plural form of var, and only plural form should be used after this
   # should fail (return 1) if any values are invalid, or if required value is missing
-  expand_dim() {
+  expand_members() {
     local dimension=$1; shift
     local dimension_plural=${dimension}s; shift
     local value=${!dimension:-${!dimension_plural:-}}
@@ -804,10 +851,10 @@ reset_expand_dim() {
     return 0
   }
 
-  # usually this doesn't need to be overridden, since it uses expand_dim to determine if it's valid
+  # usually this doesn't need to be overridden, since it uses expand_members to determine if it's valid
   validate_dims() {
     for dim in "${dimensions[@]}"; do
-      if ! expand_dim "$dim"; then
+      if ! expand_members "$dim"; then
         return 1
       fi
     done
