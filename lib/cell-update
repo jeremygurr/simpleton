@@ -438,6 +438,11 @@ local lock_timeout=${lock_timeout:-30} update_id stage_start_time previous_stage
 local lock_fd quick_check=${quick_check:-f} 
 local allow_slow_updates=${allow_slow_updates:-t} update_is_slow=f
 local debug_path= down_path= in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path= dim_path=
+local cleanup_on_exit=
+
+# need to do this again since we are in a subshell
+trap 'trace_indent=f trace -5 "Cleaning up"; 
+  eval "${cleanup_on_exit:-}"' EXIT
 
 trace 0 "Updating cell ${current_cube##*/work/} $dim_string"
 
@@ -666,13 +671,23 @@ begin_function
   if [[ -d $current_cube/down ]]; then
     down_path=$current_cube/down$cell_id
     if [[ ! -d $down_path ]]; then
-      down_path=$current_cube/down || fail
+      down_path=$current_cube/down/all || fail
+      if [[ ! -d $down_path ]]; then
+        err "down folder must either be cell specific, or have an all folder in it"
+        fail
+      fi
     fi
   fi
 
   if [[ -d $current_cube/in ]]; then
     in_path=$current_cube/in$cell_id
-    [[ ! -d $in_path ]] && in_path=$current_cube/in
+    if [[ ! -d $in_path ]]; then
+      in_path=$current_cube/in/all
+      if [[ ! -d $in_path ]]; then
+        err "in folder must either be cell specific, or have an all folder in it"
+        fail
+      fi
+    fi
   fi
 
   if [[ -d $current_cube/lock ]]; then
@@ -706,7 +721,11 @@ begin_function
   if [[ -d $current_cube/up ]]; then
     up_path=$current_cube/up$cell_id
     if [[ ! -d $up_path ]]; then
-      up_path=$current_cube/up || fail
+      up_path=$current_cube/up/all || fail
+      if [[ ! -d $up_path ]]; then
+        err "up folder must either be cell specific, or have an all folder in it"
+        fail
+      fi
     fi
   fi
 
@@ -853,7 +872,7 @@ init_context() {
           file=${file#/}
           file=${file%.safe}
           local parent_folder=${file%/*}
-          if [[ "$parent_folder" ]]; then
+          if [[ "$parent_folder" != "$file" ]]; then
             mkdir -p $out_path.new/$parent_folder || fail
           fi
           if [[ -f $out_path/$file && $out_path/$file -nt $in_path/$file ]]; then

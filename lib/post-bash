@@ -70,9 +70,12 @@ alias handle_return='return $return_value'
 alias handle_exit='exit $return_value'
 
 # make sure we clean up after ourselves whether we've launched a background job or allocated resources
+setup_exit_trap() {
 trap 'trace_indent=f trace -5 "Cleaning up"; 
   { kill $(jobs -p) && wait; } 2>/dev/null || true; 
   eval "${cleanup_on_exit:-}"' EXIT
+}
+setup_exit_trap
 
 NL=$'\n'
 TAB=$'\t'
@@ -159,6 +162,8 @@ alias terse='importance=$((importance-10))'
 #   can be overridden to provide a different behavior
 err() {
   begin_no_tracing_zone
+  local prefix=
+  [[ "${parallel:-f}" == t ]] && prefix="$BASHPID "
   local flags=
   if [ "$1" == -n ]; then
     flags=-n
@@ -176,13 +181,15 @@ err() {
     printf "%${pad_size}s" >&2
   fi
 
-  echo $flags "${RED:-}$*${RESET:-}" >&2
+  echo $flags "${RED:-}$prefix$*${RESET:-}" >&2
   end_no_tracing_zone
   return 0
 }
 
 warn() {
   begin_no_tracing_zone
+  local prefix=
+  [[ "${parallel:-f}" == t ]] && prefix="$BASHPID "
   local flags=
   if [ "$1" == -n ]; then
     flags=-n
@@ -200,7 +207,7 @@ warn() {
     printf "%${pad_size}s" >&2
   fi
 
-  echo $flags "${YELLOW:-}$*${RESET:-}" >&2
+  echo $flags "${YELLOW:-}$prefix$*${RESET:-}" >&2
   end_no_tracing_zone
 }
 
@@ -233,6 +240,8 @@ trace() {
   local importance=${importance:-0}
   let importance+=$1; shift
 
+  local prefix=
+  [[ "${parallel:-f}" == t ]] && prefix="$BASHPID "
   if [ $((trace+importance)) -gt 0 -o $trace_force == t ]; then
     if [ $nonewline == t ]; then
       if [ $tracing_midline == f ]; then
@@ -246,9 +255,9 @@ trace() {
         tracing_midline=t
       fi
       if [ $align == t ]; then
-        echo_align -n >&$fd_trace "$@"
+        echo_align -n >&$fd_trace "$prefix$@"
       else
-        echo -n >&$fd_trace "$@"
+        echo -n >&$fd_trace "$prefix$@"
       fi
     else
       if [ $tracing_midline == t ]; then
@@ -263,9 +272,9 @@ trace() {
         printf "%${pad_size}s" >&$fd_trace
       fi
       if [ $align == t ]; then
-        echo_align >&$fd_trace "$@"
+        echo_align >&$fd_trace "$prefix$@"
       else
-        echo >&$fd_trace "$@"
+        echo >&$fd_trace "$prefix$@"
       fi
     fi
   fi
@@ -276,11 +285,13 @@ trace() {
 
 out() {
   begin_no_tracing_zone
+  local prefix=
+  [[ "${parallel:-f}" == t ]] && prefix="$BASHPID "
   if [ ${tracing_midline:-f} == t ]; then
     tracing_midline=f
     echo >&$fd_trace
   fi
-  echo "$@"
+  echo "$prefix$@"
   end_no_tracing_zone
   return 0
 }
