@@ -72,7 +72,8 @@ end_function
 handle_return
 }
 
-# requires dim and dim_folder
+# input: dim dim_folder
+# output: expand_members expand_member
 get_dim_functions() {
 trace 0 "Getting dim functions for $dim"
 begin_function
@@ -170,7 +171,6 @@ cube_update_pivot_values() {
 trace 0 "Pivoting over values of $dim: ${values[*]}"
 begin_function
 
-  local processes parallel=f
   if [[ "${#values[*]}" -gt 1 && "$parallel_execution" == t ]]; then
     parallel=t
     wait_for_low_load || fail
@@ -208,6 +208,7 @@ cube_update_pivot() {
 local index=$1
 local dim=${dimensions[$index]} 
 local dim_folder=${dimension_folders[$index]}
+local processes parallel=f
 
 trace 0 "Pivoting ${current_cube##*/work/}: $dim"
 begin_function
@@ -472,6 +473,7 @@ begin_function
     fail
   fi
 
+  local consecutive_failures=${consecutive_failures:-0}
   cell_pre_update || fail
 
   local update_successful=t
@@ -584,7 +586,6 @@ begin_function
 
   if [[ "$status_path" ]]; then
 
-    local consecutive_failures=${consecutive_failures:-0}
     [[ -f "$status_path/persist" ]] && { source "$status_path/persist" || fail; }
 
     if [[ "${update_id:-}" ]]; then
@@ -724,13 +725,13 @@ handle_return
 wait_for_low_load() {
 local cube_max_load=${cube_max_load:-10}
 local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
-local current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
+local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
 if [[ $current_load -gt $cube_max_load ]]; then
   trace 0 "Load average is too high ($current_load > $cube_max_load)," \
     "waiting until things cool down first."
   local time_waited=0
   while [[ $current_load -gt $cube_max_load ]]; do
-    current_load=$(uptime | sed -E 's/.*averages: ([0-9]*).*/\1/')
+    current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
     sleep 5; let time_waited+=5
     if [[ "$cube_load_wait_timeout" -gt 0 && $time_waited -ge $cube_load_wait_timeout ]]; then
       err "Timed out waiting for cpu load to be low enough. Aborting"
@@ -837,8 +838,6 @@ init_context() {
 
   local current_cube=$1 high_volume=f cell_locks=t cell_logs=f
 
-  reset_expand_members || fail
-
   # this may be overridden to provide a custom cooldown calculation
   get_cooldown_delay() {
     [[ -z "${cooldown_delay:-}" ]] && cooldown_delay=1
@@ -878,32 +877,20 @@ init_context() {
 
 }
 
-reset_expand_members() {
-
-  # override these two in cubes to support aliases, dimension groups, and defaults
-  # should store values in plural form of var, and only plural form should be used after this
-  # should fail (return 1) if any values are invalid, or if required value is missing
-  # inputs: value result_var
-  # outputs: *result_var
-  expand_members() {
-    eval "$result_var='$value'"
-  }
-
-  expand_member() {
-    eval "$result_var='$value'"
-  }
-
-  # usually this doesn't need to be overridden, since it uses expand_members to determine if it's valid
-  validate_members() {
-    local result
-    for dim in "${dimensions[@]}"; do
-      value=${!dim} result_var=result expand_members || return 1
-      if [[ ! "$value" ]]; then
-        return 1
-      fi
-    done
-    return 0
-  }
-
+# usually this doesn't need to be overridden, since it uses expand_members to determine if it's valid
+validate_members() {
+local result
+for dim in "${dimensions[@]}"; do
+  local dims=${dim}s
+  if [[ "${!dim:-}" ]]; then
+    value=${!dim} result_var=result expand_member || return 1
+  else
+    value=${!dims} result_var=result expand_members || return 1
+  fi
+  if [[ ! "$value" ]]; then
+    return 1
+  fi
+done
+return 0
 }
 
