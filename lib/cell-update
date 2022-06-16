@@ -96,56 +96,79 @@ begin_function
     fail
   fi
 
+  if ! type expand_member &>/dev/null; then
+    err "$dim_folder/out$dim_id/functions does not contain expand_member function"
+    fail
+  fi
+
 end_function
 handle_return
 }
 
-# input: values dim
+# input: dim
 # output: values
 expand_values() {
 trace 0 "Expanding values for $dim"
 begin_function
 
-  # convert the possibly aliased or grouped values into individual values
+  local dims=${dim}s
   local new_value_list= new_values new_value value
-  begin_for value in "${values[@]}"; doo
-    if ! expand_members $value new_values; then
+  values=( ${!dim} )
+
+  if [[ ! "${values:-}" ]]; then
+
+    # handle plural dim
+    values=( ${!dims} )
+
+    if [[ ! "${values:-}" ]]; then
+      err "Missing value for dimension $dim"
+      fail
+    fi
+
+    begin_for value in "${values[@]}"; doo
+      value=$value result_var=new_values expand_members || fail
+      if [[ ! "${new_values:-}" ]]; then
+        err "Dim $dims has invalid value '$value'"
+        fail
+      fi
+      for new_value in $new_values; do
+        if [[ ! $new_value_list =~ \ $new_value\  ]]; then
+          new_value_list+=" $new_value "
+        fi
+      done
+    end_for
+
+  else
+
+    # handle singular dim
+    if [[ "${#values[*]}" -gt 1 ]]; then
+      err "Too many values for a singular dim $dim." \
+        "Use plural dim $dims if you intend to have multiple values."
+      fail
+    fi
+
+    local value=$values new_values
+
+    value=$value result_var=new_value expand_member || fail
+    if [[ ! "$new_value" ]]; then
       err "Dim $dim has invalid value '$value'"
       fail
     fi
-    for new_value in $new_values; do
-      if [[ ! $new_value_list =~ \ $new_value\  ]]; then
-        new_value_list+=" $new_value "
-      fi
-    done
-  end_for
+
+    new_value_list+="$new_value"
+
+  fi
+
   values=( $new_value_list )
 
 end_function
 handle_return
 }
 
-# should only be called if there are dimensions remaining to be pivoted. 
-# Otherwise cell_update should be called.
-cube_update_pivot() {
-
-local index=$1
-local dim=${dimensions[$index]} 
-local dim_folder=${dimension_folders[$index]}
-
-trace 0 "Pivoting ${current_cube##*/work/}: $dim"
+# inputs: dim values
+cube_update_pivot_values() {
+trace 0 "Pivoting over values of $dim: ${values[*]}"
 begin_function
-
-  local dims=${dim}s
-  local values=( ${!dim:-${dims:-}} )
-
-  if [[ ! "$values" ]]; then
-    err "Missing value for dimension $dim"
-    fail
-  fi
-
-  get_dim_functions || fail
-  expand_values || fail
 
   local processes parallel=f
   if [[ "${#values[*]}" -gt 1 && "$parallel_execution" == t ]]; then
@@ -174,6 +197,24 @@ begin_function
     fi
   end_for
 
+end_function
+handle_return
+}
+
+# should only be called if there are dimensions remaining to be pivoted. 
+# Otherwise cell_update should be called.
+cube_update_pivot() {
+
+local index=$1
+local dim=${dimensions[$index]} 
+local dim_folder=${dimension_folders[$index]}
+
+trace 0 "Pivoting ${current_cube##*/work/}: $dim"
+begin_function
+
+  get_dim_functions || fail
+  expand_values || fail
+  cube_update_pivot_values || fail
   wait_for_sub_processes || fail
 
 end_function
@@ -593,7 +634,7 @@ cell_validate() {
 
 begin_function
 
-  if ! validate_dims; then
+  if ! validate_members; then
     trace 0 "Dims for this cube aren't valid. Maybe we can try another."
     fail
   fi
@@ -796,7 +837,7 @@ init_context() {
 
   local current_cube=$1 high_volume=f cell_locks=t cell_logs=f
 
-  reset_expand_dim
+  reset_expand_members || fail
 
   # this may be overridden to provide a custom cooldown calculation
   get_cooldown_delay() {
@@ -839,22 +880,25 @@ init_context() {
 
 reset_expand_members() {
 
-  # override this in cubes to support aliases, dimension groups, and defaults
+  # override these two in cubes to support aliases, dimension groups, and defaults
   # should store values in plural form of var, and only plural form should be used after this
   # should fail (return 1) if any values are invalid, or if required value is missing
+  # inputs: value result_var
+  # outputs: *result_var
   expand_members() {
-    local dimension=$1; shift
-    local dimension_plural=${dimension}s; shift
-    local value=${!dimension:-${!dimension_plural:-}}
-    [ -z "$value" ] && return 1
-    eval "$dimension_plural=\$value"
-    return 0
+    eval "$result_var='$value'"
+  }
+
+  expand_member() {
+    eval "$result_var='$value'"
   }
 
   # usually this doesn't need to be overridden, since it uses expand_members to determine if it's valid
-  validate_dims() {
+  validate_members() {
+    local result
     for dim in "${dimensions[@]}"; do
-      if ! expand_members "$dim"; then
+      value=${!dim} result_var=result expand_members || return 1
+      if [[ ! "$value" ]]; then
         return 1
       fi
     done
