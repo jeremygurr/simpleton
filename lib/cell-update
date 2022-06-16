@@ -40,10 +40,6 @@ begin_function
     fail
   fi
 
-  if [[ "$current_cube" -ot "$current_cube/cube-context" ]]; then
-    touchup_cube || fail
-  fi
-
   eval "$localize_dim_vars" || fail
 
   if [ ${#dimensions[*]} == 0 ]; then
@@ -55,21 +51,6 @@ begin_function
 end_function
 handle_return
 
-}
-
-touchup_cube() {
-trace 0 "Touching up $current_cube"
-local f
-begin_function
-  begin_for f in debug up res down in out tmp log lock key status; doo
-    if [ -f "$current_cube/$f" ]; then
-      rm "$current_cube/$f" || fail
-      mkdir "$current_cube/$f" || fail
-    fi
-  end_for
-  touch "$current_cube"
-end_function
-handle_return
 }
 
 # input: dim dim_folder
@@ -129,8 +110,11 @@ begin_function
     begin_for value in "${values[@]}"; doo
       value=$value result_var=new_values expand_members || fail
       if [[ ! "${new_values:-}" ]]; then
-        err "Dim $dims has invalid value '$value'"
-        fail
+        value=$value result_var=new_values expand_member || fail
+        if [[ ! "${new_values:-}" ]]; then
+          err "Dim $dims has invalid value '$value'"
+          fail
+        fi
       fi
       for new_value in $new_values; do
         if [[ ! $new_value_list =~ \ $new_value\  ]]; then
@@ -663,82 +647,73 @@ cell_feature_setup() {
 
 begin_function
 
-  if [[ -d $current_cube/debug ]]; then
-    debug_path=$current_cube/debug$cell_id
-    [[ ! -d $debug_path ]] && { mkdir $debug_path || fail; }
-  fi
-
-  if [[ -d $current_cube/dim ]]; then
-    dim_path=$current_cube/dim
-  fi
-
-  if [[ -d $current_cube/down ]]; then
-    down_path=$current_cube/down$cell_id
-    if [[ ! -d $down_path ]]; then
-      down_path=$current_cube/down/all || fail
-      if [[ ! -d $down_path ]]; then
-        err "down folder must either be cell specific, or have an all folder in it"
+  local feature
+  # TODO
+  for feature in ${features:-}; do
+    case $feature in
+      debug)
+        debug_path=$current_cube/debug$cell_id
+        [[ ! -d $debug_path ]] && { mkdir -p $debug_path || fail; }
+      ;;
+      dim)
+        dim_path=$current_cube/dim
+        [[ ! -d $dim_path ]] && { mkdir $dim_path || fail; }
+      ;;
+      down)
+        down_path=$current_cube/down
+        [[ ! -d $down_path ]] && { mkdir $down_path || fail; }
+      ;;
+      in)
+        [[ ! -d $current_cube/in ]] && { mkdir $current_cube/in || fail; }
+        in_path=$current_cube/in$cell_id
+        if [[ ! -d $in_path ]]; then
+          in_path=$current_cube/in/other
+          [[ ! -d $in_path ]] && { mkdir -p $in_path || fail; }
+        fi
+      ;;
+      lock)
+        [[ ! -d $current_cube/lock ]] && { mkdir $current_cube/lock || fail; }
+        lock_path=$current_cube/lock$cell_id
+        [[ ! -d $lock_path ]] && { mkdir $lock_path || fail; }
+        if [[ "$outer_lock_fd" ]]; then
+          lock_fd=$outer_lock_fd
+        else
+          exec {lock_fd}<"$lock_path" || fail
+        fi
+      ;;
+      out)
+        [[ ! -d $current_cube/out ]] && { mkdir $current_cube/out || fail; }
+        out_path=$current_cube/out$cell_id
+        if [[ ! -d $out_path ]]; then
+          mkdir -p $out_path || fail
+          touch -t 197001010000 $out_path || fail
+        fi
+      ;;
+      res)
+        [[ ! -d $current_cube/res ]] && { mkdir $current_cube/res || fail; }
+        res_path=$current_cube/res 
+      ;;
+      status)
+        [[ ! -d $current_cube/status ]] && { mkdir $current_cube/status || fail; }
+        status_path=$current_cube/status$cell_id
+        [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
+      ;;
+      tmp)
+        [[ ! -d $current_cube/tmp ]] && { mkdir $current_cube/tmp || fail; }
+        tmp_path=$current_cube/tmp$cell_id
+        [[ ! -d $tmp_path ]] && { mkdir $tmp_path || fail; }
+      ;;
+      up)
+        [[ ! -d $current_cube/up ]] && { mkdir $current_cube/up || fail; }
+        up_path=$current_cube/up$cell_id
+        [[ ! -d $up_path ]] && { mkdir $up_path || fail; }
+      ;;
+      *)
+        err "Unknown feature '$feature'"
         fail
-      fi
-    fi
-  fi
-
-  if [[ -d $current_cube/in ]]; then
-    in_path=$current_cube/in$cell_id
-    if [[ ! -d $in_path ]]; then
-      in_path=$current_cube/in/all
-      if [[ ! -d $in_path ]]; then
-        err "in folder must either be cell specific, or have an all folder in it"
-        fail
-      fi
-    fi
-  fi
-
-  if [[ -d $current_cube/lock ]]; then
-    lock_path=$current_cube/lock$cell_id
-    [[ ! -d $lock_path ]] && { mkdir $lock_path || fail; }
-    if [[ "$outer_lock_fd" ]]; then
-      lock_fd=$outer_lock_fd
-    else
-      exec {lock_fd}<"$lock_path" || fail
-    fi
-  fi
-
-  if [[ -d $current_cube/status ]]; then
-    status_path=$current_cube/status$cell_id
-    [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
-  fi
-
-  if [[ -d $current_cube/out ]]; then
-    out_path=$current_cube/out$cell_id
-    if [[ ! -d $out_path ]]; then
-      mkdir $out_path || fail
-      touch -t 197001010000 $out_path || fail
-    fi
-  fi
-
-  if [[ -d $current_cube/tmp ]]; then
-    tmp_path=$current_cube/tmp$cell_id
-    [[ ! -d $tmp_path ]] && { mkdir $tmp_path || fail; }
-  fi
-
-  if [[ -d $current_cube/up ]]; then
-    up_path=$current_cube/up$cell_id
-    if [[ ! -d $up_path ]]; then
-      up_path=$current_cube/up/all || fail
-      if [[ ! -d $up_path ]]; then
-        err "up folder must either be cell specific, or have an all folder in it"
-        fail
-      fi
-    fi
-  fi
-
-  if [[ -d $current_cube/res ]]; then
-    res_path=$current_cube/res$cell_id
-    if [[ ! -d $res_path ]]; then
-      res_path=$current_cube/res || fail
-    fi
-  fi
+      ;;
+    esac
+  done
 
 end_function
 handle_return
