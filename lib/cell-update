@@ -612,8 +612,8 @@ begin_function
     cell_get_resources "$res_path" || fail
   fi
 
-  new_stage write-lock || fail
   if [[ "$lock_path" ]]; then
+    new_stage write-lock || fail
     trace 0 "Getting write lock for cell"
     new_stage write-lock-cell || fail
     get_write_lock "$lock_path" || fail
@@ -850,11 +850,16 @@ init_context() {
         local need_decrypt file
         begin_for file in $(find "$in_path" -name '*.safe' -type f); doo
           file=${file#$in_path}
+          file=${file#/}
           file=${file%.safe}
+          local parent_folder=${file%/*}
+          if [[ "$parent_folder" ]]; then
+            mkdir -p $out_path.new/$parent_folder || fail
+          fi
           if [[ -f $out_path/$file && $out_path/$file -nt $in_path/$file ]]; then
             ln $out_path/$file $out_path.new/$file || fail
           else
-            decrypt_file "$in_path/$file.safe" "$out_path.new/$file" || fail
+            from="$in_path/$file.safe" to="$out_path.new/$file" decrypt_file || fail
           fi
         end_for
       fi
