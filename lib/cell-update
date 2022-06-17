@@ -11,11 +11,11 @@ alias init_and_load_context_a='
 cube_update() {
 
 local current_cube=$1
+local short_cube=${current_cube##*/work/}
 # set this before calling this function to maintain a read lock even
 #   after this update completes. Used for upstream dependency locking. 
 local keep_read_locks=${keep_read_locks:-f}
 local keep_write_locks=${keep_write_locks:-f}
-
 local parallel_default=t
 [ $debug == t ] && parallel_default=f
 local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
@@ -25,7 +25,7 @@ local dimensions=() dimension_folders=() localize_dim_vars dim_string=""
 # need to collect dimensions even though we haven't expanded the members yet
 gather_dims || return 1
 
-trace 0 "Updating cube $current_cube $dim_string"
+trace 0 "Updating cube $short_cube $dim_string"
 
 begin_function
 
@@ -36,7 +36,7 @@ begin_function
   fi
 
   if [[ ! -f "$current_cube/cube-context" ]]; then
-    err "cube_update called on $current_cube which is not a cube"
+    err "cube_update called on $short_cube which is not a cube"
     fail
   fi
 
@@ -194,7 +194,7 @@ local dim=${dimensions[$index]}
 local dim_folder=${dimension_folders[$index]}
 local processes parallel=f
 
-trace 0 "Pivoting ${current_cube##*/work/}: $dim"
+trace 0 "Pivoting $short_cube: $dim"
 begin_function
 
   get_dim_functions || fail
@@ -222,7 +222,7 @@ fi
 
 select_any_cube() {
 
-trace 0 "Selecting an 'any' cube from $current_cube"
+trace 0 "Selecting an 'any' cube from $short_cube"
 begin_function
 
   local found= f
@@ -243,7 +243,7 @@ begin_function
   end_for
 
   if [[ ! "$found" ]]; then
-    err "Couldn't find a valid 'any' cube for $current_cube"
+    err "Couldn't find a valid 'any' cube for $short_cube"
     fail
   fi
 
@@ -253,7 +253,7 @@ handle_return
 }
 
 cell_get_resources() {
-trace 0 "Getting resources for $current_cube"
+trace 0 "Getting resources for $short_cube"
 begin_function
 
   local res dep_fd
@@ -306,7 +306,7 @@ return 0
 }
 
 cell_update_deps() {
-trace 0 "Updating upstream cells of $current_cube"
+trace 0 "Updating upstream cells of $short_cube"
 begin_function
 
   local dep 
@@ -321,7 +321,7 @@ begin_function
     | sort) )
 
   local total_parallel=${#parallel_deps[*]}
-  [[ "$sequential_deps" ]] && let total_parallel++
+  [[ "$serial_deps" ]] && let total_parallel++
 
   if [[ $total_parallel -gt 1 && $parallel_execution == t ]]; then
     parallel=t
@@ -339,6 +339,10 @@ begin_function
   fi
 
   wait_for_sub_processes || fail
+
+  begin_for dep in ${serial_deps[*]} ${parallel_deps[*]}; doo
+    [[ -f $dep/out/cell-context ]] && { source $dep/out/cell-context || fail; }
+  end_for
 
 end_function
 handle_return
@@ -421,20 +425,19 @@ cell_update_inner() (
 local lock_timeout=${lock_timeout:-30} update_id stage_start_time previous_stage
 local lock_fd quick_check=${quick_check:-f} 
 local allow_slow_updates=${allow_slow_updates:-t} update_is_slow=f
-local debug_path= down_path= in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path= dim_path=
+local debug_path= down_path= in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path= 
 local cleanup_on_exit=
 
 # need to do this again since we are in a subshell
 trap 'trace_indent=f trace -5 "Cleaning up"; 
   eval "${cleanup_on_exit:-}"' EXIT
 
-trace 0 "Updating cell ${current_cube##*/work/} $dim_string"
+trace 0 "Updating cell $short_cube $dim_string"
 
 begin_function
 
   local start_time=$EPOCHSECONDS
   init_and_load_context_a
-
   cell_validate || fail
   cell_feature_setup || fail
 
@@ -625,7 +628,7 @@ cell_validate() {
 begin_function
 
   if ! is_cell_id_valid; then
-    trace -5 "Skipping cell because of invalid cell id: $cell_id"
+    trace -5 "Skipping cell because of mismatching cell id: $cell_id"
     fail
   fi
 
@@ -649,16 +652,11 @@ cell_feature_setup() {
 begin_function
 
   local feature
-  # TODO
   for feature in ${features:-}; do
     case $feature in
       debug)
         debug_path=$current_cube/debug$cell_id
         [[ ! -d $debug_path ]] && { mkdir -p $debug_path || fail; }
-      ;;
-      dim)
-        dim_path=$current_cube/dim
-        [[ ! -d $dim_path ]] && { mkdir $dim_path || fail; }
       ;;
       down)
         down_path=$current_cube/down
@@ -683,7 +681,10 @@ begin_function
         fi
       ;;
       out)
-        [[ ! -d $current_cube/out ]] && { mkdir $current_cube/out || fail; }
+        if [[ ! -d $current_cube/out ]]; then
+          mkdir $current_cube/out || fail
+          touch -t 197001010000 $current_cube/out || fail
+        fi
         out_path=$current_cube/out$cell_id
         if [[ ! -d $out_path ]]; then
           mkdir -p $out_path || fail
@@ -803,8 +804,8 @@ begin_function
     succeed
   fi
 
-  if [[ "$dim_path" ]]; then
-    local dims=( $(find $dim_path -mindepth 1 -maxdepth 1 -type d) )
+  if [[ -d "$current_cube/dim" ]]; then
+    local dims=( $(find $current_cube/dim -mindepth 1 -maxdepth 1 -type d) )
     local dim
     begin_for dim in ${dims[*]}; doo
       if ! quick_check=t cube_update "$dim"; then
@@ -836,6 +837,7 @@ handle_return
 init_context() {
 
   local current_cube=$1 high_volume=f cell_locks=t cell_logs=f
+  features=
 
   # override this if there are some cell id combinations which are not valid even when
   # composed of valid dim members
