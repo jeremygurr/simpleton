@@ -66,21 +66,17 @@ begin_function
 
   save_prefix=dim cube_update "$dim_folder" || fail
 
-  if [[ ! -f "$dim_folder/out$dim_id/functions" ]]; then
-    err "Missing functions file in $dim_folder/out$dim_id. It must contain the expand_members function."
-    fail
-  fi
+  # set these to a basic default
+  expand_member() {
+    eval "$result_var='$value'"
+  }
 
-  source "$dim_folder/out$dim_id/functions" || fail
+  expand_members() {
+    eval "$result_var='$value'"
+  }
 
-  if ! type expand_members &>/dev/null; then
-    err "$dim_folder/out$dim_id/functions does not contain expand_members function"
-    fail
-  fi
-
-  if ! type expand_member &>/dev/null; then
-    err "$dim_folder/out$dim_id/functions does not contain expand_member function"
-    fail
+  if [[ -f "$dim_folder/out$dim_id/cell-context" ]]; then
+    source "$dim_folder/out$dim_id/cell-context" || fail
   fi
 
 end_function
@@ -288,6 +284,16 @@ begin_function
 
   wait_for_sub_processes || fail
 
+  begin_for res in ${serial_resources[*]} ${parallel_resources[*]}; doo
+    local res_name=${res##*/}
+    eval "local res_cell_id=\$res_${res_name}_id"
+    eval "local res_path=\$res_${res_name}_path"
+    local context_path=$res_path/out$res_cell_id/cell-context
+    if [[ -f $context_path ]]; then
+      source $context_path || fail
+    fi
+  end_for
+
 end_function
 handle_return
 }
@@ -341,7 +347,13 @@ begin_function
   wait_for_sub_processes || fail
 
   begin_for dep in ${serial_deps[*]} ${parallel_deps[*]}; doo
-    [[ -f $dep/out/cell-context ]] && { source $dep/out/cell-context || fail; }
+    local dep_name=${dep##*/}
+    eval "local dep_cell_id=\$dep_${dep_name}_id"
+    eval "local dep_path=\$dep_${dep_name}_path"
+    local context_path=$dep_path/out$dep_cell_id/cell-context
+    if [[ -f $context_path ]]; then
+      source $context_path || fail
+    fi
   end_for
 
 end_function
@@ -446,9 +458,6 @@ begin_function
     get_read_lock "$lock_path" || fail
   fi
 
-  trace 0 "Checking if update is needed"
-
-  # freshness check first
   local needs_update
   does_cube_need_update || fail
   if [[ $needs_update == f ]]; then
@@ -776,6 +785,7 @@ previous_stage=$stage
 }
 
 does_cube_need_update() {
+trace 0 "Checking if update is needed"
 begin_function
 
   needs_update=t
@@ -817,7 +827,6 @@ begin_function
     local dim
     begin_for dim in ${dims[*]}; doo
       if ! quick_check=t cube_update "$dim"; then
-        # if cube_update fails, then an update is needed
         trace 5 "Dim $dim needs update"
         succeed 
       fi
@@ -829,7 +838,6 @@ begin_function
     local dep
     begin_for dep in ${deps[*]}; doo
       if ! quick_check=t cube_update "$dep"; then
-        # if cube_update fails, then an update is needed
         trace 5 "Upstream $dep needs update"
         succeed 
       fi
