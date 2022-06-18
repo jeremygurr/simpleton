@@ -226,7 +226,7 @@ trace 0 "Selecting an 'any' cube from $short_cube"
 begin_function
 
   local found= f
-  local subs="$(find $current_cube -mindepth 1 -maxdepth 1 -type d | sort)"
+  local subs="$(find -L $current_cube -mindepth 1 -maxdepth 1 -type d | sort)"
 
   begin_for f in $subs; doo
     quick_check=t cube_update $f && {
@@ -259,11 +259,11 @@ begin_function
   local res dep_fd
   local parallel=f processes
   local parallel_resources=( $(
-    find "$current_cube/res" -mindepth 1 -maxdepth 1 -type d \
+    find -L "$current_cube/res" -mindepth 1 -maxdepth 1 -type d \
       -not -regex "$current_cube/res/[0-9]+-.*" 
     ) )
   local serial_resources=( $(
-    find "$current_cube/res" -mindepth 1 -maxdepth 1 -type d \
+    find -L "$current_cube/res" -mindepth 1 -maxdepth 1 -type d \
       -regex "$current_cube/res/[0-9]+-.*" \
     | sort) )
 
@@ -312,11 +312,11 @@ begin_function
   local dep 
   local parallel=f processes
   local parallel_deps=( $(
-    find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d \
+    find -L "$current_cube/up" -mindepth 1 -maxdepth 1 -type d \
       -not -regex "$current_cube/up/[0-9]+-.*" 
     ) )
   local serial_deps=( $(
-    find "$current_cube/up" -mindepth 1 -maxdepth 1 -type d \
+    find -L "$current_cube/up" -mindepth 1 -maxdepth 1 -type d \
       -regex "$current_cube/up/[0-9]+-.*" \
     | sort) )
 
@@ -425,7 +425,7 @@ cell_update_inner() (
 local lock_timeout=${lock_timeout:-30} update_id stage_start_time previous_stage
 local lock_fd quick_check=${quick_check:-f} 
 local allow_slow_updates=${allow_slow_updates:-t} update_is_slow=f
-local debug_path= down_path= in_path= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path= 
+local debug_path= down_path= in_path= in_path_all= lock_path= log_path= status_path= out_path= tmp_path= up_path= res_path= 
 local cleanup_on_exit=
 
 # need to do this again since we are in a subshell
@@ -669,6 +669,14 @@ begin_function
           in_path=$current_cube/in/other
           [[ ! -d $in_path ]] && { mkdir -p $in_path || fail; }
         fi
+        if [[ "$cell_id" ]]; then
+          in_path_all=$current_cube/in/all
+          [[ ! -d $in_path_all ]] && { mkdir -p $in_path_all || fail; }
+        fi
+      ;;
+      key)
+        key_path=$current_cube/key
+        [[ ! -d $key_path ]] && { mkdir $key_path || fail; }
       ;;
       lock)
         [[ ! -d $current_cube/lock ]] && { mkdir $current_cube/lock || fail; }
@@ -805,7 +813,7 @@ begin_function
   fi
 
   if [[ -d "$current_cube/dim" ]]; then
-    local dims=( $(find $current_cube/dim -mindepth 1 -maxdepth 1 -type d) )
+    local dims=( $(find -L $current_cube/dim -mindepth 1 -maxdepth 1 -type d) )
     local dim
     begin_for dim in ${dims[*]}; doo
       if ! quick_check=t cube_update "$dim"; then
@@ -817,7 +825,7 @@ begin_function
   fi
 
   if [[ "$up_path" ]]; then
-    local deps=( $(find $up_path -mindepth 1 -maxdepth 1 -type d) )
+    local deps=( $(find -L $up_path -mindepth 1 -maxdepth 1 -type d) )
     local dep
     begin_for dep in ${deps[*]}; doo
       if ! quick_check=t cube_update "$dep"; then
@@ -856,7 +864,11 @@ init_context() {
     begin_function
       if [[ "$in_path" && "$out_path" ]]; then
         local need_decrypt file
-        begin_for file in $(find "$in_path" -name '*.safe' -type f); doo
+        local files=$(find -L "$in_path" -name '*.safe' -type f)
+        if [[ "$in_path_all" ]]; then
+          files+=" $(find -L "$in_path_all" -name '*.safe' -type f)"
+        fi
+        begin_for file in $files; doo
           file=${file#$in_path}
           file=${file#/}
           file=${file%.safe}
@@ -878,6 +890,9 @@ init_context() {
   execute_update_copy() {
     if [[ "$in_path" && "$out_path" ]]; then
       rsync -a --exclude='*.safe' $in_path/ $out_path.new/ || return 1
+      if [[ "$in_path_all" ]]; then
+        rsync -a --exclude='*.safe' $in_path_all/ $out_path.new/ || return 1
+      fi
     fi
     return 0
   }
