@@ -162,52 +162,56 @@ alias terse='importance=$((importance-10))'
 #   can be overridden to provide a different behavior
 err() {
   begin_no_tracing_zone
-  local prefix=
-  [[ "${parallel:-f}" == t ]] && prefix="$BASHPID "
   local flags=
-  if [ "$1" == -n ]; then
+  if [[ "$1" == -n ]]; then
     flags=-n
     shift
   fi
 
-  if [ ${tracing_midline:-f} == t ]; then
+  if [[ ${tracing_midline:-f} == t ]]; then
     tracing_midline=f
     echo >&$fd_trace
   fi
 
-  if [ ${trace_indent:-f} == t ]; then
-    [ $trace -gt $trace_max ] && trace_max=$trace
+  if [[ ${parallel_execution:-f} == t ]]; then
+    echo -n "$BASH_SUBSHELL:$BASHPID "
+  fi
+
+  if [[ ${trace_indent:-f} == t ]]; then
+    [[ $trace -gt $trace_max ]] && trace_max=$trace
     local pad_size=$((trace_max-trace))
     printf "%${pad_size}s" >&2
   fi
 
-  echo $flags "${RED:-}$prefix$*${RESET:-}" >&2
+  echo $flags "${RED:-}$*${RESET:-}" >&2
   end_no_tracing_zone
   return 0
 }
 
 warn() {
   begin_no_tracing_zone
-  local prefix=
-  [[ "${parallel:-f}" == t ]] && prefix="$BASHPID "
   local flags=
-  if [ "$1" == -n ]; then
+  if [[ "$1" == -n ]]; then
     flags=-n
     shift
   fi
 
-  if [ ${tracing_midline:-f} == t ]; then
+  if [[ ${tracing_midline:-f} == t ]]; then
     tracing_midline=f
     echo >&$fd_trace
   fi
 
-  if [ ${trace_indent:-f} == t ]; then
-    [ $trace -gt $trace_max ] && trace_max=$trace
+  if [[ ${parallel_execution:-f} == t ]]; then
+    echo -n "$BASH_SUBSHELL:$BASHPID "
+  fi
+
+  if [[ ${trace_indent:-f} == t ]]; then
+    [[ $trace -gt $trace_max ]] && trace_max=$trace
     local pad_size=$((trace_max-trace))
     printf "%${pad_size}s" >&2
   fi
 
-  echo $flags "${YELLOW:-}$prefix$*${RESET:-}" >&2
+  echo $flags "${YELLOW:-}$*${RESET:-}" >&2
   end_no_tracing_zone
 }
 
@@ -244,12 +248,10 @@ trace() {
     return 1
   fi
 
-  local prefix=
-  [[ "${parallel:-f}" == t ]] && prefix="$BASHPID "
-  if [ $((trace+importance)) -gt 0 -o $trace_force == t ]; then
-    if [ $nonewline == t ]; then
-      if [ $tracing_midline == f ]; then
-        if [ ${trace_debug:-f} == t ]; then
+  if [[ $((trace+importance)) -gt 0 || $trace_force == t ]]; then
+    if [[ $nonewline == t ]]; then
+      if [[ $tracing_midline == f ]]; then
+        if [[ ${trace_debug:-f} == t ]]; then
           local pad_size=$((trace_max-trace))
           printf "%3d " $((pad_size+1)) >&$fd_trace
         elif [ $trace_indent == t ]; then
@@ -258,27 +260,33 @@ trace() {
         fi
         tracing_midline=t
       fi
-      if [ $align == t ]; then
-        echo_align -n >&$fd_trace "$prefix$@"
+      if [[ $align == t ]]; then
+        echo_align -n >&$fd_trace "$@"
       else
-        echo -n >&$fd_trace "$prefix$@"
+        echo -n >&$fd_trace "$@"
       fi
     else
-      if [ $tracing_midline == t ]; then
+      if [[ $tracing_midline == t ]]; then
         echo >&$fd_trace
         tracing_midline=f
       fi
-      if [ ${trace_debug:-f} == t ]; then
+      if [[ ${trace_debug:-f} == t ]]; then
         local pad_size=$((trace_max-trace))
-        printf "%3d " $((pad_size+1)) >&$fd_trace
+        local imp=$importance
+        let imp=-imp
+        [[ $imp -ge 0 ]] && imp=+$imp
+        printf "%3d$imp " $((pad_size+1)) >&$fd_trace
       elif [ $trace_indent == t ]; then
         local pad_size=$((trace_max-trace))
         printf "%${pad_size}s" >&$fd_trace
       fi
-      if [ $align == t ]; then
-        echo_align >&$fd_trace "$prefix$@"
+      if [[ ${parallel_execution:-f} == t ]]; then
+        echo -n "$BASH_SUBSHELL:$BASHPID "
+      fi
+      if [[ $align == t ]]; then
+        echo_align >&$fd_trace "$@"
       else
-        echo >&$fd_trace "$prefix$@"
+        echo >&$fd_trace "$@"
       fi
     fi
   fi
@@ -298,13 +306,17 @@ tracex() {
 
 out() {
   begin_no_tracing_zone
-  local prefix=
-  [[ "${parallel:-f}" == t ]] && prefix="$BASHPID "
+
   if [ ${tracing_midline:-f} == t ]; then
     tracing_midline=f
     echo >&$fd_trace
   fi
-  echo "$prefix$@"
+
+  if [[ ${parallel_execution:-f} == t ]]; then
+    echo -n "$BASH_SUBSHELL:$BASHPID "
+  fi
+
+  echo "$@"
   end_no_tracing_zone
   return 0
 }
