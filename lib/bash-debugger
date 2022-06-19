@@ -172,21 +172,21 @@ debug_trap() {
   debug_step_to_next_function=f
   debug_step_to_next_file=f
 
-  if [ $debug_expansion == 1 -a $debug_long_command == f ] || [ $debug_expansion == 2 ]; then
-    if [ -f "$debug_out_path" ]; then
+  if [[ $debug_expansion == 1 && $debug_long_command == f || $debug_expansion == 2 ]]; then
+    if [[ -f "$debug_out_path" ]]; then
       rm "$debug_fifo_path" &>/dev/null
       cat "$debug_out_path"
-      [ "${debug_expansion_pid:-}" ] && kill $debug_expansion_pid
+      [[ "${debug_expansion_pid:-}" ]] && kill $debug_expansion_pid &>/dev/null
       debug_expansion_pid=
       BASH_XTRACEFD=
     fi
-  elif [ -f "$debug_out_path" ]; then
+  elif [[ -f "$debug_out_path" ]]; then
     rm "$debug_out_path"
   fi
 
   local display_command=$debug_command
   local raw_display_command=$display_command
-  if [ $debug_step_to_next_line == t -o $debug_long_command == t ] && [ $debug_function != none ]; then
+  if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] && [[ $debug_function != none ]]; then
     display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
     raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
   fi
@@ -194,20 +194,20 @@ debug_trap() {
   debug_prev_command=$raw_display_command
 
   local debug_c debug_array
-  while [ $debug_r == -1 ]; do
+  while [[ $debug_r == -1 ]]; do
 
     echo >&$fd_original_err
 
-    if [ "$backlog" ]; then
+    if [[ "$backlog" ]]; then
       echo "$backlog"
       backlog=
     fi
 
     set +u
-    if [ "$debug_watch" ]; then
+    if [[ "$debug_watch" ]]; then
       local w
       for w in $debug_watch; do
-        if [ $debug_watch_style == compact ]; then
+        if [[ $debug_watch_style == compact ]]; then
           eval "echo -n \"$w \"" >&$fd_original_err
         else
           eval "echo -n \"\$w=[$w] \"" >&$fd_original_err
@@ -377,7 +377,7 @@ debug_trap() {
         echo "Stepping out of current function..." >&$fd_original_err
         debug_max_depth=$((debug_current_depth-1))
         debug_r=0
-        debug_long_command=t
+        # debug_long_command=t
         ;;
       p)
         local fixed_command
@@ -615,6 +615,11 @@ debug_start() {
     reserve_tmp_file debug_out_path || exit 1
 
     shopt -s extdebug
+    # If you add or remove lines from this trap code, you will need to update the line offset as well
+    # so that debug execution and current line to execute will be correct.
+    # Look for code starting with something like: let debug_line_num-4
+    # and adjust the -4 part based on how many lines were added or removed. If you get it right,
+    # debugging will show the right line compared to what is being executed. 
     trap '
          set +x
          tracing=f
