@@ -336,36 +336,31 @@ begin_function
   fi
 
   begin_for dep in ${parallel_deps[*]}; doo
-    update_dep "$dep" &
+    if [[ $parallel == t ]]; then
+      update_dep "$dep" &
+    else
+      update_dep "$dep" || fail
+    fi
   end_for
 
-  if [[ $parallel == t ]]; then
-    update_serial_deps &
-  else
-    update_serial_deps || fail
-  fi
+  begin_for dep in "${serial_deps[@]}"; doo
+    update_dep "$dep" || fail
+  end_for
 
   wait_for_sub_processes || fail
 
   begin_for dep in ${serial_deps[*]} ${parallel_deps[*]}; doo
     local dep_name=${dep##*/}
-    eval "local dep_cell_id=\$dep_${dep_name}_id"
-    eval "local dep_path=\$dep_${dep_name}_path"
+    eval "local dep_cell_id=\$up_${dep_name}_id"
+    eval "local dep_path=\$up_${dep_name}_path"
     local context_path=$dep_path/out$dep_cell_id/cell-context
     if [[ -f $context_path ]]; then
-      source $context_path || fail
+      current_cube=$dep_path cell_id=$dep_cell_id source $context_path || fail
     fi
   end_for
 
 end_function
 handle_return
-}
-
-update_serial_deps() {
-begin_for dep in "${serial_deps[@]}"; doo
-  update_dep "$dep" || return 1
-end_for
-return 0
 }
 
 update_dep() {
