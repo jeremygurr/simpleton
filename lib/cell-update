@@ -19,7 +19,7 @@ local keep_write_locks=${keep_write_locks:-f}
 local parallel_default=t
 [ $debug == t ] && parallel_default=f
 local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
-local save_prefix=${save_prefix:-}
+local save_info_path=${save_info_path:-}
 local dimensions=() dimension_folders=() localize_dim_vars dim_string="" 
 
 # need to collect dimensions even though we haven't expanded the members yet
@@ -64,7 +64,7 @@ begin_function
     fail
   fi
 
-  save_prefix=dim cube_update "$dim_folder" || fail
+  parallel=f save_info_path=dim cube_update "$dim_folder" || fail
 
   # set these to a basic default
   expand_member() {
@@ -167,7 +167,6 @@ begin_function
       fi
     else
       local fd=
-      local cell_id dim_string
       if [[ $parallel == t ]]; then
         cell_update &
         processes+=" $!"
@@ -253,7 +252,7 @@ cell_get_resources() {
 trace 0 "Getting resources for $short_cube"
 begin_function
 
-  local res dep_fd
+  local dep_fd
   local parallel=f processes=
   local parallel_resources=( $(
     find -L "$current_cube/res" -mindepth 1 -maxdepth 1 -type d \
@@ -269,30 +268,46 @@ begin_function
 
   if [[ $total_parallel -gt 1 && $parallel_execution == t ]]; then
     parallel=t
+    [[ ! -d $tmp_path ]] && { mkdir -p $tmp_path || fail; }
     wait_for_low_load || fail
   fi
 
-  local saved_id= saved_path= res_name
+  local res res_name
   begin_for res in ${parallel_resources[*]}; doo
-    update_resource "$res" &
+    local res_name=${res##*/}
+    eval "local res_${res_name}_id= res_${res_name}_path="
+    if [[ $parallel == t ]]; then
+      update_resource &
+      processes+=" $!"
+    else
+      update_resource || fail
+    fi
   end_for
 
-  if [[ $parallel == t ]]; then
-    update_serial_resources &
-  else
-    update_serial_resources || fail
-  fi
+  begin_for res in ${serial_resources[*]}; doo
+    local res_name=${res##*/}
+    eval "local res_${res_name}_id= res_${res_name}_path="
+    update_resource || fail
+  end_for
 
   wait_for_sub_processes || fail
 
   begin_for res in ${serial_resources[*]} ${parallel_resources[*]}; doo
+
     local res_name=${res##*/}
-    eval "local res_cell_id=\$res_${res_name}_id"
-    eval "local res_path=\$res_${res_name}_path"
+
+    if [[ $parallel == f ]]; then
+      eval "local res_cell_id=\$res_${res_name}_id"
+      eval "local res_path=\$res_${res_name}_path"
+    else
+      source $tmp_path/res_$res_name || fail
+    fi
+
     local context_path=$res_path/out$res_cell_id/cell-context
     if [[ -f $context_path ]]; then
       source $context_path || fail
     fi
+
   end_for
 
 end_function
@@ -300,16 +315,7 @@ handle_return
 }
 
 update_resource() {
-local res=$1
-local res_name=${res##*/}
-save_prefix=res_$res_name keep_write_locks=t cube_update $res
-}
-
-update_serial_resources() {
-begin_for res in ${serial_resources[*]}; doo
-  update_resource $res || return 1
-end_for
-return 0
+save_info_path=$tmp_path/res_$res_name keep_write_locks=t cube_update $res
 }
 
 cell_update_deps() {
@@ -332,18 +338,24 @@ begin_function
 
   if [[ $total_parallel -gt 1 && $parallel_execution == t ]]; then
     parallel=t
+    [[ ! -d $tmp_path ]] && { mkdir -p $tmp_path || fail; }
     wait_for_low_load || fail
   fi
 
   begin_for dep in ${parallel_deps[*]}; doo
+    local dep_name=${dep##*/}
     if [[ $parallel == t ]]; then
       update_dep "$dep" &
+      processes+=" $!"
     else
+      eval "local dep_${dep_name}_id= dep_${dep_name}_path="
       update_dep "$dep" || fail
     fi
   end_for
 
   begin_for dep in "${serial_deps[@]}"; doo
+    local dep_name=${dep##*/}
+    eval "local dep_${dep_name}_id= dep_${dep_name}_path="
     update_dep "$dep" || fail
   end_for
 
@@ -351,8 +363,14 @@ begin_function
 
   begin_for dep in ${serial_deps[*]} ${parallel_deps[*]}; doo
     local dep_name=${dep##*/}
-    eval "local dep_cell_id=\$up_${dep_name}_id"
-    eval "local dep_path=\$up_${dep_name}_path"
+
+    if [[ $parallel == f ]]; then
+      eval "local dep_cell_id=\$up_${dep_name}_id"
+      eval "local dep_path=\$up_${dep_name}_path"
+    else
+      source $tmp_path/up_$dep_name || fail
+    fi
+
     local context_path=$dep_path/out$dep_cell_id/cell-context
     if [[ -f $context_path ]]; then
       current_cube=$dep_path cell_id=$dep_cell_id source $context_path || fail
@@ -364,9 +382,7 @@ handle_return
 }
 
 update_dep() {
-local dep=$1
-local dep_name=${dep##*/}
-save_prefix=up_$dep_name keep_read_locks=t cube_update $dep
+save_info_path=$tmp_path/up_$dep_name keep_read_locks=t cube_update $dep
 }
 
 get_read_lock() {
@@ -417,7 +433,7 @@ handle_return
 }
 
 cell_update() {
-local fd= extra_fds=
+local fd= extra_fds= cell_id dim_string
 get_cell_id || return 1
 if [[ -d $current_cube/lock$cell_id && ($keep_read_locks == t || $keep_write_locks == t) ]]; then
   exec {fd}<$current_cube/lock$cell_id || return 1
@@ -547,7 +563,7 @@ begin_function
       mv $log_path/stage-timing-id-* $debug_path/ &>/dev/null
     else
       rm $log_path/update-log-id-* &>/dev/null
-      mv $log_path/stage-timing-id-* &>/dev/null
+      rm $log_path/stage-timing-id-* &>/dev/null
     fi
 
     mv $log_path/update-log-current $log_path/update-log-id-$update_id || fail
@@ -572,12 +588,6 @@ cell_pre_update() {
 begin_function
 
   new_stage begin-update || fail
-
-  if [[ -d $current_cube/log ]]; then
-    log_path=$current_cube/log$cell_id
-    [[ ! -d $log_path ]] && { mkdir $log_path || fail; }
-    tee_output_to $log_path/update-log-current
-  fi
 
   if [[ "$status_path" ]]; then
 
@@ -654,6 +664,9 @@ cell_feature_setup() {
 
 begin_function
 
+  # tmp isn't a feature, it's always created on demand
+  tmp_path=$current_cube/tmp$cell_id
+
   local feature
   for feature in ${features:-}; do
     case $feature in
@@ -715,11 +728,6 @@ begin_function
         [[ ! -d $current_cube/status ]] && { mkdir $current_cube/status || fail; }
         status_path=$current_cube/status$cell_id
         [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
-      ;;
-      tmp)
-        [[ ! -d $current_cube/tmp ]] && { mkdir $current_cube/tmp || fail; }
-        tmp_path=$current_cube/tmp$cell_id
-        [[ ! -d $tmp_path ]] && { mkdir $tmp_path || fail; }
       ;;
       up)
         [[ ! -d $current_cube/up ]] && { mkdir $current_cube/up || fail; }
@@ -788,7 +796,10 @@ begin_function
 
   needs_update=t
 
-  [[ ! "$out_path" ]] && succeed
+  if [[ ! "$out_path" ]]; then
+    trace 5 "Out feature is not active. Will always update."
+    succeed
+  fi
   
   if [[ "$in_path" && "$out_path" ]]; then
     if [[ "$in_path" -nt "$out_path" ]]; then
