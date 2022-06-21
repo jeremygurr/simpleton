@@ -183,39 +183,52 @@ local dim dims cell_dim_part= value hash
 dim_string=
 cell_id=
 
-for dim in "${dimensions[@]}"; do
-  value="${!dim}"
-  dim_string+="$dim=$value "
-  if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
-    cell_dim_part+="$value,"
+trace 0 "Computing cell id for $short_cube"
+begin_function
+  
+  if [[ ! "${dimensions:-}" ]]; then
+    trace 0 "This cube doesn't have any dimensions"
+  fi
+
+  for dim in "${dimensions[@]}"; do
+    value="${!dim}"
+    dim_string+="$dim=$value "
+    if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
+      cell_dim_part+="$value,"
+    else
+      hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
+      cell_dim_part+="${hash:0:8},"
+    fi
+  done
+
+  if [[ "$cell_dim_part" ]]; then
+    cell_dim_part=${cell_dim_part%,}
+    cell_id=/$cell_dim_part
+    trace -5 "Cell id calculated: $cell_id"
+    if [[ ${high_volume_cube:-f} == t ]]; then
+      hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
+      hash=${hash:0:2}
+      cell_id=/$hash/$cell_dim_part
+    fi
   else
-    hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
-    cell_dim_part+="${hash:0:8},"
+    trace -5 "No cell id for this cube"
   fi
-done
 
-if [[ "$cell_dim_part" ]]; then
-  cell_dim_part=${cell_dim_part%,}
-  cell_id=/$cell_dim_part
-  if [[ ${high_volume_cube:-f} == t ]]; then
-    hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
-    hash=${hash:0:2}
-    cell_id=/$hash/$cell_dim_part
+  if [[ "${save_info_path:-}" ]]; then
+    local save_info_prefix=${save_info_path##*/}
+    if [[ "${parallel:-f}" == f ]]; then
+      trace -5 "Saving into var: ${save_info_prefix}_id=$cell_id"
+      eval "${save_info_prefix}_id=$cell_id"
+      eval "${save_info_prefix}_path=$current_cube"
+    else
+      trace -5 "Saving into file: $save_info_path ${save_info_prefix}_id=$cell_id"
+      echo "${save_info_prefix}_id=$cell_id" >$save_info_path || fail
+      echo "${save_info_prefix}_path=$current_cube" >>$save_info_path || fail
+    fi
   fi
-fi
 
-if [[ "${save_info_path:-}" ]]; then
-  local save_info_prefix=${save_info_path##*/}
-  if [[ "${parallel:-f}" == f ]]; then
-    eval "${save_info_prefix}_id=$cell_id"
-    eval "${save_info_prefix}_path=$current_cube"
-  else
-    echo "${save_info_prefix}_id=$cell_id" >$save_info_path || return 1
-    echo "${save_info_prefix}_path=$current_cube" >>$save_info_path || return 1
-  fi
-fi
-
-return 0
+end_function
+handle_return
 
 }
 

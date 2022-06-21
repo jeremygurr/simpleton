@@ -10,6 +10,8 @@ alias init_and_load_context_a='
 
 cube_update() {
 
+# whether this is running in a process forked from the main execution process
+local forked=${forked:-${parallel:-f}}
 local current_cube=$1
 local short_cube=${current_cube##*/work/}
 # set this before calling this function to maintain a read lock even
@@ -64,7 +66,7 @@ begin_function
     fail
   fi
 
-  parallel=f save_info_path=dim cube_update "$dim_folder" || fail
+  parallel=f save_info_path=dim fresh= cube_update "$dim_folder" || fail
 
   # set these to a basic default
   expand_member() {
@@ -225,7 +227,7 @@ begin_function
   local subs="$(find -L $current_cube -mindepth 1 -maxdepth 1 -type d | sort)"
 
   begin_for f in $subs; doo
-    quick_check=t cube_update $f && {
+    quick_check=t fresh= cube_update $f && {
       found=$f
       succeed
     }
@@ -242,6 +244,8 @@ begin_function
     err "Couldn't find a valid 'any' cube for $short_cube"
     fail
   fi
+
+  current_cube=$found
 
 end_function
 handle_return
@@ -275,11 +279,11 @@ begin_function
   local res res_name
   begin_for res in ${parallel_resources[*]}; doo
     local res_name=${res##*/}
-    eval "local res_${res_name}_id= res_${res_name}_path="
     if [[ $parallel == t ]]; then
       update_resource &
       processes+=" $!"
     else
+      eval "local res_${res_name}_id= res_${res_name}_path="
       update_resource || fail
     fi
   end_for
@@ -296,12 +300,12 @@ begin_function
 
     local res_name=${res##*/}
 
-    if [[ $parallel == f ]]; then
-      eval "local res_cell_id=\$res_${res_name}_id"
-      eval "local res_path=\$res_${res_name}_path"
-    else
+    if [[ $parallel == t ]]; then
       source $tmp_path/res_$res_name || fail
     fi
+
+    eval "local res_cell_id=\$res_${res_name}_id"
+    eval "local res_path=\$res_${res_name}_path"
 
     local context_path=$res_path/out$res_cell_id/cell-context
     if [[ -f $context_path ]]; then
@@ -315,7 +319,7 @@ handle_return
 }
 
 update_resource() {
-save_info_path=$tmp_path/res_$res_name keep_write_locks=t cube_update $res
+save_info_path=$tmp_path/res_$res_name keep_write_locks=t fresh= cube_update $res
 }
 
 cell_update_deps() {
@@ -348,14 +352,14 @@ begin_function
       update_dep "$dep" &
       processes+=" $!"
     else
-      eval "local dep_${dep_name}_id= dep_${dep_name}_path="
+      eval "local up_${dep_name}_id= up_${dep_name}_path="
       update_dep "$dep" || fail
     fi
   end_for
 
   begin_for dep in "${serial_deps[@]}"; doo
     local dep_name=${dep##*/}
-    eval "local dep_${dep_name}_id= dep_${dep_name}_path="
+    eval "local up_${dep_name}_id= up_${dep_name}_path="
     update_dep "$dep" || fail
   end_for
 
@@ -364,12 +368,12 @@ begin_function
   begin_for dep in ${serial_deps[*]} ${parallel_deps[*]}; doo
     local dep_name=${dep##*/}
 
-    if [[ $parallel == f ]]; then
-      eval "local dep_cell_id=\$up_${dep_name}_id"
-      eval "local dep_path=\$up_${dep_name}_path"
-    else
+    if [[ $parallel == t ]]; then
       source $tmp_path/up_$dep_name || fail
     fi
+
+    eval "local dep_cell_id=\$up_${dep_name}_id"
+    eval "local dep_path=\$up_${dep_name}_path"
 
     local context_path=$dep_path/out$dep_cell_id/cell-context
     if [[ -f $context_path ]]; then
@@ -382,7 +386,7 @@ handle_return
 }
 
 update_dep() {
-save_info_path=$tmp_path/up_$dep_name keep_read_locks=t cube_update $dep
+save_info_path=$tmp_path/up_$dep_name keep_read_locks=t fresh= cube_update $dep
 }
 
 get_read_lock() {
@@ -835,7 +839,7 @@ begin_function
     local dims=( $(find -L $current_cube/dim -mindepth 1 -maxdepth 1 -type d) )
     local dim
     begin_for dim in ${dims[*]}; doo
-      if ! quick_check=t cube_update "$dim"; then
+      if ! quick_check=t fresh= cube_update "$dim"; then
         trace 5 "Dim $dim needs update"
         succeed 
       fi
@@ -846,7 +850,7 @@ begin_function
     local deps=( $(find -L $up_path -mindepth 1 -maxdepth 1 -type d) )
     local dep
     begin_for dep in ${deps[*]}; doo
-      if ! quick_check=t cube_update "$dep"; then
+      if ! quick_check=t fresh= cube_update "$dep"; then
         trace 5 "Upstream $dep needs update"
         succeed 
       fi
