@@ -2,16 +2,12 @@
 
 type -t cube_update >/dev/null && return 0
 
-# current_cube must be set before this is used
-alias init_and_load_context_a='
-  init_context "$current_cube" || fail
-  load_context "$current_cube" || fail
-'
-
 cube_update() {
 
 local current_cube=$1 \ 
-      short_cube=${current_cube##*/work/}
+      short_cube=${current_cube##*/work/} \
+      parent_cell_id=${cell_id:-} \
+      expire_after=
 
 # set this before calling this function to maintain a read or write lock even
 #   after this update completes. Used for upstream dependency locking. 
@@ -21,7 +17,6 @@ local keep_read_locks=${keep_read_locks:-f} \
 local parallel_default=t
 [ $debug == t ] && parallel_default=f
 local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
-local save_info_path=${save_info_path:-}
 local dimensions=() dimension_folders=() localize_dim_vars dim_string="" 
 
 # need to collect dimensions even though we haven't expanded the members yet
@@ -30,6 +25,17 @@ gather_dims || return 1
 trace 0 "Updating cube $short_cube $dim_string"
 
 begin_function
+
+  init_context "$current_cube" || fail
+  load_context "$current_cube" || fail
+
+  if [[ "$expire_after" ]]; then
+    trace 0 "Deleting cached data older than $expire_after"
+    local expiration_minutes
+    convert_to_seconds expire_after expiration_minutes || fail
+    let expiration_minutes/=60
+    find -L $current_cube/out -mindepth 1 -maxdepth 1 -mmin +$expiration_minutes -exec rm -r \{\} + || fail
+  fi
 
   # is this an 'any' cell?
   if [[ ${current_cube%\?} != $current_cube ]]; then
@@ -66,12 +72,12 @@ begin_function
     fail
   fi
 
-  local saved_path=$return_path/dim_$dim
+  local saved_path=$return_path/dim/$dim
   if [[ -e $saved_path ]]; then
     rm $saved_path || fail
   fi
 
-  save_info_path=$saved_path fresh= cube_update "$dim_folder" || fail
+  fresh= cube_update "$dim_folder" || fail
 
   # set these to a basic default
   expand_member() {
@@ -82,7 +88,7 @@ begin_function
     eval "$result_var='$value'"
   }
 
-  handle_cube_reply $saved_path || fail
+  handle_cube_reply || fail
 
 end_function
 handle_return
@@ -90,12 +96,13 @@ handle_return
 
 # inputs: saved_path 
 handle_cube_reply() {
+if [[ ! -e $saved_path ]]; then
+  err "Return path doesn't exist: $saved_path"
+  return 1
+fi
 source $saved_path || return 1
-local key=${saved_path##*/}
-eval "local result_folder=\$${key}_folder"
-eval "local result_id=\$${key}_id"
-if [[ -f "$result_folder/out$result_id/cell-context" ]]; then
-  source "$result_folder/out$result_id/cell-context" || return 1
+if [[ -f "$saved_path/cell-context" ]]; then
+  source "$saved_path/cell-context" || return 1
 fi
 }
 
@@ -224,6 +231,7 @@ if [[ $parallel == t && "$processes" ]]; then
   trace 0 "Waiting for sub processes to complete"
   local process
   for process in $processes; do
+    trace -5 "Waiting for process $process"
     wait $process &>/dev/null
     if [[ $? -gt 0 && $? -lt 127 ]]; then
       trace 0 "Subprocess $process failed to terminate successfully"
@@ -316,8 +324,8 @@ handle_return
 
 update_resource() {
 local res_name=$1
-local saved_path=$return_path/res_$res_name
-save_info_path=$saved_path keep_write_locks=t fresh= cube_update $res || return 1
+local saved_path=$return_path/res/$res_name
+keep_write_locks=t fresh= cube_update $res || return 1
 handle_cube_reply || return 1
 }
 
@@ -346,7 +354,6 @@ begin_function
 
   begin_for dep in ${parallel_deps[*]}; doo
     local dep_name=${dep##*/}
-    eval "local up_${dep_name}_id= up_${dep_name}_path="
     if [[ $parallel == t ]]; then
       update_dep "$dep" &
       processes+=" $!"
@@ -357,7 +364,6 @@ begin_function
 
   begin_for dep in "${serial_deps[@]}"; doo
     local dep_name=${dep##*/}
-    eval "local up_${dep_name}_id= up_${dep_name}_path="
     update_dep "$dep" || fail
   end_for
 
@@ -369,8 +375,8 @@ handle_return
 
 update_dep() {
 local dep_name=$1
-local saved_path=$return_path/up_$dep_name
-save_info_path=$saved_path keep_write_locks=t fresh= cube_update $dep || return 1
+local saved_path=$return_path/up/$dep_name
+keep_write_locks=t fresh= cube_update $dep || return 1
 handle_cube_reply || return 1
 }
 
@@ -454,7 +460,6 @@ trace 0 "Updating cell $short_cube $dim_string"
 begin_function
 
   local start_time=$EPOCHSECONDS
-  init_and_load_context_a
   cell_validate || fail
   cell_feature_setup || fail
 
@@ -511,11 +516,11 @@ begin_function
 
     if [[ -d "$out_path.new" ]]; then
       if ! diff -r "$out_path" "$out_path.new" >/dev/null; then
-        [[ -d "$out_path.old" ]] && rm -rf "$out_path.old"
+        [[ -d "$out_path.old" ]] && rm -r "$out_path.old"
         mv "$out_path" "$out_path.old" || fail
         mv "$out_path.new" "$out_path" || fail
       else
-        rm -rf "$out_path.new" || fail
+        rm -r "$out_path.new" || fail
       fi
     fi
 
@@ -523,8 +528,12 @@ begin_function
       touch -d @$start_time "$out_path" || fail
     fi
 
-    if [ -d "$tmp_path" ]; then
-      rm -rf "$tmp_path" || fail
+    if [[ -d "$tmp_path" ]]; then
+      rm -r "$tmp_path" || fail
+    fi
+
+    if [[ -d "$return_path" ]]; then
+      rm -r "$return_path" || fail
     fi
 
     consecutive_failures=0
@@ -618,7 +627,7 @@ begin_function
 
   if [[ "$out_path" ]]; then
     if [[ -d $out_path.new ]]; then 
-      rm -rf $out_path.new || fail
+      rm -r $out_path.new || fail
     fi
     mkdir $out_path.new || fail
   fi
@@ -722,7 +731,7 @@ begin_function
       ;;
       tmp)
         tmp_path=$current_cube/tmp$cell_id
-        [[ -d $tmp_path ]] && { rm -rf $tmp_path || fail; }
+        [[ -d $tmp_path ]] && { rm -r $tmp_path || fail; }
         mkdir -p $tmp_path || fail
       ;;
       up)

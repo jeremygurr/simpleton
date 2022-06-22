@@ -5,17 +5,19 @@ SIMPLETON_EXTENSIONS=${SIMPLETON_EXTENSIONS:-$SIMPLETON_REPO/..}
 # don't let other users read any files written by these scripts
 umask 0077
 
-get_current_cube() {
+# params: subject
+# output: cube
+get_cube() {
 local subject=$1
-current_cube=
+cube=
 while [[ ${#subject} -gt 1 && $subject =~ / ]]; do
   if [[ -f "$subject/cube-context" ]]; then
-    current_cube=$subject
+    cube=$subject
     break
   fi
   subject=${subject%/*}
 done
-[[ "$current_cube" ]]
+[[ "$cube" ]]
 }
 
 get_tmp_path() {
@@ -174,9 +176,7 @@ handle_return
 }
 
 # input: dimensions 
-# optional inputs: save_info_path parallel 
 # output: cell_id, dim_string
-# maybe output: ${save_info_path}_id ${save_info_path}_path
 get_cell_id() {
 
 local dim dims cell_dim_part= value hash 
@@ -214,21 +214,22 @@ begin_function
     trace -5 "No cell id for this cube"
   fi
 
-  if [[ "${save_info_path:-}" ]]; then
+  get_cube "${current_cube%/*}" || succeed
+  local parent_cube=$cube
 
-    local save_info_prefix=${save_info_path##*/}
-    trace -5 "Saving into file: $save_info_path ${save_info_prefix}_id=$cell_id"
+  # it's possible for the current cube to not have an out folder, in which case this link will be 
+  # bad. Don't use the link unless you know the cube is supposed to have an out folder
+  local from=$current_cube/out$cell_id
+  local part=${current_cube#$parent_cube/}
+  local chop=${part#*/}
+  chop=${chop#*/}
+  part=${part%$chop}
+  part=${part%/}
+  part=${part%?}
+  local to=$parent_cube/return$parent_cell_id/$part
 
-    if [[ -e $save_info_path ]]; then
-      err "Save info file already exists: $save_info_path"
-      err "Make sure there this cube ($short_cube) doesn't have a one-to-many dependency."
-      fail
-    fi
-
-    echo "${save_info_prefix}_id=$cell_id" >$save_info_path || fail
-    echo "${save_info_prefix}_path=$current_cube" >>$save_info_path || fail
-
-  fi
+  trace -5 "Linking output of $from to $to"
+  ln -s $from $to || fail
 
 end_function
 handle_return
