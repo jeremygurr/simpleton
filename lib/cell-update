@@ -2,22 +2,99 @@
 
 type -t cube_update >/dev/null && return 0
 
+# never run as background process. 
+# Instead pass in run_in_background=t and this function will handle the rest.
+# parameters: {cube to update}
+# inputs: run_in_background
+# outputs: processes
 cube_update() {
+local current_cube=$1 \
+      run_in_background=${run_in_background:-f}
+local short_cube=${current_cube##*/work/} \
+      fd
 
-local current_cube=$1 \ 
-      short_cube=${current_cube##*/work/} \
-      parent_cell_id=${cell_id:-} \
-      expire_after=
+begin_function
 
-# set this before calling this function to maintain a read or write lock even
-#   after this update completes. Used for upstream dependency locking. 
-local keep_read_locks=${keep_read_locks:-f} \
-      keep_write_locks=${keep_write_locks:-f}
+  # handle quick check
+  can_skip_update && succeed
+
+  # decide whether to run in background or in subshell
+  if [[ $run_in_background == t ]]; then
+    cube_update_inner &
+    processes+=" $!"
+  else
+    # running in a subshell to fully isolate changes from this calling context
+    # but it's not actually in the background
+    ( cube_update_inner )
+  fi
+
+end_function
+handle_return
+}
+
+can_skip_update() {
+
+if [[ -n "$in_path" && "$in_path" -nt "$out_path" ]]; then
+  return 1
+fi
+
+if [[ $current_cube/cube-context -nt $out_path ]]; then
+  return 1
+fi
+
+if [[ "${fresh:-}" ]]; then
+  local fresh_seconds
+  convert_to_seconds $fresh fresh_seconds || return 1
+  local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
+  local out_timestamp=$(date -r "$out_path" +%s)
+  if [ $out_timestamp -lt $fresh_cutoff ]; then
+    return 1
+  fi
+fi
+
+if [[ $(find $current_cube/up -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
+  return 1
+fi
+
+if [[ $(find $current_cube/dim -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
+  return 1
+fi
+
+if [[ $(find $current_cube/res -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
+  return 1
+fi
+
+if [[ "$parent_return_path" ]]; then
+  # at this point cell_id must be blank since there are no dims in this cube
+  local p=$parent_return_path/$parent_sub_type/$parent_sub_name
+  [[ ! -d $p ]] && return 1
+  [[ $current_cube/out -nt $p ]] && return 1
+fi
+
+return 0
+
+}
+
+# This is guaranteed to be run in a subshell, so every var and function is local automatically
+cube_update_inner() {
+
+run_in_background=f
+parent_return_path=${parent_return_path:-} 
+parent_lock_path=${parent_lock_path:-} 
+parent_sub_type=${parent_sub_type:-} 
+parent_sub_name=${parent_sub_name:-}
+cube_expiration= 
+features=
+
+setup_exit_trap
+
+local short_cube=${current_cube##*/work/}
 
 local parallel_default=t
 [ $debug == t ] && parallel_default=f
 local parallel_execution=${parallel_execution:-${par:-$parallel_default}}
-local dimensions=() dimension_folders=() localize_dim_vars dim_string="" 
+
+local dimensions=() dimension_folders=() localize_dim_vars dim_string="" return_path= 
 
 # need to collect dimensions even though we haven't expanded the members yet
 gather_dims || return 1
@@ -29,10 +106,12 @@ begin_function
   init_context "$current_cube" || fail
   load_context "$current_cube" || fail
 
-  if [[ "$expire_after" ]]; then
-    trace 0 "Deleting cached data older than $expire_after"
+  return_path=$current_cube/return
+
+  if [[ "$cube_expiration" ]]; then
+    trace 0 "Deleting cached data older than $cube_expiration"
     local expiration_minutes
-    convert_to_seconds expire_after expiration_minutes || fail
+    convert_to_seconds cube_expiration expiration_minutes || fail
     let expiration_minutes/=60
     find -L $current_cube/out -mindepth 1 -maxdepth 1 -mmin +$expiration_minutes -exec rm -r \{\} + || fail
   fi
@@ -72,11 +151,10 @@ begin_function
     fail
   fi
 
-  local saved_path=$return_path/dim/$dim
-  if [[ -e $saved_path ]]; then
-    rm $saved_path || fail
-  fi
-
+  parent_return_path=$current_cube/return \
+  parent_lock_path= \
+  parent_sub_type=dim \
+  parent_sub_name=$dim \
   fresh= cube_update "$dim_folder" || fail
 
   # set these to a basic default
@@ -96,18 +174,18 @@ handle_return
 
 # inputs: saved_path 
 handle_cube_reply() {
+local saved_path=$current_cube/return/dim/$dim
 if [[ ! -e $saved_path ]]; then
   err "Return path doesn't exist: $saved_path"
   return 1
 fi
-source $saved_path || return 1
 if [[ -f "$saved_path/cell-context" ]]; then
   source "$saved_path/cell-context" || return 1
 fi
 }
 
 # input: dim
-# output: values
+# output: values 
 expand_values() {
 trace 0 "Expanding values for $dim"
 begin_function
@@ -171,6 +249,8 @@ handle_return
 
 # inputs: dim values
 cube_update_pivot_values() {
+local parent_return_path=$current_cube/return
+
 trace 0 "Pivoting over values of $dim: ${values[*]}"
 begin_function
 
@@ -195,7 +275,7 @@ begin_function
         cell_update &
         processes+=" $!"
       else
-        cell_update || fail
+        ( cell_update ) || fail
       fi
     fi
   end_for
@@ -250,14 +330,14 @@ begin_function
   local subs="$(find -L $current_cube -mindepth 1 -maxdepth 1 -type d | sort)"
 
   begin_for f in $subs; doo
-    quick_check=t fresh= cube_update $f && {
+    quick_check=t fresh=auto cube_update $f && {
       found=$f
       succeed
     }
   end_for
 
   [[ ! "$found" ]] && begin_for f in $subs; doo
-    cube_update $f && {
+    fresh=auto cube_update $f && {
       found=$f
       succeed
     }
@@ -380,28 +460,6 @@ keep_write_locks=t fresh= cube_update $dep || return 1
 handle_cube_reply || return 1
 }
 
-get_read_lock() {
-local lock_path=$1
-local timeout=${2:-$lock_timeout}
-flock -s -w $lock_timeout $lock_fd || {
-  err "Failed to get read lock for $lock_path within $timeout seconds"
-  return 1
-  }
-}
-
-get_write_lock() {
-local lock_path=$1
-local timeout=${2:-$lock_timeout}
-flock -e -w $lock_timeout $lock_fd || {
-  err "Failed to get write lock for $lock_path within $timeout seconds"
-  return 1
-  }
-}
-
-unlock() {
-flock -u $1
-}
-
 write_persist_file() {
 echo "
 update_id=$update_id
@@ -427,34 +485,22 @@ end_function
 handle_return
 }
 
+# guaranteed to run in a subshell
 cell_update() {
 
-local fd= extra_fds= cell_id dim_string
-get_cell_id || return 1
-if [[ -d $current_cube/lock$cell_id && ($keep_read_locks == t || $keep_write_locks == t) ]]; then
-  exec {fd}<$current_cube/lock$cell_id || return 1
-fi
-outer_lock_fd=$fd cell_update_inner || return 1
-return 0
+lock_timeout=${lock_timeout:-30} 
+quick_check=${quick_check:-f} 
+allow_slow_updates=${allow_slow_updates:-t} 
+update_is_slow=f 
+fresh=${fresh:-$default_fresh}
 
-}
+debug_path= down_path= in_path= in_path_all= lock_path= log_path= status_path= 
+out_path= tmp_path= up_path= res_path= return_path= 
+cleanup_on_exit= cell_id= dim_string=
 
-# Notice that it has parentheses after function name instead of braces. This means it launches in a
-# subshell, localizing the variables and function changes
-cell_update_inner() (
-
-local lock_timeout=${lock_timeout:-30} update_id stage_start_time previous_stage \
-      lock_fd quick_check=${quick_check:-f} \
-      allow_slow_updates=${allow_slow_updates:-t} update_is_slow=f \
-      debug_path= down_path= in_path= in_path_all= lock_path= log_path= status_path= \
-      out_path= tmp_path= up_path= res_path= return_path= \
-      cleanup_on_exit=
-
-# need to do this again since we are in a subshell
-# trap 'trace_indent=f trace -5 "Cleaning up"; 
-#   eval "${cleanup_on_exit:-}"' EXIT
 setup_exit_trap
 
+get_cell_id || return 1
 trace 0 "Updating cell $short_cube $dim_string"
 
 begin_function
@@ -463,45 +509,58 @@ begin_function
   cell_validate || fail
   cell_feature_setup || fail
 
-  if [[ "$lock_path" ]]; then
-    trace 0 "Getting read lock for cell"
-    get_read_lock "$lock_path" || fail
-  fi
-
-  local needs_update
+  local needs_update has_lock=f
   does_cube_need_update || fail
-  if [[ $needs_update == f ]]; then
+  if [[ $needs_update == t ]]; then
     if [[ $quick_check == t ]]; then
-      trace 5 "Quick check finished: Update not needed"
+      trace -5 "Quick check finished: Update needed"
+      fail
+    fi
+
+    local consecutive_failures=${consecutive_failures:-0}
+    cell_pre_update || fail
+
+    local update_successful=t
+
+    if type execute_update &>/dev/null; then
+      new_stage execute-update || fail
+      execute_update || update_successful=f
+    fi
+
+    cell_post_update || fail
+
+  else
+    if [[ $quick_check == t ]]; then
+      trace -5 "Quick check finished: Update not needed"
     else
       trace 0 "Update not needed"
     fi
-    succeed
   fi
 
-  if [[ $quick_check == t ]]; then
-    trace 5 "Quick check finished: Update needed"
-    fail
+  update_return_path || fail
+  if [[ $has_lock == t ]]; then
+    folder_to_unlock=$out_path pid_file=$lock_path/pid folder_unlock || fail
   fi
-
-  local consecutive_failures=${consecutive_failures:-0}
-  cell_pre_update || fail
-
-  local update_successful=t
-
-  if type execute_update &>/dev/null; then
-    new_stage execute-update || fail
-    execute_update || update_successful=f
-  fi
-
-  cell_post_update || fail
-
-  # unlocks happen automatically when this subprocess closes, in addition to filehandle closing
 
 end_function
 handle_return
 
-)
+}
+
+update_return_path() {
+begin_function
+
+  if [[ ! -e $parent_return_path || $out_path -nt $parent_return_path ]]; then
+    if [[ -n "$lock_path" && $has_lock == f ]]; then
+      folder_to_lock=$out_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
+      has_lock=t
+    fi
+    cp -alu $out_path/* $parent_return_path/ || fail
+  fi
+
+end_function
+handle_return
+}
 
 cell_post_update() {
 
@@ -528,7 +587,7 @@ begin_function
       touch -d @$start_time "$out_path" || fail
     fi
 
-    if [[ -d "$tmp_path" ]]; then
+    if [[ -n "$tmp_path" && -d "$tmp_path" ]]; then
       rm -r "$tmp_path" || fail
     fi
 
@@ -574,11 +633,6 @@ begin_function
 
   fi
 
-  if [[ "$outer_lock_fd" && $keep_write_locks == f && $keep_read_locks == t ]]; then
-    # convert back to read lock so it doesn't change when downstream update is proceeding
-    get_read_lock "$lock_path" || fail
-  fi
-
 end_function
 handle_return
 
@@ -618,11 +672,12 @@ begin_function
     cell_get_resources "$res_path" || fail
   fi
 
-  if [[ "$lock_path" ]]; then
+  if [[ -n "$lock_path" && $has_lock == f ]]; then
     new_stage write-lock || fail
     trace 0 "Getting write lock for cell"
     new_stage write-lock-cell || fail
-    get_write_lock "$lock_path" || fail
+    folder_to_lock=$out_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
+    has_lock=t
   fi
 
   if [[ "$out_path" ]]; then
@@ -665,30 +720,39 @@ cell_feature_setup() {
 
 begin_function
 
-  tmp_path=${tmp_path:-/tmp}
+  # this will be created when needed
+  return_path=$current_cube/return$cell_id
 
   # out path must always be there
-  if [[ ! -d $current_cube/out ]]; then
-    mkdir $current_cube/out || fail
-    touch -t 197001010000 $current_cube/out || fail
-  fi
-  out_path=$current_cube/out$cell_id
-  if [[ ! -d $out_path ]]; then
-    mkdir -p $out_path || fail
-    touch -t 197001010000 $out_path || fail
-  fi
+  out_path=$current_cube/out${cell_id}
+  mkdir -p ${out_path}.new || fail
 
   if [[ -d $current_cube/in ]]; then
     in_path=$current_cube/in$cell_id
     if [[ ! -d $in_path ]]; then
       in_path=$current_cube/in/other
-      [[ ! -d $in_path ]] && in_path=
+      [[ ! -d $in_path ]] && in_path=$current_cube/in
     fi
   fi
   if [[ "$cell_id" ]]; then
     in_path_all=$current_cube/in/all
     [[ ! -d $in_path_all ]] && in_path_all=
   fi
+  if [[ -d $current_cube/up ]]; then
+    up_path=$current_cube/up$cell_id
+    if [[ ! -d $up_path ]]; then
+      up_path=$current_cube/up/other
+      [[ ! -d $up_path ]] && up_path=
+    fi
+  fi
+  if [[ -d $current_cube/res ]]; then
+    res_path=$current_cube/res$cell_id
+    if [[ ! -d $res_path ]]; then
+      res_path=$current_cube/res/other
+      [[ ! -d $res_path ]] && res_path=
+    fi
+  fi
+  tmp_path=$current_cube/tmp$cell_id
 
   local feature
   for feature in ${features:-}; do
@@ -697,56 +761,24 @@ begin_function
         debug_path=$current_cube/debug$cell_id
         [[ ! -d $debug_path ]] && { mkdir -p $debug_path || fail; }
       ;;
-      down)
-        down_path=$current_cube/down
-        [[ ! -d $down_path ]] && { mkdir $down_path || fail; }
-      ;;
-      key)
-        key_path=$current_cube/key
-        [[ ! -d $key_path ]] && { mkdir $key_path || fail; }
-      ;;
       lock)
         [[ ! -d $current_cube/lock ]] && { mkdir $current_cube/lock || fail; }
         lock_path=$current_cube/lock$cell_id
         [[ ! -d $lock_path ]] && { mkdir -p $lock_path || fail; }
-        if [[ "$outer_lock_fd" ]]; then
-          lock_fd=$outer_lock_fd
-        else
-          exec {lock_fd}<"$lock_path" || fail
-        fi
       ;;
       log)
         [[ ! -d $current_cube/log ]] && { mkdir $current_cube/log || fail; }
         log_path=$current_cube/log$cell_id
         [[ ! -d $log_path ]] && { mkdir -p $log_path || fail; }
       ;;
-      res)
-        [[ ! -d $current_cube/res ]] && { mkdir $current_cube/res || fail; }
-        res_path=$current_cube/res 
-      ;;
       status)
         [[ ! -d $current_cube/status ]] && { mkdir $current_cube/status || fail; }
         status_path=$current_cube/status$cell_id
         [[ ! -d $status_path ]] && { mkdir -p $status_path || fail; }
       ;;
-      tmp)
-        tmp_path=$current_cube/tmp$cell_id
-        [[ -d $tmp_path ]] && { rm -r $tmp_path || fail; }
-        mkdir -p $tmp_path || fail
-      ;;
-      up)
-        [[ ! -d $current_cube/up ]] && { mkdir $current_cube/up || fail; }
-        up_path=$current_cube/up 
-      ;;
       *)
         err "Unknown feature '$feature'"
         fail
-      ;;
-    esac
-    case $feature in
-      dep|res)
-        [[ ! -d $current_cube/return$cell_id ]] && { mkdir -p $current_cube/return$cell_id || fail; }
-        return_path=$current_cube/return$cell_id
       ;;
     esac
   done
@@ -808,37 +840,33 @@ begin_function
   needs_update=t
 
   if [[ ! "$out_path" ]]; then
-    trace 5 "Out feature is not active. Will always update."
+    trace -5 "Out path is missing, needs update"
     succeed
   fi
-  
-  if [[ "$in_path" && "$out_path" ]]; then
-    if [[ "$in_path" -nt "$out_path" ]]; then
-      trace 5 "Local changes were made, needs update"
-      succeed
-    fi
+
+  if [[ -n "$in_path" && "$in_path" -nt "$out_path" ]]; then
+    trace -5 "Local changes were made, needs update"
+    succeed
   fi
 
-  if [[ "$up_path" && "$out_path" ]]; then
-    if [[ "$up_path" -nt "$out_path" ]]; then
-      trace 5 "Upstream changes were made, needs update"
-      succeed
-    fi
+  if [[ -n "$up_path" && "$up_path" -nt "$out_path" ]]; then
+    trace -5 "Upstream changes were made, needs update"
+    succeed
   fi
 
-  if [[ "${fresh:-}" ]]; then
+  if [[ $fresh != none ]]; then
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
     local out_timestamp=$(date -r "$out_path" +%s)
     if [ $out_timestamp -lt $fresh_cutoff ]; then
-      trace 5 "Freshness requirement ($fresh) not met, needs update"
+      trace -5 "Freshness requirement ($fresh) not met, needs update"
       succeed
     fi
   fi
 
   if [[ $current_cube/cube-context -nt $out_path ]]; then
-    trace 5 "cube-context has changed, needs update"
+    trace -5 "cube-context has changed, needs update"
     succeed
   fi
 
@@ -847,7 +875,7 @@ begin_function
     local dim
     begin_for dim in ${dims[*]}; doo
       if ! quick_check=t fresh= cube_update "$dim"; then
-        trace 5 "Dim $dim needs update"
+        trace -5 "Dim $dim needs update"
         succeed 
       fi
     end_for
@@ -858,7 +886,7 @@ begin_function
     local dep
     begin_for dep in ${deps[*]}; doo
       if ! quick_check=t fresh= cube_update "$dep"; then
-        trace 5 "Upstream $dep needs update"
+        trace -5 "Upstream dependency $dep needs update"
         succeed 
       fi
     end_for
@@ -874,6 +902,10 @@ init_context() {
 
   local current_cube=$1 high_volume=f 
   features=
+  # override this when you need a different default
+  # none means never refresh based on time. 30s means refresh if it is older than 30 seconds.
+  # 1w means refresh if it's older than a week.
+  default_fresh=none
 
   # override this if there are some cell id combinations which are not valid even when
   # composed of valid dim members

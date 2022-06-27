@@ -650,6 +650,115 @@ convert_to_seconds() {
   return 0
 }
 
+# inputs: folder_to_lock timeout pid_file
+# if timeout is not given, then attempt will immediately fail if it can't get the lock right away
+#   otherwise it will keep trying until the timeout is reached or the lock is obtained.
+folder_lock() {
+local folder_to_lock=${folder_to_lock}
+local timeout=${timeout:-}
+local pid_file=${pid_file}
+
+trace 0 "Attempting to obtain lock for $folder_to_lock"
+
+begin_function
+
+  if [[ -d "$folder_to_lock" ]]; then
+    trace -5 "Lock folder exists already: $folder_to_lock"
+    local pid=$(<"$pid_file")
+    if [[ "$pid" == $$ ]]; then
+      trace -5 "This process already owns the lock, so we are done."
+      succeed
+    fi
+
+    # check to see if the process is still running
+    if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
+      rm -rf "$folder_to_lock" || fail
+      trace -5 "Removed stale lock: $folder_to_lock with pid: $pid"
+    fi
+  fi
+
+  local timeleft
+  let timeleft=timeout*1000
+  local delay=250
+  local success=f
+  begin_while true; doo
+    mkdir "$folder_to_lock" &>/dev/null && success=t
+    if [[ $success == t ]]; then
+      echo $$ >"$pid_file" || fail
+      break
+    fi
+
+    if [ ! "$timeout" ]; then
+      break
+    fi
+
+    local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
+    trace -5 "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
+    sleep $seconds_to_wait
+    timeleft=$((timeleft-delay))
+    let delay*=2
+    if [ "$timeleft" -le 0 ]; then
+      out "Timeout reached. Couldn't obtain the lock in time."
+      break
+    fi
+  end_while
+
+  if [[ $success == f ]]; then
+    trace 0 "Failed to obtain lock."
+    fail
+  fi
+
+  # lock obtained
+  trace 0 "Succeeded in obtaining lock."
+
+end_function
+handle_return
+}
+
+# inputs: folder_to_unlock pid_file
+folder_unlock() {
+local folder_to_unlock=$folder_to_unlock
+local pid_file=$pid_file
+
+if [[ ! "$folder_to_unlock" ]]; then
+  err "Usage: unlock {lock name}"
+  return 1
+fi
+
+if [[ -d "$folder_to_unlock" ]]; then
+  rm -r "$folder_to_unlock" || return 1
+fi
+
+if [[ -f "$pid_file" ]]; then
+  rm "$pid_file" || return 1
+fi
+
+return 0
+}
+
+fd_read_lock() {
+local lock_path=$1
+local timeout=${2:-$lock_timeout}
+flock -s -w $lock_timeout $lock_fd || {
+  err "Failed to get read lock for $lock_path within $timeout seconds"
+  return 1
+  }
+}
+
+fd_write_lock() {
+local lock_path=$1
+local timeout=${2:-$lock_timeout}
+flock -e -w $lock_timeout $lock_fd || {
+  err "Failed to get write lock for $lock_path within $timeout seconds"
+  return 1
+  }
+}
+
+fd_unlock() {
+flock -u $1
+}
+
+
 update_modify_times() {
 local from_inclusive=$1; shift
 local to_exclusive=$1
