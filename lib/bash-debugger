@@ -67,7 +67,7 @@ debug_trap() {
   let debug_line_num-=4
 
   local debug_function=$1; shift
-  local debug_command="$*"
+  local debug_command=$1; shift
 
   [[ "$debug_function" =~ ^$debug_ignore$ ]] && return 0
 
@@ -201,9 +201,17 @@ debug_trap() {
 
     echo >&$fd_original_err
 
-    if [[ "$backlog" ]]; then
-      echo "$backlog"
-      backlog=
+    if [[ $debug_follow_source == t ]]; then
+      echo >&$fd_original_err
+      let debug_list_offset=-9
+      debug_display_source
+      debug_list_dir=forwards
+      let debug_list_offset+=20
+    else
+      if [[ "$backlog" ]]; then
+        echo "$backlog"
+        backlog=
+      fi
     fi
 
     set +u
@@ -227,23 +235,26 @@ debug_trap() {
     echo -n "$prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
     #printf "%4d" $debug_line_num >&$fd_original_err
     echo -n " $GREEN$debug_function $RESET:" >&$fd_original_err
-    echo -n "$debug_command" >&$fd_original_err
 
-    # if [[ $debug_highlight ==  t ]]; then
-    #   echo -n "$display_command" >&$fd_original_err
-    # else
-    #   echo -n "$raw_display_command" >&$fd_original_err
-    # fi
+    if [[ $debug_follow_source == t ]]; then
+      echo -n " $debug_command" >&$fd_original_err
+    else
+      if [[ $debug_highlight == t ]]; then
+        echo -n "$display_command" >&$fd_original_err
+      else
+        echo -n "$raw_display_command" >&$fd_original_err
+      fi
+    fi
 
     debug_long_command=f
     read -s -n1 debug_c <&$fd_original_in
 
-    if [[ "$debug_c" != l -a "$debug_c" != L ]]; then
+    if [[ "$debug_c" != l && "$debug_c" != L ]]; then
       debug_list_offset=0
       debug_list_dir=none
     fi
 
-    if [[ "$debug_c" == l -a $debug_list_dir != none ]]; then
+    if [[ "$debug_c" == l && $debug_list_dir != none ]]; then
       echo -n "$CLEAR_LINE" >&$fd_original_err
       echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
       if [[ "$debug_watch" ]]; then
@@ -500,6 +511,15 @@ debug_trap() {
           echo "No previous search." >&$fd_original_err
         fi
         ;;
+      ^)
+        if [ $debug_follow_source == t ]; then
+          echo "Follow source is now off" >&$fd_original_err
+          debug_follow_source=f
+        else
+          echo "Follow source is now on" >&$fd_original_err
+          debug_follow_source=t
+        fi
+        ;;
       \?)
         echo >&$fd_original_err
         echo "a  display array" >&$fd_original_err
@@ -537,6 +557,7 @@ debug_trap() {
         echo "]  continue until we reach a different function" >&$fd_original_err
         echo "}  continue until we reach a different file" >&$fd_original_err
         echo ".  continue until a line contains the previously searched substring given" >&$fd_original_err
+        echo "^  toggle source following (displays source context after every command)" >&$fd_original_err
         ;;
       *)
         echo "Press ? for a list of commands" >&$fd_original_err
@@ -600,6 +621,8 @@ debug_start() {
     debug_expanded_search=${debug_expanded_search:-f}
     debug_expansion=${debug_expansion:-1}
     debug_expression=${debug_expression:-echo none}
+    debug_expanded_search=${debug_expanded_search:-f}
+    debug_follow_source=${debug_follow_source:-t}
     debug_ignore=${debug_ignore:-(echo_align|trace|out|warn|err)}
     debug_last_location=${debug_last_location:-}
     debug_list_dir=${debug_list_dir:-none}
