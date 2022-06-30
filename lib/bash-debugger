@@ -204,17 +204,21 @@ debug_trap() {
 
   debug_prev_command=$raw_display_command
 
-  local debug_c debug_array
+  local debug_c debug_array no_follow_once=f
   while [[ $debug_r == -1 ]]; do
 
     echo >&$fd_original_err
 
     if [[ $debug_follow_source == t ]]; then
-      echo >&$fd_original_err
-      let debug_list_offset=-9
-      debug_display_source
-      debug_list_dir=forwards
-      let debug_list_offset+=20
+      if [[ $no_follow_once == t ]]; then
+        no_follow_once=f
+      else
+        echo >&$fd_original_err
+        let debug_list_offset=-9
+        debug_display_source
+        debug_list_dir=forwards
+        let debug_list_offset+=20
+      fi
     else
       if [[ "$backlog" ]]; then
         echo "$backlog"
@@ -241,7 +245,6 @@ debug_trap() {
       prefix="$YELLOW$BASH_SUBSHELL:$BASHPID "
     fi
     echo -n "$prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
-    #printf "%4d" $debug_line_num >&$fd_original_err
     echo -n " $GREEN$debug_function $RESET:" >&$fd_original_err
 
     if [[ $debug_follow_source == t ]]; then
@@ -294,6 +297,7 @@ debug_trap() {
         debug_display_source
         debug_list_dir=forwards
         let debug_list_offset+=20
+        no_follow_once=t
         ;;
       C)
         echo "Continuing..." >&$fd_original_err
@@ -385,12 +389,15 @@ debug_trap() {
         debug_display_source
         let debug_list_offset+=20
         debug_list_dir=forwards
+        no_follow_once=t
         ;;
       L)
         [ $debug_list_dir == forwards ] && let debug_list_offset-=20
         let debug_list_offset-=20
+        [[ $debug_list_offset -lt 0 ]] && debug_list_offset=0
         debug_display_source
         debug_list_dir=backwards
+        no_follow_once=t
         ;;
       n)
         debug_r=0
