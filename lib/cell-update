@@ -557,12 +557,21 @@ handle_return
 update_return_path() {
 begin_function
 
-  if [[ ! -e $parent_return_path || $out_path -nt $parent_return_path ]]; then
-    if [[ -n "$lock_path" && $has_lock == f ]]; then
+  local empty=f
+  is_dir_empty $out_path && empty=t
+
+  local return_target=$parent_return_path/$parent_sub_type/$parent_sub_name
+  if [[ ! -d $return_target || $out_path -nt $return_target ]]; then
+    if [[ $empty == f && "$lock_path" && $has_lock == f ]]; then
       folder_to_lock=$out_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
       has_lock=t
     fi
-    cp -alu $out_path/* $parent_return_path/ || fail
+    if [[ ! -d $return_target ]]; then
+      mkdir -p $return_target || fail
+    fi
+    if [[ $empty == f ]]; then
+      cp -alu $out_path/* $return_target/ || fail
+    fi
   fi
 
 end_function
@@ -581,12 +590,16 @@ begin_function
     trace 0 "Update successful."
 
     if [[ -d "$out_path.new" ]]; then
-      if ! diff -r "$out_path" "$out_path.new" >/dev/null; then
-        [[ -d "$out_path.old" ]] && rm -r "$out_path.old"
-        mv "$out_path" "$out_path.old" || fail
-        mv "$out_path.new" "$out_path" || fail
+      if [[ -d "$out_path" ]]; then
+        if files_are_different -r "$out_path" "$out_path.new" >/dev/null; then
+          [[ -d "$out_path.old" ]] && rm -r "$out_path.old"
+          mv "$out_path" "$out_path.old" || fail
+          mv "$out_path.new" "$out_path" || fail
+        else
+          rm -r "$out_path.new" || fail
+        fi
       else
-        rm -r "$out_path.new" || fail
+        mv "$out_path.new" "$out_path" || fail
       fi
     fi
 
@@ -594,13 +607,14 @@ begin_function
       touch -d @$start_time "$out_path" || fail
     fi
 
-    if [[ -n "$tmp_path" && -d "$tmp_path" ]]; then
+    if [[ "$tmp_path" && -d "$tmp_path" ]]; then
       rm -r "$tmp_path" || fail
     fi
 
-    if [[ -d "$return_path" ]]; then
-      rm -r "$return_path" || fail
-    fi
+    # I don't think we want to do this. Let's keep this record of what was returned
+    # if [[ -d "$return_path" ]]; then
+    #   rm -r "$return_path" || fail
+    # fi
 
     consecutive_failures=0
 
@@ -846,7 +860,7 @@ begin_function
 
   needs_update=t
 
-  if [[ ! "$out_path" ]]; then
+  if [[ ! -d "$out_path" ]]; then
     trace -5 "Out path is missing, needs update"
     succeed
   fi
