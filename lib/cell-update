@@ -2,6 +2,9 @@
 
 type -t cube_update >/dev/null && return 0
 
+# return codes for cube_update
+readonly update_needed=2 somethings_wrong=1 up_to_date=0
+
 # never run as background process. 
 # Instead pass in run_in_background=t and this function will handle the rest.
 # parameters: {cube to update}
@@ -11,6 +14,7 @@ cube_update() {
 local current_cube=$1 \
       run_in_background=${run_in_background:-f}
 local short_cube=${current_cube##*/work/} 
+local rc
 
 begin_function
 
@@ -24,8 +28,10 @@ begin_function
   else
     # running in a subshell to fully isolate changes from this calling context
     # but it's not actually in the background
-    ( cube_update_inner )
+    ( cube_update_inner ) || fail
   fi
+
+  wait_for_sub_processes || fail
 
 end_function
 handle_return
@@ -323,18 +329,31 @@ handle_return
 
 # input: parallel processes
 wait_for_sub_processes() {
-if [[ $parallel == t && "$processes" ]]; then
+if [[ "$processes" ]]; then
   trace 0 "Waiting for sub processes to complete"
-  local process
+  local process last_err_code= last_failed_process= rc
   for process in $processes; do
     trace -5 "Waiting for process $process"
-    wait $process &>/dev/null
-    if [[ $? -gt 0 && $? -lt 127 ]]; then
-      trace 0 "Subprocess $process failed to terminate successfully"
-      return 1
+    wait $process &>/dev/null; rc=$?
+    if [[ $rc -gt 0 && $rc -lt 127 ]]; then
+      if [[ ! "$last_err_code" ]]; then
+        last_err_code=$rc
+        last_failed_process=$process
+      else
+        trace 0 "Subprocess $process failed to terminate successfully"
+        return 1
+      fi
     fi
   done
+  if [[ "$last_err_code" ]]; then
+    if [[ "$last_err_code" == 1 ]]; then
+      trace 0 "Subprocess $last_failed_process failed to terminate successfully"
+      return 1
+    fi
+    return $last_err_code
+  fi
 fi
+return 0
 }
 
 select_any_cube() {
@@ -343,17 +362,21 @@ trace 0 "Selecting an 'any' cube from $short_cube"
 begin_function
 
   local found= f
-  local subs="$(find -L $current_cube -mindepth 1 -maxdepth 1 -type d | sort)"
+  local subs="$(find -L $current_cube -mindepth 1 -maxdepth 1 -type d | sort)"; or_fail
+  local rc
 
   begin_for f in $subs; doo
-    quick_check=t fresh=auto cube_update $f && {
+    quick_check=t reply_fd=$reply_fd fresh= cube_update $f; rc=$?
+    if [[ $rc == $somethings_wrong ]]; then
+      fail
+    elif [[ $rc == $up_to_date ]]; then
       found=$f
-      succeed
-    }
+      break
+    fi
   end_for
 
   [[ ! "$found" ]] && begin_for f in $subs; doo
-    fresh=auto cube_update $f && {
+    fresh= cube_update $f && {
       found=$f
       succeed
     }
@@ -530,7 +553,9 @@ begin_function
   if [[ $needs_update == t ]]; then
     if [[ $quick_check == t ]]; then
       trace -5 "Quick check finished: Update needed"
-      fail
+      return_value=$update_needed
+      break_out=t
+      break
     fi
 
     local consecutive_failures=${consecutive_failures:-0}
@@ -703,7 +728,6 @@ begin_function
   fi
 
   if [[ -n "$lock_path" && $has_lock == f ]]; then
-    new_stage write-lock || fail
     trace 0 "Getting write lock for cell"
     new_stage write-lock-cell || fail
     folder_to_lock=$out_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
@@ -772,14 +796,18 @@ begin_function
     up_path=$current_cube/up$cell_id
     if [[ ! -d $up_path ]]; then
       up_path=$current_cube/up/other
-      [[ ! -d $up_path ]] && up_path=
+      if [[ ! -d $up_path ]]; then
+        up_path=$current_cube/up
+      fi
     fi
   fi
   if [[ -d $current_cube/res ]]; then
     res_path=$current_cube/res$cell_id
     if [[ ! -d $res_path ]]; then
       res_path=$current_cube/res/other
-      [[ ! -d $res_path ]] && res_path=
+      if [[ ! -d $res_path ]]; then
+        res_path=$current_cube/res
+      fi
     fi
   fi
   tmp_path=$current_cube/tmp$cell_id
@@ -900,11 +928,15 @@ begin_function
     succeed
   fi
 
+  local rc
   if [[ -d "$current_cube/dim" ]]; then
     local dims=( $(find -L $current_cube/dim -mindepth 1 -maxdepth 1 -type d) )
     local dim
     begin_for dim in ${dims[*]}; doo
-      if ! quick_check=t fresh= cube_update "$dim"; then
+      quick_check=t fresh= cube_update "$dim"; rc=$?
+      if [[ $rc == $somethings_wrong ]]; then
+        fail
+      elif [[ $rc == $needs_update ]]; then
         trace -5 "Dim $dim needs update"
         succeed 
       fi
@@ -915,7 +947,10 @@ begin_function
     local deps=( $(find -L $up_path -mindepth 1 -maxdepth 1 -type d) )
     local dep
     begin_for dep in ${deps[*]}; doo
-      if ! quick_check=t fresh= cube_update "$dep"; then
+      quick_check=t fresh= cube_update "$dep"; rc=$?
+      if [[ $rc == $somethings_wrong ]]; then
+        fail
+      elif [[ $rc == $needs_update ]]; then
         trace -5 "Upstream dependency $dep needs update"
         succeed 
       fi
