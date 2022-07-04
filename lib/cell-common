@@ -48,17 +48,17 @@ begin_function
   if [[ ! -f "$user_private_key" ]]; then
     err "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
     err "You may create one using: ssh-keygen -mPEM"
-    fail
+    fail1
   fi
 
   if [[ ! -d "$tmp_path" ]]; then
     err "tmp_path must be set to a directory before calling decrypt_file."
-    fail
+    fail1
   fi
 
   if [[ ! -d "$current_cube" ]]; then
     err "current_cube must be set before calling decrypt_file"
-    fail
+    fail1
   fi
 
   if [[ ! -d $current_cube/key ]]; then
@@ -68,20 +68,20 @@ begin_function
   if [[ ! -f "$current_cube/key/key.$USER" ]]; then
     err "You don't have a key for this cube ($USER). Ask someone who does to add you. Existing keys:" 
     find -L $current_cube/key -name "key.*" >&2
-    fail
+    fail1
   fi
 
   # extract the main key
   if ! openssl pkeyutl -decrypt -inkey $user_private_key -in "$current_cube/key/key.$USER" -out $tmp_path/main; then
     err "Failed to decrypt main key." 
-    fail
+    fail1
   fi
   defer "rm $tmp_path/main"
 
   # decrypt the secret file
   if ! openssl enc -pbkdf2 -in $from -out $to -d -pass file:$tmp_path/main; then 
     err "Failed to decrypt secret file." 
-    fail
+    fail1
   fi
 
 end_function
@@ -103,17 +103,17 @@ begin_function
   if [[ ! -f "$user_private_key" ]]; then
     err "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
     err "You may create one using: ssh-keygen -mPEM"
-    fail
+    fail1
   fi
 
   if [[ ! -d "$tmp_path" ]]; then
     err "tmp_path must be set to a directory before calling decrypt_file."
-    fail
+    fail1
   fi
 
   if [[ ! -d "$current_cube" ]]; then
     err "current_cube must be set before calling decrypt_file"
-    fail
+    fail1
   fi
 
   if [[ ! -d $current_cube/key ]]; then
@@ -128,7 +128,7 @@ begin_function
 
       err "You don't have a key for this cube ($USER). Ask someone who does to add you. Existing keys:" 
       find -L $current_cube/key -name "key.*" >&2
-      fail
+      fail1
 
     else
 
@@ -137,20 +137,20 @@ begin_function
       # create a new main key
       if ! openssl rand -base64 40 >$tmp_path/main; then
         err "Failed to generate new main key."
-        fail
+        fail1
       fi
       defer "rm $tmp_path/main"
 
       # create a compatible public key from the user's private key
       if ! openssl pkey -in $user_private_key -out $tmp_path/public -pubout; then 
         err "Failed to convert private key to public key."
-        fail
+        fail1
       fi
 
       # encrypt main key with given user key
       if ! openssl pkeyutl -encrypt -pubin -inkey $tmp_path/public -in $tmp_path/main -out $current_cube/key/key.$USER; then
         err "Failed to encrypt main key."
-        fail
+        fail1
       fi
 
     fi
@@ -158,7 +158,7 @@ begin_function
     # extract the main key
     if ! openssl pkeyutl -decrypt -inkey $user_private_key -in $current_cube/key/key.$USER -out $tmp_path/main; then
       err "Failed to decrypt main key." 
-      fail
+      fail1
     fi
 
     defer "rm $tmp_path/main"
@@ -167,7 +167,7 @@ begin_function
   # encrypt the file with main key
   if ! openssl enc -pbkdf2 -in $from -out $to -pass file:$tmp_path/main; then
     err "Failed to create new secret file."
-    fail
+    fail1
   fi
 
 end_function
@@ -329,7 +329,7 @@ begin_function
       if [[ ! "$dimension" =~ ^[a-zA-Z0-9_]+$ ]]; then
         err "Invalid dimension name [$dimension] derived from folder $dimension_folder"
         err "Dimensions must only have alphanumeric or _ characters in it."
-        fail
+        fail1
       fi
       dimension_plural=${dimension}s
       dimensions+=( $dimension )
