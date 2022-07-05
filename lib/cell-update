@@ -197,10 +197,10 @@ handle_return
 
 # inputs: saved_path 
 handle_cube_reply() {
-if [[ ! -e $saved_path ]]; then
-  err "Return path doesn't exist: $saved_path"
-  return 1
-fi
+#if [[ ! -e $saved_path ]]; then
+#  err "Return path doesn't exist: $saved_path"
+#  return 1
+#fi
 if [[ -f "$saved_path/cell-context" ]]; then
   source "$saved_path/cell-context" || return 1
 fi
@@ -454,7 +454,7 @@ parent_lock_path=$lock_path \
 parent_return_path=$return_path \
 parent_sub_type=res \
 parent_sub_name=$res_name \
-keep_write_locks=t fresh= cube_update $res || return 1
+fresh= cube_update $res || return 1
 handle_cube_reply || return 1
 }
 
@@ -464,10 +464,12 @@ begin_function
 
   local dep 
   local parallel=f processes=
+
   local parallel_deps=( $(
     find -L "$current_cube/up" -mindepth 1 -maxdepth 1 -type d \
-      -not -regex "$current_cube/up/[0-9]+-.*" 
-    ) )
+      -not -regex "$current_cube/up/[0-9]+-.*" \
+      | sort) )
+
   local serial_deps=( $(
     find -L "$current_cube/up" -mindepth 1 -maxdepth 1 -type d \
       -regex "$current_cube/up/[0-9]+-.*" \
@@ -491,11 +493,16 @@ begin_function
     fi
   end_for
 
-  begin_for dep in "${serial_deps[@]}"; doo
+  begin_for dep in ${serial_deps[*]}; doo
     update_dep "$dep" || fail
   end_for
 
   wait_for_sub_processes || fail
+
+  begin_for dep in ${serial_deps[*]} ${parallel_deps[*]}; doo
+    local dep_name=${dep##*/}
+    saved_path=$return_path/up/$dep_name handle_cube_reply || fail
+  end_for
 
 end_function
 handle_return
@@ -509,7 +516,7 @@ parent_lock_path=$lock_path \
 parent_return_path=$return_path \
 parent_sub_type=up \
 parent_sub_name=$dep_name \
-keep_write_locks=t fresh= cube_update $dep || return 1
+fresh= cube_update $dep || return 1
 handle_cube_reply || return 1
 }
 
@@ -639,6 +646,11 @@ begin_function
     trace 0 "Update successful."
 
     if [[ -d "$out_path.new" ]]; then
+
+      if [[ "$out_path.new" ]]; then 
+        touch -d @$start_time "$out_path.new" || fail
+      fi
+
       if [[ -d "$out_path" ]]; then
         if files_are_different -r "$out_path" "$out_path.new" >/dev/null; then
           [[ -d "$out_path.old" ]] && rm -r "$out_path.old"
@@ -650,10 +662,7 @@ begin_function
       else
         mv "$out_path.new" "$out_path" || fail
       fi
-    fi
 
-    if [[ "$out_path" ]]; then 
-      touch -d @$start_time "$out_path" || fail
     fi
 
     if [[ "$tmp_path" && -d "$tmp_path" ]]; then

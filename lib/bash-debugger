@@ -94,7 +94,7 @@ debug_trap() {
 
   local debug_line_num=$1; shift
 
-  debug_line_num=${BASH_LINENO[0]}
+  #debug_line_num=${BASH_LINENO[0]}
 
   # if code inside the debug trap is changed, you may need to adjust this offset to ensure the code displayed in the debugger lines up with what is actually being executed.
   let debug_line_num-=4
@@ -252,7 +252,11 @@ debug_trap() {
 
     echo >&$fd_original_err
 
-    if [[ $debug_follow_source == t ]]; then
+    local current_source_line_without_comment=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file" \
+      | sed -E 's/^ *(.*) *$/\1/' \
+      | sed -E 's/#.*//'
+      )
+    if [[ $debug_follow_source == t && "$current_source_line_without_comment" ]]; then
       if [[ $no_follow_once == t ]]; then
         no_follow_once=f
       else
@@ -738,7 +742,7 @@ debug_start() {
          set +x
          tracing=f
          set +T
-         debug_trap "${BASH_SOURCE[0]}" "${BASH_LINENO[1]:-${LINENO[0]}}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@"
+         debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@"
          debug_rc=$?
          [ $debug_rewind == t ] && continue
          [ $debug_exit == t ] && exit 1
