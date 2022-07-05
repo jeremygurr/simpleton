@@ -81,7 +81,14 @@ if [[ $(find $current_cube/res -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 
 fi
 
 if [[ "$parent_return_path" ]]; then
-  # at this point cell_id must be blank since there are no dims in this cube
+  if [[ ! "$parent_sub_type" ]]; then
+    err "Missing parent_sub_type. This var must be set if parent_return_path is set."
+    return 1
+  fi
+  if [[ ! "$parent_sub_name" ]]; then
+    err "Missing parent_sub_name. This var must be set if parent_return_path is set."
+    return 1
+  fi
   local p=$parent_return_path/$parent_sub_type/$parent_sub_name
   [[ ! -d $p ]] && return 1
   [[ $current_cube/out -nt $p ]] && return 1
@@ -165,6 +172,8 @@ begin_function
     fail1
   fi
 
+  local saved_path=$current_cube/return/dim/$dim
+
   parent_return_path=$current_cube/return \
   parent_lock_path= \
   parent_sub_type=dim \
@@ -188,7 +197,6 @@ handle_return
 
 # inputs: saved_path 
 handle_cube_reply() {
-local saved_path=$current_cube/return/dim/$dim
 if [[ ! -e $saved_path ]]; then
   err "Return path doesn't exist: $saved_path"
   return 1
@@ -272,8 +280,6 @@ handle_return
 
 # inputs: dim values
 cube_update_pivot_values() {
-local parent_return_path=$current_cube/return
-
 trace 0 "Pivoting over values of $dim: ${values[*]}"
 begin_function
 
@@ -444,6 +450,10 @@ handle_return
 update_resource() {
 local res_name=$1
 local saved_path=$return_path/res/$res_name
+parent_lock_path=$lock_path \
+parent_return_path=$return_path \
+parent_sub_type=res \
+parent_sub_name=$res_name \
 keep_write_locks=t fresh= cube_update $res || return 1
 handle_cube_reply || return 1
 }
@@ -482,7 +492,6 @@ begin_function
   end_for
 
   begin_for dep in "${serial_deps[@]}"; doo
-    local dep_name=${dep##*/}
     update_dep "$dep" || fail
   end_for
 
@@ -493,8 +502,13 @@ handle_return
 }
 
 update_dep() {
-local dep_name=$1
+local dep=$1
+local dep_name=${dep##*/}
 local saved_path=$return_path/up/$dep_name
+parent_lock_path=$lock_path \
+parent_return_path=$return_path \
+parent_sub_type=up \
+parent_sub_name=$dep_name \
 keep_write_locks=t fresh= cube_update $dep || return 1
 handle_cube_reply || return 1
 }
@@ -548,7 +562,8 @@ begin_function
   cell_validate || fail
   cell_feature_setup || fail
 
-  local needs_update has_lock=f
+  local needs_update has_lock=f update_successful=t
+
   does_cube_need_update || fail
   if [[ $needs_update == t ]]; then
     if [[ $quick_check == t ]]; then
@@ -560,8 +575,6 @@ begin_function
 
     local consecutive_failures=${consecutive_failures:-0}
     cell_pre_update || fail
-
-    local update_successful=t
 
     if type execute_update &>/dev/null; then
       new_stage execute-update || fail
@@ -930,11 +943,36 @@ begin_function
     succeed
   fi
 
+  if [[ "$parent_return_path" ]]; then
+    if [[ ! "$parent_sub_type" ]]; then
+      err "Missing parent_sub_type. This var must be set if parent_return_path is set."
+      fail1
+    fi
+    if [[ ! "$parent_sub_name" ]]; then
+      err "Missing parent_sub_name. This var must be set if parent_return_path is set."
+      fail1
+    fi
+    local p=$parent_return_path/$parent_sub_type/$parent_sub_name
+    if [[ ! -d $p ]]; then
+      trace -5 "Parent return path is missing ($p), so update is needed."
+      succeed
+    fi
+    if [[ $current_cube/out -nt $p ]]; then
+      trace -5 "Parent return path is outdated ($p), so update is needed."
+      succeed
+    fi
+  fi
+
   local rc
   if [[ -d "$current_cube/dim" ]]; then
     local dims=( $(find -L $current_cube/dim -mindepth 1 -maxdepth 1 -type d) )
     local dim
     begin_for dim in ${dims[*]}; doo
+      local dim_name=${dim##*/}
+      parent_lock_path= \
+      parent_return_path=$current_cube/return \
+      parent_sub_type=dim \
+      parent_sub_name=$dim_name \
       quick_check=t fresh= cube_update "$dim"; rc=$?
       if [[ $rc == $somethings_wrong ]]; then
         fail1
@@ -949,6 +987,11 @@ begin_function
     local deps=( $(find -L $up_path -mindepth 1 -maxdepth 1 -type d) )
     local dep
     begin_for dep in ${deps[*]}; doo
+      local dep_name=${dep##*/}
+      parent_lock_path= \
+      parent_return_path=$return_path \
+      parent_sub_type=up \
+      parent_sub_name=$dep_name \
       quick_check=t fresh= cube_update "$dep"; rc=$?
       if [[ $rc == $somethings_wrong ]]; then
         fail1
