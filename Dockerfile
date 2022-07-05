@@ -102,9 +102,9 @@ RUN apk add \
   zlib-doc \
   $nothing
 
-RUN apk add \
-  openssl3-doc \
-  $nothing
+# RUN apk add \
+#   openssl3-doc \
+#   $nothing
 
 ENV HOME /home
 ENV PAGER less
