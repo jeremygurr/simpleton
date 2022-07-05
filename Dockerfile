@@ -9,6 +9,7 @@ ARG HTTPS_PROXY=""
 ARG HTTP_PROXY=""
 ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine/
 
+COPY repositories /etc/apk/
 RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@$ALPINE_REPO@g" /etc/apk/repositories 
 RUN apk update 
 
