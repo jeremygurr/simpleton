@@ -1,8 +1,5 @@
 #!/bin/bash
 
-name=${1:-one-infra-simpleton}
-persist=${persist:-t}
-
 if [ ! "$SIMPLETON_REPO" ]; then
   echo "You must set SIMPLETON_REPO env var to your workspace folder before running this." >&2
   exit 1
@@ -18,31 +15,12 @@ if [ ! "$SIMPLETON_WORKSPACE" ]; then
   exit 1
 fi
 
-copy_workspace() {
-  sleep 5
-  echo -en "\r\nCopying workspace..." >&2
-  docker cp "$SIMPLETON_WORKSPACE" $name:/ || { echo -e "Failed.\r" >&2; return 1; }
-  echo -e "Done.\r" >&2
-}
+set -x
+#docker run -it --rm --name simpleton -e COLUMNS=$COLUMNS \
+docker run -it --rm -u $UID --name simpleton -e COLUMNS=$COLUMNS \
+  -v $SIMPLETON_REPO:/simpleton \
+  -v $SIMPLETON_HOME:/home \
+  -v $SIMPLETON_WORKSPACE:/work \
+  -e USER=$USER simpleton
+set +x
 
-if [ $persist == t ]; then
-  set -x
-  docker run -it --rm -u $UID --name $name -e COLUMNS=$COLUMNS \
-    -v $SIMPLETON_REPO:/simpleton \
-    -v $SIMPLETON_REPO/../one-infra-simpleton:/one-infra-simpleton \
-    -v $SIMPLETON_HOME:/home \
-    -v $SIMPLETON_WORKSPACE:/work \
-    -e prompt_name='one-infra-simpleton ' \
-    -e USER=$USER one-infra-simpleton
-  set +x
-else
-  copy_workspace & pid=$!
-  set -x
-  docker run -it --rm -u $UID --name $name -e COLUMNS=$COLUMNS \
-    -v $SIMPLETON_REPO:/simpleton \
-    -v $SIMPLETON_REPO/../one-infra-simpleton:/one-infra-simpleton \
-    -v $SIMPLETON_HOME:/home \
-    -e prompt_name='one-infra-simpleton ' \
-    -e USER=$USER one-infra-simpleton || kill $pid
-  set +x
-fi
