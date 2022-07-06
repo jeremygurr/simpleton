@@ -1,0 +1,58 @@
+#!/bin/bash
+
+type -t dna_move >/dev/null && return 0
+
+dna_move() {
+
+local from=$1; shift
+local to=$1
+
+if [[ ${to} != ${to%/} ]]; then
+  to=$to${from##*/}
+fi
+
+to=$(realpath $to)
+
+trace $log_info "Moving cell ${from##*/work/} to ${to##*/work/}"
+begin_function
+
+  if [[ -L $from ]]; then
+    err "From cell ($from) is a link. It doesn't make sense to use this command on a link."
+    err "Just use the mv command for this."
+    fail1
+  fi
+
+  if [[ ! -f $from/cube-context ]]; then
+    err "Source cube is invalid: $from"
+    err "Either it is not a cube, or the folder doesn't exist"
+    fail1
+  fi
+
+  if [[ ! -e $to ]]; then
+    err "Target already exists: $to"
+    fail1
+  fi
+
+  local workspace=${from##*/work/}
+  if [[ "$workspace" == "$from" ]]; then
+    err "Cell doesn't exist in a workspace"
+    err "One of it's parent folders must be 'work'"
+    fail1
+  fi
+  workspace=${from%/$workspace}
+
+  maybe mv $from $to || fail
+
+  local link
+  begin_for link in $(find $workspace -type l); doo
+    local real=$(realpath -eL $link)
+    if [[ "$real" == "$from" ]]; then
+      maybe rm $link || fail
+      maybe ln -sf $to || fail
+    fi
+  end_for
+
+end_function
+handle_return
+
+}

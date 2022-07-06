@@ -2,11 +2,15 @@
 
 features:
   docker container based: runs on any os
+  easier debugability: isolated cells with separate logs
+  organize functionality into repos
   abstraction for:
     retry 
     parallel execution
     multi-value handling
     caching
+    orchestration
+    locking
 
 handlers
   look in in/ for folder patterns and execute based on them
@@ -14,118 +18,35 @@ handlers
   in/lib/java pulls in external libs needed to out/lib/java
   in/**.bash-template get hydrated
   sourced before local context
-what if we want to output to screen and cache result?
-  ( ) write_to_stdout write_to_cache write_to_parent
-      write_to_stdout defaults to true if not writing to parent
-  (*) cube_update doesn't bother with output, but the cell command may auto view
-      view folder contains various renderers of the output data
-      built in viewers: view=raw view=none
-      this means out must always exist, but may have a cache limit?
-make expire_after variable in cube_context
-  check expiration at beginning of cube update and delete all expired data
-no more save_path, instead auto detect from cube path parent cube
-  symbolic link from out$cell_id to {parent}/return${parent_cell_id}/{part}/{name}
-  delete the return link when cell completes successfully
 what about supporting member lists that are too long?
   can specify a file instead of a string: @members
 passing complex member lists to sub
   case: service is already set for function move, but it needs undeploy to happen, which has it's own set of services
   can't update deps until this is resolved
   optional function to calculate dimensions for a given sub: calc_sub_dims "$sub"
-can't pass parent_return_path into cube_update without a cell_id
-  so what goes into cube_update then? Or is this something that should go into cell_update?
-  ( ) compute cell id earlier? 
-    can't compute it before pivot
-  ( ) make quick check after pivot?
-    but then we can't do parallel decision in cube_update
-      would need to be pushed into pivot, but then pivots are already parallel then?
-  (*) quick check doesn't apply when there are dims anyway, so cell_id is known
-parent return path must include cell id (doesn't seem to be for single-value cube)
-  actually, no cell id for dims anyway, so this is ok
-how to handle debug_search reverting to searching when exiting a subshell?
-  need to record debug state into a file
-    during interactive debug loop
-    only record if a significant change happens
-    write atomically
-  read from file
-    at beginning of debug trap
-    will slow down debugging a lot
-    + check date of debug file?
-  make this work for multiple threads?
-    should only need a global state
-      what we are searching for
-      watches
-      basic settings
-    only save var when change is made
-      keep a list of vars which have changed since last fork?
-  load_debug_state
-    when pid changes
-      debug_prev_pid= can't work because var isn't maintained between processes
-      need to read a current_pid file
-        no just keep track of a last_load_state time and compare to debug_state file
-  save_debug_state
-    when user changes something
-cube_update should not return false for update needed, instead use var
-  but cube_update always runs in subshell, so var passing is impossible
-  [ ] use file passing
-  [ ] use different function to determine if update is needed
-  [ ] don't run in subshell if checking 
-  [ ] use y=$(g 10>&1); eval "$y"
-      this works for single thread subshells but what about multi-thread?
-      each starts with a separate fd
-      but they'll be writing to the same vars?
-      only use for update check which only uses one thread
-  [*] use different return code
-if out contains a output file, auto display?
-simplify locks
-  parallel pivoting and many->many subs makes it impossible to pass in fd to locks
-  immutable structures as much as possible
-  use out folder as cell lock
-  make new$cell, if failed, wait a bit and check again
-  new$cell.pid = process locking new
-  how to read lock cells
-    (*) hard link files to parent cube return
-        cp -alu 
-        while write lock is being held
-        handle large slow changing folders more efficiently:
-          just link the out folder for static cells
-          dynamic cells will hard link
-          cube_change_class=dynamic / static (default dynamic)
-          cube_cardinality=low / high (default low)
-          cube_expiration (replace expire_after)
-    ( ) use separate locking mechanism
-  locking resources 
-    new folder for this, linked to lock folder of parent cube
-put subshell back to cube
-making ultra-light cubes?
-  lots of cubes even for simple cubes because of dims
-  impact
-    subshell
-    load context
-    feature setup
-  cube_update does lightweight check first
-    needs to compute cell id still?
-      can check the return folder
-    if context < out
-    if fresh
-    if no dims or deps or locks
 default freshness for single_value
   overlapping auto-expire functionality
   distinctly different: not using auto-expire can allow for fetching of old values
-build retry mechanism
-  retry_max=1, retry_delay=1, retry_scale=2
-  update returns 2 if retryable
+universal pretend var
+  f, t, ask
+  maybe function
 ----------------------------------------------------------------------------------------------------
-tune log verbosity
-  make flat functions
+dna-move
+up links are relative, so we can't move the cells like we need to 
+  but if we make it absolute, what if another cell is trying to link to it when it moved?
+  [ ] keep it relative and recompute it as needed
+  [*] switch to absolute, still need to recompute
+      does it make sense to put in repo with abs paths?
+      simpler to read
+cached version of etcd key: one-data/etcd/dump-loader
 get etcd value
   path: one-data/etcd/value
   value: env project key 
   derived: service_domain, certs
-single key fetch: one-data/etcd/single-value-loader
-cached version of etcd key: one-data/etcd/dump-loader
-universal apply_changes var
-  f, t, ask
+write-key
+mvs/function/execute
+mvs/function/undeploy
+mvs/function/load
 deploy fsm 
   # need to set up tunnels beforehand (maybe 3 tunnels?)
   up

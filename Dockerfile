@@ -108,15 +108,14 @@ RUN apk add \
 
 ENV HOME /home
 ENV PAGER less
-ENV SIMPLETON_REPO /simpleton
-ENV SIMPLETON_WORK /work
+ENV SIMPLETON_REPO /repo
 ENV REPO_CACHE /home/.m2/repository
 
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
 RUN chmod a+rwx /etc
-COPY ./ $SIMPLETON_REPO/
-RUN ln -sf $SIMPLETON_REPO/shell-start.sh /etc/profile.d/
-RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
+COPY ./ $SIMPLETON_REPO/simpleton/
+RUN ln -sf $SIMPLETON_REPO/simpleton/shell-start.sh /etc/profile.d/
+RUN ln -sf $SIMPLETON_REPO/simpleton/inputrc /etc/
 COPY sudoers /etc/
 RUN chown root /etc/sudoers
 RUN mkdir -p $REPO_CACHE
@@ -125,6 +124,6 @@ COPY vimrc /home/.vimrc
 ARG TIME_ZONE=UTC
 RUN setup-timezone -z $TIME_ZONE
 
-WORKDIR $SIMPLETON_WORK
-CMD /bin/bash $SIMPLETON_REPO/init
+WORKDIR $SIMPLETON_REPO
+CMD /bin/bash $SIMPLETON_REPO/simpleton/init
 

@@ -800,6 +800,44 @@ local first=${contents[0]}
 [[ "${first%\*}" != "$first" ]]
 }
 
+pretend=${pretend:-ask}
+maybe() {
+local command_to_execute="$*"
+local execute
+
+case $pretend in
+  t)
+    execute=t
+  ;;
+  f)
+    echo "Pretending to execute: $command_to_execute" >&fd_trace
+    execute=f
+  ;;
+  a|ask)
+    local response
+    echo "Command to be executed: $command_to_execute" >&fd_trace
+    read -p 'Are you sure you want to run this? [y/n] ' -s -n1 response >&fd_trace
+    if [[ "$response" == y ]]; then
+      echo "yes" >&fd_trace
+      execute=t
+    else
+      echo "no" >&fd_trace
+      execute=f
+    fi
+  ;;
+  *)
+    err "Invalid pretend value: $pretend. Must be one of: t f ask"
+    return 1
+  ;;
+esac
+
+if [[ $execute == t ]]; then
+  eval "$command_to_execute" || return $?
+fi
+
+return 0
+}
+
 # used in if condition to be more clear.
 # instead of:
 #   if ! diff $f1 $f2; then ...
