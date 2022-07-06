@@ -9,6 +9,7 @@ importance=${importance:-0}
 trace_indent=${trace_indent:-f}
 trace_max=$trace
 trace_force=${trace_force:-f}
+trace_pid=${trace_pid:-f}
 bash_trace=${bash_trace:-100}
 debug=${debug:-f}
 EDITOR=${EDITOR:-vim}
@@ -291,7 +292,7 @@ trace() {
         local pad_size=$((trace_max-trace))
         printf "%${pad_size}s" >&$fd_trace
       fi
-      if [[ ${parallel_execution:-f} == t ]]; then
+      if [[ ${parallel_execution:-f} == t && $trace_pid == t ]]; then
         echo -n "$BASH_SUBSHELL:$BASHPID " >&$fd_trace
       fi
       if [[ $align == t ]]; then
@@ -806,32 +807,36 @@ local command_to_execute="$*"
 local execute
 
 case $pretend in
-  t)
+  f)
     execute=t
   ;;
-  f)
-    echo "Pretending to execute: $command_to_execute" >&fd_trace
+  t)
+    echo "Pretending to execute: $command_to_execute" >&$fd_trace
     execute=f
   ;;
   a|ask)
     local response
-    echo "Command to be executed: $command_to_execute" >&fd_trace
-    read -p 'Are you sure you want to run this? [y/n] ' -s -n1 response >&fd_trace
+    echo "Command to be executed: $command_to_execute" >&$fd_trace
+    read -p 'Are you sure you want to run this? [y/n/q] ' -s -n1 response >&$fd_trace
     if [[ "$response" == y ]]; then
-      echo "yes" >&fd_trace
+      echo "yes" >&$fd_trace
       execute=t
+    elif [[ "$response" == q ]]; then
+      echo "quit" >&$fd_trace
+      exit 1
     else
-      echo "no" >&fd_trace
+      echo "no" >&$fd_trace
       execute=f
     fi
   ;;
   *)
-    err "Invalid pretend value: $pretend. Must be one of: t f ask"
+    err "Invalid pretend setting: $pretend. Must be one of: t f ask"
     return 1
   ;;
 esac
 
 if [[ $execute == t ]]; then
+  trace $log_trace "Executing: $command_to_execute"
   eval "$command_to_execute" || return $?
 fi
 

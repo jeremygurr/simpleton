@@ -11,6 +11,7 @@ if [[ ${to} != ${to%/} ]]; then
   to=$to${from##*/}
 fi
 
+from=$(realpath $from)
 to=$(realpath $to)
 
 trace $log_info "Moving cell ${from##*/work/} to ${to##*/work/}"
@@ -28,7 +29,7 @@ begin_function
     fail1
   fi
 
-  if [[ ! -e $to ]]; then
+  if [[ -e $to ]]; then
     err "Target already exists: $to"
     fail1
   fi
@@ -41,16 +42,20 @@ begin_function
   fi
   workspace=${from%/$workspace}
 
-  maybe mv $from $to || fail
-
   local link
   begin_for link in $(find $workspace -type l); doo
-    local real=$(realpath -eL $link)
-    if [[ "$real" == "$from" ]]; then
+    local real=$(realpath -L $link)
+    if [[ ! -e $real ]]; then
+      err "Broken link: $link -> $real"
+      fail1
+    fi
+    if [[ "$real/" =~ ^$from/ ]]; then
       maybe rm $link || fail
-      maybe ln -sf $to || fail
+      maybe ln -sf $to $link || fail
     fi
   end_for
+
+  maybe mv $from $to || fail
 
 end_function
 handle_return
