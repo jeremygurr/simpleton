@@ -38,13 +38,25 @@ handle_return
 }
 
 # This is a special case check which happens before context can be loaded and
-# background processes are launched. This case only works when there are no dimensions
-# for this cube (is a singleton cube). This is a common case since almost all dim cells
-# do not have dimensions inside of them. 
+# background processes are launched. This case only works when there are no dependencies
+# for this cube. 
 can_skip_update() {
 
 local in_path=$current_cube/in
 local out_path=$current_cube/out
+
+# Try and do without this
+# if [[ $(find $current_cube/dim -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
+#   return 1
+# fi
+
+if [[ $(find $current_cube/up -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
+  return 1
+fi
+
+if [[ $(find $current_cube/res -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
+  return 1
+fi
 
 if [[ ! -d "$out_path" ]]; then
   return 1
@@ -66,18 +78,6 @@ if [[ "${fresh:-}" ]]; then
   if [ $out_timestamp -lt $fresh_cutoff ]; then
     return 1
   fi
-fi
-
-if [[ $(find $current_cube/up -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
-  return 1
-fi
-
-if [[ $(find $current_cube/dim -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
-  return 1
-fi
-
-if [[ $(find $current_cube/res -mindepth 1 -maxdepth 1 2>/dev/null | wc -l) -gt 0 ]]; then
-  return 1
 fi
 
 if [[ "$parent_return_path" ]]; then
@@ -625,17 +625,14 @@ begin_function
   is_dir_empty $out_path && empty=t
 
   local return_target=$parent_return_path/$parent_sub_type/$parent_sub_name
-  if [[ ! -d $return_target || $out_path -nt $return_target ]]; then
-    if [[ $empty == f && "$lock_path" && $has_lock == f ]]; then
-      folder_to_lock=$lock_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
-      has_lock=t
-    fi
+  if [[ ! -d $return_target || $out_path -nt $return_target || $current_cube/out -nt $return_target ]]; then
     if [[ ! -d $return_target ]]; then
       mkdir -p $return_target || fail
     fi
     if [[ $empty == f ]]; then
       cp -alu $out_path/* $return_target/ || fail
     fi
+    touch $return_target || fail
   fi
 
 end_function
@@ -660,17 +657,18 @@ begin_function
           [[ -d "$out_path.old" ]] && rm -r "$out_path.old"
           mv "$out_path" "$out_path.old" || fail
           mv "$out_path.new" "$out_path" || fail
+          touch -d @$start_time $out_path $current_cube/out || fail
         else
           rm -r "$out_path.new" || fail
+          if [[ $out_path != $current_cube/out ]]; then
+            touch -r $out_path $current_cube/out || fail
+          fi
         fi
       else
         mv "$out_path.new" "$out_path" || fail
+        touch -d @$start_time $out_path $current_cube/out || fail
       fi
 
-    fi
-
-    if [[ -d $out_path ]]; then 
-      touch -d @$start_time $out_path || fail
     fi
 
     if [[ "$tmp_path" && -d "$tmp_path" ]]; then
@@ -760,6 +758,13 @@ begin_function
     update_id=1000
   fi
 
+  if [[ -n "$lock_path" && $has_lock == f ]]; then
+    trace 0 "Getting write lock for cell"
+    new_stage write-lock-cell || fail
+    folder_to_lock=$lock_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
+    has_lock=t
+  fi
+
   if [[ "$up_path" ]]; then
     new_stage update-deps || fail
     cell_update_deps || fail
@@ -769,13 +774,6 @@ begin_function
     trace 0 "Getting resources for cell"
     new_stage get-resources || fail
     cell_get_resources "$res_path" || fail
-  fi
-
-  if [[ -n "$lock_path" && $has_lock == f ]]; then
-    trace 0 "Getting write lock for cell"
-    new_stage write-lock-cell || fail
-    folder_to_lock=$lock_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
-    has_lock=t
   fi
 
   if [[ "$out_path" ]]; then
@@ -986,32 +984,13 @@ begin_function
       trace -5 "Parent return path is missing ($p), so update is needed."
       succeed
     fi
-    if [[ $current_cube/out -nt $p ]]; then
+    if [[ $out_path -nt $p || $current_cube/out -nt $p ]]; then
       trace -5 "Parent return path is outdated ($p), so update is needed."
       succeed
     fi
   fi
 
   local rc
-  if [[ -d "$current_cube/dim" ]]; then
-    local dims=( $(find -L $current_cube/dim -mindepth 1 -maxdepth 1 -type d) )
-    local dim
-    begin_for dim in ${dims[*]}; doo
-      local dim_name=${dim##*/}
-      parent_lock_path= \
-      parent_return_path=$current_cube/return \
-      parent_sub_type=dim \
-      parent_sub_name=$dim_name \
-      output= \
-      quick_check=t fresh= cube_update "$dim"; rc=$?
-      if [[ $rc == $somethings_wrong ]]; then
-        fail1
-      elif [[ $rc == $update_needed ]]; then
-        trace -5 "Dim $dim needs update"
-        succeed 
-      fi
-    end_for
-  fi
 
   if [[ "$up_path" ]]; then
     local deps=( $(find -L $up_path -mindepth 1 -maxdepth 1 -type d) )
