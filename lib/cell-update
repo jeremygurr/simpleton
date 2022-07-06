@@ -8,7 +8,7 @@ readonly update_needed=2 somethings_wrong=1 up_to_date=0
 # never run as background process. 
 # Instead pass in run_in_background=t and this function will handle the rest.
 # parameters: {cube to update}
-# inputs: run_in_background
+# inputs: run_in_background output
 # outputs: processes
 cube_update() {
 local current_cube=$1 \
@@ -101,12 +101,12 @@ return 0
 # This is guaranteed to be run in a subshell, so every var and function is local automatically
 cube_update_inner() {
 
-run_in_background=f
-parent_return_path=${parent_return_path:-} 
-parent_lock_path=${parent_lock_path:-} 
-parent_sub_type=${parent_sub_type:-} 
-parent_sub_name=${parent_sub_name:-}
-cube_expiration= 
+run_in_background=f \
+parent_return_path=${parent_return_path:-} \
+parent_lock_path=${parent_lock_path:-} \
+parent_sub_type=${parent_sub_type:-} \
+parent_sub_name=${parent_sub_name:-} \
+cube_expiration= \
 features=
 
 setup_exit_trap
@@ -115,7 +115,7 @@ parallel_default=t
 [ $debug == t ] && parallel_default=f
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
-local dimensions=() dimension_folders=() localize_dim_vars dim_string="" return_path= 
+dimensions=() dimension_folders=() localize_dim_vars= dim_string= return_path= 
 
 # need to collect dimensions even though we haven't expanded the members yet
 gather_dims || return 1
@@ -178,6 +178,7 @@ begin_function
   parent_lock_path= \
   parent_sub_type=dim \
   parent_sub_name=$dim \
+  output= \
   fresh= cube_update "$dim_folder" || fail
 
   # set these to a basic default
@@ -372,7 +373,7 @@ begin_function
   local rc
 
   begin_for f in $subs; doo
-    quick_check=t reply_fd=$reply_fd fresh= cube_update $f; rc=$?
+    quick_check=t reply_fd=$reply_fd fresh= output= cube_update $f; rc=$?
     if [[ $rc == $somethings_wrong ]]; then
       fail1
     elif [[ $rc == $up_to_date ]]; then
@@ -382,7 +383,7 @@ begin_function
   end_for
 
   [[ ! "$found" ]] && begin_for f in $subs; doo
-    fresh= cube_update $f && {
+    fresh= output= cube_update $f && {
       found=$f
       succeed
     }
@@ -454,6 +455,7 @@ parent_lock_path=$lock_path \
 parent_return_path=$return_path \
 parent_sub_type=res \
 parent_sub_name=$res_name \
+output= \
 fresh= cube_update $res || return 1
 handle_cube_reply || return 1
 }
@@ -516,6 +518,7 @@ parent_lock_path=$lock_path \
 parent_return_path=$return_path \
 parent_sub_type=up \
 parent_sub_name=$dep_name \
+output= \
 fresh= cube_update $dep || return 1
 handle_cube_reply || return 1
 }
@@ -548,15 +551,14 @@ handle_return
 # guaranteed to run in a subshell
 cell_update() {
 
-lock_timeout=${lock_timeout:-30} 
-quick_check=${quick_check:-f} 
-allow_slow_updates=${allow_slow_updates:-t} 
-update_is_slow=f 
+lock_timeout=${lock_timeout:-30} \
+quick_check=${quick_check:-f} \
+allow_slow_updates=${allow_slow_updates:-t} \
+update_is_slow=f \
 fresh=${fresh:-$default_fresh}
 
-debug_path= down_path= in_path= in_path_all= lock_path= log_path= status_path= 
-out_path= tmp_path= up_path= res_path= return_path= 
-cleanup_on_exit= cell_id= dim_string=
+debug_path= down_path= in_path= in_path_all= lock_path= log_path= status_path= \
+out_path= tmp_path= up_path= res_path= return_path= cleanup_on_exit= cell_id= dim_string=
 
 setup_exit_trap
 
@@ -598,13 +600,16 @@ begin_function
     fi
   fi
 
-  if [[ "$parent_return_path" ]]; then
-    update_return_path || fail
-  fi
-
-  if [[ $has_lock == t ]]; then
-    folder_to_unlock=$lock_path pid_file=$lock_path/pid folder_unlock || fail
-  fi
+  case $output in
+    default)
+      if [[ -f $out_path/error ]]; then
+        cat $out_path/error
+      fi
+      if [[ -f $out_path/output ]]; then
+        cat $out_path/output
+      fi
+    ;;
+  esac
 
   [[ $update_successful == f ]] && fail1
 
@@ -650,10 +655,6 @@ begin_function
 
     if [[ -d "$out_path.new" ]]; then
 
-      if [[ "$out_path.new" ]]; then 
-        touch -d @$start_time "$out_path.new" || fail
-      fi
-
       if [[ -d "$out_path" ]]; then
         if files_are_different -r "$out_path" "$out_path.new" >/dev/null; then
           [[ -d "$out_path.old" ]] && rm -r "$out_path.old"
@@ -666,6 +667,10 @@ begin_function
         mv "$out_path.new" "$out_path" || fail
       fi
 
+    fi
+
+    if [[ -d $out_path ]]; then 
+      touch -d @$start_time $out_path || fail
     fi
 
     if [[ "$tmp_path" && -d "$tmp_path" ]]; then
@@ -713,6 +718,14 @@ begin_function
     mv $log_path/stage-timing-current $log_path/stage-timing-id-$update_id || fail
     ln -f $log_path/stage-timing-id-$update_id $log_path/stage-timing-last-$success_string || fail
 
+  fi
+
+  if [[ "$parent_return_path" ]]; then
+    update_return_path || fail
+  fi
+
+  if [[ $has_lock == t ]]; then
+    folder_to_unlock=$lock_path pid_file=$lock_path/pid folder_unlock || fail
   fi
 
 end_function
@@ -989,6 +1002,7 @@ begin_function
       parent_return_path=$current_cube/return \
       parent_sub_type=dim \
       parent_sub_name=$dim_name \
+      output= \
       quick_check=t fresh= cube_update "$dim"; rc=$?
       if [[ $rc == $somethings_wrong ]]; then
         fail1
@@ -1008,6 +1022,7 @@ begin_function
       parent_return_path=$return_path \
       parent_sub_type=up \
       parent_sub_name=$dep_name \
+      output= \
       quick_check=t fresh= cube_update "$dep"; rc=$?
       if [[ $rc == $somethings_wrong ]]; then
         fail1
