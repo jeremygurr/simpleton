@@ -13,6 +13,11 @@ bash_trace=${bash_trace:-100}
 debug=${debug:-f}
 EDITOR=${EDITOR:-vim}
 
+log_warn=${log_warn:-10}
+log_info=${log_info:-0}
+log_trace=${log_trace:--10}
+log_trace2=${log_trace2:--20}
+
 alias begin_no_tracing_zone='[[ $no_trace_depth == 0 && $tracing == t ]] && set +x; let no_trace_depth++'
 alias end_no_tracing_zone='let no_trace_depth--; [[ $no_trace_depth -le 0 && $tracing == t ]] && set -x'
 
@@ -31,23 +36,27 @@ alias end_no_tracing_zone='let no_trace_depth--; [[ $no_trace_depth -le 0 && $tr
 #   }
 
 if [ $trace -gt $bash_trace ]; then
-  alias  begin_function='let trace--; [ $trace -lt $bash_trace ] && {set +x; tracing=f;} || {set -x; tracing=t;}; local return_value=0 break_out=f; while true; do'
-  alias     begin_while='break_out=f; while'
-  alias       begin_for='break_out=f; for'
-  alias begin_breakable='break_out=f; while true; do'
-  alias    end_function='break; done; let trace++; [ $trace -ge $bash_trace ] && {set -x; tracing=t;}'
-  alias       end_while='done; [[ $break_out == t ]] && break'
-  alias         end_for='done; [[ $break_out == t ]] && break'
-  alias   end_breakable='done; [[ $break_out == t ]] && break'
+  alias       begin_function='let trace--; [ $trace -lt $bash_trace ] && {set +x; tracing=f;} || {set -x; tracing=t;}; local return_value=0 break_out=f; while true; do'
+  alias  begin_function_flat='[ $trace -lt $bash_trace ] && {set +x; tracing=f;} || {set -x; tracing=t;}; local return_value=0 break_out=f; while true; do'
+  alias          begin_while='break_out=f; while'
+  alias            begin_for='break_out=f; for'
+  alias      begin_breakable='break_out=f; while true; do'
+  alias         end_function='break; done; let trace++; [ $trace -ge $bash_trace ] && {set -x; tracing=t;}'
+  alias    end_function_flat='break; done; [ $trace -ge $bash_trace ] && {set -x; tracing=t;}'
+  alias            end_while='done; [[ $break_out == t ]] && break'
+  alias              end_for='done; [[ $break_out == t ]] && break'
+  alias        end_breakable='done; [[ $break_out == t ]] && break'
 else
-  alias  begin_function='let trace--; local return_value=0 break_out=f; while true; do'
-  alias     begin_while='break_out=f; while'
-  alias       begin_for='break_out=f; for'
-  alias begin_breakable='break_out=f; while true; do'
-  alias    end_function='break; done; let trace++'
-  alias       end_while='done; [[ $break_out == t ]] && break'
-  alias         end_for='done; [[ $break_out == t ]] && break'
-  alias   end_breakable='done; [[ $break_out == t ]] && break'
+  alias       begin_function='let trace--; local return_value=0 break_out=f; while true; do'
+  alias  begin_function_flat='local return_value=0 break_out=f; while true; do'
+  alias          begin_while='break_out=f; while'
+  alias            begin_for='break_out=f; for'
+  alias      begin_breakable='break_out=f; while true; do'
+  alias         end_function='break; done; let trace++'
+  alias    end_function_flat='break; done'
+  alias            end_while='done; [[ $break_out == t ]] && break'
+  alias              end_for='done; [[ $break_out == t ]] && break'
+  alias        end_breakable='done; [[ $break_out == t ]] && break'
 fi
 
 # to avoid bash syntax parsing problems
@@ -414,31 +423,31 @@ convert_to_seconds() {
   case "$from" in
     *s)
       eval "$to=${from%s}"
-      ;;
+    ;;
     *m)
       eval "$to=$((${from%m}*60))"
-      ;;
+    ;;
     *h)
       eval "$to=$((${from%h}*60*60))"
-      ;;
+    ;;
     *d)
       eval "$to=$((${from%d}*24*60*60))"
-      ;;
+    ;;
     *w)
       eval "$to=$((${from%w}*7*24*60*60))"
-      ;;
+    ;;
     *y)
       eval "$to=$((${from%y}*365*24*60*60))"
-      ;;
+    ;;
     *)
-      if [[ "$from" =~ [0-9]+ ]]; then
+      if [[ "$from" =~ ^[0-9]+$ ]]; then
         # default to seconds
         eval "$to=$from"
       else
         err "Unknown time format, use something like: 4h, 3d, 5m"
         return 1
       fi
-      ;;
+    ;;
   esac
   return 0
 }
@@ -660,19 +669,19 @@ local folder_to_lock=${folder_to_lock}
 local timeout=${timeout:-}
 local pid_file=${pid_file}
 
-trace 0 "Attempting to obtain lock for $folder_to_lock"
+trace ${log_trace:-0} "Attempting to obtain lock for $folder_to_lock"
 
 begin_function
 
   if [[ -d "$folder_to_lock" ]]; then
 
-    trace -5 "Lock folder exists already: $folder_to_lock"
+    trace ${log_trace:--10} "Lock folder exists already: $folder_to_lock"
     local pid=
 
     if [[ -f "$pid_file" ]]; then
       pid=$(<"$pid_file")
       if [[ "$pid" == $$ ]]; then
-        trace -5 "This process already owns the lock, so we are done."
+        trace ${log_trace:--10} "This process already owns the lock, so we are done."
         succeed
       fi
 
@@ -681,7 +690,7 @@ begin_function
     # check to see if the process is still running
     if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
       rm -rf "$folder_to_lock" || fail
-      trace -5 "Removed stale lock: $folder_to_lock with pid: $pid"
+      trace ${log_trace:--10} "Removed stale lock: $folder_to_lock with pid: $pid"
     fi
 
   fi
@@ -702,7 +711,7 @@ begin_function
     fi
 
     local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
-    trace -5 "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
+    trace ${log_warn:-10} "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
     sleep $seconds_to_wait
     timeleft=$((timeleft-delay))
     let delay*=2
@@ -713,14 +722,14 @@ begin_function
   end_while
 
   if [[ $success == f ]]; then
-    trace 0 "Failed to obtain lock."
+    trace ${log_warn:-10} "Failed to obtain lock."
     fail
   fi
 
   defer "rm -r '$pid_file' '$folder_to_lock'"
 
   # lock obtained
-  trace 0 "Succeeded in obtaining lock."
+  trace ${log_trace:--10} "Succeeded in obtaining lock."
 
 end_function
 handle_return

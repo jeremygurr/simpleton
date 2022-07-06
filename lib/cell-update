@@ -3,7 +3,7 @@
 type -t cube_update >/dev/null && return 0
 
 # return codes for cube_update
-readonly update_needed=2 somethings_wrong=1 up_to_date=0
+readonly failed_but_can_retry=2 update_needed=2 somethings_wrong=1 up_to_date=0 everythings_fine=0
 
 # never run as background process. 
 # Instead pass in run_in_background=t and this function will handle the rest.
@@ -16,7 +16,7 @@ local current_cube=$1 \
 local short_cube=${current_cube##*/work/} 
 local rc processes=
 
-begin_function
+begin_function_flat
 
   # handle quick check
   can_skip_update && succeed
@@ -33,7 +33,7 @@ begin_function
 
   wait_for_sub_processes || fail
 
-end_function
+end_function_flat
 handle_return
 }
 
@@ -107,6 +107,9 @@ parent_lock_path=${parent_lock_path:-} \
 parent_sub_type=${parent_sub_type:-} \
 parent_sub_name=${parent_sub_name:-} \
 cube_expiration= \
+retry_max=1 \
+retry_delay=1 \
+retry_scale=2 \
 features=
 
 setup_exit_trap
@@ -120,7 +123,7 @@ dimensions=() dimension_folders=() localize_dim_vars= dim_string= return_path=
 # need to collect dimensions even though we haven't expanded the members yet
 gather_dims || return 1
 
-trace 0 "Updating cube $short_cube $dim_string"
+trace $log_info "Updating cube $short_cube $dim_string"
 
 begin_function
 
@@ -130,9 +133,9 @@ begin_function
   return_path=$current_cube/return
 
   if [[ "$cube_expiration" ]]; then
-    trace 0 "Deleting cached data older than $cube_expiration"
+    trace $log_trace "Deleting cached data older than $cube_expiration"
     local expiration_minutes
-    convert_to_seconds cube_expiration expiration_minutes || fail
+    convert_to_seconds $cube_expiration expiration_minutes || fail
     let expiration_minutes/=60
     find -L $current_cube/out -mindepth 1 -maxdepth 1 -mmin +$expiration_minutes -exec rm -r \{\} + || fail
   fi
@@ -164,7 +167,7 @@ handle_return
 # input: dim dim_folder
 # output: expand_members expand_member
 get_dim_functions() {
-trace 0 "Getting dim functions for $dim"
+trace $log_trace "Getting dim functions for $dim"
 begin_function
 
   if [[ ! -d "$dim_folder" ]]; then
@@ -210,7 +213,7 @@ fi
 # input: dim
 # output: values 
 expand_values() {
-trace 0 "Expanding values for $dim"
+trace $log_trace "Expanding values for $dim"
 begin_function
 
   local dims=${dim}s
@@ -281,8 +284,8 @@ handle_return
 
 # inputs: dim values
 cube_update_pivot_values() {
-trace 0 "Pivoting over values of $dim: ${values[*]}"
-begin_function
+trace $log_trace "Pivoting over values of $dim: ${values[*]}"
+begin_function_flat
 
   local parallel=f
   if [[ "${#values[*]}" -gt 1 && "$parallel_execution" == t ]]; then
@@ -309,7 +312,7 @@ begin_function
     fi
   end_for
 
-end_function
+end_function_flat
 handle_return
 }
 
@@ -322,39 +325,39 @@ local dim=${dimensions[$index]}
 local dim_folder=${dimension_folders[$index]}
 local processes= parallel=f
 
-trace 0 "Pivoting $short_cube: $dim"
-begin_function
+trace $log_trace "Pivoting $short_cube: $dim"
+begin_function_flat
 
   get_dim_functions || fail
   expand_values || fail
   cube_update_pivot_values || fail
   wait_for_sub_processes || fail
 
-end_function
+end_function_flat
 handle_return
 }
 
 # input: parallel processes
 wait_for_sub_processes() {
 if [[ "$processes" ]]; then
-  trace 0 "Waiting for sub processes to complete"
+  trace $log_info "Waiting for sub processes to complete"
   local process last_err_code= last_failed_process= rc
   for process in $processes; do
-    trace -5 "Waiting for process $process"
+    trace $log_trace "Waiting for process $process"
     wait $process &>/dev/null; rc=$?
     if [[ $rc -gt 0 && $rc -lt 127 ]]; then
       if [[ ! "$last_err_code" ]]; then
         last_err_code=$rc
         last_failed_process=$process
       else
-        trace 0 "Subprocess $process failed to terminate successfully"
+        trace $log_warn "Subprocess $process failed to terminate successfully"
         return 1
       fi
     fi
   done
   if [[ "$last_err_code" ]]; then
     if [[ "$last_err_code" == 1 ]]; then
-      trace 0 "Subprocess $last_failed_process failed to terminate successfully"
+      trace $log_warn "Subprocess $last_failed_process failed to terminate successfully"
       return 1
     fi
     return $last_err_code
@@ -365,7 +368,7 @@ return 0
 
 select_any_cube() {
 
-trace 0 "Selecting an 'any' cube from $short_cube"
+trace $log_trace "Selecting an 'any' cube from $short_cube"
 begin_function
 
   local found= f
@@ -402,7 +405,7 @@ handle_return
 }
 
 cell_get_resources() {
-trace 0 "Getting resources for $short_cube"
+trace $log_trace "Getting resources for $short_cube"
 begin_function
 
   local dep_fd
@@ -461,7 +464,7 @@ handle_cube_reply || return 1
 }
 
 cell_update_deps() {
-trace 0 "Updating upstream cells of $short_cube"
+trace $log_trace "Updating upstream cells of $short_cube"
 begin_function
 
   local dep 
@@ -537,7 +540,7 @@ begin_function
   if [[ $consecutive_failures -gt 0 ]]; then
     get_cooldown_delay || fail
     if [[ $cooldown_delay -gt 0 ]]; then
-      trace 0 "Too many errors have occurred, waiting for cooldown period of $cooldown_delay seconds"
+      trace $log_warn "Too many errors have occurred, waiting for cooldown period of $cooldown_delay seconds"
       new_stage cooldown || fail
       sleep $cooldown_delay
     fi
@@ -563,7 +566,7 @@ out_path= tmp_path= up_path= res_path= return_path= cleanup_on_exit= cell_id= di
 setup_exit_trap
 
 get_cell_id || return 1
-trace 0 "Updating cell $short_cube $dim_string"
+trace $log_trace "Updating cell $short_cube $dim_string"
 
 begin_function
 
@@ -571,12 +574,12 @@ begin_function
   cell_validate || fail
   cell_feature_setup || fail
 
-  local needs_update has_lock=f update_successful=t
+  local needs_update has_lock=f update_successful
 
   does_cube_need_update || fail
   if [[ $needs_update == t ]]; then
     if [[ $quick_check == t ]]; then
-      trace -5 "Quick check finished: Update needed"
+      trace $log_trace "Quick check finished: Update needed"
       return_value=$update_needed
       break_out=t
       break
@@ -587,31 +590,55 @@ begin_function
 
     if type execute_update &>/dev/null; then
       new_stage execute-update || fail
-      execute_update || update_successful=f
+      local rc delay=$retry_delay
+      update_successful=f
+      for ((retry=0; retry < retry_max; retry++)); do
+        execute_update; rc=$?
+        case $rc in
+          $failed_but_can_retry)
+            [[ $retry -lt $((retry_max-1)) ]] && trace $log_info "execute_update failed. Will retry"
+          ;;
+          $everythings_fine)
+            update_successful=t
+            break
+          ;;
+          *)
+            trace $log_warn "execute_update returned $rc"
+            break
+          ;;
+        esac
+        trace $log_info "Waiting $delay seconds before retrying."
+        sleep $delay
+        let 'delay *= retry_scale'
+      done
+    else
+      update_successful=t
     fi
 
     cell_post_update || fail
 
   else
     if [[ $quick_check == t ]]; then
-      trace -5 "Quick check finished: Update not needed"
+      trace $log_trace "Quick check finished: Update not needed"
     else
-      trace 0 "Update not needed"
+      trace $log_trace "Update not needed"
     fi
   fi
 
-  case $output in
-    default)
-      if [[ -f $out_path/error ]]; then
-        cat $out_path/error
-      fi
-      if [[ -f $out_path/output ]]; then
-        cat $out_path/output
-      fi
-    ;;
-  esac
-
-  [[ $update_successful == f ]] && fail1
+  if [[ $update_successful == t ]]; then
+    case $output in
+      default)
+        if [[ -f $out_path/error ]]; then
+          cat $out_path/error
+        fi
+        if [[ -f $out_path/output ]]; then
+          cat $out_path/output
+        fi
+      ;;
+    esac
+  else
+    fail1
+  fi
 
 end_function
 handle_return
@@ -648,7 +675,7 @@ begin_function
 
   if [[ $update_successful == t ]]; then
 
-    trace 0 "Update successful."
+    trace $log_info "Update successful."
 
     if [[ -d "$out_path.new" ]]; then
 
@@ -684,7 +711,7 @@ begin_function
 
   else
 
-    trace 0 "Update failed."
+    trace $log_warn "Update failed."
     let consecutive_failures++
 
   fi
@@ -759,7 +786,7 @@ begin_function
   fi
 
   if [[ -n "$lock_path" && $has_lock == f ]]; then
-    trace 0 "Getting write lock for cell"
+    trace $log_trace "Getting write lock for cell"
     new_stage write-lock-cell || fail
     folder_to_lock=$lock_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
     has_lock=t
@@ -771,7 +798,7 @@ begin_function
   fi
 
   if [[ "$res_path" ]]; then
-    trace 0 "Getting resources for cell"
+    trace $log_trace "Getting resources for cell"
     new_stage get-resources || fail
     cell_get_resources "$res_path" || fail
   fi
@@ -793,17 +820,17 @@ cell_validate() {
 begin_function
 
   if ! is_cell_id_valid; then
-    trace -5 "Skipping cell because of mismatching cell id: $cell_id"
+    trace $log_trace "Skipping cell because of mismatching cell id: $cell_id"
     fail1
   fi
 
   if ! validate_members; then
-    trace 0 "Dims for this cube aren't valid. Maybe we can try another."
+    trace $log_trace "Dims for this cube aren't valid. Maybe we can try another."
     fail1
   fi
 
   if [[ $allow_slow_updates == f && $update_is_slow == t ]]; then
-    trace 0 "Update is too slow to meet requirements, let's try a different strategy"
+    trace $log_trace "Update is too slow to meet requirements, let's try a different strategy"
     fail1
   fi
 
@@ -893,7 +920,7 @@ local cube_max_load=${cube_max_load:-10}
 local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
 local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
 if [[ $current_load -gt $cube_max_load ]]; then
-  trace 0 "Load average is too high ($current_load > $cube_max_load)," \
+  trace $log_warn "Load average is too high ($current_load > $cube_max_load)," \
     "waiting until things cool down first."
   local time_waited=0
   while [[ $current_load -gt $cube_max_load ]]; do
@@ -924,33 +951,33 @@ eval "exec $fd_trace>&$fd_original_trace"
 new_stage() {
 local stage=$1
 if [[ "${previous_stage:-}" ]]; then
-  trace 0 "Finished stage $previous_stage" \
+  trace $log_trace "Finished stage $previous_stage" \
     "in $(echo "$EPOCHSECONDS - $stage_start_time" | bc) seconds"
 fi
 [[ "$log_path" ]] && echo "$stage $EPOCHSECONDS" >>"$log_path/stage-timing-current"
-trace 0 "Starting stage $stage"
+trace $log_trace "Starting stage $stage"
 stage_start_time=$EPOCHSECONDS
 previous_stage=$stage
 }
 
 does_cube_need_update() {
-trace 0 "Checking if update is needed"
+trace $log_trace "Checking if update is needed"
 begin_function
 
   needs_update=t
 
   if [[ ! -d "$out_path" ]]; then
-    trace -5 "Out path is missing, needs update"
+    trace $log_trace "Out path is missing, needs update"
     succeed
   fi
 
   if [[ -n "$in_path" && "$in_path" -nt "$out_path" ]]; then
-    trace -5 "Local changes were made, needs update"
+    trace $log_trace "Local changes were made, needs update"
     succeed
   fi
 
   if [[ -n "$up_path" && "$up_path" -nt "$out_path" ]]; then
-    trace -5 "Upstream changes were made, needs update"
+    trace $log_trace "Upstream changes were made, needs update"
     succeed
   fi
 
@@ -960,13 +987,13 @@ begin_function
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
     local out_timestamp=$(date -r "$out_path" +%s)
     if [ $out_timestamp -lt $fresh_cutoff ]; then
-      trace -5 "Freshness requirement ($fresh) not met, needs update"
+      trace $log_trace "Freshness requirement ($fresh) not met, needs update"
       succeed
     fi
   fi
 
   if [[ $current_cube/cube-context -nt $out_path ]]; then
-    trace -5 "cube-context has changed, needs update"
+    trace $log_trace "cube-context has changed, needs update"
     succeed
   fi
 
@@ -981,11 +1008,11 @@ begin_function
     fi
     local p=$parent_return_path/$parent_sub_type/$parent_sub_name
     if [[ ! -d $p ]]; then
-      trace -5 "Parent return path is missing ($p), so update is needed."
+      trace $log_trace "Parent return path is missing ($p), so update is needed."
       succeed
     fi
     if [[ $out_path -nt $p || $current_cube/out -nt $p ]]; then
-      trace -5 "Parent return path is outdated ($p), so update is needed."
+      trace $log_trace "Parent return path is outdated ($p), so update is needed."
       succeed
     fi
   fi
@@ -1006,7 +1033,7 @@ begin_function
       if [[ $rc == $somethings_wrong ]]; then
         fail1
       elif [[ $rc == $update_needed ]]; then
-        trace -5 "Upstream dependency $dep needs update"
+        trace $log_trace "Upstream dependency $dep needs update"
         succeed 
       fi
     end_for
