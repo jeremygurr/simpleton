@@ -590,34 +590,7 @@ begin_function
 
     local consecutive_failures=${consecutive_failures:-0}
     cell_pre_update || fail
-
-    if type execute_update &>/dev/null; then
-      new_stage execute-update || fail
-      local rc delay=$retry_delay
-      update_successful=f
-      for ((retry=0; retry < retry_max; retry++)); do
-        execute_update; rc=$?
-        case $rc in
-          $failed_but_can_retry)
-            [[ $retry -lt $((retry_max-1)) ]] && trace $log_info "execute_update failed. Will retry"
-          ;;
-          $everythings_fine)
-            update_successful=t
-            break
-          ;;
-          *)
-            trace $log_warn "execute_update returned $rc"
-            break
-          ;;
-        esac
-        trace $log_info "Waiting $delay seconds before retrying."
-        sleep $delay
-        let 'delay *= retry_scale'
-      done
-    else
-      update_successful=t
-    fi
-
+    cell_execute_update || fail
     cell_post_update || fail
 
   else
@@ -629,24 +602,63 @@ begin_function
     update_successful=t
   fi
 
+  cell_handle_output || fail
+
+end_function
+handle_return
+
+}
+
+cell_handle_output() {
+begin_function
   if [[ $update_successful == t ]]; then
     case $output in
       default)
         if [[ -f $out_path/error ]]; then
-          cat $out_path/error
+          cat $out_path/error || fail
         fi
         if [[ -f $out_path/output ]]; then
-          cat $out_path/output
+          cat $out_path/output || fail
         fi
       ;;
     esac
   else
     fail1
   fi
-
 end_function
 handle_return
+}
 
+cell_execute_update() {
+begin_function
+  if type execute_update &>/dev/null; then
+    new_stage execute-update || fail
+    local rc delay=$retry_delay
+    update_successful=f
+    for ((retry=0; retry < retry_max; retry++)); do
+      execute_update; rc=$?
+      case $rc in
+        $failed_but_can_retry)
+          [[ $retry -lt $((retry_max-1)) ]] && trace $log_info "execute_update failed. Will retry"
+        ;;
+        $everythings_fine)
+          update_successful=t
+          break
+        ;;
+        *)
+          trace $log_warn "execute_update returned $rc"
+          break
+        ;;
+      esac
+      trace $log_info "Waiting $delay seconds before retrying."
+      sleep $delay
+      let 'delay *= retry_scale'
+    done
+  else
+    update_successful=t
+  fi
+end_function
+handle_return
 }
 
 update_return_path() {
