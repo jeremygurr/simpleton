@@ -11,10 +11,10 @@ if [[ ${to} != ${to%/} ]]; then
   to=$to${from##*/}
 fi
 
-from=$(realpath $from)
+local real_from=$(realpath $from)
 to=$(realpath $to)
 
-trace $log_info "Moving cell ${from##*/work/} to ${to##*/work/}"
+trace $log_info "Moving cell ${real_from##*/work/} to ${to##*/work/}"
 begin_function
 
   if [[ -L $from ]]; then
@@ -34,13 +34,13 @@ begin_function
     fail1
   fi
 
-  local workspace=${from##*/work/}
-  if [[ "$workspace" == "$from" ]]; then
+  local workspace=${real_from##*/work/}
+  if [[ "$workspace" == "$real_from" ]]; then
     err "Cell doesn't exist in a workspace"
     err "One of it's parent folders must be 'work'"
     fail1
   fi
-  workspace=${from%/$workspace}
+  workspace=${real_from%/$workspace}
 
   local link
   begin_for link in $(find $workspace -type l); doo
@@ -49,13 +49,16 @@ begin_function
       err "Broken link: $link -> $real"
       fail1
     fi
-    if [[ "$real/" =~ ^$from/ ]]; then
+    if [[ "$real/" =~ ^$real_from/ ]]; then
       maybe rm $link || fail
+      if [[ ${real##*/} == ${link##*/} && ${to##*/} != ${link##*/} ]]; then
+        link=${link%/*}/${to##*/}
+      fi
       maybe ln -sf $to $link || fail
     fi
   end_for
 
-  maybe mv $from $to || fail
+  maybe mv $real_from $to || fail
 
 end_function
 handle_return
