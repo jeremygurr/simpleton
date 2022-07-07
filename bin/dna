@@ -15,27 +15,14 @@ parameters=( "$@" )
 
 load_subjects() {
   subjects=()
-  local subject require_valid_subjects=${require_valid_subjects:-t}
+  local subject 
   for subject in "${parameters[@]}"; do
-    subject=$(realpath "$subject")
-    if [[ $require_valid_subjects == t && ! -d "$subject" ]]; then
-      err "Subject does not exist or is not a folder: $subject"
-      exit 1
-    fi
+    #subject=$(realpath "$subject")
     subjects+=( "$subject" )
   done
 
   if [[ ! "${subjects:-}" ]]; then
     subjects=( $PWD )
-  fi
-
-  if [[ $require_valid_subjects == t ]]; then
-    for subject in "${subjects[@]}"; do
-      if [ ! -f "$subject/cube-context" ]; then
-        err "Subject $subject is not a cube. Subject must be a folder which contains a cube-context file."
-        exit 1
-      fi
-    done
   fi
 }
 
@@ -46,21 +33,50 @@ show_usage() {
   warn "  commands:"
   warn "    add [{path to cell(s)}]                 add a part to an existing cell"
   warn "                                            part={up|res|log|...} use_id={t|f} values=' ... '"
+  warn "    clone {from} {to}..                     clones a cell from one location to a new one"
   warn "    edit [{path to file(s) in cell(s)}]     edit a file in an existing cell, updating and encrypting as needed"
-  warn "    link {from} {to}                        link a cell from one location to a new one"
-  warn "    move {from} {to}                        move a cell from one location to a new one"
+  warn "    link {from} {to}..                      link a cell from one location to a new one"
+  warn "    move {from}.. {to}                      move a cell from one location to a new one"
   warn "    new [{path to cell(s)}]                 create new cells"
   warn "                                            type={min|standard|...}"
 }
 
+load_subjects || exit 1
 case $command in 
+  clone)
+    if [[ ${#subjects[*]} -lt 2 ]]; then
+      err "clone command must be followed by 2 parameters"
+      show_usage
+      exit 1
+    fi
+    source $SIMPLETON_REPO/lib/dna-clone || exit 1
+    begin_for subject in "${subjects[@]:1}"; doo
+      dna_clone "${subjects[0]}" "$subject" || exit 1
+    end_for
+    ;;
   move|mv)
+    if [[ ${#subjects[*]} -lt 2 ]]; then
+      err "clone command must be followed by 2 parameters"
+      show_usage
+      exit 1
+    fi
     source $SIMPLETON_REPO/lib/dna-move || exit 1
-    dna_move "${parameters[0]:-}" "${parameters[1]:-}" || exit 1
+    local last=${#subjects[*]}
+    let last--
+    begin_for subject in "${subjects[@]:0:$last}"; doo
+      dna_move "$subject" "${parameters[$last]}" || exit 1
+    end_for
     ;;
   link)
+    if [[ ${#subjects[*]} -lt 2 ]]; then
+      err "clone command must be followed by 2 parameters"
+      show_usage
+      exit 1
+    fi
     source $SIMPLETON_REPO/lib/dna-link || exit 1
-    dna_link "${parameters[0]:-}" "${parameters[1]:-}" || exit 1
+    begin_for subject in "${subjects[@]:1}"; doo
+      dna_link "${subjects[0]}" "$subject" || exit 1
+    end_for
     ;;
   edit)
     source $SIMPLETON_REPO/lib/dna-edit || exit 1
@@ -69,14 +85,12 @@ case $command in
     end_for
     ;;
   new)
-    require_valid_subjects=f load_subjects || exit 1
     source $SIMPLETON_REPO/lib/dna-new || exit 1
     begin_for subject in "${subjects[@]}"; doo
       dna_new "$subject" || exit 1
     end_for
     ;;
   add)
-    load_subjects || exit 1
     source $SIMPLETON_REPO/lib/dna-add || exit 1
     begin_for subject in "${subjects[@]}"; doo
       dna_add "$subject" || exit 1
