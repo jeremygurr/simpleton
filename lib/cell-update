@@ -110,6 +110,7 @@ cube_expiration= \
 retry_max=1 \
 retry_delay=1 \
 retry_scale=2 \
+allow_slow_updates=${allow_slow_updates:-t} \
 features=
 
 setup_exit_trap
@@ -129,6 +130,9 @@ begin_function
 
   init_context "$current_cube" || fail
   load_context "$current_cube" || fail
+
+  fresh=${fresh:-$default_fresh}
+  cube_validate || fail
 
   return_path=$current_cube/return
 
@@ -557,8 +561,7 @@ cell_update() {
 lock_timeout=${lock_timeout:-30} \
 quick_check=${quick_check:-f} \
 allow_slow_updates=${allow_slow_updates:-t} \
-update_is_slow=f \
-fresh=${fresh:-$default_fresh}
+update_is_slow=f 
 
 debug_path= down_path= in_path= in_path_all= lock_path= log_path= status_path= \
 out_path= tmp_path= up_path= res_path= return_path= cleanup_on_exit= cell_id= dim_string=
@@ -816,6 +819,30 @@ handle_return
 
 }
 
+cube_validate() {
+
+begin_function
+
+  if [[ $allow_slow_updates == f && $update_is_slow == t ]]; then
+    trace $log_trace "Update is too slow to meet requirements, let's try a different strategy"
+    fail1
+  fi
+
+  if [[ "${require_fresh_greater_than:-}" && $fresh != always ]]; then
+    local requirement fresh_seconds
+    convert_to_seconds $require_fresh_greater_than requirement || fail
+    convert_to_seconds $fresh fresh_seconds || fail
+    if [[ $fresh_seconds -lt $requirement ]]; then
+      trace $log_trace "Freshness is too low for this cube ($fresh < $require_fresh_greater_than)"
+      fail1
+    fi
+  fi
+
+end_function
+handle_return
+
+}
+
 cell_validate() {
 
 begin_function
@@ -827,11 +854,6 @@ begin_function
 
   if ! validate_members; then
     trace $log_trace "Dims for this cube aren't valid. Maybe we can try another."
-    fail1
-  fi
-
-  if [[ $allow_slow_updates == f && $update_is_slow == t ]]; then
-    trace $log_trace "Update is too slow to meet requirements, let's try a different strategy"
     fail1
   fi
 
@@ -982,7 +1004,7 @@ begin_function
     succeed
   fi
 
-  if [[ $fresh != none ]]; then
+  if [[ $fresh != always ]]; then
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
@@ -1051,9 +1073,10 @@ init_context() {
   local current_cube=$1 high_volume=f 
   features=
   # override this when you need a different default
-  # none means never refresh based on time. 30s means refresh if it is older than 30 seconds.
+  # always means never refresh based on time. 30s means refresh if it is older than 30 seconds.
   # 1w means refresh if it's older than a week.
-  default_fresh=none
+  default_fresh=always
+  require_fresh_greater_than=
 
   # override this if there are some cell id combinations which are not valid even when
   # composed of valid dim members
