@@ -70,7 +70,7 @@ if [[ $current_cube/cube-context -nt $out_path ]]; then
   return 1
 fi
 
-if [[ "${fresh:-}" ]]; then
+if [[ "${fresh:-}" && $fresh != always ]]; then
   local fresh_seconds
   convert_to_seconds $fresh fresh_seconds || return 1
   local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
@@ -579,7 +579,7 @@ begin_function
 
   local needs_update has_lock=f update_successful
 
-  does_cube_need_update || fail
+  does_cell_need_update || fail
   if [[ $needs_update == t ]]; then
     if [[ $quick_check == t ]]; then
       trace $log_trace "Quick check finished: Update needed"
@@ -700,28 +700,22 @@ begin_function
           [[ -d "$out_path.old" ]] && rm -r "$out_path.old"
           mv "$out_path" "$out_path.old" || fail
           mv "$out_path.new" "$out_path" || fail
-          touch -d @$start_time $out_path $current_cube/out || fail
+          touch $current_cube/out || fail
         else
           rm -r "$out_path.new" || fail
-          if [[ $out_path != $current_cube/out ]]; then
-            touch -r $out_path $current_cube/out || fail
-          fi
         fi
       else
         mv "$out_path.new" "$out_path" || fail
-        touch -d @$start_time $out_path $current_cube/out || fail
+        touch $current_cube/out || fail
       fi
+
+      touch -d @$start_time $out_path/freshness || fail
 
     fi
 
     if [[ "$tmp_path" && -d "$tmp_path" ]]; then
       rm -r "$tmp_path" || fail
     fi
-
-    # I don't think we want to do this. Let's keep this record of what was returned
-    # if [[ -d "$return_path" ]]; then
-    #   rm -r "$return_path" || fail
-    # fi
 
     consecutive_failures=0
 
@@ -995,7 +989,7 @@ stage_start_time=$EPOCHSECONDS
 previous_stage=$stage
 }
 
-does_cube_need_update() {
+does_cell_need_update() {
 trace $log_trace "Checking if update is needed"
 begin_function
 
@@ -1020,7 +1014,7 @@ begin_function
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
-    local out_timestamp=$(date -r "$out_path" +%s)
+    local out_timestamp=$(date -r "$out_path/freshness" +%s)
     if [ $out_timestamp -lt $fresh_cutoff ]; then
       trace $log_trace "Freshness requirement ($fresh) not met, needs update"
       succeed
