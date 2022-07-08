@@ -1,0 +1,679 @@
+#!/bin/bash
+
+type -t cube_update >/dev/null && return 0
+readonly failed_but_can_retry=2 skip=2 somethings_wrong=1 everythings_fine=0
+
+# never run as background process. 
+# Instead pass in run_in_background=t and this function will handle the rest.
+cube_update() {
+local current_cube=$1 \
+      operation_scope=${operation_scope:-short} \
+      run_in_background=${run_in_background:-f} \
+      processes=
+local short_cube=${current_cube##*/work/} 
+
+begin_function_flat
+
+  # handle quick check
+  can_skip_update && succeed
+
+  # decide whether to run in background or in subshell
+  if [[ $run_in_background == t ]]; then
+    cube_update_inner &
+    processes+=" $!"
+  else
+    # running in a subshell to fully isolate changes from this calling context
+    # but it's not actually in the background
+    ( cube_update_inner ) || fail
+  fi
+
+  wait_for_sub_processes || fail
+
+end_function_flat
+handle_return
+}
+
+# This is guaranteed to be run in a subshell, so every var and function is local automatically
+cube_update_inner() {
+
+dimensions=() dimension_files=() localize_dim_vars= dim_string= 
+if [ -d "$current_cube/dim" ]; then
+  gather_dims || return 1
+fi
+trace $log_trace "Updating cube $short_cube $dim_string"
+
+begin_function
+
+  run_in_background=f
+  setup_exit_trap
+
+  parallel_default=t
+  [ $debug == t ] && parallel_default=f
+  parallel_execution=${parallel_execution:-${par:-$parallel_default}}
+
+  init_context || fail
+  load_context || fail
+
+  fresh=${fresh:-$default_fresh}
+
+  if [[ "$cube_expiration" ]]; then
+    trace $log_trace "Deleting cached data older than $cube_expiration"
+    local expiration_minutes
+    convert_to_seconds $cube_expiration expiration_minutes || fail
+    let expiration_minutes/=60
+    find -L $current_cube/cell -mindepth 1 -maxdepth 1 -mmin +$expiration_minutes -exec rm -r \{\} + || fail
+  fi
+
+  if [[ ! -f "$current_cube/cube-context" ]]; then
+    err "cube_update called on $short_cube which is not a cube"
+    fail1
+  fi
+
+  cube_validate || fail
+  eval "$localize_dim_vars" || fail
+
+  if [[ ${#dimensions[*]} -eq 0 ]]; then
+    ( cell_update ) || fail
+  else
+    cube_update_pivot 0 || fail
+  fi
+
+end_function
+handle_return
+
+}
+
+gather_dims() {
+trace $log_trace "Gathering dimensions for $short_cube"
+local dimension dimension_file dimension_plural
+localize_dim_vars=
+dimensions=()
+dim_string=
+begin_function
+  begin_for dimension_file in \
+    $(find -L $current_cube/dim -mindepth 1 -maxdepth 1 -type f | sort); doo
+    dimension=${dimension_file##*/}
+    dimension=${dimension##*-}
+    if [[ ! "$dimension" =~ ^[a-zA-Z0-9_]+$ ]]; then
+      err "Invalid dimension name [$dimension] derived from folder $dimension_file"
+      err "Dimensions must only have alphanumeric or _ characters in it."
+      fail1
+    fi
+    dimension_plural=${dimension}s
+    dimensions+=( $dimension )
+    dimension_files+=( "$dimension_file" )
+    localize_dim_vars+="local $dimension=\${$dimension:-} $dimension_plural=\${$dimension_plural:-}; "
+    if [[ "${!dimension_plural:-}" ]]; then
+      dim_string+="$dimension_plural=[ ${!dimension_plural:-} ] "
+    else
+      dim_string+="$dimension=${!dimension:-} "
+    fi
+  end_for
+end_function
+handle_return
+}
+
+# input: dimensions 
+# output: cell_id, dim_string
+get_cell_id() {
+
+local dim dims cell_dim_part= value hash 
+
+trace $log_trace "Computing cell id for $short_cube"
+begin_function
+  
+  if [[ ! "${dimensions:-}" ]]; then
+    trace $log_trace "This cube doesn't have any dimensions"
+  fi
+
+  for dim in "${dimensions[@]}"; do
+    value="${!dim}"
+    dim_string+="$dim=$value "
+    if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
+      cell_dim_part+="$value,"
+    else
+      hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
+      cell_dim_part+="${hash:0:8},"
+    fi
+  done
+
+  if [[ "$cell_dim_part" ]]; then
+    cell_dim_part=${cell_dim_part%,}
+    cell_id=/$cell_dim_part
+    trace $log_trace "Cell id calculated: $cell_id"
+    if [[ $high_volume_cube == t ]]; then
+      hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
+      hash=${hash:0:2}
+      cell_id=/$hash/$cell_dim_part
+    fi
+  else
+    trace $log_trace "No cell id for this cube"
+  fi
+
+end_function
+handle_return
+
+}
+
+load_context() {
+local f=$1 
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+handler_folders=( )
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_physical_context_before "$physical_parent" || return 1
+    load_logical_context_before "$physical_parent" || return 1
+  else
+    load_physical_context_before "$logical_parent" || return 1
+  fi
+fi
+
+[ -f "$f/cube-context-before" ] && source "$f/cube-context-before"
+[ -f "$f/cube-context" ] && source "$f/cube-context"
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+[ -d "$f/handlers" ] && handler_folders+=( "$f/handlers" )
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_logical_context_after "$physical_parent" || return 1
+    load_physical_context_after "$physical_parent" || return 1
+  else
+    load_physical_context_after "$logical_parent" || return 1
+  fi
+fi
+
+return 0
+}
+
+load_physical_context_before() {
+local f=$1 
+local physical_parent=${f%/*}
+if [ "${#physical_parent}" -gt 1 ]; then
+  load_physical_context_before "$physical_parent" || return 1
+fi
+[ -f "$f/cube-context-before" ] && source "$f/cube-context-before"
+return 0
+}
+
+load_physical_context_after() {
+local f=$1 
+local physical_parent=${f%/*}
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+[ -d "$f/handlers" ] && handler_folders+=( "$f/handlers" )
+if [ "${#physical_parent}" -gt 1 ]; then
+  load_physical_context_after "$physical_parent" || return 1
+fi
+return 0
+}
+
+load_logical_context_before() {
+
+local f=$1 
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_physical_context_before "$physical_parent" || return 1
+    load_logical_context_before "$physical_parent" || return 1
+  else
+    load_physical_context_before "$logical_parent" || return 1
+  fi
+fi
+
+[ -f "$f/cube-context-before" ] && source "$f/cube-context-before"
+return 0
+
+}
+
+load_logical_context_after() {
+
+local f=$1 
+local logical_parent=${f%/*}
+local physical_parent=$(realpath "$logical_parent")
+
+[ -f "$f/cube-context-after" ] && source "$f/cube-context-after"
+[ -d "$f/handlers" ] && handler_folders+=( "$f/handlers" )
+
+if [ "${#logical_parent}" -gt 1 ]; then
+  if [ "$physical_parent" != "$logical_parent" ]; then
+    load_logical_context_after "$physical_parent" || return 1
+    load_physical_context_after "$physical_parent" || return 1
+  else
+    load_physical_context_after "$logical_parent" || return 1
+  fi
+fi
+
+return 0
+
+}
+
+execute_update_decrypt() {
+  begin_function
+    if [[ "$cube_in_path" ]]; then
+      local need_decrypt ofile file files=
+      if [[ $cube_in_path ]]; then
+        files+=" $(find -L $cube_in_path -name '*.safe' -type f)"
+      fi
+      begin_for ofile in $files; doo
+        file=${ofile#$cube_in_path}
+        file=${file#/}
+        file=${file%.safe}
+        local parent_folder=${file%/*}
+        if [[ "$parent_folder" != "$file" ]]; then
+          mkdir -p $out_path.new/$parent_folder || fail
+        fi
+        if [[ -f $out_path/$file && $out_path/$file -nt $ofile ]]; then
+          ln $out_path/$file $out_path.new/$file || fail
+        else
+          from="$ofile" to="$out_path.new/$file" decrypt_file || fail
+        fi
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
+execute_update_copy() {
+  if [[ "$cube_in_path" && "$out_path" ]]; then
+    rsync -a --exclude='*.safe' $cube_in_path/ $out_path.new/ || return 1
+  fi
+  return 0
+}
+
+# should only be called if there are dimensions remaining to be pivoted. 
+# Otherwise cell_update should be called.
+cube_update_pivot() {
+
+local index=$1
+local dim=${dimensions[$index]} 
+local dim_file=${dimension_files[$index]}
+local processes=
+
+trace $log_trace "Pivoting $short_cube: $dim"
+begin_function_flat
+
+  get_dim_functions || fail
+  expand_values || fail
+  cube_update_pivot_values || fail
+  wait_for_sub_processes || fail
+
+end_function_flat
+handle_return
+}
+
+# input: dim
+# output: values 
+expand_values() {
+trace $log_trace "Expanding values for $dim"
+begin_function
+
+  local dims=${dim}s
+  local new_value_list= new_values new_value value
+  values=( ${!dim} )
+
+  if [[ ! "${values:-}" ]]; then
+
+    # handle plural dim
+    values=( ${!dims} )
+
+    if [[ ! "${values:-}" ]]; then
+
+      # see if a default value is defined
+      value= result_var=new_values expand_member || fail
+      if [[ ! "${new_values:-}" ]]; then
+        err "Missing value for dimension $dim"
+        fail1
+      fi
+
+    else
+
+      begin_for value in "${values[@]}"; doo
+        value=$value result_var=new_values expand_members || fail
+        if [[ ! "${new_values:-}" ]]; then
+          value=$value result_var=new_values expand_member || fail
+          if [[ ! "${new_values:-}" ]]; then
+            err "Dim $dims has invalid value '$value'"
+            fail1
+          fi
+        fi
+      end_for
+
+    fi
+
+    for new_value in $new_values; do
+      if [[ ! $new_value_list =~ \ $new_value\  ]]; then
+        new_value_list+=" $new_value "
+      fi
+    done
+
+  else
+
+    # handle singular dim
+    if [[ "${#values[*]}" -gt 1 ]]; then
+      err "Too many values for a singular dim $dim." \
+        "Use plural dim $dims if you intend to have multiple values."
+      fail1
+    fi
+
+    local value=$values new_values
+
+    value=$value result_var=new_value expand_member || fail
+    if [[ ! "$new_value" ]]; then
+      err "Dim $dim has invalid value '$value'"
+      fail1
+    fi
+
+    new_value_list+="$new_value"
+
+  fi
+
+  values=( $new_value_list )
+
+end_function
+handle_return
+}
+
+cube_update_pivot_values() {
+trace $log_trace "Pivoting over values of $dim: ${values[*]}"
+begin_function_flat
+
+  local parallel=f
+  if [[ "${#values[*]}" -gt 1 && "$parallel_execution" == t ]]; then
+    parallel=t
+    wait_for_low_load || fail
+  fi
+
+  begin_for value in "${values[@]}"; doo
+    eval "$dim='$value'"
+    if [[ ${#dimensions[*]} -gt $((index + 1)) ]]; then
+      if [[ $parallel == t ]]; then
+        cube_update_pivot $((index + 1)) &
+        processes+=" $!"
+      else
+        cube_update_pivot $((index + 1)) || fail
+      fi
+    else
+      if [[ $parallel == t ]]; then
+        cell_update &
+        processes+=" $!"
+      else
+        ( cell_update ) || fail
+      fi
+    fi
+  end_for
+
+end_function_flat
+handle_return
+}
+
+wait_for_low_load() {
+local cube_max_load=${cube_max_load:-10}
+local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
+local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
+if [[ $current_load -gt $cube_max_load ]]; then
+  trace $log_warn "Load average is too high ($current_load > $cube_max_load)," \
+    "waiting until things cool down first."
+  local time_waited=0
+  while [[ $current_load -gt $cube_max_load ]]; do
+    current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
+    sleep 5; let time_waited+=5
+    if [[ "$cube_load_wait_timeout" -gt 0 && $time_waited -ge $cube_load_wait_timeout ]]; then
+      err "Timed out waiting for cpu load to be low enough. Aborting"
+      return 1
+    fi
+  done
+fi
+return 0
+}
+
+# input: parallel processes
+wait_for_sub_processes() {
+if [[ "$processes" ]]; then
+  trace $log_info "Waiting for sub processes to complete"
+  local process last_err_code= last_failed_process= rc
+  for process in $processes; do
+    trace $log_trace "Waiting for process $process"
+    wait $process &>/dev/null; rc=$?
+    if [[ $rc -gt 0 && $rc -lt 127 ]]; then
+      if [[ ! "$last_err_code" ]]; then
+        last_err_code=$rc
+        last_failed_process=$process
+      else
+        trace $log_warn "Subprocess $process failed to terminate successfully"
+        return 1
+      fi
+    fi
+  done
+  if [[ "$last_err_code" ]]; then
+    if [[ "$last_err_code" == 1 ]]; then
+      trace $log_warn "Subprocess $last_failed_process failed to terminate successfully"
+      return 1
+    fi
+    return $last_err_code
+  fi
+fi
+return 0
+}
+
+# guaranteed to run in a subshell
+cell_update() {
+
+lock_timeout=${lock_timeout:-30} \
+
+debug_path= cube_in_path= up_path= down_path= lock_path= cube_log_path= \
+log_path= status_path= out_path= tmp_path= cleanup_on_exit= \
+cell_id= dim_string= cell_path=
+
+setup_exit_trap
+
+get_cell_id || return 1
+trace $log_info "Updating cell $short_cube $dim_string"
+
+begin_function
+
+  local start_time=$EPOCHSECONDS
+  cell_validate || fail
+  cell_feature_setup || fail
+  # TODO Transfer up from cube to cell if not already there
+
+  local needs_update has_lock=f update_successful
+
+  does_cell_need_update || fail
+  if [[ $needs_update == t ]]; then
+    if [[ $quick_check == t ]]; then
+      trace $log_trace "Quick check finished: Update needed"
+      return_value=$update_needed
+      break_out=t
+      break
+    fi
+
+    local consecutive_failures=${consecutive_failures:-0}
+    cell_pre_update || fail
+    # TODO Where to put this
+    mkdir -p $out_path.new || fail
+    cell_execute_update || fail
+    cell_post_update || fail
+
+  else
+    if [[ $quick_check == t ]]; then
+      trace $log_trace "Quick check finished: Update not needed"
+    else
+      trace $log_trace "Update not needed"
+    fi
+    update_successful=t
+  fi
+
+  cell_handle_output || fail
+
+end_function
+handle_return
+
+}
+
+cube_validate() {
+
+begin_function
+
+  if ! validate_members; then
+    trace $log_trace "Dims for this cube aren't valid. Maybe we can try another."
+    return_value=$skip
+    break_out=t
+    break
+  fi
+
+end_function
+handle_return
+
+}
+
+# usually this doesn't need to be overridden, since it uses expand_members to determine if it's valid
+validate_members() {
+local result i count=${#dimensions[*]} dim dims
+for ((i=0; i<count; i++)); do
+  dim=${dimensions[$i]}
+  dim_file=${dimension_files[$i]}
+  dims=${dim}s
+  get_dim_functions || return 1
+  if [[ "${!dim:-}" ]]; then
+    value=${!dim} result_var=result expand_member || return 1
+  else
+    value=${!dims} result_var=result expand_members || return 1
+  fi
+  if [[ ! "$value" ]]; then
+    return 1
+  fi
+done
+return 0
+}
+
+# input: dim dim_file
+# output: expand_members expand_member
+get_dim_functions() {
+
+  if [[ ! -f "$dim_file" ]]; then
+    err "Internal error: cube_update_pivot was called with an index which doesn't corrospond with a dimension file: $dim_file"
+    return 1
+  fi
+
+  # set these to a basic default
+  expand_member() {
+    eval "$result_var='$value'"
+  }
+
+  expand_members() {
+    eval "$result_var='$value'"
+  }
+
+  source $dim_file
+
+}
+
+cell_validate() {
+
+begin_function
+
+  if ! is_cell_id_valid; then
+    trace $log_trace "Skipping cell because of mismatching cell id: $cell_id"
+    return_value=$skip
+    break_out=t
+    break
+  fi
+
+end_function
+handle_return
+
+}
+
+init_context() {
+
+  # override this when you need a different default
+  # inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
+  # 1w means refresh if it's older than a week.
+  default_fresh=inf \
+  require_fresh_greater_than= \
+  retry_max=1 \
+  retry_delay=1 \
+  retry_scale=2 \
+  cube_expiration= \
+  high_volume_cube=f \
+  features=
+
+  # override this if there are some cell id combinations which are not valid even when
+  # composed of valid dim members
+  # returns 1 if it's not a valid combination of members
+  is_cell_id_valid() {
+    return 0
+  }
+
+  # this may be overridden to provide a custom cooldown calculation
+  get_cooldown_delay() {
+    [[ -z "${cooldown_delay:-}" ]] && cooldown_delay=1
+    let cooldown_delay*=2
+  }
+
+  # override this to implement custom update logic
+  execute_update() {
+    execute_update_decrypt || return 1
+    execute_update_copy || return 1
+  }
+
+}
+
+cell_feature_setup() {
+
+begin_function
+
+  cube_path=$current_cube
+  cell_path=$cube_path/cell${cell_id}
+
+  # out path must always be there
+  out_path=$cell_path/out
+
+  if [[ -d $cube_path/in ]]; then
+    cube_in_path=$cube_path/in
+  fi
+
+  if [[ -d $cube_path/up ]]; then
+    cube_up_path=$cube_path/up
+    up_path=$cell_path/up
+  fi
+
+  # created on demand
+  tmp_path=$cell_path/tmp
+
+  local feature
+  for feature in ${features:-}; do
+    case $feature in
+      debug)
+        debug_path=$cell_path/debug
+        [[ ! -d $debug_path ]] && { mkdir -p $debug_path || fail; }
+      ;;
+      lock)
+        lock_path=$cell_path/lock
+        [[ ! -d $lock_path ]] && { mkdir $lock_path || fail; }
+      ;;
+      log)
+        log_path=$cell_path/log
+        cube_log_path=$cube_path/log
+        [[ ! -d $log_path ]] && { mkdir -p $log_path || fail; }
+        [[ ! -d $cube_log_path ]] && { mkdir -p $cube_log_path || fail; }
+      ;;
+      status)
+        status_path=$cell_path/status
+        [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
+      ;;
+      *)
+        err "Unknown feature '$feature'"
+        fail1
+      ;;
+    esac
+  done
+
+end_function
+handle_return
+
+}
+

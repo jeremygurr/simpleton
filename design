@@ -7,10 +7,12 @@ features:
   abstraction for:
     retry 
     parallel execution
-    multi-value handling
+    multi-value dim handling
     caching
     orchestration
     locking
+    multi-strategy handling
+    pretend execution management
 
 docs
   cube names should be verbs, and folders which contain them should be nouns
@@ -51,15 +53,104 @@ need to track two dates?
   how to track last change?
   [ ] separate file for change
   [*] out folder for change, separate file for freshness
+near and far average timings for cubes
+should strategies be implemented in up or as part of the cube itself?
+  [*] in up
+      need to have special logic in update code to handle different variations
+  [ ] directly in the cube, with multiple execution functions for different strategies
+      each strategy may have separate dependencies or resource needs
+      need to track statistics for each strategy separately
+do we support multi-strategies inside of multi-strategies?
+  only one level, other cells can aggregate more levels
+  much simpler
+cube vs cell
+  log
+    cell: last success / fail
+    cell: stage execution times
+    cube: history of requests
+  status
+    cell: avg execution / error rate
+  lock
+    cell
+can we simplify dims?
+  not cubes? only a function script?
+  use cases: pods and etcd keys
+    keys don't really have a validation
+    pods need to be able to be referenced even when in a deleted state
+  how to share between cubes?
+    we may want to share other files between cubes also
+    just a simple link?
+    can have a folder containing files even if they aren't a cube
+can we simplify resources?
+  unify with in deps
+  provide dim=any to find the first which is available and can be locked
+  normal deps don't need a lock?
+  how to mark these as needing a lock?
+    [*] lock- prefix
+    [ ] res- prefix
 ----------------------------------------------------------------------------------------------------
+go through cell-update
+update other cell commands
+update dna commands
+handling updates
+  [ ] check if a dep needs to be updated first, and then check again while updating
+  [ ] immediately update it if needed
+  [*] push driven modification checks, making checks trivial, but complicating changes
+      checks happen a lot more often than changes
+      write a 'needs-update' file to out_path with info about cell which changed
+      but this won't work for freshness checks, only for change checks
+      maybe we can track min freshness also
+      needs-update
+        change_cause=...
+      min-upstream-freshness
+        min_upstream_freshness=...
+should fresh requirement ever be deep?
+  [ ] only apply to top level and allow all other cells to use their defaults
+  [*] + add a fresh_deep option
+should we make up cell specific, auto attaching to specific cells?
+  could make return path not needed
+  simplifies down stream pushes on change
+  can't link to a specific cell though?
+    link to out path, from which cell id can be derived
+  do dims or res need to be cell specific?
+    dim and res changes need to require updates of downstream
+    do we even track downstream of dim/res?
+      need dim/up dim/down
+      rename up to something else: 
+      [ ] factor
+      [ ] part
+      [*] in (combine with source somehow?)
+instead make a folder 'cell' that all cell ids are under with their own
+  in/res/out/log/status folders
+will need to hold lock for upstream cells while updating down
+how to aggregate many cells of a cube into a single document
+  an upstream group can have many cells
+how to handle orphaned dim members (pods which which were deleted)
+where will alternate strategy retries happen?
+  how does needs_update work for multi-strategy deps?
+    [ ] assume they don't need updating
+    [ ] if at least one dep doesn't need updating
+    [*] if any dep is changed, needs update
+  happening during dependency execution
+  loop over each strategy in order until one succeeds
+operation_scope=long / short
+  should change multi-select strategy
+  look at long values instead of short?
+  randomization to keep strategies from becoming blocked
+  retry should choose a different method?
 get etcd value
   path: one-data/etcd/value
   value: env project key 
   derived: service_domain, certs
+get-folder-keys-from-dump
+get-folder-keys-direct
+get-folder-keys
+  choose most reliable then fastest?
 write-key
 mvs/function/execute
 mvs/function/undeploy
 mvs/function/load
+mvs/function/deploy
 deploy fsm 
   # need to set up tunnels beforehand (maybe 3 tunnels?)
   up

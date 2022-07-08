@@ -563,7 +563,7 @@ quick_check=${quick_check:-f} \
 allow_slow_updates=${allow_slow_updates:-t} \
 update_is_slow=f 
 
-debug_path= down_path= in_path= in_path_all= lock_path= log_path= status_path= \
+debug_path= down_path= in_path= in_path_all= lock_path= log_path= status_path= status_path_all= \
 out_path= tmp_path= up_path= res_path= return_path= cleanup_on_exit= cell_id= dim_string=
 
 setup_exit_trap
@@ -688,6 +688,17 @@ begin_function
 
   new_stage complete || fail
   local end_time=$EPOCHSECONDS
+  local duration_of_update=$((end_time-start_time))
+
+  local avg_duration_short=$duration_of_update avg_duration_long=$duration_of_update
+  local avg_failure_rate_short=0 avg_failure_rate_long=0
+  local cube_persist_file=$status_path_all/persist
+
+  if [[ "$status_path_all" ]]; then
+    if [[ -e $cube_persist_file ]]; then
+      source $cube_persist_file || fail
+    fi
+  fi
 
   if [[ $update_successful == t ]]; then
 
@@ -719,22 +730,38 @@ begin_function
 
     consecutive_failures=0
 
+    if [[ "$status_path_all" ]]; then
+      let 'avg_duration_short = (avg_duration_short * 9 + duration_of_update) / 10'
+      let 'avg_duration_long = (avg_duration_long * 99 + duration_of_update) / 100'
+      let 'avg_failure_rate_short = (avg_failure_rate_short * 9) / 10'
+      let 'avg_failure_rate_long = (avg_failure_rate_long * 99) / 100'
+    fi
+
   else
 
     trace $log_warn "Update failed."
     let consecutive_failures++
+    if [[ "$status_path_all" ]]; then
+      let 'avg_failure_rate_short = (avg_failure_rate_short * 9 + 1000) / 10'
+      let 'avg_failure_rate_long = (avg_failure_rate_long * 99 + 1000) / 100'
+    fi
 
   fi
 
   if [[ "$status_path" ]]; then
     write_persist_file || fail
+    echo "\
+      avg_duration_short=$avg_duration_short
+      avg_duration_long=$avg_duration_long
+      avg_failure_rate_short=$avg_failure_rate_short
+      avg_failure_rate_long=$avg_failure_rate_long
+      " >$cube_persist_file || fail
   fi
 
   if [[ "$log_path" ]]; then
 
     local success_string=good
     [[ $update_successful == f ]] && success_string=bad
-    local duration_of_update=$((end_time-start_time))
     echo "update_id=$update_id start=$start_time duration=$duration_of_update from=$called_from" \
       "result=$success_string $dim_string" >>$log_path/history || fail
 
@@ -931,6 +958,8 @@ begin_function
         [[ ! -d $current_cube/status ]] && { mkdir $current_cube/status || fail; }
         status_path=$current_cube/status$cell_id
         [[ ! -d $status_path ]] && { mkdir -p $status_path || fail; }
+        status_path_all=$current_cube/status/all
+        [[ ! -d $status_path_all ]] && { mkdir $status_path_all || fail; }
       ;;
       *)
         err "Unknown feature '$feature'"
@@ -1053,17 +1082,26 @@ begin_function
     local dep
     begin_for dep in ${deps[*]}; doo
       local dep_name=${dep##*/}
-      parent_lock_path= \
-      parent_return_path=$return_path \
-      parent_sub_type=up \
-      parent_sub_name=$dep_name \
-      output= \
-      quick_check=t fresh= cube_update "$dep"; rc=$?
-      if [[ $rc == $somethings_wrong ]]; then
-        fail1
-      elif [[ $rc == $update_needed ]]; then
-        trace $log_trace "Upstream dependency $dep needs update"
-        succeed 
+      if [[ ${dep_name%\?} == $dep_name ]]; then
+        # single strategy dependency
+        parent_lock_path= \
+        parent_return_path=$return_path \
+        parent_sub_type=up \
+        parent_sub_name=$dep_name \
+        output= \
+        quick_check=t fresh= cube_update "$dep"; rc=$?
+        if [[ $rc == $somethings_wrong ]]; then
+          fail1
+        elif [[ $rc == $update_needed ]]; then
+          trace $log_trace "Upstream dependency $dep needs update"
+          succeed 
+        fi
+      else 
+        # multi-strategy dependency
+        local strategies=( $(find -L $dep -mindepth 1 -maxdepth 1 -type d) )
+        begin_for dep in ${strategies[*]}; doo
+          # TODO 
+        end_for
       fi
     end_for
   fi
