@@ -412,6 +412,7 @@ begin_function
     local min_upstream_freshness=inf
     if [[ ! -f $out_path/min-upstream-freshness ]]; then
       derive_min_upstream_freshness $up_path || fail
+      echo "min_upstream_freshness=$min_upstream_freshness" >$out_path/min-upstream-freshness || fail
     else
       source $out_path/min-upstream-freshness || fail
     fi
@@ -443,20 +444,64 @@ handle_return
 derive_min_upstream_freshness() {
 local up_path=$1
 begin_function
-  local cube default_fresh=inf
-  get_cube $up_path || return 1
+
+  local cube default_fresh=inf \
+        out_path=${up_path%/*}/out \
+        result
+  if [[ ! -d $out_path ]]; then
+    mkdir -p $out_path || fail
+  fi
+  get_cube $up_path || fail
+
+  if [[ -f $out_path/min-upstream-freshness ]]; then
+    local prev=$min_upstream_freshness
+    source $out_path/min-upstream-freshness || fail
+    min $min_upstream_freshness $prev || fail
+    min_upstream_freshness=$result
+    succeed
+  fi
+
   if [[ -f $cube/cube-vars ]]; then
     source $cube/cube-vars || fail
   fi
+
   if [[ $default_fresh != inf ]]; then
     local default_fresh_seconds
     convert_to_seconds $default_fresh default_fresh_seconds || fail
-    if [[ $min_upstream_freshness == inf || $default_fresh_seconds -lt $min_upstream_freshness ]]; then
-      min_upstream_freshness=$default_fresh_seconds
-    fi
+    min $min_upstream_freshness $default_fresh_seconds || fail
+    min_upstream_freshness=$result
   fi
-  local dep
-  begin_for dep in $(find1 ...)
+
+  local group dep
+
+  begin_for group in $(find1 $up_path -name '*?' -type d); doo
+    begin_for dep in $(find1 $group -type d); doo
+      derive_min_upstream_freshness_handle_group $dep || fail
+    end_for
+  end_for
+
+  begin_for dep in $(find1 $up_path -not -name '*?' -type d); doo
+    derive_min_upstream_freshness_handle_group $dep || fail
+  end_for
+
+  echo "min_upstream_freshness=$min_upstream_freshness" >$out_path/min-upstream-freshness || fail
+
+end_function
+handle_return
+}
+
+derive_min_upstream_freshness_handle_group() {
+local dep=$1 cell cube
+begin_function
+  begin_for cell in $(find1 $group -type d); doo
+    get_cube $cell || fail
+    if [[ ! -f $cube/cube-context ]]; then
+      err "Not a cube: $cube"
+      fail1
+    fi
+    # recursive
+    derive_min_upstream_freshness $cell/up || fail
+  end_for
 end_function
 handle_return
 }
