@@ -48,11 +48,14 @@ begin_function
   setup_exit_trap
 
   parallel_default=t
-  [ $debug == t ] && parallel_default=f
+  [[ $debug == t ]] && parallel_default=f
   parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
   init_context || fail
   load_context || fail
+  if [[ -f $current_cube/cube-vars ]]; then
+    source $current_cube/cube-vars || fail
+  fi
 
   fresh=${fresh:-$default_fresh}
 
@@ -61,7 +64,7 @@ begin_function
     local expiration_minutes
     convert_to_seconds $cube_expiration expiration_minutes || fail
     let expiration_minutes/=60
-    find -L $current_cube/cell -mindepth 1 -maxdepth 1 -mmin +$expiration_minutes -exec rm -r \{\} + || fail
+    find1 $current_cube/cell -mmin +$expiration_minutes -exec rm -r \{\} + || fail
   fi
 
   if [[ ! -f "$current_cube/cube-context" ]]; then
@@ -76,78 +79,6 @@ begin_function
     ( cell_update ) || fail
   else
     cube_update_pivot 0 || fail
-  fi
-
-end_function
-handle_return
-
-}
-
-gather_dims() {
-trace $log_trace "Gathering dimensions for $short_cube"
-local dimension dimension_file dimension_plural
-localize_dim_vars=
-dimensions=()
-dim_string=
-begin_function
-  begin_for dimension_file in \
-    $(find -L $current_cube/dim -mindepth 1 -maxdepth 1 -type f | sort); doo
-    dimension=${dimension_file##*/}
-    dimension=${dimension##*-}
-    if [[ ! "$dimension" =~ ^[a-zA-Z0-9_]+$ ]]; then
-      err "Invalid dimension name [$dimension] derived from folder $dimension_file"
-      err "Dimensions must only have alphanumeric or _ characters in it."
-      fail1
-    fi
-    dimension_plural=${dimension}s
-    dimensions+=( $dimension )
-    dimension_files+=( "$dimension_file" )
-    localize_dim_vars+="local $dimension=\${$dimension:-} $dimension_plural=\${$dimension_plural:-}; "
-    if [[ "${!dimension_plural:-}" ]]; then
-      dim_string+="$dimension_plural=[ ${!dimension_plural:-} ] "
-    else
-      dim_string+="$dimension=${!dimension:-} "
-    fi
-  end_for
-end_function
-handle_return
-}
-
-# input: dimensions 
-# output: cell_id, dim_string
-get_cell_id() {
-
-local dim dims cell_dim_part= value hash 
-
-trace $log_trace "Computing cell id for $short_cube"
-begin_function
-  
-  if [[ ! "${dimensions:-}" ]]; then
-    trace $log_trace "This cube doesn't have any dimensions"
-  fi
-
-  for dim in "${dimensions[@]}"; do
-    value="${!dim}"
-    dim_string+="$dim=$value "
-    if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
-      cell_dim_part+="$value,"
-    else
-      hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
-      cell_dim_part+="${hash:0:8},"
-    fi
-  done
-
-  if [[ "$cell_dim_part" ]]; then
-    cell_dim_part=${cell_dim_part%,}
-    cell_id=/$cell_dim_part
-    trace $log_trace "Cell id calculated: $cell_id"
-    if [[ $high_volume_cube == t ]]; then
-      hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
-      hash=${hash:0:2}
-      cell_id=/$hash/$cell_dim_part
-    fi
-  else
-    trace $log_trace "No cell id for this cube"
   fi
 
 end_function
@@ -304,78 +235,6 @@ end_function_flat
 handle_return
 }
 
-# input: dim
-# output: values 
-expand_values() {
-trace $log_trace "Expanding values for $dim"
-begin_function
-
-  local dims=${dim}s
-  local new_value_list= new_values new_value value
-  values=( ${!dim} )
-
-  if [[ ! "${values:-}" ]]; then
-
-    # handle plural dim
-    values=( ${!dims} )
-
-    if [[ ! "${values:-}" ]]; then
-
-      # see if a default value is defined
-      value= result_var=new_values expand_member || fail
-      if [[ ! "${new_values:-}" ]]; then
-        err "Missing value for dimension $dim"
-        fail1
-      fi
-
-    else
-
-      begin_for value in "${values[@]}"; doo
-        value=$value result_var=new_values expand_members || fail
-        if [[ ! "${new_values:-}" ]]; then
-          value=$value result_var=new_values expand_member || fail
-          if [[ ! "${new_values:-}" ]]; then
-            err "Dim $dims has invalid value '$value'"
-            fail1
-          fi
-        fi
-      end_for
-
-    fi
-
-    for new_value in $new_values; do
-      if [[ ! $new_value_list =~ \ $new_value\  ]]; then
-        new_value_list+=" $new_value "
-      fi
-    done
-
-  else
-
-    # handle singular dim
-    if [[ "${#values[*]}" -gt 1 ]]; then
-      err "Too many values for a singular dim $dim." \
-        "Use plural dim $dims if you intend to have multiple values."
-      fail1
-    fi
-
-    local value=$values new_values
-
-    value=$value result_var=new_value expand_member || fail
-    if [[ ! "$new_value" ]]; then
-      err "Dim $dim has invalid value '$value'"
-      fail1
-    fi
-
-    new_value_list+="$new_value"
-
-  fi
-
-  values=( $new_value_list )
-
-end_function
-handle_return
-}
-
 cube_update_pivot_values() {
 trace $log_trace "Pivoting over values of $dim: ${values[*]}"
 begin_function_flat
@@ -477,7 +336,9 @@ begin_function
   local start_time=$EPOCHSECONDS
   cell_validate || fail
   cell_feature_setup || fail
-  # TODO Transfer up from cube to cell if not already there
+  if [[ "$cube_up_path" && "$cube_up_path" -nt "$up_path" ]]; then
+    cell_setup_up || fail
+  fi
 
   local needs_update has_lock=f update_successful
 
@@ -511,6 +372,93 @@ begin_function
 end_function
 handle_return
 
+}
+
+does_cell_need_update() {
+trace $log_trace "Checking if update is needed"
+begin_function
+
+  needs_update=t
+
+  if [[ $fresh -eq 0 ]]; then
+    succeed
+  fi
+
+  if [[ ! -d "$out_path" ]]; then
+    trace $log_trace "Out path is missing, needs update"
+    succeed
+  fi
+
+  if [[ -n "$in_path" && "$in_path" -nt "$out_path" ]]; then
+    trace $log_trace "Local changes were made, needs update"
+    succeed
+  fi
+
+  if [[ -n "$up_path" && ( "$up_path" -nt "$out_path" || -f "$up_path/needs-update" ) ]]; then
+    trace $log_trace "Upstream changes were made, needs update"
+    succeed
+  fi
+
+  if [[ $fresh != inf ]]; then
+    local fresh_seconds
+    convert_to_seconds $fresh fresh_seconds || fail
+    local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
+    local out_timestamp=$(date -r $out_path/freshness +%s)
+    if [[ $out_timestamp -lt $fresh_cutoff ]]; then
+      trace $log_trace "Freshness requirement ($fresh) not met, needs update"
+      succeed
+    fi
+
+    local min_upstream_freshness=inf
+    if [[ ! -f $out_path/min-upstream-freshness ]]; then
+      derive_min_upstream_freshness $up_path || fail
+    else
+      source $out_path/min-upstream-freshness || fail
+    fi
+
+    if [[ $min_upstream_freshness != inf ]]; then
+      
+      fresh_cutoff=$((EPOCHSECONDS-min_upstream_freshness))
+      if [[ $out_timestamp -lt $fresh_cutoff ]]; then
+        trace $log_trace "Freshness requirement ($fresh) not met because of upstream, needs update"
+        succeed
+      fi
+
+    fi
+  fi
+
+  if [[ $current_cube/cube-context -nt $out_path ]]; then
+    trace $log_trace "cube-context has changed, needs update"
+    succeed
+  fi
+
+  needs_update=f
+
+end_function
+handle_return
+}
+
+# input: $1 (up_path of a cell to be analyzed)
+# output: min_upstream_freshness
+derive_min_upstream_freshness() {
+local up_path=$1
+begin_function
+  local cube default_fresh=inf
+  get_cube $up_path || return 1
+  if [[ -f $cube/cube-vars ]]; then
+    source $cube/cube-vars || fail
+  fi
+  if [[ $default_fresh != inf ]]; then
+    local default_fresh_seconds
+    convert_to_seconds $default_fresh default_fresh_seconds || fail
+    if [[ $min_upstream_freshness == inf || $default_fresh_seconds -lt $min_upstream_freshness ]]; then
+      min_upstream_freshness=$default_fresh_seconds
+    fi
+  fi
+  local dep
+  begin_for dep in $(find1 ...)
+end_function
+handle_return
 }
 
 cube_validate() {
@@ -549,28 +497,6 @@ done
 return 0
 }
 
-# input: dim dim_file
-# output: expand_members expand_member
-get_dim_functions() {
-
-  if [[ ! -f "$dim_file" ]]; then
-    err "Internal error: cube_update_pivot was called with an index which doesn't corrospond with a dimension file: $dim_file"
-    return 1
-  fi
-
-  # set these to a basic default
-  expand_member() {
-    eval "$result_var='$value'"
-  }
-
-  expand_members() {
-    eval "$result_var='$value'"
-  }
-
-  source $dim_file
-
-}
-
 cell_validate() {
 
 begin_function
@@ -589,7 +515,8 @@ handle_return
 
 init_context() {
 
-  # override this when you need a different default
+  # default_fresh should be set in cube-vars file instead of cube-context, since cube-context is
+  #   only read during an update, and cube-vars can be checked during a needs-update check
   # inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
   # 1w means refresh if it's older than a week.
   default_fresh=inf \
@@ -671,6 +598,281 @@ begin_function
       ;;
     esac
   done
+
+end_function
+handle_return
+
+}
+
+cell_setup_up() {
+
+trace $log_trace "Setting up 'up' folder for cell"
+begin_function
+
+  local dep dep_name target cell_ids cell_id group
+  begin_for group in $(find1 $cube_up_path -name '*?'); doo
+    dep_name=${dep##*/}
+    target=$up_path/$dep_name
+    if [[ -e $target ]]; then
+      rm -r $target || fail
+    fi
+    mkdir $target || fail
+    cell_setup_up_deps $group $target || fail
+  end_for
+
+  cell_setup_up_deps $cube_up_path $up_path || fail
+
+end_function
+handle_return
+
+}
+
+cell_setup_up_deps() {
+
+begin_function_flat
+
+  local from=$1; shift
+  local to=$1
+  
+  local dep dep_name target cell_ids cell_id group
+  begin_for dep in $(find1 $from -not -name '*?'); doo
+    if [[ ! -f $dep/cube-context ]]; then
+      err "$dep is not a cube"
+      fail1
+    fi
+    dep_name=${dep##*/}
+    target=$to/$dep_name
+    if [[ -e $target ]]; then
+      rm -r $target || fail
+    fi
+    mkdir $target || fail
+    get_cell_ids $dep || fail
+    begin_for cell_id in $cell_ids; do
+      local real_dep=$(realpath $dep)
+      if [[ ! -d $real_dep ]]; then
+        err "Invalid link: $real_dep found from $dep. It must point to a cube directory."
+        fail1
+      fi
+      ln -s $real_dep/cell/$cell_id $target/ || fail
+    end_for
+  end_for
+
+end_function_flat
+handle_return
+
+}
+
+# inputs: $1 (cube)
+# outputs: cell_ids
+get_cell_ids() {
+begin_function
+  local current_cube=$1 
+  local short_cube=${current_cube##*/work/}
+  cell_ids=
+  local dimensions localize_dim_vars dim_string cell_id
+  gather_dims || fail
+  if [[ ${#dimensions[*]} -eq 0 ]]; then
+    cell_ids=only
+    succeed
+  else
+    eval "$localize_dim_vars" || fail
+    get_cell_ids_pivot 0 || fail
+  fi
+  cell_ids=${cell_ids# }
+end_function
+handle_return
+}
+
+# inputs: $1 (dim index)
+# outputs: cell_ids
+get_cell_ids_pivot() {
+begin_function_flat
+  local index=$1 \
+  local dim=${dimensions[$index]} \
+  local dim_folder=${dimension_folders[$index]} \
+  local values
+  get_dim_functions || fail
+  expand_values || fail
+  get_cell_ids_pivot_values || fail
+end_function_flat
+handle_return
+}
+
+# inputs: short_cube current_cube
+# outputs: dimensions dim_string
+gather_dims() {
+trace $log_trace "Gathering dimensions for $short_cube"
+local dimension dimension_file dimension_plural
+localize_dim_vars=
+dimensions=()
+dim_string=
+begin_function
+  begin_for dimension_file in \
+    $(find1 $current_cube/dim -type f | sort); doo
+    dimension=${dimension_file##*/}
+    dimension=${dimension##*-}
+    if [[ ! "$dimension" =~ ^[a-zA-Z0-9_]+$ ]]; then
+      err "Invalid dimension name [$dimension] derived from folder $dimension_file"
+      err "Dimensions must only have alphanumeric or _ characters in it."
+      fail1
+    fi
+    dimension_plural=${dimension}s
+    dimensions+=( $dimension )
+    dimension_files+=( "$dimension_file" )
+    localize_dim_vars+="local $dimension=\${$dimension:-} $dimension_plural=\${$dimension_plural:-}; "
+    if [[ "${!dimension_plural:-}" ]]; then
+      dim_string+="$dimension_plural=[ ${!dimension_plural:-} ] "
+    else
+      dim_string+="$dimension=${!dimension:-} "
+    fi
+  end_for
+end_function
+handle_return
+}
+
+# input: dim
+# output: values 
+expand_values() {
+trace $log_trace "Expanding values for $dim"
+begin_function
+
+  local dims=${dim}s
+  local new_value_list= new_values new_value value
+  values=( ${!dim} )
+
+  if [[ ! "${values:-}" ]]; then
+
+    # handle plural dim
+    values=( ${!dims} )
+
+    if [[ ! "${values:-}" ]]; then
+
+      # see if a default value is defined
+      value= result_var=new_values expand_member || fail
+      if [[ ! "${new_values:-}" ]]; then
+        err "Missing value for dimension $dim"
+        fail1
+      fi
+
+    else
+
+      begin_for value in "${values[@]}"; doo
+        value=$value result_var=new_values expand_members || fail
+        if [[ ! "${new_values:-}" ]]; then
+          value=$value result_var=new_values expand_member || fail
+          if [[ ! "${new_values:-}" ]]; then
+            err "Dim $dims has invalid value '$value'"
+            fail1
+          fi
+        fi
+      end_for
+
+    fi
+
+    for new_value in $new_values; do
+      if [[ ! $new_value_list =~ \ $new_value\  ]]; then
+        new_value_list+=" $new_value "
+      fi
+    done
+
+  else
+
+    # handle singular dim
+    if [[ "${#values[*]}" -gt 1 ]]; then
+      err "Too many values for a singular dim $dim." \
+        "Use plural dim $dims if you intend to have multiple values."
+      fail1
+    fi
+
+    local value=$values new_values
+
+    value=$value result_var=new_value expand_member || fail
+    if [[ ! "$new_value" ]]; then
+      err "Dim $dim has invalid value '$value'"
+      fail1
+    fi
+
+    new_value_list+="$new_value"
+
+  fi
+
+  values=( $new_value_list )
+
+end_function
+handle_return
+}
+
+# input: dim dim_file
+# output: expand_members expand_member
+get_dim_functions() {
+
+  if [[ ! -f "$dim_file" ]]; then
+    err "Internal error: cube_update_pivot was called with an index which doesn't corrospond with a dimension file: $dim_file"
+    return 1
+  fi
+
+  # set these to a basic default
+  expand_member() {
+    eval "$result_var='$value'"
+  }
+
+  expand_members() {
+    eval "$result_var='$value'"
+  }
+
+  source $dim_file
+
+}
+
+# inputs: values
+# outputs: cell_ids
+get_cell_ids_pivot_values() {
+begin_function_flat
+  begin_for value in "${values[@]}"; doo
+    eval "$dim='$value'"
+    if [[ ${#dimensions[*]} -gt $((index + 1)) ]]; then
+      get_cell_ids_pivot $((index + 1)) || fail
+    else
+      get_cell_id || fail
+      cell_ids+=" $cell_id"
+    fi
+  end_for
+end_function_flat
+handle_return
+}
+
+# input: dimensions 
+# output: cell_id, dim_string
+get_cell_id() {
+
+local dim dims cell_dim_part= value hash 
+
+trace $log_trace "Computing cell id for $short_cube"
+begin_function
+  
+  for dim in "${dimensions[@]}"; do
+    value="${!dim}"
+    dim_string+="$dim=$value "
+    if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
+      cell_dim_part+="$value,"
+    else
+      hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
+      cell_dim_part+="${hash:0:8},"
+    fi
+  done
+
+  if [[ "$cell_dim_part" ]]; then
+    cell_dim_part=${cell_dim_part%,}
+    cell_id=/$cell_dim_part
+    trace $log_trace "Cell id calculated: $cell_id"
+    if [[ $high_volume_cube == t ]]; then
+      hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
+      hash=${hash:0:2}
+      cell_id=/$hash/$cell_dim_part
+    fi
+  else
+    cell_id=only
+  fi
 
 end_function
 handle_return
