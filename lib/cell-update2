@@ -268,24 +268,249 @@ end_function_flat
 handle_return
 }
 
-wait_for_low_load() {
-local cube_max_load=${cube_max_load:-10}
-local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
-local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
-if [[ $current_load -gt $cube_max_load ]]; then
-  trace $log_warn "Load average is too high ($current_load > $cube_max_load)," \
-    "waiting until things cool down first."
-  local time_waited=0
-  while [[ $current_load -gt $cube_max_load ]]; do
-    current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
-    sleep 5; let time_waited+=5
-    if [[ "$cube_load_wait_timeout" -gt 0 && $time_waited -ge $cube_load_wait_timeout ]]; then
-      err "Timed out waiting for cpu load to be low enough. Aborting"
-      return 1
+# guaranteed to run in a subshell
+cell_update() {
+
+lock_timeout=${lock_timeout:-30} \
+
+debug_path= cube_in_path= up_path= down_path= lock_path= cube_log_path= \
+log_path= status_path= out_path= tmp_path= cleanup_on_exit= \
+cell_id= dim_string= cell_path=
+
+setup_exit_trap
+
+get_cell_id || return 1
+trace $log_info "Updating cell $short_cube $dim_string"
+
+begin_function
+
+  local start_time=$EPOCHSECONDS
+  cell_validate || fail
+  cell_feature_setup || fail
+  if [[ "$cube_up_path" && "$cube_up_path" -nt "$up_path" ]]; then
+    if [[ ! -d $up_path ]]; then
+      mkdir $up_path || fail
     fi
+    cell_setup_up || fail
+  fi
+
+  local maybe_deps_changed=t \
+        local_inputs_changed=t \
+        not_fresh=t \
+        has_lock=f \
+        update_successful=f \
+        need_to_execute_update=t \
+        cell_was_changed=f
+
+  does_cell_need_update || fail
+  if [[ $maybe_deps_changed == t || $local_inputs_changed == t || $not_fresh == t ]]; then
+    local consecutive_failures=${consecutive_failures:-0} \
+          upstream_changed=f
+    cell_pre_update || fail
+    if [[ $need_to_execute_update == t ]]; then
+      cell_execute_update || fail
+    fi
+    cell_post_update || fail
+    # TODO if change made, push to down, updating up and needs-update folders
+  else
+    trace $log_trace "Update not needed"
+    update_successful=t
+  fi
+
+  if [[ $update_successful == t ]]; then
+    rm $out_path/needs-update || fail
+    # TODO link result to parent_dep
+  fi
+  # TODO use view instead
+  cell_handle_output || fail
+
+end_function
+handle_return
+
+}
+
+cell_execute_update() {
+begin_function
+  if type execute_update &>/dev/null; then
+    new_stage execute-update || fail
+    local rc delay=$retry_delay
+    update_successful=f
+    for ((retry=0; retry < retry_max; retry++)); do
+      execute_update; rc=$?
+      case $rc in
+        $failed_but_can_retry)
+          [[ $retry -lt $((retry_max-1)) ]] && trace $log_info "execute_update failed. Will retry"
+        ;;
+        $everythings_fine)
+          update_successful=t
+          break
+        ;;
+        *)
+          trace $log_warn "execute_update returned $rc"
+          break
+        ;;
+      esac
+      trace $log_info "Waiting $delay seconds before retrying."
+      sleep $delay
+      let 'delay *= retry_scale'
+    done
+  else
+    update_successful=t
+  fi
+end_function
+handle_return
+}
+
+cell_pre_update() {
+
+begin_function
+
+  if [[ "$log_path" ]]; then
+    tee_output_to $log_path/update-log-current
+  fi
+
+  new_stage begin-update || fail
+  mkdir -p $out_path.new || fail
+
+  if [[ $maybe_deps_changed == t && "$up_path" ]]; then
+    new_stage update-deps || fail
+    cell_update_deps || fail
+  fi
+
+  if [[ $upstream_changed == t || $local_inputs_changed == t || $not_fresh == t ]]; then
+    need_to_execute_update=t
+  fi
+
+  if [[ $need_to_execute_update == t ]]; then
+    if [[ "$status_path" ]]; then
+
+      [[ -f "$status_path/persist" ]] && { source "$status_path/persist" || fail; }
+
+      if [[ "${update_id:-}" ]]; then
+        let update_id++
+      else
+        update_id=1000
+      fi
+
+      maybe_apply_cooldown || fail
+      write_persist_file || fail
+
+    else
+      update_id=1000
+    fi
+
+    if [[ "$lock_path" && $has_lock == f ]]; then
+      trace $log_trace "Getting write lock for cell"
+      new_stage write-lock-cell || fail
+      folder_to_lock=$lock_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
+      has_lock=t
+    fi
+
+    if [[ "$out_path" ]]; then
+      if [[ -d $out_path.new ]]; then 
+        rm -r $out_path.new || fail
+      fi
+      mkdir $out_path.new || fail
+    fi
+  fi
+
+end_function
+handle_return
+
+}
+
+cell_update_deps() {
+trace $log_trace "Updating upstream cells of $short_cube"
+begin_function
+
+  local dep 
+  local parallel=f processes=
+
+  local parallel_deps=( $(
+    find "$up_path" -type d \
+      -not -regex "$up_path/[0-9]+-.*" \
+      | sort) )
+
+  local serial_deps=( $(
+    find "$up_path" -type d \
+      -regex "$up_path/[0-9]+-.*" \
+      | sort) )
+
+  local total_parallel=${#parallel_deps[*]}
+  [[ "${serial_deps:-}" ]] && let total_parallel++
+
+  if [[ $total_parallel -gt 1 && $parallel_execution == t ]]; then
+    parallel=t
+    wait_for_low_load || fail
+  fi
+
+  begin_for dep in ${parallel_deps[*]}; doo
+    local dep_name=${dep##*/}
+    if [[ $parallel == t ]]; then
+      update_dep "$dep" &
+      processes+=" $!"
+    else
+      update_dep "$dep" || fail
+    fi
+  end_for
+
+  if [[ $parallel == t ]]; then
+    cell_update_deps_serial &
+    processes+=" $!"
+  else
+    cell_update_deps_serial || fail
+  fi
+
+  wait_for_sub_processes || fail
+
+  begin_for dep in ${serial_deps[*]} ${parallel_deps[*]}; doo
+    handle_cube_reply $dep || fail
+  end_for
+
+end_function
+handle_return
+}
+
+cell_update_deps_serial() {
+for dep in ${serial_deps[*]}; do
+  update_dep "$dep" || return 1
+done
+return 0
+}
+
+handle_cube_reply() {
+local dep=$1 cell multi dep2
+if [[ $dep == ${dep%?} ]]; then
+  # not multipath
+  handle_cube_reply_cells $dep || return 1
+else
+  # multipath dep
+  for dep2 in $(find1 $dep); do
+    handle_cube_reply_cells $dep2 || return 1
   done
 fi
 return 0
+}
+
+handle_cube_reply_cells() {
+for cell in $(find1 $dep); do
+  if [[ -f $cell/out/cell-context ]]; then
+    source $cell/out/cell-context || return 1
+  fi
+  if [[ $cell/out -nt $out_path ]]; then
+    upstream_changed=t
+  fi
+done
+return 0
+}
+
+update_dep() {
+local dep=$1
+local to_delete=$dep/*
+if [[ "$to_delete" ]]; then
+  rm $to_delete || return 1
+fi
+parent_dep=$dep view= fresh= cube_update $dep || return 1
 }
 
 # input: parallel processes
@@ -317,123 +542,83 @@ fi
 return 0
 }
 
-# guaranteed to run in a subshell
-cell_update() {
-
-lock_timeout=${lock_timeout:-30} \
-
-debug_path= cube_in_path= up_path= down_path= lock_path= cube_log_path= \
-log_path= status_path= out_path= tmp_path= cleanup_on_exit= \
-cell_id= dim_string= cell_path=
-
-setup_exit_trap
-
-get_cell_id || return 1
-trace $log_info "Updating cell $short_cube $dim_string"
-
-begin_function
-
-  local start_time=$EPOCHSECONDS
-  cell_validate || fail
-  cell_feature_setup || fail
-  if [[ "$cube_up_path" && "$cube_up_path" -nt "$up_path" ]]; then
-    cell_setup_up || fail
-  fi
-
-  local needs_update has_lock=f update_successful
-
-  does_cell_need_update || fail
-  if [[ $needs_update == t ]]; then
-    if [[ $quick_check == t ]]; then
-      trace $log_trace "Quick check finished: Update needed"
-      return_value=$update_needed
-      break_out=t
-      break
+wait_for_low_load() {
+local cube_max_load=${cube_max_load:-10}
+local cube_load_wait_timeout=${cube_load_wait_timeout:-600}
+local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
+if [[ $current_load -gt $cube_max_load ]]; then
+  trace $log_warn "Load average is too high ($current_load > $cube_max_load)," \
+    "waiting until things cool down first."
+  local time_waited=0
+  while [[ $current_load -gt $cube_max_load ]]; do
+    current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
+    sleep 5; let time_waited+=5
+    if [[ "$cube_load_wait_timeout" -gt 0 && $time_waited -ge $cube_load_wait_timeout ]]; then
+      err "Timed out waiting for cpu load to be low enough. Aborting"
+      return 1
     fi
-
-    local consecutive_failures=${consecutive_failures:-0}
-    cell_pre_update || fail
-    # TODO Where to put this
-    mkdir -p $out_path.new || fail
-    cell_execute_update || fail
-    cell_post_update || fail
-
-  else
-    if [[ $quick_check == t ]]; then
-      trace $log_trace "Quick check finished: Update not needed"
-    else
-      trace $log_trace "Update not needed"
-    fi
-    update_successful=t
-  fi
-
-  cell_handle_output || fail
-
-end_function
-handle_return
-
+  done
+fi
+return 0
 }
 
 does_cell_need_update() {
 trace $log_trace "Checking if update is needed"
 begin_function
 
-  needs_update=t
-
-  if [[ $fresh -eq 0 ]]; then
-    succeed
-  fi
-
   if [[ ! -d "$out_path" ]]; then
     trace $log_trace "Out path is missing, needs update"
-    succeed
+  elif [[ -n "$in_path" && "$in_path" -nt "$out_path" ]]; then
+    trace $log_trace "Local changes were made, needs update"
+  elif [[ $current_cube/cube-context -nt $out_path ]]; then
+    trace $log_trace "cube-context has changed, needs update"
+  else
+    local_inputs_changed=f
   fi
 
-  if [[ -n "$in_path" && "$in_path" -nt "$out_path" ]]; then
-    trace $log_trace "Local changes were made, needs update"
-    succeed
-  fi
 
   if [[ -n "$up_path" && ( "$up_path" -nt "$out_path" || -f "$up_path/needs-update" ) ]]; then
     trace $log_trace "Upstream changes were made, needs update"
-    succeed
+  else
+    maybe_deps_changed=f
   fi
 
-  if [[ $fresh != inf ]]; then
+  if [[ $fresh != inf && $fresh -gt 0 ]]; then
+
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
     local out_timestamp=$(date -r $out_path/freshness +%s)
+
     if [[ $out_timestamp -lt $fresh_cutoff ]]; then
+
       trace $log_trace "Freshness requirement ($fresh) not met, needs update"
-      succeed
-    fi
 
-    local min_upstream_freshness=inf
-    if [[ ! -f $out_path/min-upstream-freshness ]]; then
-      derive_min_upstream_freshness $up_path || fail
-      echo "min_upstream_freshness=$min_upstream_freshness" >$out_path/min-upstream-freshness || fail
     else
-      source $out_path/min-upstream-freshness || fail
-    fi
 
-    if [[ $min_upstream_freshness != inf ]]; then
-      
-      fresh_cutoff=$((EPOCHSECONDS-min_upstream_freshness))
-      if [[ $out_timestamp -lt $fresh_cutoff ]]; then
-        trace $log_trace "Freshness requirement ($fresh) not met because of upstream, needs update"
-        succeed
+      local min_upstream_freshness=inf
+
+      if [[ ! -f $out_path/min-upstream-freshness ]]; then
+        derive_min_upstream_freshness $up_path || fail
+        echo "min_upstream_freshness=$min_upstream_freshness" >$out_path/min-upstream-freshness || fail
+      else
+        source $out_path/min-upstream-freshness || fail
+      fi
+
+      if [[ $min_upstream_freshness != inf ]]; then
+        
+        fresh_cutoff=$((EPOCHSECONDS-min_upstream_freshness))
+        if [[ $out_timestamp -lt $fresh_cutoff ]]; then
+          trace $log_trace "Freshness requirement ($fresh) not met because of upstream, needs update"
+        else
+          not_fresh=f
+        fi
+
       fi
 
     fi
-  fi
 
-  if [[ $current_cube/cube-context -nt $out_path ]]; then
-    trace $log_trace "cube-context has changed, needs update"
-    succeed
   fi
-
-  needs_update=f
 
 end_function
 handle_return
@@ -453,16 +638,16 @@ begin_function
   fi
   get_cube $up_path || fail
 
+  if [[ -f $cube/cube-vars ]]; then
+    source $cube/cube-vars || fail
+  fi
+
   if [[ -f $out_path/min-upstream-freshness ]]; then
     local prev=$min_upstream_freshness
     source $out_path/min-upstream-freshness || fail
     min $min_upstream_freshness $prev || fail
     min_upstream_freshness=$result
     succeed
-  fi
-
-  if [[ -f $cube/cube-vars ]]; then
-    source $cube/cube-vars || fail
   fi
 
   if [[ $default_fresh != inf ]]; then
