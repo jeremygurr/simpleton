@@ -178,37 +178,11 @@ return 0
 
 }
 
-execute_update_decrypt() {
-  begin_function
-    if [[ "$cube_in_path" ]]; then
-      local need_decrypt ofile file files=
-      if [[ $cube_in_path ]]; then
-        files+=" $(find -L $cube_in_path -name '*.safe' -type f)"
-      fi
-      begin_for ofile in $files; doo
-        file=${ofile#$cube_in_path}
-        file=${file#/}
-        file=${file%.safe}
-        local parent_folder=${file%/*}
-        if [[ "$parent_folder" != "$file" ]]; then
-          mkdir -p $out_path.new/$parent_folder || fail
-        fi
-        if [[ -f $out_path/$file && $out_path/$file -nt $ofile ]]; then
-          ln $out_path/$file $out_path.new/$file || fail
-        else
-          from="$ofile" to="$out_path.new/$file" decrypt_file || fail
-        fi
-      end_for
-    fi
-  end_function
-  handle_return
-}
-
 execute_update_copy() {
-  if [[ "$cube_in_path" && "$out_path" ]]; then
-    rsync -a --exclude='*.safe' $cube_in_path/ $out_path.new/ || return 1
-  fi
-  return 0
+if [[ "$cube_in_path" && "$out_path" ]]; then
+  rsync -a --exclude='*.safe' $cube_in_path/ $out_path.new/ || return 1
+fi
+return 0
 }
 
 # should only be called if there are dimensions remaining to be pivoted. 
@@ -270,7 +244,7 @@ cell_update() {
 
 lock_timeout=${lock_timeout:-30} \
 
-debug_path= cube_in_path= up_path= down_path= lock_path= cube_log_path= \
+debug_path= in_path= cube_in_path= up_path= cube_up_path= down_path= lock_path= cube_log_path= \
 log_path= status_path= cube_status_path= out_path= tmp_path= cleanup_on_exit= \
 cell_id= dim_string= cell_path=
 
@@ -499,6 +473,7 @@ return 0
 }
 
 cell_execute_update() {
+trace $log_info "Executing update"
 begin_function
   if type execute_update &>/dev/null; then
     new_stage execute-update || fail
@@ -539,7 +514,11 @@ begin_function
   fi
 
   new_stage begin-update || fail
-  mkdir -p $out_path.new || fail
+
+  if [[ -d $out_path.new ]]; then 
+    rm -r $out_path.new || fail
+  fi
+  mkdir $out_path.new || fail
 
   if [[ $maybe_deps_changed == t && "$up_path" ]]; then
     new_stage update-deps || fail
@@ -574,17 +553,40 @@ begin_function
       has_lock=t
     fi
 
-    if [[ "$out_path" ]]; then
-      if [[ -d $out_path.new ]]; then 
-        rm -r $out_path.new || fail
-      fi
-      mkdir $out_path.new || fail
-    fi
   fi
 
 end_function
 handle_return
 
+}
+
+maybe_apply_cooldown() {
+begin_function
+  # If cell recently failed, wait until cooldown period is complete
+  if [[ $consecutive_failures -gt 0 ]]; then
+    get_cooldown_delay || fail
+    if [[ $cooldown_delay -gt 0 ]]; then
+      trace $log_warn "Too many errors have occurred, waiting for cooldown period of $cooldown_delay seconds"
+      new_stage cooldown || fail
+      sleep $cooldown_delay
+    fi
+  else
+    cooldown_delay=1
+  fi
+end_function
+handle_return
+}
+
+new_stage() {
+local stage=$1
+if [[ "${previous_stage:-}" ]]; then
+  trace $log_trace "Finished stage $previous_stage" \
+    "in $(echo "$EPOCHSECONDS - $stage_start_time" | bc) seconds"
+fi
+[[ "$log_path" ]] && echo "$stage $EPOCHSECONDS" >>"$log_path/stage-timing-current"
+trace $log_trace "Starting stage $stage"
+stage_start_time=$EPOCHSECONDS
+previous_stage=$stage
 }
 
 write_cube_persist_file() {
@@ -795,18 +797,20 @@ begin_function
       fi
 
       if [[ $min_upstream_freshness != inf ]]; then
-        
         fresh_cutoff=$((EPOCHSECONDS-min_upstream_freshness))
         if [[ $out_timestamp -lt $fresh_cutoff ]]; then
           trace $log_trace "Freshness requirement ($fresh) not met because of upstream, needs update"
         else
           not_fresh=f
         fi
-
+      else
+        not_fresh=f
       fi
 
     fi
 
+  else
+    not_fresh=f
   fi
 
 end_function
@@ -968,18 +972,56 @@ init_context() {
 
 }
 
+execute_update_decrypt() {
+begin_function
+  if [[ "$cube_in_path" ]]; then
+    execute_update_decrypt_folder $cube_in_path || fail
+  fi
+  if [[ "$in_path" ]]; then
+    execute_update_decrypt_folder $in_path || fail
+  fi
+end_function
+handle_return
+}
+
+execute_update_decrypt_folder() {
+local path=$1
+begin_function
+  local need_decrypt ofile file files=
+  files+=" $(find -L $path -name '*.safe' -type f)"
+  begin_for ofile in $files; doo
+    file=${ofile#$path/}
+    file=${file%.safe}
+    local parent_folder=${file%/*}
+    if [[ "$parent_folder" && "$parent_folder" != "$file" ]]; then
+      mkdir -p $out_path.new/$parent_folder || fail
+    fi
+    if [[ -f $out_path/$file && $out_path/$file -nt $ofile ]]; then
+      ln $out_path/$file $out_path.new/$file || fail
+    else
+      from="$ofile" to="$out_path.new/$file" decrypt_file || fail
+    fi
+  end_for
+end_function
+handle_return
+}
+
 cell_feature_setup() {
 
 begin_function
 
   cube_path=$current_cube
-  cell_path=$cube_path/cell/${cell_id}
+  cell_path=$cube_path/cell/$cell_id
 
   # out path must always be there
   out_path=$cell_path/out
 
   if [[ -d $cube_path/in ]]; then
     cube_in_path=$cube_path/in
+  fi
+
+  if [[ -d $cube_path/cell-in/$cell_id ]]; then
+    in_path=$cube_path/cell-in/$cell_id
   fi
 
   if [[ -d $cube_path/up ]]; then
