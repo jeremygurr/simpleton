@@ -311,22 +311,36 @@ begin_function
       cell_execute_update || fail
     fi
     cell_post_update || fail
-    # TODO if change made, push to down, updating up and needs-update folders
   else
     trace $log_trace "Update not needed"
     update_successful=t
   fi
 
-  if [[ $update_successful == t ]]; then
-    rm $out_path/needs-update || fail
-    # TODO link result to parent_dep
-  fi
-  # TODO use view instead
   cell_handle_output || fail
 
 end_function
 handle_return
 
+}
+
+cell_handle_output() {
+begin_function
+  if [[ $update_successful == t ]]; then
+    case $view in
+      default)
+        if [[ -f $out_path/error ]]; then
+          cat $out_path/error || fail
+        fi
+        if [[ -f $out_path/output ]]; then
+          cat $out_path/output || fail
+        fi
+      ;;
+    esac
+  else
+    fail1
+  fi
+end_function
+handle_return
 }
 
 cell_post_update() {
@@ -410,9 +424,9 @@ begin_function
     local success_string=good
     [[ $update_successful == f ]] && success_string=bad
     echo "update_id=$update_id start=$start_time duration=$duration_of_update from=$called_from" \
-      "result=$success_string" >>$log_path/history || fail
+      "result=$success_string changed=$cell_was_changed" >>$log_path/history || fail
     echo "update_id=$update_id start=$start_time duration=$duration_of_update from=$called_from" \
-      "result=$success_string $dim_string" >>$cube_log_path/history || fail
+      "result=$success_string changed=$cell_was_changed $dim_string" >>$cube_log_path/history || fail
 
     untee_output || fail
 
@@ -431,15 +445,23 @@ begin_function
 
   fi
 
-  if [[ "$parent_dep" ]]; then
-    if [[ -e $parent_dep/${cell_path##*/} ]]; then
-      err "Target already exists for link: $parent_dep/${cell_path##*/}"
-      fail1
+  if [[ $update_successful == t ]]; then
+    if [[ "$parent_dep" ]]; then
+      if [[ -e $parent_dep/${cell_path##*/} ]]; then
+        err "Target already exists for link: $parent_dep/${cell_path##*/}"
+        fail1
+      fi
+      ln -s $cell_path $parent_dep/ || fail
     fi
-    ln -s $cell_path $parent_dep/ || fail
+    rm $out_path/upstraem-changed fail
+    if [[ $cell_was_changed == t ]]; then
+      trace $log_trace "Notifying downstream cells of change"
+      notify_downstream_of_change $cell_path || fail
+    fi
   fi
 
   if [[ $has_lock == t ]]; then
+    trace $log_trace "Releasing lock $lock_path"
     folder_to_unlock=$lock_path pid_file=$lock_path/pid folder_unlock || fail
   fi
 
@@ -448,16 +470,32 @@ handle_return
 
 }
 
+notify_downstream_of_change() {
+local cell=$1 down_cell
+if [[ -d $cell/down ]]; then
+  for down_cell in $(find1 $cell/down); do
+    if [[ ! -f $down_cell/out/upstream-changed ]]; then
+      touch $down_cell/out/upstream-changed || return 1
+      # recursive
+      notify_downstream_of_change $down_cell || return 1
+    fi
+  done
+fi
+return 0
+}
+
 read_persist_file() {
 if [[ -e $status_path/persist ]]; then
   source $status_path/persist || fail
 fi
+return 0
 }
 
 read_cube_persist_file() {
 if [[ -e $cube_status_path/persist ]]; then
   source $cube_status_path/persist || fail
 fi
+return 0
 }
 
 cell_execute_update() {
@@ -728,7 +766,7 @@ begin_function
   fi
 
 
-  if [[ -n "$up_path" && ( "$up_path" -nt "$out_path" || -f "$up_path/needs-update" ) ]]; then
+  if [[ -n "$up_path" && ( "$up_path" -nt "$out_path" || -f $out_path/upstraem-changed ]]; then
     trace $log_trace "Upstream changes were made, needs update"
   else
     maybe_deps_changed=f
