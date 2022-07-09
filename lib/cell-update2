@@ -274,7 +274,7 @@ cell_update() {
 lock_timeout=${lock_timeout:-30} \
 
 debug_path= cube_in_path= up_path= down_path= lock_path= cube_log_path= \
-log_path= status_path= out_path= tmp_path= cleanup_on_exit= \
+log_path= status_path= cube_status_path= out_path= tmp_path= cleanup_on_exit= \
 cell_id= dim_string= cell_path=
 
 setup_exit_trap
@@ -327,6 +327,137 @@ begin_function
 end_function
 handle_return
 
+}
+
+cell_post_update() {
+
+begin_function
+
+  new_stage complete || fail
+  local end_time=$EPOCHSECONDS
+  local duration_of_update=$((end_time-start_time))
+
+  if [[ "$status_path" ]]; then
+    local avg_duration_short=$duration_of_update avg_duration_long=$duration_of_update
+    local avg_failure_rate_short=0 avg_failure_rate_long=0
+    local cube_avg_duration_short=$duration_of_update cube_avg_duration_long=$duration_of_update
+    local cube_avg_failure_rate_short=0 cube_avg_failure_rate_long=0
+    read_persist_file || fail
+    read_cube_persist_file || fail
+  fi
+
+  if [[ $update_successful == t ]]; then
+
+    trace $log_info "Update successful."
+
+    if [[ -d "$out_path.new" ]]; then
+
+      if [[ -d "$out_path" ]]; then
+        if files_are_different -r "$out_path" "$out_path.new" >/dev/null; then
+          [[ -d "$out_path.old" ]] && rm -r "$out_path.old"
+          mv "$out_path" "$out_path.old" || fail
+          mv "$out_path.new" "$out_path" || fail
+          cell_was_changed=t
+        else
+          rm -r "$out_path.new" || fail
+        fi
+      else
+        mv "$out_path.new" "$out_path" || fail
+        cell_was_changed=t
+      fi
+
+      touch -d @$start_time $out_path/freshness || fail
+
+    fi
+
+    if [[ "$tmp_path" && -d "$tmp_path" ]]; then
+      rm -r "$tmp_path" || fail
+    fi
+
+    consecutive_failures=0
+
+    if [[ "$status_path" ]]; then
+      let 'avg_duration_short = (avg_duration_short * 9 + duration_of_update) / 10'
+      let 'avg_duration_long = (avg_duration_long * 99 + duration_of_update) / 100'
+      let 'avg_failure_rate_short = (avg_failure_rate_short * 9) / 10'
+      let 'avg_failure_rate_long = (avg_failure_rate_long * 99) / 100'
+      let 'cube_avg_duration_short = (cube_avg_duration_short * 9 + duration_of_update) / 10'
+      let 'cube_avg_duration_long = (cube_avg_duration_long * 99 + duration_of_update) / 100'
+      let 'cube_avg_failure_rate_short = (cube_avg_failure_rate_short * 9) / 10'
+      let 'cube_avg_failure_rate_long = (cube_avg_failure_rate_long * 99) / 100'
+    fi
+
+  else
+
+    trace $log_warn "Update failed."
+    let consecutive_failures++
+    if [[ "$cube_status_path" ]]; then
+      let 'avg_failure_rate_short = (avg_failure_rate_short * 9 + 1000) / 10'
+      let 'avg_failure_rate_long = (avg_failure_rate_long * 99 + 1000) / 100'
+      let 'cube_avg_failure_rate_short = (cube_avg_failure_rate_short * 9 + 1000) / 10'
+      let 'cube_avg_failure_rate_long = (cube_avg_failure_rate_long * 99 + 1000) / 100'
+    fi
+
+  fi
+
+  if [[ "$status_path" ]]; then
+    write_persist_file || fail
+    write_cube_persist_file || fail
+  fi
+
+  if [[ "$log_path" ]]; then
+
+    local success_string=good
+    [[ $update_successful == f ]] && success_string=bad
+    echo "update_id=$update_id start=$start_time duration=$duration_of_update from=$called_from" \
+      "result=$success_string" >>$log_path/history || fail
+    echo "update_id=$update_id start=$start_time duration=$duration_of_update from=$called_from" \
+      "result=$success_string $dim_string" >>$cube_log_path/history || fail
+
+    untee_output || fail
+
+    if [[ "$debug_path" ]]; then
+      mv $log_path/update-log-id-* $debug_path/ &>/dev/null
+      mv $log_path/stage-timing-id-* $debug_path/ &>/dev/null
+    else
+      rm $log_path/update-log-id-* &>/dev/null
+      rm $log_path/stage-timing-id-* &>/dev/null
+    fi
+
+    mv $log_path/update-log-current $log_path/update-log-id-$update_id || fail
+    ln -f $log_path/update-log-id-$update_id $log_path/update-log-last-$success_string || fail
+    mv $log_path/stage-timing-current $log_path/stage-timing-id-$update_id || fail
+    ln -f $log_path/stage-timing-id-$update_id $log_path/stage-timing-last-$success_string || fail
+
+  fi
+
+  if [[ "$parent_dep" ]]; then
+    if [[ -e $parent_dep/${cell_path##*/} ]]; then
+      err "Target already exists for link: $parent_dep/${cell_path##*/}"
+      fail1
+    fi
+    ln -s $cell_path $parent_dep/ || fail
+  fi
+
+  if [[ $has_lock == t ]]; then
+    folder_to_unlock=$lock_path pid_file=$lock_path/pid folder_unlock || fail
+  fi
+
+end_function
+handle_return
+
+}
+
+read_persist_file() {
+if [[ -e $status_path/persist ]]; then
+  source $status_path/persist || fail
+fi
+}
+
+read_cube_persist_file() {
+if [[ -e $cube_status_path/persist ]]; then
+  source $cube_status_path/persist || fail
+fi
 }
 
 cell_execute_update() {
@@ -384,7 +515,7 @@ begin_function
   if [[ $need_to_execute_update == t ]]; then
     if [[ "$status_path" ]]; then
 
-      [[ -f "$status_path/persist" ]] && { source "$status_path/persist" || fail; }
+      read_persist_file || fail
 
       if [[ "${update_id:-}" ]]; then
         let update_id++
@@ -393,7 +524,6 @@ begin_function
       fi
 
       maybe_apply_cooldown || fail
-      write_persist_file || fail
 
     else
       update_id=1000
@@ -417,6 +547,27 @@ begin_function
 end_function
 handle_return
 
+}
+
+write_cube_persist_file() {
+echo "\
+cube_avg_duration_short=$cube_avg_duration_short
+cube_avg_duration_long=$cube_avg_duration_long
+cube_avg_failure_rate_short=$cube_avg_failure_rate_short
+cube_avg_failure_rate_long=$cube_avg_failure_rate_long
+" >$cube_status_path/persist
+}
+
+write_persist_file() {
+echo "\
+update_id=$update_id
+cooldown_delay=${cooldown_delay:-0}
+consecutive_failures=$consecutive_failures
+avg_duration_short=$avg_duration_short
+avg_duration_long=$avg_duration_long
+avg_failure_rate_short=$avg_failure_rate_short
+avg_failure_rate_long=$avg_failure_rate_long
+" >$status_path/persist
 }
 
 cell_update_deps() {
@@ -820,7 +971,9 @@ begin_function
       ;;
       status)
         status_path=$cell_path/status
+        cube_status_path=$cube_path/status
         [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
+        [[ ! -d $cube_status_path ]] && { mkdir $cube_status_path || fail; }
       ;;
       *)
         err "Unknown feature '$feature'"
