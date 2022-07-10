@@ -14,6 +14,11 @@ local short_cube=${current_cube##*/work/}
 
 begin_function_flat
 
+  if [[ ! -f "$current_cube/cube-context" ]]; then
+    err "cube_update called on $short_cube which is not a cube"
+    fail1
+  fi
+
   # decide whether to run in background or in subshell
   if [[ $run_in_background == t ]]; then
     cube_update_inner &
@@ -62,11 +67,6 @@ begin_function
     convert_to_seconds $cube_expiration expiration_minutes || fail
     let expiration_minutes/=60
     find1 $current_cube/cell -mmin +$expiration_minutes -exec rm -r \{\} + || fail
-  fi
-
-  if [[ ! -f "$current_cube/cube-context" ]]; then
-    err "cube_update called on $short_cube which is not a cube"
-    fail1
   fi
 
   cube_validate || fail
@@ -634,13 +634,13 @@ begin_function
   local parallel=f processes=
 
   local parallel_deps=( $(
-    find "$up_path" -type d \
-      -not -regex "$up_path/[0-9]+-.*" \
+    find1 "$cube_up_path" -type d \
+      -not -regex "$cube_up_path/[0-9]+-.*" \
       | sort) )
 
   local serial_deps=( $(
-    find "$up_path" -type d \
-      -regex "$up_path/[0-9]+-.*" \
+    find1 "$cube_up_path" -type d \
+      -regex "$cube_up_path/[0-9]+-.*" \
       | sort) )
 
   local total_parallel=${#parallel_deps[*]}
@@ -711,13 +711,10 @@ done
 return 0
 }
 
+# This performs an update on a dep given a cube dep, not a cell one
 update_dep() {
 local dep=$1
-local to_delete=$dep/*
-if [[ "$to_delete" ]]; then
-  rm $to_delete || return 1
-fi
-parent_dep=$dep view= fresh= cube_update $dep || return 1
+parent_dep=$cell_path view= fresh= cube_update $dep || return 1
 }
 
 # input: parallel processes
@@ -1122,13 +1119,14 @@ begin_function_flat
     fi
     dep_name=${dep##*/}
     target=$to/$dep_name
-    if [[ -e $target ]]; then
-      rm -r $target || fail
-    fi
+    # should be impossible since we delete the up folder before calling this
+    #if [[ -e $target ]]; then
+    #  rm -r $target || fail
+    #fi
     mkdir $target || fail
     get_cell_ids $dep || fail
     local real_dep=$(realpath $dep)
-    if [[ ! -d $real_dep ]]; then
+    if [[ ! -e $real_dep/cube-context ]]; then
       err "Invalid link: $real_dep found from $dep. It must point to a cube directory."
       fail1
     fi
@@ -1176,9 +1174,9 @@ handle_return
 get_cell_ids_pivot() {
 begin_function_flat
   local index=$1 \
+        values
   local dim=${dimensions[$index]} \
-  local dim_folder=${dimension_folders[$index]} \
-  local values
+        dim_file=${dimension_files[$index]} 
   get_dim_functions || fail
   expand_values || fail
   get_cell_ids_pivot_values || fail
