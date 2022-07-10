@@ -56,7 +56,7 @@ begin_function
 
   fresh=${fresh:-$default_fresh}
 
-  if [[ "$cube_expiration" ]]; then
+  if [[ "$cube_expiration" && -d $current_cube/cell ]]; then
     trace $log_trace "Deleting cached data older than $cube_expiration"
     local expiration_minutes
     convert_to_seconds $cube_expiration expiration_minutes || fail
@@ -259,9 +259,10 @@ begin_function
   cell_validate || fail
   cell_feature_setup || fail
   if [[ "$cube_up_path" && "$cube_up_path" -nt "$up_path" ]]; then
-    if [[ ! -d $up_path ]]; then
-      mkdir $up_path || fail
+    if [[ -d $up_path ]]; then
+      rm -r $up_path || fail
     fi
+    mkdir $up_path || fail
     cell_setup_up || fail
   fi
 
@@ -427,7 +428,9 @@ begin_function
       fi
       ln -s $cell_path $parent_dep/ || fail
     fi
-    rm $out_path/upstraem-changed || fail
+    if [[ -f $out_path/upstream-changed ]]; then
+      rm $out_path/upstream-changed || fail
+    fi
     if [[ $cell_was_changed == t ]]; then
       trace $log_trace "Notifying downstream cells of change"
       notify_downstream_of_change $cell_path || fail
@@ -510,7 +513,7 @@ cell_pre_update() {
 begin_function
 
   if [[ "$log_path" ]]; then
-    tee_output_to $log_path/update-log-current
+    tee_output_to $log_path/update-log-current || fail
   fi
 
   new_stage begin-update || fail
@@ -558,6 +561,19 @@ begin_function
 end_function
 handle_return
 
+}
+
+tee_output_to() {
+local target=$1
+exec 1> >(tee "$target")
+exec 2> >(tee -a "$target")
+eval "exec $fd_trace> >(tee -a '$target')"
+}
+
+untee_output() {
+exec 1>&$fd_original_out
+exec 2>&$fd_original_err
+eval "exec $fd_trace>&$fd_original_trace"
 }
 
 maybe_apply_cooldown() {
@@ -852,13 +868,13 @@ begin_function
 
   local group dep
 
-  begin_for group in $(find1 $up_path -name '*?' -type d); doo
+  begin_for group in $(find1 $up_path -name '*\?' -type d); doo
     begin_for dep in $(find1 $group -type d); doo
       derive_min_upstream_freshness_handle_group $dep || fail
     end_for
   end_for
 
-  begin_for dep in $(find1 $up_path -not -name '*?' -type d); doo
+  begin_for dep in $(find1 $up_path -not -name '*\?' -type d); doo
     derive_min_upstream_freshness_handle_group $dep || fail
   end_for
 
@@ -904,13 +920,14 @@ handle_return
 validate_members() {
 local out= i count=${#dimensions[*]} dim dims
 for ((i=0; i<count; i++)); do
-  dim=${dimensions[$i]}
-  dim_file=${dimension_files[$i]}
-  dims=${dim}s
+  local dim=${dimensions[$i]}
+  local dim_file=${dimension_files[$i]}
+  local dims=${dim}s
+  local value=
   get_dim_functions || return 1
   if [[ "${!dim:-}" ]]; then
     value=${!dim} result_var=out expand_member || return 1
-  else
+  elif [[ "${!dims:-}" ]]; then
     value=${!dims} result_var=out expand_members || return 1
   fi
   if [[ ! "$out" ]]; then
@@ -1076,12 +1093,9 @@ trace $log_trace "Setting up 'up' folder for cell"
 begin_function
 
   local dep_name target group
-  begin_for group in $(find1 $cube_up_path -name '*?'); doo
+  begin_for group in $(find1 $cube_up_path -name '*\?'); doo
     dep_name=${group##*/}
     target=$up_path/$dep_name
-    if [[ -e $target ]]; then
-      rm -r $target || fail
-    fi
     mkdir $target || fail
     cell_setup_up_deps $group $target || fail
   end_for
