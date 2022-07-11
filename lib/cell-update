@@ -369,7 +369,7 @@ begin_function
         cell_was_changed=t
       fi
 
-      touch -d @$start_time $out_path/freshness || fail
+      touch -d @$start_time $status_path/freshness || fail
 
     fi
 
@@ -435,8 +435,8 @@ begin_function
   fi
 
   if [[ $update_successful == t ]]; then
-    if [[ -f $out_path/upstream-changed ]]; then
-      rm $out_path/upstream-changed || return 1
+    if [[ -f $status_path/upstream-changed ]]; then
+      rm $status_path/upstream-changed || return 1
     fi
     if [[ $cell_was_changed == t ]]; then
       trace $log_trace "Notifying downstream cells of change"
@@ -794,7 +794,7 @@ begin_function
   fi
 
 
-  if [[ -n "$up_path" && ( "$up_path" -nt "$out_path" || -f $out_path/upstraem-changed ) ]]; then
+  if [[ -n "$up_path" && ( "$up_path" -nt "$out_path" || -f $status_path/upstream-changed ) ]]; then
     trace $log_trace "Upstream changes were made, needs update"
   else
     maybe_deps_changed=f
@@ -807,7 +807,7 @@ begin_function
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
-    local out_timestamp=$(date -r $out_path/freshness +%s)
+    local out_timestamp=$(date -r $status_path/freshness +%s)
 
     if [[ $out_timestamp -lt $fresh_cutoff ]]; then
 
@@ -817,11 +817,11 @@ begin_function
 
       local min_upstream_freshness=inf
 
-      if [[ ! -f $out_path/min-upstream-freshness ]]; then
+      if [[ ! -f $cube_status_path/min-upstream-freshness ]]; then
         derive_min_upstream_freshness $up_path || fail
-        echo "min_upstream_freshness=$min_upstream_freshness" >$out_path/min-upstream-freshness || fail
+        echo "min_upstream_freshness=$min_upstream_freshness" >$cube_status_path/min-upstream-freshness || fail
       else
-        source $out_path/min-upstream-freshness || fail
+        source $cube_status_path/min-upstream-freshness || fail
       fi
 
       if [[ $min_upstream_freshness != inf ]]; then
@@ -861,9 +861,9 @@ begin_function
     source $cube/cube-vars || fail
   fi
 
-  if [[ -f $out_path/min-upstream-freshness ]]; then
+  if [[ -f $cube_status_path/min-upstream-freshness ]]; then
     local prev=$min_upstream_freshness
-    source $out_path/min-upstream-freshness || fail
+    source $cube_status_path/min-upstream-freshness || fail
     min $min_upstream_freshness $prev || fail
     min_upstream_freshness=$result
     succeed
@@ -888,7 +888,7 @@ begin_function
     derive_min_upstream_freshness_handle_group $dep || fail
   end_for
 
-  echo "min_upstream_freshness=$min_upstream_freshness" >$out_path/min-upstream-freshness || fail
+  echo "min_upstream_freshness=$min_upstream_freshness" >$cube_status_path/min-upstream-freshness || fail
 
 end_function
 handle_return
