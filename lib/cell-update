@@ -1059,6 +1059,11 @@ begin_function
     up_path=$cell_path/up
   fi
 
+  status_path=$cell_path/status
+  cube_status_path=$cube_path/status
+  [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
+  [[ ! -d $cube_status_path ]] && { mkdir $cube_status_path || fail; }
+
   # created on demand
   tmp_path=$cell_path/tmp
 
@@ -1078,12 +1083,6 @@ begin_function
         cube_log_path=$cube_path/log
         [[ ! -d $log_path ]] && { mkdir -p $log_path || fail; }
         [[ ! -d $cube_log_path ]] && { mkdir -p $cube_log_path || fail; }
-      ;;
-      status)
-        status_path=$cell_path/status
-        cube_status_path=$cube_path/status
-        [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
-        [[ ! -d $cube_status_path ]] && { mkdir $cube_status_path || fail; }
       ;;
       *)
         err "Unknown feature '$feature'"
@@ -1206,25 +1205,27 @@ localize_dim_vars=
 dimensions=()
 dim_string=
 begin_function
-  begin_for dimension_file in \
-    $(find1 $current_cube/dim -type f | sort); doo
-    dimension=${dimension_file##*/}
-    dimension=${dimension##*-}
-    if [[ ! "$dimension" =~ ^[a-zA-Z0-9_]+$ ]]; then
-      err "Invalid dimension name [$dimension] derived from folder $dimension_file"
-      err "Dimensions must only have alphanumeric or _ characters in it."
-      fail1
-    fi
-    dimension_plural=${dimension}s
-    dimensions+=( $dimension )
-    dimension_files+=( "$dimension_file" )
-    localize_dim_vars+="local $dimension=\${$dimension:-} $dimension_plural=\${$dimension_plural:-}; "
-    if [[ "${!dimension_plural:-}" ]]; then
-      dim_string+="$dimension_plural=[ ${!dimension_plural:-} ] "
-    else
-      dim_string+="$dimension=${!dimension:-} "
-    fi
-  end_for
+  if [[ -d $current_cube/dim ]]; then
+    begin_for dimension_file in \
+      $(find1 $current_cube/dim -type f | sort); doo
+      dimension=${dimension_file##*/}
+      dimension=${dimension##*-}
+      if [[ ! "$dimension" =~ ^[a-zA-Z0-9_]+$ ]]; then
+        err "Invalid dimension name [$dimension] derived from folder $dimension_file"
+        err "Dimensions must only have alphanumeric or _ characters in it."
+        fail1
+      fi
+      dimension_plural=${dimension}s
+      dimensions+=( $dimension )
+      dimension_files+=( "$dimension_file" )
+      localize_dim_vars+="local $dimension=\${$dimension:-} $dimension_plural=\${$dimension_plural:-}; "
+      if [[ "${!dimension_plural:-}" ]]; then
+        dim_string+="$dimension_plural=[ ${!dimension_plural:-} ] "
+      else
+        dim_string+="$dimension=${!dimension:-} "
+      fi
+    end_for
+  fi
 end_function
 handle_return
 }
