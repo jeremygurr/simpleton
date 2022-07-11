@@ -85,17 +85,11 @@ handle_return
 
 load_context() {
 local f=$current_cube
-local logical_parent=${f%/*}
-local physical_parent=$(realpath "$logical_parent")
+local parent=$(realpath "${f%/*}")
 handler_folders=( )
 
-if [[ "${logical_parent##*/work}" != $logical_parent ]]; then
-  if [[ "$physical_parent" != "$logical_parent" ]]; then
-    load_physical_context_before "$physical_parent" || return 1
-    load_logical_context_before "$physical_parent" || return 1
-  else
-    load_physical_context_before "$logical_parent" || return 1
-  fi
+if [[ "${parent##*/work}" != $parent ]]; then
+  load_context_before "$parent" || return 1
 fi
 
 [[ -f "$f/cube-context-before" ]] && source "$f/cube-context-before"
@@ -103,79 +97,32 @@ fi
 [[ -f "$f/cube-context-after" ]] && source "$f/cube-context-after"
 [[ -d "$f/handlers" ]] && handler_folders+=( "$f/handlers" )
 
-if [[ "${logical_parent##*/work}" != $logical_parent ]]; then
-  if [[ "$physical_parent" != "$logical_parent" ]]; then
-    load_logical_context_after "$physical_parent" || return 1
-    load_physical_context_after "$physical_parent" || return 1
-  else
-    load_physical_context_after "$logical_parent" || return 1
-  fi
+if [[ "${parent##*/work}" != $parent ]]; then
+  load_context_after "$parent" || return 1
 fi
 
 return 0
 }
 
-load_physical_context_before() {
+load_context_before() {
 local f=$1 
-local physical_parent=${f%/*}
-if [[ "${physical_parent##*/work}" != $physical_parent ]]; then
-  load_physical_context_before "$physical_parent" || return 1
+local parent=${f%/*}
+if [[ "${parent##*/work}" != $parent ]]; then
+  load_context_before "$parent" || return 1
 fi
 [[ -f "$f/cube-context-before" ]] && source "$f/cube-context-before"
 return 0
 }
 
-load_physical_context_after() {
+load_context_after() {
 local f=$1 
-local physical_parent=${f%/*}
+local parent=${f%/*}
 [[ -f "$f/cube-context-after" ]] && source "$f/cube-context-after"
 [[ -d "$f/handlers" ]] && handler_folders+=( "$f/handlers" )
-if [[ "${physical_parent##*/work}" != $physical_parent ]]; then
-  load_physical_context_after "$physical_parent" || return 1
+if [[ "${parent##*/work}" != $parent ]]; then
+  load_context_after "$parent" || return 1
 fi
 return 0
-}
-
-load_logical_context_before() {
-
-local f=$1 
-local logical_parent=${f%/*}
-local physical_parent=$(realpath "$logical_parent")
-
-if [[ "${logical_parent##*/work}" != $logical_parent ]]; then
-  if [[ "$physical_parent" != "$logical_parent" ]]; then
-    load_physical_context_before "$physical_parent" || return 1
-    load_logical_context_before "$physical_parent" || return 1
-  else
-    load_physical_context_before "$logical_parent" || return 1
-  fi
-fi
-
-[[ -f "$f/cube-context-before" ]] && source "$f/cube-context-before"
-return 0
-
-}
-
-load_logical_context_after() {
-
-local f=$1 
-local logical_parent=${f%/*}
-local physical_parent=$(realpath "$logical_parent")
-
-[[ -f "$f/cube-context-after" ]] && source "$f/cube-context-after"
-[[ -d "$f/handlers" ]] && handler_folders+=( "$f/handlers" )
-
-if [[ "${logical_parent##*/work}" != $logical_parent ]]; then
-  if [[ "$physical_parent" != "$logical_parent" ]]; then
-    load_logical_context_after "$physical_parent" || return 1
-    load_physical_context_after "$physical_parent" || return 1
-  else
-    load_physical_context_after "$logical_parent" || return 1
-  fi
-fi
-
-return 0
-
 }
 
 execute_update_copy() {
