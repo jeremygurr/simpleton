@@ -89,7 +89,7 @@ local logical_parent=${f%/*}
 local physical_parent=$(realpath "$logical_parent")
 handler_folders=( )
 
-if [[ "${logical_parent##*/work/}" =~ .. ]]; then
+if [[ "${logical_parent##*/work}" =~ .. ]]; then
   if [[ "$physical_parent" != "$logical_parent" ]]; then
     load_physical_context_before "$physical_parent" || return 1
     load_logical_context_before "$physical_parent" || return 1
@@ -103,7 +103,7 @@ fi
 [[ -f "$f/cube-context-after" ]] && source "$f/cube-context-after"
 [[ -d "$f/handlers" ]] && handler_folders+=( "$f/handlers" )
 
-if [[ "${logical_parent##*/work/}" =~ .. ]]; then
+if [[ "${logical_parent##*/work}" =~ .. ]]; then
   if [[ "$physical_parent" != "$logical_parent" ]]; then
     load_logical_context_after "$physical_parent" || return 1
     load_physical_context_after "$physical_parent" || return 1
@@ -118,7 +118,7 @@ return 0
 load_physical_context_before() {
 local f=$1 
 local physical_parent=${f%/*}
-if [[ "${physical_parent##*/work/}" =~ .. ]]; then
+if [[ "${physical_parent##*/work}" =~ .. ]]; then
   load_physical_context_before "$physical_parent" || return 1
 fi
 [[ -f "$f/cube-context-before" ]] && source "$f/cube-context-before"
@@ -130,7 +130,7 @@ local f=$1
 local physical_parent=${f%/*}
 [[ -f "$f/cube-context-after" ]] && source "$f/cube-context-after"
 [[ -d "$f/handlers" ]] && handler_folders+=( "$f/handlers" )
-if [[ "${physical_parent##*/work/}" =~ .. ]]; then
+if [[ "${physical_parent##*/work}" =~ .. ]]; then
   load_physical_context_after "$physical_parent" || return 1
 fi
 return 0
@@ -142,7 +142,7 @@ local f=$1
 local logical_parent=${f%/*}
 local physical_parent=$(realpath "$logical_parent")
 
-if [[ "${logical_parent##*/work/}" =~ .. ]]; then
+if [[ "${logical_parent##*/work}" =~ .. ]]; then
   if [[ "$physical_parent" != "$logical_parent" ]]; then
     load_physical_context_before "$physical_parent" || return 1
     load_logical_context_before "$physical_parent" || return 1
@@ -165,7 +165,7 @@ local physical_parent=$(realpath "$logical_parent")
 [[ -f "$f/cube-context-after" ]] && source "$f/cube-context-after"
 [[ -d "$f/handlers" ]] && handler_folders+=( "$f/handlers" )
 
-if [[ "${logical_parent##*/work/}" =~ .. ]]; then
+if [[ "${logical_parent##*/work}" =~ .. ]]; then
   if [[ "$physical_parent" != "$logical_parent" ]]; then
     load_logical_context_after "$physical_parent" || return 1
     load_physical_context_after "$physical_parent" || return 1
@@ -288,11 +288,25 @@ begin_function
     update_successful=t
   fi
 
+  cell_handle_result || fail
   cell_handle_output || fail
 
 end_function
 handle_return
 
+}
+
+cell_handle_result() {
+if [[ $update_successful == t ]]; then
+  if [[ "$parent_dep" ]]; then
+    if [[ -e $parent_dep/${cell_path##*/} ]]; then
+      err "Target already exists for link: $parent_dep/${cell_path##*/}"
+      return 1
+    fi
+    local cell_path=$(realpath $cell_path); or_fail
+    ln -s $cell_path $parent_dep/ || return 1
+  fi
+fi
 }
 
 cell_handle_output() {
@@ -421,19 +435,12 @@ begin_function
   fi
 
   if [[ $update_successful == t ]]; then
-    if [[ "$parent_dep" ]]; then
-      if [[ -e $parent_dep/${cell_path##*/} ]]; then
-        err "Target already exists for link: $parent_dep/${cell_path##*/}"
-        fail1
-      fi
-      ln -s $cell_path $parent_dep/ || fail
-    fi
     if [[ -f $out_path/upstream-changed ]]; then
-      rm $out_path/upstream-changed || fail
+      rm $out_path/upstream-changed || return 1
     fi
     if [[ $cell_was_changed == t ]]; then
       trace $log_trace "Notifying downstream cells of change"
-      notify_downstream_of_change $cell_path || fail
+      notify_downstream_of_change $cell_path || return 1
     fi
   fi
 
@@ -529,10 +536,9 @@ begin_function
   fi
 
   if [[ $upstream_changed == t || $local_inputs_changed == t || $not_fresh == t ]]; then
-    need_to_execute_update=t
-  fi
 
-  if [[ $need_to_execute_update == t ]]; then
+    need_to_execute_update=t
+
     if [[ "$status_path" ]]; then
 
       read_persist_file || fail
@@ -555,6 +561,11 @@ begin_function
       folder_to_lock=$lock_path timeout=$lock_timeout pid_file=$lock_path/pid folder_lock || fail
       has_lock=t
     fi
+
+    local cell_up_dep
+    begin_for cell_up_dep in $(find1 $up_path); doo
+      handle_cube_reply $cell_up_dep || fail
+    end_for
 
   fi
 
@@ -670,10 +681,6 @@ begin_function
 
   wait_for_sub_processes || fail
 
-  begin_for dep in ${serial_deps[*]} ${parallel_deps[*]}; doo
-    handle_cube_reply $dep || fail
-  end_for
-
 end_function
 handle_return
 }
@@ -685,6 +692,7 @@ done
 return 0
 }
 
+# inputs: $1 (cell up/{dep} folder)
 handle_cube_reply() {
 local dep=$1 cell multi dep2
 if [[ $dep == ${dep%\?} ]]; then
@@ -714,7 +722,12 @@ return 0
 # This performs an update on a dep given a cube dep, not a cell one
 update_dep() {
 local dep=$1
-parent_dep=$cell_path view= fresh= cube_update $dep || return 1
+local parent_dep=$cell_path/up/${dep##*/}
+if [[ -e $parent_dep ]]; then
+  rm -r $parent_dep || return 1 
+fi
+mkdir $parent_dep || return 1
+parent_dep=$parent_dep view= fresh= cube_update $dep || return 1
 }
 
 # input: parallel processes
