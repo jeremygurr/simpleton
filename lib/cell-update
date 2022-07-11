@@ -380,12 +380,12 @@ begin_function
     consecutive_failures=0
 
     if [[ "$status_path" ]]; then
-      let 'avg_duration_short = (avg_duration_short * 9 + duration_of_update) / 10'
-      let 'avg_duration_long = (avg_duration_long * 99 + duration_of_update) / 100'
+      let 'avg_duration_short = (avg_duration_short * 9 + duration_of_update * 1000) / 10'
+      let 'avg_duration_long = (avg_duration_long * 99 + duration_of_update * 1000) / 100'
       let 'avg_failure_rate_short = (avg_failure_rate_short * 9) / 10'
       let 'avg_failure_rate_long = (avg_failure_rate_long * 99) / 100'
-      let 'cube_avg_duration_short = (cube_avg_duration_short * 9 + duration_of_update) / 10'
-      let 'cube_avg_duration_long = (cube_avg_duration_long * 99 + duration_of_update) / 100'
+      let 'cube_avg_duration_short = (cube_avg_duration_short * 9 + duration_of_update * 1000) / 10'
+      let 'cube_avg_duration_long = (cube_avg_duration_long * 99 + duration_of_update * 1000) / 100'
       let 'cube_avg_failure_rate_short = (cube_avg_failure_rate_short * 9) / 10'
       let 'cube_avg_failure_rate_long = (cube_avg_failure_rate_long * 99) / 100'
     fi
@@ -459,7 +459,16 @@ local cell=$1 down_cell
 if [[ -d $cell/down ]]; then
   for down_cell in $(find1 $cell/down); do
     if [[ ! -f $down_cell/out/upstream-changed ]]; then
+      if [[ ! -d $down_cell/out ]]; then
+        mkdir -p $down_cell/out || return 1
+      fi
       touch $down_cell/out/upstream-changed || return 1
+      local cube
+      get_cube $down_cell || return 1
+      local min_fresh_file=$cube/status/min-upstream-freshness
+      if [[ -f $min_fresh_file ]]; then
+        rm $min_fresh_file || return 1
+      fi
       # recursive
       notify_downstream_of_change $down_cell || return 1
     fi
@@ -785,7 +794,11 @@ begin_function
 
   if [[ ! -d "$out_path" ]]; then
     trace $log_trace "Out path is missing, needs update"
-  elif [[ -n "$in_path" && "$in_path" -nt "$out_path" ]]; then
+  elif [[ -n "$in_path" && 
+    ( "$in_path" -nt "$out_path" 
+    || "$cube_in_path" -nt "$out_path"
+    )
+    ]]; then
     trace $log_trace "Local changes were made, needs update"
   elif [[ $current_cube/cube-context -nt $out_path ]]; then
     trace $log_trace "cube-context has changed, needs update"
@@ -793,8 +806,11 @@ begin_function
     local_inputs_changed=f
   fi
 
-
-  if [[ -n "$up_path" && ( "$up_path" -nt "$out_path" || -f $status_path/upstream-changed ) ]]; then
+  if [[ -n "$up_path" && 
+     ( "$up_path" -nt "$out_path" 
+     || "$cube_up_path" -nt "$out_path" 
+     || -f $status_path/upstream-changed 
+     ) ]]; then
     trace $log_trace "Upstream changes were made, needs update"
   else
     maybe_deps_changed=f
@@ -802,14 +818,17 @@ begin_function
 
   if [[ $fresh == inf ]]; then
     not_fresh=f
-  elif [[ $fresh -gt 0 ]]; then
+  elif [[ $fresh != 0 ]]; then
 
     local fresh_seconds
     convert_to_seconds $fresh fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
-    local out_timestamp=$(date -r $status_path/freshness +%s)
+    local out_timestamp=
+    if [[ -f $status_path/freshness ]]; then
+      out_timestamp=$(date -r $status_path/freshness +%s)
+    fi
 
-    if [[ $out_timestamp -lt $fresh_cutoff ]]; then
+    if [[ ! "$out_timestamp" || $out_timestamp -lt $fresh_cutoff ]]; then
 
       trace $log_trace "Freshness requirement ($fresh) not met, needs update"
 
@@ -855,7 +874,8 @@ begin_function
   if [[ ! -d $out_path ]]; then
     mkdir -p $out_path || fail
   fi
-  get_cube $up_path || fail
+  get_cube $(realpath $up_path) || fail
+  local cube_status_path=$cube/status
 
   if [[ -f $cube/cube-vars ]]; then
     source $cube/cube-vars || fail
@@ -896,29 +916,45 @@ handle_return
 
 derive_min_upstream_freshness_handle_group() {
 local dep=$1 cell cube
-begin_function
-  begin_for cell in $(find1 $group -type d); doo
-    get_cube $cell || fail
-    if [[ ! -f $cube/cube-context ]]; then
-      err "Not a cube: $cube"
-      fail1
-    fi
-    # recursive
-    derive_min_upstream_freshness $cell/up || fail
-  end_for
-end_function
-handle_return
+for cell in $(find1 $dep -type d); do
+  # recursive
+  derive_min_upstream_freshness $cell/up || return 1
+done
+return 0
 }
 
 cube_validate() {
 
 begin_function
 
+  if [[ "$require_fresh_greater_than" ]]; then
+    local require_seconds fresh_seconds
+    convert_to_seconds $require_fresh_greater_than require_seconds || fail
+    convert_to_seconds $fresh fresh_seconds || fail
+    if [[ $fresh_seconds -lt $require_seconds ]]; then
+      if [[ "$parent_dep" ]]; then
+        log $log_info "Freshness is too strict for this cube: $fresh < $require_fresh_greater_than. Try a different freshness or cube."
+        return_value=$skip
+        break_out=t
+        break
+      else
+        err "Freshness is too strict for this cube: $fresh < $require_fresh_greater_than. Try a different freshness or cube."
+        fail1
+      fi
+    fi
+  fi
+
+  local missing_dims=
   if ! validate_members; then
-    trace $log_trace "Dims for this cube aren't valid. Maybe we can try another."
-    return_value=$skip
-    break_out=t
-    break
+    if [[ "$parent_dep" ]]; then
+      trace $log_trace "Dims for this cube aren't valid. Maybe we can try another."
+      return_value=$skip
+      break_out=t
+      break
+    else
+      err "Missing or invalid parameters:$missing_dims"
+      fail1
+    fi
   fi
 
 end_function
@@ -935,15 +971,19 @@ for ((i=0; i<count; i++)); do
   local dims=${dim}s
   local value=
   get_dim_functions || return 1
+  invalid=f
   if [[ "${!dim:-}" ]]; then
-    value=${!dim} result_var=out expand_member || return 1
+    value=${!dim} result_var=out expand_member || invalid=t
   elif [[ "${!dims:-}" ]]; then
-    value=${!dims} result_var=out expand_members || return 1
+    value=${!dims} result_var=out expand_members || invalid=t
   fi
-  if [[ ! "$out" ]]; then
-    return 1
+  if [[ ! "$out" || $invalid == t ]]; then
+    missing_dims+=" $dim"
   fi
 done
+if [[ "$missing_dims" ]]; then
+  return 1
+fi
 return 0
 }
 
