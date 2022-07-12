@@ -366,6 +366,7 @@ debug_trap() {
           eval "echo \"$i: \\\"\${$debug_array[$i]}\\\"\"" >&$fd_original_err
         done
         set -u
+        no_follow_once=t
         ;;
       c)
         echo "# Continuing..." >&$fd_original_err
@@ -388,20 +389,25 @@ debug_trap() {
       d)
         echo >&$fd_original_err
         read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
-        if [[ ! "$debug_display" =~ ^[a-zA-Z0-9_]+$ ]]; then
-          echo "Invalid var name: '$debug_display'. Use only a simple var without $" >&$fd_original_err
-          debug_display=
-        else
-          set +u
-          eval 'echo "[${!debug_display}]"' >&$fd_original_err
-          set -u
-        fi
+        local d
+        for d in $debug_display; do
+          if [[ ! "$d" =~ ^[a-zA-Z0-9_]+$ ]]; then
+            echo "Invalid var name: '$d'. Use only a simple var without $" >&$fd_original_err
+            debug_display=
+          else
+            set +u
+            eval 'echo "$d=${!d}"' >&$fd_original_err
+            set -u
+          fi
+        done
+        no_follow_once=t
         ;;
       D)
         echo >&$fd_original_err
         set +u
         eval 'echo "[${!debug_display}]"' >&$fd_original_err
         set -u
+        no_follow_once=t
         ;;
       e)
         echo >&$fd_original_err
@@ -409,12 +415,14 @@ debug_trap() {
         set +u
         eval "$debug_expression" >&$fd_original_err
         set -u
+        no_follow_once=t
         ;;
       E)
         echo >&$fd_original_err
         set +u
         eval "$debug_expression" >&$fd_original_err
         set -u
+        no_follow_once=t
         ;;
       f)
         echo >&$fd_original_err
@@ -452,6 +460,7 @@ debug_trap() {
           debug_highlight=t
         fi
         debug_save_state
+        no_follow_once=t
         ;;
       i)
         echo "# Stepping in" >&$fd_original_err
@@ -531,6 +540,7 @@ debug_trap() {
         set +u
         eval "echo \"$fixed_command\"" >&$fd_original_err
         set -u
+        no_follow_once=t
         ;;
       P)
         echo >&$fd_original_err
@@ -542,6 +552,7 @@ debug_trap() {
         set +u
         eval "echo \"$fixed_command\"" >&$fd_original_err
         set -u
+        no_follow_once=t
         ;;
       q) 
         echo "# Quitting" >&$fd_original_err
@@ -568,6 +579,7 @@ debug_trap() {
       S)
         echo "# Show call stack" >&$fd_original_err
         start_frame=2 stack_trace
+        no_follow_once=t
         ;;
       t)
         if [[ "${#PS4}" -lt 5 ]]; then
@@ -578,11 +590,13 @@ debug_trap() {
           echo "# Disabled time tracing" >&fd_original_err
         fi
         debug_save_state
+        no_follow_once=t
         ;;
       w)
         echo >&$fd_original_err
         read -e -p "Watch: " debug_watch <&$fd_original_in >&$fd_original_err
         debug_save_state
+        no_follow_once=t
         ;;
       W)
         if [ $debug_watch_style == wide ]; then
@@ -592,6 +606,7 @@ debug_trap() {
         fi
         echo "# Debug watch style is now $debug_watch_style" >&$fd_original_err
         debug_save_state
+        no_follow_once=t
         ;;
       x)
         if [ $debug_expansion == 1 ]; then
@@ -602,6 +617,7 @@ debug_trap() {
           debug_expansion=1
         fi
         debug_save_state
+        no_follow_once=t
         ;;
       X)
         if [ $debug_expansion == 2 ]; then
@@ -612,6 +628,7 @@ debug_trap() {
           debug_expansion=2
         fi
         debug_save_state
+        no_follow_once=t
         ;;
       =)
         echo "# Running until this line is reached again" >&$fd_original_err
@@ -698,10 +715,12 @@ debug_trap() {
         echo "}  continue until we reach a different file" >&$fd_original_err
         echo ".  repeat previous deep or shallow search" >&$fd_original_err
         echo "^  toggle source following (displays source context after every command)" >&$fd_original_err
+        no_follow_once=t
         ;;
       *)
         echo "# Unknown command" >&$fd_original_err
         echo "Press ? for a list of commands" >&$fd_original_err
+        no_follow_once=t
         ;;
     esac
   done

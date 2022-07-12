@@ -30,6 +30,14 @@ alias gbg='git bisect good'
 alias gbb='git bisect bad'
 alias gr='git remote'
 
+rcp() {
+  local shell="ssh";
+  if [ "${port:-}" ]; then
+      shell="ssh -p $port"
+  fi
+  RSYNC_RSH="$shell" rsync -a --append --inplace --partial --progress "$@"
+}
+
 unset gl
 gl() {
   git --no-pager log -n ${lines:-20} --decorate --pretty=tformat:"%Cblue %h %Creset %<(25)%ci %C(auto)%d%Creset %s" "$@"

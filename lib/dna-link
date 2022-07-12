@@ -25,13 +25,43 @@ begin_function
       maybe rm -r $to || fail
     else
       err "Target cube already exists or a folder or link is already there."
-      err "Delete it if you want to create it again"
+      err "Delete it if you want to create it again, or set force=t"
       fail1
     fi
   fi
 
   local abs_from=$(realpath -L $from)
-  maybe ln -s $abs_from $to || fail
+  local abs_to=$(realpath -L $to)
+  maybe ln -s $abs_from $abs_to || fail
+
+  local cube cube_to cube_from
+  get_cube ${abs_to%/*} || fail
+  cube_to=$cube
+  get_cube $abs_from || fail
+  cube_from=$cube
+
+  local to_without_cube=${abs_to#$cube_to/}
+  local part=${to_without_cube%%/*}
+  case $part in
+    up)
+      if [[ $cube_from != $abs_from ]]; then
+        err "Only cubes can be linked into the up folder of a cube."
+        err "$abs_from is not a cube"
+        fail1
+      fi
+      local cube_to_name=${cube_to##*/}
+      local down_link=$abs_from/down/$cube_to_name
+      if [[ -e $down_link ]]; then
+        maybe rm $down_link || fail
+      elif [[ ! -d $abs_from/down ]]; then
+        maybe mkdir -p $abs_from/down || fail
+      fi
+      maybe ln -s $cube_to $down_link || fail
+    ;;
+    *)
+      incomplete "part=$part"
+    ;;
+  esac
 
 end_function
 handle_return
