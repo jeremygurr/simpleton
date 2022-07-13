@@ -9,7 +9,7 @@ cube_update() {
 local cube_path=$1 view=${view:-} \
       operation_scope=${operation_scope:-short} \
       run_in_background=${run_in_background:-f} \
-      processes= parent_dep=${parent_dep:-} 
+      processes= 
 local short_cube=${cube_path##*/work/} \
       cube_name=${cube_path##*/}
 
@@ -236,25 +236,11 @@ begin_function
     update_successful=t
   fi
 
-  cell_handle_result || fail
   cell_handle_output || fail
 
 end_function
 handle_return
 
-}
-
-cell_handle_result() {
-if [[ $update_successful == t ]]; then
-  if [[ "$parent_dep" ]]; then
-    if [[ -e $parent_dep/${cell_path##*/} ]]; then
-      err "Target already exists for link: $parent_dep/${cell_path##*/}"
-      return 1
-    fi
-    local cell_path=$(realpath $cell_path); or_fail
-    ln -s $cell_path $parent_dep/ || return 1
-  fi
-fi
 }
 
 cell_handle_output() {
@@ -688,12 +674,7 @@ return 0
 # This performs an update on a dep given a cube dep, not a cell one
 update_dep() {
 local dep=$1
-local parent_dep=$cell_path/up/${dep##*/}
-if [[ -e $parent_dep ]]; then
-  rm -r $parent_dep || return 1 
-fi
-mkdir $parent_dep || return 1
-parent_dep=$parent_dep view= fresh= cube_update $dep || return 1
+view= fresh= called_from=$cube_name cube_update $dep || return 1
 }
 
 # input: parallel processes
@@ -889,7 +870,7 @@ begin_function
     convert_to_seconds $require_fresh_greater_than require_seconds || fail
     convert_to_seconds $fresh fresh_seconds || fail
     if [[ $fresh_seconds -lt $require_seconds ]]; then
-      if [[ "$parent_dep" ]]; then
+      if [[ $called_from != cli ]]; then
         log $log_info "Freshness is too strict for this cube: $fresh < $require_fresh_greater_than. Try a different freshness or cube."
         return_value=$skip
         break_out=t
@@ -903,7 +884,7 @@ begin_function
 
   local missing_dims=
   if ! validate_members; then
-    if [[ "$parent_dep" ]]; then
+    if [[ $called_from != cli ]]; then
       trace $log_trace "Dims for this cube aren't valid. Maybe we can try another."
       return_value=$skip
       break_out=t
@@ -1129,7 +1110,6 @@ begin_function_flat
 
     dep_name=${dep##*/}
     local real_dep=$(realpath $dep)
-    debug_start # make sure down links are working
 
     if [[ ! -e $dep/down/$cube_name ]]; then
       if [[ ! -d $dep/down ]]; then
