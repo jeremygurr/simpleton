@@ -114,13 +114,13 @@ ENV REPO_CACHE /home/.m2/repository
 
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
 RUN chmod a+rwx /etc
-COPY ./ $SIMPLETON_REPO/
+#COPY ./ $SIMPLETON_REPO/
 RUN ln -sf $SIMPLETON_REPO/shell-start.sh /etc/profile.d/
 RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
 COPY sudoers /etc/
 RUN chown root /etc/sudoers
 RUN mkdir -p $REPO_CACHE
-COPY vimrc /home/.vimrc
+#COPY vimrc /home/.vimrc
 
 ARG TIME_ZONE=UTC
 RUN setup-timezone -z $TIME_ZONE
