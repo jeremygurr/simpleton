@@ -6,15 +6,16 @@ readonly failed_but_can_retry=2 skip=2 somethings_wrong=1 everythings_fine=0
 # never run as background process. 
 # Instead pass in run_in_background=t and this function will handle the rest.
 cube_update() {
-local current_cube=$1 view=${view:-} \
+local cube_path=$1 view=${view:-} \
       operation_scope=${operation_scope:-short} \
       run_in_background=${run_in_background:-f} \
       processes= parent_dep=${parent_dep:-} 
-local short_cube=${current_cube##*/work/} 
+local short_cube=${cube_path##*/work/} \
+      cube_name=${cube_path##*/}
 
 begin_function_flat
 
-  if [[ ! -f "$current_cube/cube-context" ]]; then
+  if [[ ! -f "$cube_path/cube-context" ]]; then
     err "cube_update called on $short_cube which is not a cube"
     fail1
   fi
@@ -39,7 +40,7 @@ handle_return
 cube_update_inner() {
 
 dimensions=() dimension_files=() localize_dim_vars= dim_string= 
-if [ -d "$current_cube/dim" ]; then
+if [ -d "$cube_path/dim" ]; then
   gather_dims || return 1
 fi
 trace $log_trace "Updating cube $short_cube $dim_string"
@@ -55,18 +56,18 @@ begin_function
 
   init_context || fail
   load_context || fail
-  if [[ -f $current_cube/cube-vars ]]; then
-    source $current_cube/cube-vars || fail
+  if [[ -f $cube_path/cube-vars ]]; then
+    source $cube_path/cube-vars || fail
   fi
 
   fresh=${fresh:-$default_fresh}
 
-  if [[ "$cube_expiration" && -d $current_cube/cell ]]; then
+  if [[ "$cube_expiration" && -d $cube_path/cell ]]; then
     trace $log_trace "Deleting cached data older than $cube_expiration"
     local expiration_minutes
     convert_to_seconds $cube_expiration expiration_minutes || fail
     let expiration_minutes/=60
-    find1 $current_cube/cell -mmin +$expiration_minutes -exec rm -r \{\} + || fail
+    find1 $cube_path/cell -mmin +$expiration_minutes -exec rm -r \{\} + || fail
   fi
 
   cube_validate || fail
@@ -84,7 +85,7 @@ handle_return
 }
 
 load_context() {
-local f=$current_cube
+local f=$cube_path
 local parent=$(realpath "${f%/*}")
 handler_folders=( )
 
@@ -403,26 +404,34 @@ handle_return
 }
 
 notify_downstream_of_change() {
-local cell=$1 down_cell
-if [[ -d $cell/down ]]; then
-  for down_cell in $(find1 $cell/down); do
-    if [[ ! -f $down_cell/out/upstream-changed ]]; then
-      if [[ ! -d $down_cell/out ]]; then
-        mkdir -p $down_cell/out || return 1
+trace $log_trace "Notifying downstream deps of change"
+begin_function
+  local cell=$1 down_cell down_cube
+  if [[ -d $cell/down ]]; then
+    begin_for down_cube in $(find1 $cell/down); doo
+    begin_for down_cell in $(find1 $down_cube); doo
+      if [[ ! -e $down_cell ]]; then
+        trace $log_trace "Removing broken link: $down_cell"
+        rm $down_cell || fail
+      elif [[ ! -f $down_cell/status/upstream-changed ]]; then
+        if [[ ! -d $down_cell/status ]]; then
+          mkdir -p $down_cell/status || fail
+        fi
+        touch $down_cell/status/upstream-changed || fail
+        local cube
+        get_cube $down_cell || fail
+        local min_fresh_file=$cube/status/min-upstream-freshness
+        if [[ -f $min_fresh_file ]]; then
+          rm $min_fresh_file || fail
+        fi
+        # recursive
+        notify_downstream_of_change $down_cell || fail
       fi
-      touch $down_cell/out/upstream-changed || return 1
-      local cube
-      get_cube $down_cell || return 1
-      local min_fresh_file=$cube/status/min-upstream-freshness
-      if [[ -f $min_fresh_file ]]; then
-        rm $min_fresh_file || return 1
-      fi
-      # recursive
-      notify_downstream_of_change $down_cell || return 1
-    fi
-  done
-fi
-return 0
+    end_for
+    end_for
+  fi
+end_function
+handle_return
 }
 
 read_persist_file() {
@@ -748,7 +757,7 @@ begin_function
     )
     ]]; then
     trace $log_trace "Local changes were made, needs update"
-  elif [[ $current_cube/cube-context -nt $status_path/updated ]]; then
+  elif [[ $cube_path/cube-context -nt $status_path/updated ]]; then
     trace $log_trace "cube-context has changed, needs update"
   else
     local_inputs_changed=f
@@ -1025,7 +1034,6 @@ cell_feature_setup() {
 
 begin_function
 
-  cube_path=$current_cube
   cell_path=$cube_path/cell/$cell_id
   if [[ ! -d $cell_path ]]; then
     mkdir -p $cell_path || fail
@@ -1108,39 +1116,60 @@ cell_setup_up_deps() {
 
 begin_function_flat
 
-  local from=$1; shift
-  local to=$1
+  local cube_up_path=$1; shift
+  local cell_up_path=$1
   
   local dep dep_name target cell_ids dep_cell_id
-  begin_for dep in $(find1 $from); doo
+  begin_for dep in $(find1 $cube_up_path -not -name '*\?'); doo
+
     if [[ ! -f $dep/cube-context ]]; then
       err "$dep is not a cube"
       fail1
     fi
+
     dep_name=${dep##*/}
-    target=$to/$dep_name
-    # should be impossible since we delete the up folder before calling this
-    #if [[ -e $target ]]; then
-    #  rm -r $target || fail
-    #fi
+    local real_dep=$(realpath $dep)
+    debug_start # make sure down links are working
+
+    if [[ ! -e $dep/down/$cube_name ]]; then
+      if [[ ! -d $dep/down ]]; then
+        mkdir $dep/down || fail
+      fi
+      trace $log_trace "Creating cube down link: $dep/down/${real_dep##*/}"
+      ln -s $real_dep $dep/down/ || fail
+    fi
+
+    target=$cell_up_path/$dep_name
     mkdir $target || fail
     get_cell_ids $dep || fail
-    local real_dep=$(realpath $dep)
-    if [[ ! -e $real_dep/cube-context ]]; then
-      err "Invalid link: $real_dep found from $dep. It must point to a cube directory."
-      fail1
-    fi
+
+    local link_count=0
     begin_for dep_cell_id in $cell_ids; do
+
       local up_cell=$real_dep/cell/$dep_cell_id
       ln -s $up_cell $target/ || fail
-      if [[ ! -e $up_cell/down/$cell_id ]]; then
-        if [[ ! -d $up_cell/down ]]; then
-          mkdir $up_cell/down || fail
+      local up_down_path=$up_cell/down/$cube_name/$cell_id
+
+      if [[ ! -e $up_down_path ]]; then
+        if [[ ! -d $up_cell/down/$cube_name ]]; then
+          mkdir -p $up_cell/down/$cube_name || fail
         fi
-        ln -s $cell_path $up_cell/down/ || fail
-        # TODO how to distinguish different cubes in down, we'll wait until we see the problem first
+        ln -s $cell_path $up_down_path || fail
       fi
+
+      if [[ $link_count == 0 ]]; then
+        if [[ -f $target/only ]]; then
+          rm $target/only || fail
+        fi
+        ln -s $up_cell $target/only || fail
+      elif [[ $link_count == 1 ]]; then
+        rm $target/only || fail
+      fi
+
+      let link_count++
+
     end_for
+
   end_for
 
 end_function_flat
@@ -1152,8 +1181,8 @@ handle_return
 # outputs: cell_ids
 get_cell_ids() {
 begin_function
-  local current_cube=$1 
-  local short_cube=${current_cube##*/work/}
+  local cube_path=$1 
+  local short_cube=${cube_path##*/work/}
   cell_ids=
   local dimensions localize_dim_vars dim_string cell_id
   gather_dims || fail
@@ -1184,7 +1213,7 @@ end_function_flat
 handle_return
 }
 
-# inputs: short_cube current_cube
+# inputs: short_cube cube_path
 # outputs: dimensions dim_string
 gather_dims() {
 trace $log_trace "Gathering dimensions for $short_cube"
@@ -1193,9 +1222,9 @@ localize_dim_vars=
 dimensions=()
 dim_string=
 begin_function
-  if [[ -d $current_cube/dim ]]; then
+  if [[ -d $cube_path/dim ]]; then
     begin_for dimension_file in \
-      $(find1 $current_cube/dim -type f | sort); doo
+      $(find1 $cube_path/dim -type f | sort); doo
       dimension=${dimension_file##*/}
       dimension=${dimension##*-}
       if [[ ! "$dimension" =~ ^[a-zA-Z0-9_]+$ ]]; then
