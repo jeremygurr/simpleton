@@ -274,10 +274,22 @@ begin_function
   local duration_of_update=$((end_time-start_time))
 
   if [[ "$status_path" ]]; then
-    local avg_duration_short=$duration_of_update avg_duration_long=$duration_of_update
-    local avg_failure_rate_short=0 avg_failure_rate_long=0
-    local cube_avg_duration_short=$duration_of_update cube_avg_duration_long=$duration_of_update
-    local cube_avg_failure_rate_short=0 cube_avg_failure_rate_long=0
+    local avg_duration_short=${avg_duration_short:-$duration_of_update} \
+          avg_duration_long=${avg_duration_long:-$duration_of_update} \
+          avg_failure_rate_short=${avg_failure_rate_short:-0} \
+          avg_failure_rate_long=${avg_failure_rate_long:-0} \
+          max_duration_short=${max_duration_short:-0} \
+          max_duration_short_age=${max_duration_short_age:-0} \
+          max_duration_long=${max_duration_long:-0} \
+          max_duration_long_age=${max_duration_long_age:-0} \
+          cube_avg_duration_short=${cube_avg_duration_short:-$duration_of_update} \
+          cube_avg_duration_long=${cube_avg_duration_long:-$duration_of_update} \
+          cube_avg_failure_rate_short=${cube_avg_failure_rate_short:-0} \
+          cube_avg_failure_rate_long=${cube_avg_failure_rate_long:-0} \
+          cube_max_duration_short=${cube_max_duration_short:-0} \
+          cube_max_duration_short_age=${cube_max_duration_short_age:-0} \
+          cube_max_duration_long=${cube_max_duration_long:-0} \
+          cube_max_duration_long_age=${cube_max_duration_long_age:-0} 
     read_persist_file || fail
     read_cube_persist_file || fail
   fi
@@ -316,6 +328,10 @@ begin_function
     consecutive_failures=0
 
     if [[ "$status_path" ]]; then
+      update_max_duration max_duration_short 10
+      update_max_duration max_duration_long 100
+      update_max_duration cube_max_duration_short 10
+      update_max_duration cube_max_duration_long 100
       let 'avg_duration_short = (avg_duration_short * 9 + duration_of_update * 1000) / 10'
       let 'avg_duration_long = (avg_duration_long * 99 + duration_of_update * 1000) / 100'
       let 'avg_failure_rate_short = (avg_failure_rate_short * 9) / 10'
@@ -389,6 +405,19 @@ begin_function
 end_function
 handle_return
 
+}
+
+update_max_duration() {
+local var=$1
+local window=$2
+local age_var=${var}_age
+if [[ $duration_of_update -gt ${!var} ]]; then
+  eval "$var=$duration_of_update; $age_var=0"
+elif [[ ${!age_var} -gt $window ]]; then
+  eval "let $var=($var+$duration_of_update)/2; $age_var=0"
+else
+  eval "let $age_var++"
+fi
 }
 
 notify_downstream_of_change() {
@@ -576,6 +605,10 @@ cube_avg_duration_short=$cube_avg_duration_short
 cube_avg_duration_long=$cube_avg_duration_long
 cube_avg_failure_rate_short=$cube_avg_failure_rate_short
 cube_avg_failure_rate_long=$cube_avg_failure_rate_long
+cube_max_duration_short=$cube_max_duration_short
+cube_max_duration_short_age=$cube_max_duration_short_age
+cube_max_duration_long=$cube_max_duration_long
+cube_max_duration_long_age=$cube_max_duration_long_age
 " >$cube_status_path/persist
 }
 
@@ -588,6 +621,10 @@ avg_duration_short=$avg_duration_short
 avg_duration_long=$avg_duration_long
 avg_failure_rate_short=$avg_failure_rate_short
 avg_failure_rate_long=$avg_failure_rate_long
+max_duration_short=$max_duration_short
+max_duration_short_age=$max_duration_short_age
+max_duration_long=$max_duration_long
+max_duration_long_age=$max_duration_long_age
 " >$status_path/persist
 }
 
@@ -675,8 +712,83 @@ return 0
 
 # This performs an update on a dep given a cube dep, not a cell one
 update_dep() {
-local dep=$1
-view= fresh= called_from=$cube_name cube_update $dep || return 1
+local cube_dep=$1 choice multipath=f
+local choices=( $cube_dep ) chosen
+trace $log_trace "Updating dependency $cube_dep"
+begin_function
+
+  if [[ $cube_dep == *\? ]]; then
+    multipath=t
+    local shuffle_chance=${shuffle_chance:-100} \
+          prefer=${prefer:-low_latency} \
+          cube_dep_name=${cube_dep##*/}
+
+    choices=( $(find1 $cube_dep) ); or_fail
+
+    if [[ "${#choices[*]}" == 0 ]]; then
+      err 'No strategies available for $cube_dep'
+      fail1
+    elif [[ "${#choices[*]}" -gt 1 ]]; then
+      local i choice_count=${#choices[*]} choice_path choice_name choice_cell cells
+
+      chosen=
+      # are any cached?
+      begin_for choice in ${choices[*]}; doo
+        choice_name=${choice##*/}
+        choice_path=$up_path/$cube_dep_name/$choice_name
+        cells="$(find1 $choice_path)"
+        if_command_failed && { 
+          err "Internal error: Missing cells in dep path: $choice_path"
+          fail1
+        }
+
+        begin_for choice_cell in $cells; doo
+          is_cell_up_to_date $choice_cell && {
+            chosen=$choice_cell
+            break
+          }
+        end_for
+      end_for
+
+      if [[ ! "$chosen" ]]; then
+        # sort by reliability class
+        begin_for choice in ${choices[*]}; doo
+        end_for
+      fi
+      
+      # is a strategy explicitly defined? 
+      #  L low latency / lower throughput
+      #  T high throughput / higher latency
+      #  R high reliability / lower performance
+      #  P high performance / lower reliability
+      # if not choose based on order of options
+      begin_for ((i=0; i<choice_count; i++)); doo
+        
+      end_for
+      # add to choices array
+    fi
+
+  fi
+
+  local choice failed=f 
+
+  chosen=
+  for choice in ${choices[*]}; do
+    view= fresh= called_from=$cube_name cube_update $choice || failed=t
+    if [[ $failed == f ]]; then
+      chosen=$choice
+      break
+    fi
+    # make chosen link 
+  done
+
+  if [[ ! "$chosen" ]]; then
+    trace $log_warn "Failed to update dependency: $cube_dep"
+    fail1
+  fi
+
+end_function
+handle_return
 }
 
 # input: parallel processes
@@ -956,6 +1068,7 @@ init_context() {
   retry_scale=2 \
   cube_expiration= \
   high_volume_cube=f \
+  strategy_flags= \
   features=
 
   # override this if there are some cell id combinations which are not valid even when

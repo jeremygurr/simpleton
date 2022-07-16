@@ -89,6 +89,7 @@ RUN apk add \
   tar-doc \
   texinfo \
   texinfo-doc \
+  tshark \
   tzdata \
   util-linux \
   util-linux-doc \
