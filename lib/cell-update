@@ -7,7 +7,6 @@ readonly failed_but_can_retry=2 skip=2 somethings_wrong=1 everythings_fine=0
 # Instead pass in run_in_background=t and this function will handle the rest.
 cube_update() {
 local cube_path=$1 view=${view:-} \
-      operation_scope=${operation_scope:-short} \
       run_in_background=${run_in_background:-f} \
       processes= 
 local short_cube=${cube_path##*/work/} \
@@ -717,78 +716,85 @@ local choices=( $cube_dep ) chosen
 trace $log_trace "Updating dependency $cube_dep"
 begin_function
 
+  local cube_dep_name=${cube_dep##*/}
   if [[ $cube_dep == *\? ]]; then
+    debug_start
     multipath=t
-    local shuffle_chance=${shuffle_chance:-100} \
-          prefer=${prefer:-low_latency} \
-          cube_dep_name=${cube_dep##*/}
 
-    choices=( $(find1 $cube_dep) ); or_fail
+    local OIFS=$IFS
+    IFS=$NL choices=( $(find1 $cube_dep) ); or_fail
+    IFS=$OIFS
+    local choice_count=${#choices[*]} 
+    local result results
 
-    if [[ "${#choices[*]}" == 0 ]]; then
-      err 'No strategies available for $cube_dep'
+    if [[ $choice_count == 0 ]]; then
+      err 'No choices available for $cube_dep'
       fail1
-    elif [[ "${#choices[*]}" -gt 1 ]]; then
-      local i choice_count=${#choices[*]} choice_path choice_name choice_cell cells
+    elif [[ $choice_count -gt 1 ]]; then
+      local i choice_path choice_name choice_cell cells 
+      results=( "${choices[@]}" )
+      for ((i=0; i<choice_count; i++)); do
+        results[$i]=" ${results[$i]}"
+      done
 
-      chosen=
-      # are any cached?
-      begin_for choice in ${choices[*]}; doo
-        choice_name=${choice##*/}
-        choice_path=$up_path/$cube_dep_name/$choice_name
-        cells="$(find1 $choice_path)"
-        if_command_failed && { 
-          err "Internal error: Missing cells in dep path: $choice_path"
+      local strategy
+      begin_for strategy in $strategies; doo
+        if type strategy_$strategy &>/dev/null; then
+          begin_for ((i=0; i<choice_count; i++)); doo
+            choice="${choices[$i]}"
+            strategy_$strategy || fail
+          end_for
+        else
+          err "Invalid strategy: $strategy"
           fail1
-        }
-
-        begin_for choice_cell in $cells; doo
-          is_cell_up_to_date $choice_cell && {
-            chosen=$choice_cell
-            break
-          }
-        end_for
+        fi
       end_for
 
-      if [[ ! "$chosen" ]]; then
-        # sort by reliability class
-        begin_for choice in ${choices[*]}; doo
-        end_for
-      fi
-      
-      # is a strategy explicitly defined? 
-      #  L low latency / lower throughput
-      #  T high throughput / higher latency
-      #  R high reliability / lower performance
-      #  P high performance / lower reliability
-      # if not choose based on order of options
-      begin_for ((i=0; i<choice_count; i++)); doo
-        
-      end_for
-      # add to choices array
+      # sort choices
+      IFS=$NL results="${results[*]}"
+      IFS=$OIFS trace $log_trace "strategy results:"
+      IFS=$OIFS trace $log_trace "${results[*]}"
+      choices=( $(echo "${results[*]}" | sort | awk '{print $2}') )
+      IFS=$OIFS
+
+    else # only one choice
+      chosen=$choices 
     fi
 
   fi
 
-  local choice failed=f 
+  # TODO shuffle
 
   chosen=
-  for choice in ${choices[*]}; do
-    view= fresh= called_from=$cube_name cube_update $choice || failed=t
+  local failed
+  # attempt update of each option, until one succeeds
+  begin_for choice in ${choices[*]}; doo
+    failed=f
+    view= fresh= called_from=$cube_name parent= cube_update $choice || failed=t
     if [[ $failed == f ]]; then
       chosen=$choice
       break
     fi
-    # make chosen link 
-  done
+  end_for
 
   if [[ ! "$chosen" ]]; then
     trace $log_warn "Failed to update dependency: $cube_dep"
     fail1
   fi
 
+  if [[ $multipath == t ]]; then
+    ln -s $choice $up_path/${cube_dep_name%\?} || fail
+  fi
+
 end_function
 handle_return
+}
+
+# Does a given dependency already have fresh data?
+# input: result choice
+# output: result
+strategy_cached() {
+# TODO
 }
 
 # input: parallel processes
@@ -1069,6 +1075,8 @@ init_context() {
   cube_expiration= \
   high_volume_cube=f \
   strategy_flags= \
+  strategies='cached reliability latency' \
+  shuffle_chance=100 \  # chance out of 1000 of not following the computed strategy order
   features=
 
   # override this if there are some cell id combinations which are not valid even when
