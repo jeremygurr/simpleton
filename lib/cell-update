@@ -205,6 +205,13 @@ begin_function
   local start_time=$EPOCHSECONDS
   cell_validate || fail
   cell_feature_setup || fail
+
+  if [[ "$cube_up_before_path" ]]; then
+    new_stage update-deps-before || fail
+    cell_update_deps_before || fail
+    # TODO if this changed, must refresh the up folder below
+  fi
+
   if [[ "$cube_up_path" && "$cube_up_path" -nt "$up_path" ]]; then
     if [[ -d $up_path ]]; then
       rm -r $up_path || fail
@@ -627,6 +634,32 @@ max_duration_long_age=$max_duration_long_age
 " >$status_path/persist
 }
 
+cell_update_deps_before() {
+trace $log_trace "Updating up-before cells of $short_cube"
+begin_function
+
+  local dep 
+  local parallel=f processes=
+
+  local deps=( $(find1 "$cube_up_before_path" -type d | sort) )
+
+  begin_for dep in ${deps[*]}; doo
+    local dep_name=${dep##*/}
+    if [[ $parallel == t ]]; then
+      update_dep "$dep" &
+      processes+=" $!"
+    else
+      update_dep "$dep" || fail
+    fi
+  end_for
+  # TODO if anything changed, must refresh other deps somehow
+
+  wait_for_sub_processes || fail
+
+end_function
+handle_return
+}
+
 cell_update_deps() {
 trace $log_trace "Updating upstream cells of $short_cube"
 begin_function
@@ -864,7 +897,12 @@ begin_function
     local_inputs_changed=f
   fi
 
-  if [[ -n "$up_path" && 
+  if [[ -n "$up_before_path" && 
+     ( "$up_before_path" -nt "$status_path/updated" 
+     || "$cube_up_before_path" -nt "$status_path/updated" 
+     || -f $status_path/upstream-changed 
+     )
+     || -n "$up_path" && 
      ( "$up_path" -nt "$status_path/updated" 
      || "$cube_up_path" -nt "$status_path/updated" 
      || -f $status_path/upstream-changed 
@@ -1152,6 +1190,11 @@ begin_function
 
   if [[ -d $cube_path/cell-in/$cell_id ]]; then
     in_path=$cube_path/cell-in/$cell_id
+  fi
+
+  if [[ -d $cube_path/up-before ]]; then
+    cube_up_before_path=$cube_path/up-before
+    up_before_path=$cell_path/up-before
   fi
 
   if [[ -d $cube_path/up ]]; then
