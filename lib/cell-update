@@ -261,15 +261,15 @@ begin_function
         not_fresh=t \
         has_lock=f \
         update_successful=f \
-        need_to_execute_update=t \
+        need_update=t \
         cell_was_changed=f
 
-  does_cell_need_update || fail
+  does_cell_need_update $cell_path || fail
   if [[ $needs_update == t ]]; then
     local consecutive_failures=${consecutive_failures:-0} \
           upstream_changed=f
     cell_pre_update || fail
-    if [[ $need_to_execute_update == t ]]; then
+    if [[ $needs_update == t ]]; then
       cell_execute_update || fail
     fi
     cell_post_update || fail
@@ -564,9 +564,7 @@ begin_function
     cell_update_deps || fail
   fi
 
-  if [[ $upstream_changed == t || $local_inputs_changed == t || $not_fresh == t ]]; then
-
-    need_to_execute_update=t
+  if [[ $needs_update == t ]]; then
 
     if [[ "$status_path" ]]; then
 
@@ -953,10 +951,16 @@ return 0
 }
 
 does_cell_need_update() {
-trace $log_trace "Checking if update is needed"
+local cell_path=$1 out_path= in_path= cube_in_path= status_path= \
+  up_before_path= up_path= cube_up_before_path= cube_up_path= \
+  cube_status_path=
+  
+trace $log_trace "Checking if update is needed for $cell_path"
 begin_function
 
-  needs_update=t
+  needs_update=t local_inputs_changed=t maybe_deps_changed=t not_fresh=t
+
+  setup_path_vars $cell_path || fail
 
   if [[ ! -d "$out_path" ]]; then
     trace $log_trace "Out path is missing, needs update"
@@ -1271,34 +1275,10 @@ begin_function
     done >>$cell_dim_path || fail
   fi
 
-  # out path must always be there
-  out_path=$cell_path/out
+  setup_path_vars $cell_path || fail
 
-  if [[ -d $cube_path/in ]]; then
-    cube_in_path=$cube_path/in
-  fi
-
-  if [[ -d $cube_path/cell-in/$cell_id ]]; then
-    in_path=$cube_path/cell-in/$cell_id
-  fi
-
-  if [[ -d $cube_path/up-before ]]; then
-    cube_up_before_path=$cube_path/up-before
-    up_before_path=$cell_path/up-before
-  fi
-
-  if [[ -d $cube_path/up ]]; then
-    cube_up_path=$cube_path/up
-    up_path=$cell_path/up
-  fi
-
-  status_path=$cell_path/status
-  cube_status_path=$cube_path/status
   [[ ! -d $status_path ]] && { mkdir $status_path || fail; }
   [[ ! -d $cube_status_path ]] && { mkdir $cube_status_path || fail; }
-
-  # created on demand
-  tmp_path=$cell_path/tmp
 
   local feature
   for feature in ${features:-}; do
@@ -1326,6 +1306,37 @@ begin_function
 
 end_function
 handle_return
+
+}
+
+setup_path_vars() {
+
+# out path must always be there
+out_path=$cell_path/out
+
+if [[ -d $cube_path/in ]]; then
+  cube_in_path=$cube_path/in
+fi
+
+if [[ -d $cube_path/cell-in/$cell_id ]]; then
+  in_path=$cube_path/cell-in/$cell_id
+fi
+
+if [[ -d $cube_path/up-before ]]; then
+  cube_up_before_path=$cube_path/up-before
+  up_before_path=$cell_path/up-before
+fi
+
+if [[ -d $cube_path/up ]]; then
+  cube_up_path=$cube_path/up
+  up_path=$cell_path/up
+fi
+
+status_path=$cell_path/status
+cube_status_path=$cube_path/status
+
+# created on demand
+tmp_path=$cell_path/tmp
 
 }
 
