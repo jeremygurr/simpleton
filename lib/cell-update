@@ -759,7 +759,6 @@ begin_function
 
   local cube_dep_name=${cube_dep##*/}
   if [[ $cube_dep == *\? ]]; then
-    debug_start
     multipath=t
 
     local OIFS=$IFS
@@ -804,7 +803,12 @@ begin_function
 
   fi
 
-  # TODO shuffle
+  # avoid strategy starvation by occasionally allowing the underdog to be on top
+  if [[ $((RANDOM % 1000)) -gt $shuffle_chance ]]; then
+    local c=${#choices[*]}
+    let c--
+    choices=( ${choices[-1]} ${choices[*]:0:$c} )
+  fi
 
   chosen=
   local failed
@@ -1305,7 +1309,11 @@ begin_function_flat
       ln -s $real_dep $dep/down/ || fail
     fi
 
-    target=$cell_up_path/$dep_name
+    local cell_dep_name=$dep_name
+    if [[ $cell_dep_name =~ ^[0-9]+-(.*) ]]; then
+      cell_dep_name=${BASH_REMATCH[1]}
+    fi
+    target=$cell_up_path/$cell_dep_name
     mkdir $target || fail
     get_cell_ids $dep || fail
 
