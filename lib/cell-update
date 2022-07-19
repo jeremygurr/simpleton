@@ -58,6 +58,7 @@ begin_function
   if [[ -f $cube_path/cube-vars ]]; then
     source $cube_path/cube-vars || fail
   fi
+  expand_strategies || fail
 
   fresh=${fresh:-$default_fresh}
 
@@ -85,6 +86,37 @@ begin_function
 end_function
 handle_return
 
+}
+
+expand_strategies() {
+local new_strategies=
+for strategy in $strategies; do
+  case strategy in
+    cached|c)
+      new_strategies+=" cached"
+    ;;
+    reliable|r)
+      new_strategies+=" reliable"
+    ;;
+    latency|l)
+      new_strategies+=" latency"
+    ;;
+    throughput|t)
+      new_strategies+=" throughput"
+    ;;
+    crt)
+      new_strategies+=" cached reliable throughput"
+    ;;
+    crl)
+      new_strategies+=" cached reliable latency"
+    ;;
+    *)
+      err "Invalid strategy: $strategy"
+      fail1
+    ;;
+  esac
+done
+strategies=${new_strategies# }
 }
 
 load_context() {
@@ -233,7 +265,7 @@ begin_function
         cell_was_changed=f
 
   does_cell_need_update || fail
-  if [[ $maybe_deps_changed == t || $local_inputs_changed == t || $not_fresh == t ]]; then
+  if [[ $needs_update == t ]]; then
     local consecutive_failures=${consecutive_failures:-0} \
           upstream_changed=f
     cell_pre_update || fail
@@ -764,50 +796,62 @@ begin_function
     local OIFS=$IFS
     IFS=$NL choices=( $(find1 $cube_dep) ); or_fail
     IFS=$OIFS
-    local choice_count=${#choices[*]} 
-    local result results
+    local choice_count=${#choices[*]} result results
 
     if [[ $choice_count == 0 ]]; then
       err 'No choices available for $cube_dep'
       fail1
     elif [[ $choice_count -gt 1 ]]; then
       local i choice_path choice_name choice_cell cells 
-      results=( "${choices[@]}" )
-      for ((i=0; i<choice_count; i++)); do
-        results[$i]=" ${results[$i]}"
-      done
+
+      results=( )
 
       local strategy
       begin_for strategy in $strategies; doo
         if type strategy_$strategy &>/dev/null; then
           begin_for ((i=0; i<choice_count; i++)); doo
+
             choice="${choices[$i]}"
+            choice_cell=$up_path/$cube_dep_name/$choice_name
+
+            if [[ ! -d $choice_cell ]]; thne
+             err "Invalid choice: $choice_cell"
+             fail1
+            fi
+
+            result=${results[$i]}
             strategy_$strategy || fail
+            results[$i]=$result
+
           end_for
         else
-          err "Invalid strategy: $strategy"
+          err "Missing strategy function: strategy_$strategy"
           fail1
         fi
       end_for
 
-      # sort choices
-      IFS=$NL results="${results[*]}"
-      IFS=$OIFS trace $log_trace "strategy results:"
-      IFS=$OIFS trace $log_trace "${results[*]}"
-      choices=( $(echo "${results[*]}" | sort | awk '{print $2}') )
-      IFS=$OIFS
+      for ((i=0; i<choice_count; i++)); do
+        results[$i]+=" ${choices[$i]}$NL"
+      done
+      results[0]=" ${results[0]}" # necessary to align results for echo command
+      choices=( $(echo "${results[*]}" | sort) )
 
-    else # only one choice
-      chosen=$choices 
+      # avoid strategy starvation by occasionally allowing the underdog to be on top
+      if [[ $((RANDOM % 1000)) -gt $shuffle_chance ]]; then
+        local c=${#choices[*]}
+        let c--
+        choices=( ${choices[-1]} ${choices[*]:0:$c} )
+      fi
+
+      trace $log_trace "strategy results:"
+      for ((i=0; i<choice_count; i++)); do
+        choice=${choices[$i]}
+        trace $log_trace "$choice"
+        choices[$i]="${choice##* }"
+      done
+
     fi
 
-  fi
-
-  # avoid strategy starvation by occasionally allowing the underdog to be on top
-  if [[ $((RANDOM % 1000)) -gt $shuffle_chance ]]; then
-    local c=${#choices[*]}
-    let c--
-    choices=( ${choices[-1]} ${choices[*]:0:$c} )
   fi
 
   chosen=
@@ -828,7 +872,12 @@ begin_function
   fi
 
   if [[ $multipath == t ]]; then
-    ln -s $choice $up_path/${cube_dep_name%\?} || fail
+    local choice_name=${choice##*/} 
+    local target=$up_path/${cube_dep_name%\?}
+    if [[ -e $target ]]; then
+      rm -r $target || fail
+    fi
+    ln -s $up_path/$cube_dep_name/$choice_name $target || fail
   fi
 
 end_function
@@ -836,11 +885,22 @@ handle_return
 }
 
 # Does a given dependency already have fresh data?
-# input: result choice
+# input: result choice_cell
 # output: result
 strategy_cached() {
-# TODO
-:
+trace $log_trace "Calculating strategy score: cached for $choice"
+begin_function
+
+  does_cell_need_update $choice_cell || fail
+
+  if [[ $needs_update == t ]]; then
+    result+=" 1"
+  else
+    result+=" 0"
+  fi
+
+end_function
+handle_return
 }
 
 # input: parallel processes
@@ -895,6 +955,8 @@ return 0
 does_cell_need_update() {
 trace $log_trace "Checking if update is needed"
 begin_function
+
+  needs_update=t
 
   if [[ ! -d "$out_path" ]]; then
     trace $log_trace "Out path is missing, needs update"
@@ -965,6 +1027,10 @@ begin_function
 
     fi
 
+  fi
+
+  if [[ $maybe_deps_changed == f && $local_inputs_changed == f && $not_fresh == f ]]; then
+    needs_update=f
   fi
 
 end_function
