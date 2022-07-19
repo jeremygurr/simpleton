@@ -69,6 +69,8 @@ begin_function
     find1 $cube_path/cell -mmin +$expiration_minutes -exec rm -r \{\} + || fail
   fi
 
+  find1 $cube_path/cell -name *.bad -type d -exec rm -r \{\} + || fail
+
   cube_validate || fail
   eval "$localize_dim_vars" || fail
 
@@ -394,13 +396,17 @@ begin_function
 
   if [[ $update_successful == t ]]; then
     if [[ -f $status_path/upstream-changed ]]; then
-      rm $status_path/upstream-changed || return 1
+      rm $status_path/upstream-changed || fail
     fi
     if [[ $cell_was_changed == t ]]; then
       trace $log_trace "Notifying downstream cells of change"
-      notify_downstream_of_change $cell_path || return 1
+      notify_downstream_of_change $cell_path || fail
     fi
-    touch $status_path/updated || return 1
+    touch $status_path/updated || fail
+    if [[ $cell_path == *.bad ]]; then
+      cell_path=${cell_path%.bad}
+      mv $cell_path.bad $cell_path || fail
+    fi
   fi
 
   if [[ $has_lock == t ]]; then
@@ -1180,6 +1186,10 @@ begin_function
 
   cell_path=$cube_path/cell/$cell_id
   if [[ ! -d $cell_path ]]; then
+    cell_path=$cube_path/cell/$cell_id.bad
+    if [[ -e $cell_path ]]; then
+      rm -r $cell_path || fail
+    fi
     mkdir -p $cell_path || fail
     local dim cell_dim_path=$cell_path/dims
     [[ -e $cell_dim_path ]] && { rm $cell_dim_path || fail; }
