@@ -331,7 +331,9 @@ begin_function
           cube_max_duration_short=${cube_max_duration_short:-0} \
           cube_max_duration_short_age=${cube_max_duration_short_age:-0} \
           cube_max_duration_long=${cube_max_duration_long:-0} \
-          cube_max_duration_long_age=${cube_max_duration_long_age:-0} 
+          cube_max_duration_long_age=${cube_max_duration_long_age:-0} \
+          sample_count=${sample_count:-0} \
+          cube_sample_count=${cube_sample_count:-0}
     read_persist_file || fail
     read_cube_persist_file || fail
   fi
@@ -398,6 +400,8 @@ begin_function
   fi
 
   if [[ "$status_path" ]]; then
+    let cube_sample_count++
+    let sample_count++
     write_persist_file || fail
     write_cube_persist_file || fail
   fi
@@ -653,6 +657,7 @@ cube_max_duration_short=$cube_max_duration_short
 cube_max_duration_short_age=$cube_max_duration_short_age
 cube_max_duration_long=$cube_max_duration_long
 cube_max_duration_long_age=$cube_max_duration_long_age
+cube_sample_count=$cube_sample_count
 " >$cube_status_path/persist
 }
 
@@ -669,6 +674,7 @@ max_duration_short=$max_duration_short
 max_duration_short_age=$max_duration_short_age
 max_duration_long=$max_duration_long
 max_duration_long_age=$max_duration_long_age
+sample_count=$sample_count
 " >$status_path/persist
 }
 
@@ -896,6 +902,93 @@ begin_function
   else
     result+=" 0"
   fi
+
+end_function
+handle_return
+}
+
+# Computes the error rate of a given dependency?
+# input: result choice_cell
+# output: result
+strategy_throughput() {
+trace $log_trace "Calculating strategy score: throughput for $choice"
+begin_function
+
+  local avg_duration=0
+
+  if [[ -e $choice_cell/status/persist ]]; then
+    source $choice_cell/status/persist || fail
+  fi
+
+  if [[ -e $choice/status/persist ]]; then
+    source $choice/status/persist || fail
+  fi
+
+  if [[ $sample_count -lt 3 ]]; then
+    avg_duration=${cube_avg_duration_long:-0}
+  else
+    avg_duration=${avg_duration_long:-0}
+  fi
+
+  result+=" $(printf "%04d" $avg_duration)"
+
+end_function
+handle_return
+}
+
+# Computes the error rate of a given dependency?
+# input: result choice_cell
+# output: result
+strategy_latency() {
+trace $log_trace "Calculating strategy score: latency for $choice"
+begin_function
+
+  local max_duration=0
+
+  if [[ -e $choice_cell/status/persist ]]; then
+    source $choice_cell/status/persist || fail
+  fi
+
+  if [[ -e $choice/status/persist ]]; then
+    source $choice/status/persist || fail
+  fi
+
+  if [[ $sample_count -lt 3 ]]; then
+    max_duration=${cube_max_duration_long:-0}
+  else
+    max_duration=${max_duration_long:-0}
+  fi
+
+  result+=" $(printf "%04d" $max_duration)"
+
+end_function
+handle_return
+}
+
+# Computes the error rate of a given dependency?
+# input: result choice_cell
+# output: result
+strategy_reliable() {
+trace $log_trace "Calculating strategy score: reliable for $choice"
+begin_function
+
+  local avg_fail_rate=0
+
+  if [[ -e $choice_cell/status/persist ]]; then
+    source $choice_cell/status/persist || fail
+  fi
+
+  if [[ -e $choice/status/persist ]]; then
+    source $choice/status/persist || fail
+  fi
+
+  if [[ $sample_count -lt 3 ]]; then
+    avg_fail_rate=${cube_avg_failure_rate_short:-0}
+  else
+    avg_fail_rate=${avg_failure_rate_short:-0}
+  fi
+
+  result+=" $(printf "%04d" $avg_fail_rate)"
 
 end_function
 handle_return
