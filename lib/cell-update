@@ -91,11 +91,11 @@ handle_return
 expand_strategies() {
 local new_strategies=
 for strategy in $strategies; do
-  case strategy in
+  case $strategy in
     cached|c)
       new_strategies+=" cached"
     ;;
-    reliable|r)
+    reliable|reliability|r)
       new_strategies+=" reliable"
     ;;
     latency|l)
@@ -112,7 +112,7 @@ for strategy in $strategies; do
     ;;
     *)
       err "Invalid strategy: $strategy"
-      fail1
+      return 1
     ;;
   esac
 done
@@ -809,6 +809,9 @@ begin_function
       local i choice_path choice_name choice_cell cells 
 
       results=( )
+      for ((i=0; i<choice_count; i++)); do
+        results[$i]=
+      done
 
       local strategy
       begin_for strategy in $strategies; doo
@@ -816,11 +819,19 @@ begin_function
           begin_for ((i=0; i<choice_count; i++)); doo
 
             choice="${choices[$i]}"
-            choice_cell=$up_path/$cube_dep_name/$choice_name
+            choice_name=${choice##*/}
+            if [[ $choice_name =~ ^[0-9]+-(.*) ]]; then
+              choice_name=${BASH_REMATCH[1]}
+            fi
 
-            if [[ ! -d $choice_cell ]]; thne
+            if [[ ! -d $up_path/$cube_dep_name/$choice_name ]]; then
              err "Invalid choice: $choice_cell"
              fail1
+            fi
+
+            choice_cell=$up_path/$cube_dep_name/$choice_name/only
+            if [[ ! -d $up_path/$cube_dep_name/$choice_name/only ]]; then
+              incomplete "Can't handle multiple cells in a multi-path dependency yet"
             fi
 
             result=${results[$i]}
@@ -837,14 +848,15 @@ begin_function
       for ((i=0; i<choice_count; i++)); do
         results[$i]+=" ${choices[$i]}$NL"
       done
-      results[0]=" ${results[0]}" # necessary to align results for echo command
-      choices=( $(echo "${results[*]}" | sort) )
+      #results[0]=" ${results[0]}" # necessary to align results for echo command
+      debug_start
+      OIFS=$IFS IFS=$NL choices=( $(echo "${results[*]}" | sort) ) IFS=$OIFS
 
       # avoid strategy starvation by occasionally allowing the underdog to be on top
-      if [[ $((RANDOM % 1000)) -gt $shuffle_chance ]]; then
+      if [[ $((RANDOM % 1000)) -lt $shuffle_chance ]]; then
         local c=${#choices[*]}
         let c--
-        choices=( ${choices[-1]} ${choices[*]:0:$c} )
+        OIFS=$IFS IFS=$NL choices=( ${choices[-1]} ${choices[*]:0:$c} ) IFS=$OIFS
       fi
 
       trace $log_trace "strategy results:"
@@ -895,6 +907,7 @@ strategy_cached() {
 trace $log_trace "Calculating strategy score: cached for $choice"
 begin_function
 
+  local needs_update
   does_cell_need_update $choice_cell || fail
 
   if [[ $needs_update == t ]]; then
@@ -924,7 +937,7 @@ begin_function
     source $choice/status/persist || fail
   fi
 
-  if [[ $sample_count -lt 3 ]]; then
+  if [[ ${sample_count:-0} -lt 3 ]]; then
     avg_duration=${cube_avg_duration_long:-0}
   else
     avg_duration=${avg_duration_long:-0}
@@ -953,7 +966,7 @@ begin_function
     source $choice/status/persist || fail
   fi
 
-  if [[ $sample_count -lt 3 ]]; then
+  if [[ ${sample_count:-0} -lt 3 ]]; then
     max_duration=${cube_max_duration_long:-0}
   else
     max_duration=${max_duration_long:-0}
@@ -982,7 +995,7 @@ begin_function
     source $choice/status/persist || fail
   fi
 
-  if [[ $sample_count -lt 3 ]]; then
+  if [[ ${sample_count:-0} -lt 3 ]]; then
     avg_fail_rate=${cube_avg_failure_rate_short:-0}
   else
     avg_fail_rate=${avg_failure_rate_short:-0}
@@ -1044,7 +1057,7 @@ return 0
 }
 
 does_cell_need_update() {
-local cell_path=$1 out_path= in_path= cube_in_path= status_path= \
+local cell_path=$1 cube_path= out_path= in_path= cube_in_path= status_path= \
   up_before_path= up_path= cube_up_before_path= cube_up_path= \
   cube_status_path=
   
@@ -1288,8 +1301,7 @@ init_context() {
   retry_scale=2 \
   cube_expiration= \
   high_volume_cube=f \
-  strategy_flags= \
-  strategies='cached reliability latency' \
+  strategies='crl' \
   # chance out of 1000 of not following the computed strategy order
   shuffle_chance=100 \
   features=
@@ -1403,6 +1415,14 @@ handle_return
 }
 
 setup_path_vars() {
+cell_path=$(realpath $1)
+local cube
+get_cube $cell_path || return 1
+cube_path=$cube
+
+if [[ -f $cube_path/cube-vars ]]; then
+  source $cube_path/cube-vars || return 1
+fi
 
 # out path must always be there
 out_path=$cell_path/out
