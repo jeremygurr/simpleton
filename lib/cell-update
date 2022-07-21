@@ -475,8 +475,8 @@ trace $log_trace "Notifying downstream deps of change"
 begin_function
   local cell=$1 down_cell down_cube
   if [[ -d $cell/down ]]; then
-    begin_for down_cube in $(find1 $cell/down); doo
-    begin_for down_cell in $(find1 $down_cube); doo
+    begin_for down_cube in $(find1 $cell/down); doo or_fail
+    begin_for down_cell in $(find1 $down_cube); doo or_fail
       if [[ ! -e $down_cell ]]; then
         trace $log_trace "Removing broken link: $down_cell"
         rm $down_cell || fail
@@ -494,8 +494,8 @@ begin_function
         # recursive
         notify_downstream_of_change $down_cell || fail
       fi
-    end_for
-    end_for
+    true; end_for
+    true; end_for
   fi
 end_function
 handle_return
@@ -594,9 +594,13 @@ begin_function
     fi
 
     local cell_up_dep
-    begin_for cell_up_dep in $(find1 $up_path); doo
+    if [[ ! -d $up_path ]]; then
+      err "Internal error: invalid up_path=$up_path"
+      fail1
+    fi
+    begin_for cell_up_dep in $(find1 $up_path); doo or_fail
       handle_cube_reply $cell_up_dep || fail
-    end_for
+    true; end_for
 
   fi
 
@@ -767,22 +771,22 @@ if [[ $dep == ${dep%\?} ]]; then
   handle_cube_reply_cells $dep || return 1
 else
   # multipath dep
-  for dep2 in $(find1 $dep); do
+  for dep2 in $(find1 $dep); do or_fail
     handle_cube_reply_cells $dep2 || return 1
-  done
+  true; done
 fi
 return 0
 }
 
 handle_cube_reply_cells() {
-for cell in $(find1 $dep); do
+for cell in $(find1 $dep); do or_fail
   if [[ -f $cell/out/cell-context ]]; then
     source $cell/out/cell-context || return 1
   fi
   if [[ $cell/out -nt $out_path ]]; then
     upstream_changed=t
   fi
-done
+true; done
 return 0
 }
 
@@ -849,7 +853,6 @@ begin_function
         results[$i]+=" ${choices[$i]}$NL"
       done
       #results[0]=" ${results[0]}" # necessary to align results for echo command
-      debug_start
       OIFS=$IFS IFS=$NL choices=( $(echo "${results[*]}" | sort) ) IFS=$OIFS
 
       # avoid strategy starvation by occasionally allowing the underdog to be on top
@@ -904,7 +907,7 @@ handle_return
 # input: result choice_cell
 # output: result
 strategy_cached() {
-trace $log_trace "Calculating strategy score: cached for $choice"
+trace $log_trace "Calculating cached score for $choice"
 begin_function
 
   local needs_update
@@ -924,7 +927,7 @@ handle_return
 # input: result choice_cell
 # output: result
 strategy_throughput() {
-trace $log_trace "Calculating strategy score: throughput for $choice"
+trace $log_trace "Calculating throughput score for $choice"
 begin_function
 
   local avg_duration=0
@@ -953,7 +956,7 @@ handle_return
 # input: result choice_cell
 # output: result
 strategy_latency() {
-trace $log_trace "Calculating strategy score: latency for $choice"
+trace $log_trace "Calculating latency score for $choice"
 begin_function
 
   local max_duration=0
@@ -982,7 +985,7 @@ handle_return
 # input: result choice_cell
 # output: result
 strategy_reliable() {
-trace $log_trace "Calculating strategy score: reliable for $choice"
+trace $log_trace "Calculating reliable score for $choice"
 begin_function
 
   local avg_fail_rate=0
@@ -1183,15 +1186,15 @@ begin_function
 
   local group dep
 
-  begin_for group in $(find1 $up_path -name '*\?' -type d); doo
-    begin_for dep in $(find1 $group -type d); doo
+  begin_for group in $(find1 $up_path -name '*\?' -type d); doo or_fail
+    begin_for dep in $(find1 $group -type d); doo or_fail
       derive_min_upstream_freshness_handle_group $dep || fail
-    end_for
-  end_for
+    true; end_for
+  true; end_for
 
-  begin_for dep in $(find1 $up_path -not -name '*\?' -type d); doo
+  begin_for dep in $(find1 $up_path -not -name '*\?' -type d); doo or_fail
     derive_min_upstream_freshness_handle_group $dep || fail
-  end_for
+  true; end_for
 
   echo "min_upstream_freshness=$min_upstream_freshness" >$cube_status_path/min-upstream-freshness || fail
 
@@ -1201,10 +1204,10 @@ handle_return
 
 derive_min_upstream_freshness_handle_group() {
 local dep=$1 cell cube
-for cell in $(find1 $dep -type d); do
+for cell in $(find1 $dep -type d); do or_fail
   # recursive
   derive_min_upstream_freshness $cell/up || return 1
-done
+true; done
 return 0
 }
 
@@ -1459,12 +1462,12 @@ trace $log_trace "Setting up 'up' folder for cell"
 begin_function
 
   local dep_name target group
-  begin_for group in $(find1 $cube_up_path -name '*\?'); doo
+  begin_for group in $(find1 $cube_up_path -name '*\?'); doo or_fail
     dep_name=${group##*/}
     target=$up_path/$dep_name
     mkdir $target || fail
     cell_setup_up_deps $group $target || fail
-  end_for
+  true; end_for
 
   cell_setup_up_deps $cube_up_path $up_path || fail
 
@@ -1481,7 +1484,7 @@ begin_function_flat
   local cell_up_path=$1
   
   local dep dep_name target cell_ids dep_cell_id
-  begin_for dep in $(find1 $cube_up_path -not -name '*\?'); doo
+  begin_for dep in $(find1 $cube_up_path -not -name '*\?'); doo or_fail
 
     if [[ ! -f $dep/cube-context ]]; then
       err "$dep is not a cube"
@@ -1508,7 +1511,7 @@ begin_function_flat
     get_cell_ids $dep || fail
 
     local link_count=0
-    begin_for dep_cell_id in $cell_ids; do
+    begin_for dep_cell_id in $cell_ids; doo
 
       local up_cell=$real_dep/cell/$dep_cell_id
       ln -s $up_cell $target/ || fail
@@ -1534,7 +1537,7 @@ begin_function_flat
 
     end_for
 
-  end_for
+  true; end_for
 
 end_function_flat
 handle_return
