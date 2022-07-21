@@ -70,10 +70,6 @@ begin_function
     find1 $cube_path/cell -mmin +$expiration_minutes -exec rm -r \{\} + || fail
   fi
 
-  if [[ -d $cube_path/cell ]]; then
-    find1 $cube_path/cell -name *.bad -type d -exec rm -r \{\} + || fail
-  fi
-
   cube_validate || fail
   eval "$localize_dim_vars" || fail
 
@@ -372,16 +368,19 @@ begin_function
     consecutive_failures=0
 
     if [[ "$status_path" ]]; then
-      update_max_duration max_duration_short 10
-      update_max_duration max_duration_long 100
-      update_max_duration cube_max_duration_short 10
-      update_max_duration cube_max_duration_long 100
-      let 'avg_duration_short = (avg_duration_short * 9 + duration_of_update * 1000) / 10'
-      let 'avg_duration_long = (avg_duration_long * 99 + duration_of_update * 1000) / 100'
+      if [[ $debugging == f ]]; then
+        update_max_duration max_duration_short 10
+        update_max_duration max_duration_long 100
+        update_max_duration cube_max_duration_short 10
+        update_max_duration cube_max_duration_long 100
+        let 'avg_duration_short = (avg_duration_short * 9 + duration_of_update * 1000) / 10'
+        let 'avg_duration_long = (avg_duration_long * 99 + duration_of_update * 1000) / 100'
+        let 'cube_avg_duration_short = (cube_avg_duration_short * 9 + duration_of_update * 1000) / 10'
+        let 'cube_avg_duration_long = (cube_avg_duration_long * 99 + duration_of_update * 1000) / 100'
+      fi
+
       let 'avg_failure_rate_short = (avg_failure_rate_short * 9) / 10'
       let 'avg_failure_rate_long = (avg_failure_rate_long * 99) / 100'
-      let 'cube_avg_duration_short = (cube_avg_duration_short * 9 + duration_of_update * 1000) / 10'
-      let 'cube_avg_duration_long = (cube_avg_duration_long * 99 + duration_of_update * 1000) / 100'
       let 'cube_avg_failure_rate_short = (cube_avg_failure_rate_short * 9) / 10'
       let 'cube_avg_failure_rate_long = (cube_avg_failure_rate_long * 99) / 100'
     fi
@@ -441,10 +440,6 @@ begin_function
       notify_downstream_of_change $cell_path || fail
     fi
     touch $status_path/updated || fail
-    if [[ $cell_path == *.bad ]]; then
-      cell_path=${cell_path%.bad}
-      mv $cell_path.bad $cell_path || fail
-    fi
   fi
 
   if [[ $has_lock == t ]]; then
@@ -786,7 +781,7 @@ for cell in $(find1 $dep); do or_fail
   if [[ $cell/out -nt $out_path ]]; then
     upstream_changed=t
   fi
-true; done
+true; done; or_fail
 return 0
 }
 
@@ -860,9 +855,10 @@ begin_function
         local c=${#choices[*]}
         let c--
         OIFS=$IFS IFS=$NL choices=( ${choices[-1]} ${choices[*]:0:$c} ) IFS=$OIFS
+        trace $log_trace "Shuffled strategies"
       fi
 
-      trace $log_trace "strategy results:"
+      trace $log_trace "Strategy results:"
       for ((i=0; i<choice_count; i++)); do
         choice=${choices[$i]}
         trace $log_trace "$choice"
@@ -891,12 +887,13 @@ begin_function
   fi
 
   if [[ $multipath == t ]]; then
-    local choice_name=${choice##*/} 
-    local target=$up_path/${cube_dep_name%\?}
-    if [[ -e $target ]]; then
-      rm -r $target || fail
+    local chosen_name=${chosen##*/} 
+    if [[ $chosen_name =~ ^[0-9]+-(.*) ]]; then
+      chosen_name=${BASH_REMATCH[1]}
     fi
-    ln -s $up_path/$cube_dep_name/$choice_name $target || fail
+    local target=$up_path/${cube_dep_name%\?}
+    safe_link $up_path/$cube_dep_name/$chosen_name $target || fail
+    trace $log_info "Chose $chosen_name for $cube_dep"
   fi
 
 end_function
@@ -1370,10 +1367,6 @@ begin_function
 
   cell_path=$cube_path/cell/$cell_id
   if [[ ! -d $cell_path ]]; then
-    cell_path=$cube_path/cell/$cell_id.bad
-    if [[ -e $cell_path ]]; then
-      rm -r $cell_path || fail
-    fi
     mkdir -p $cell_path || fail
     local dim cell_dim_path=$cell_path/dims
     [[ -e $cell_dim_path ]] && { rm $cell_dim_path || fail; }
@@ -1498,8 +1491,8 @@ begin_function_flat
       if [[ ! -d $dep/down ]]; then
         mkdir $dep/down || fail
       fi
-      trace $log_trace "Creating cube down link: $dep/down/${real_dep##*/}"
-      ln -s $real_dep $dep/down/ || fail
+      trace $log_trace "Creating cube down link: $dep/down/$cube_name"
+      safe_link $real_dep $dep/down/$cube_name || fail
     fi
 
     local cell_dep_name=$dep_name
@@ -1514,21 +1507,18 @@ begin_function_flat
     begin_for dep_cell_id in $cell_ids; doo
 
       local up_cell=$real_dep/cell/$dep_cell_id
-      ln -s $up_cell $target/ || fail
+      safe_link $up_cell $target/ || fail
       local up_down_path=$up_cell/down/$cube_name/$cell_id
 
       if [[ ! -e $up_down_path ]]; then
         if [[ ! -d $up_cell/down/$cube_name ]]; then
           mkdir -p $up_cell/down/$cube_name || fail
         fi
-        ln -s $cell_path $up_down_path || fail
+        safe_link $cell_path $up_down_path || fail
       fi
 
       if [[ $link_count == 0 ]]; then
-        if [[ -f $target/only ]]; then
-          rm $target/only || fail
-        fi
-        ln -s $up_cell $target/only || fail
+        safe_link $up_cell $target/only || fail
       elif [[ $link_count == 1 ]]; then
         rm $target/only || fail
       fi
