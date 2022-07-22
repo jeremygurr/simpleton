@@ -58,9 +58,10 @@ begin_function
   if [[ -f $cube_path/cube-vars ]]; then
     source $cube_path/cube-vars || fail
   fi
+  strategies=${strategies:-$default_strategies}
   expand_strategies || fail
 
-  fresh=${fresh:-$default_fresh}
+  fresh=${fresh2:-${fresh:-$default_fresh}}
 
   if [[ "$cube_expiration" && -d $cube_path/cell ]]; then
     trace $log_trace "Deleting cached data older than $cube_expiration"
@@ -186,7 +187,7 @@ handle_return
 }
 
 cube_update_pivot_values() {
-trace $log_trace "Pivoting over values of $dim: ${values[*]}"
+trace $log_trace2 "Pivoting over values of $dim: ${values[*]}"
 begin_function_flat
 
   local parallel=f
@@ -244,21 +245,22 @@ begin_function
     # TODO if this changed, must refresh the up folder below
   fi
 
-  debug_start
   if [[ "$cube_up_path" && "$cube_up_path" -nt "$up_path" ]]; then
     if [[ -d $up_path ]]; then
       rm -r $up_path || fail
     fi
     mkdir $up_path || fail
-    cell_setup_up || fail
+    cell_setup_up || { rm -r $up_path; fail1; }
   fi
 
   local maybe_deps_changed=t \
         local_inputs_changed=t \
+        local_failure=f \
         not_fresh=t \
         has_lock=f \
         update_successful=f \
         need_update=t \
+        deps_updated_successfully=t \
         cell_was_changed=f
 
   does_cell_need_update $cell_path || fail
@@ -330,6 +332,7 @@ begin_function
           cube_max_duration_long=${cube_max_duration_long:-0} \
           cube_max_duration_long_age=${cube_max_duration_long_age:-0} \
           sample_count=${sample_count:-0} \
+          update_id=1000 \
           cube_sample_count=${cube_sample_count:-0}
     read_persist_file || fail
     read_cube_persist_file || fail
@@ -385,23 +388,27 @@ begin_function
       let 'cube_avg_failure_rate_short = (cube_avg_failure_rate_short * 9) / 10'
       let 'cube_avg_failure_rate_long = (cube_avg_failure_rate_long * 99) / 100'
     fi
+    let cube_sample_count++
+    let sample_count++
 
   else
 
-    trace $log_warn "Update failed."
-    let consecutive_failures++
-    if [[ "$cube_status_path" ]]; then
-      let 'avg_failure_rate_short = (avg_failure_rate_short * 9 + 1000) / 10'
-      let 'avg_failure_rate_long = (avg_failure_rate_long * 99 + 1000) / 100'
-      let 'cube_avg_failure_rate_short = (cube_avg_failure_rate_short * 9 + 1000) / 10'
-      let 'cube_avg_failure_rate_long = (cube_avg_failure_rate_long * 99 + 1000) / 100'
+    trace $log_warn "Update of $short_cube cell $cell_id failed."
+    if [[ $local_failure == t ]]; then
+      let consecutive_failures++
+      if [[ "$cube_status_path" ]]; then
+        let 'avg_failure_rate_short = (avg_failure_rate_short * 9 + 1000) / 10'
+        let 'avg_failure_rate_long = (avg_failure_rate_long * 99 + 1000) / 100'
+        let 'cube_avg_failure_rate_short = (cube_avg_failure_rate_short * 9 + 1000) / 10'
+        let 'cube_avg_failure_rate_long = (cube_avg_failure_rate_long * 99 + 1000) / 100'
+      fi
+      let cube_sample_count++
+      let sample_count++
     fi
 
   fi
 
   if [[ "$status_path" ]]; then
-    let cube_sample_count++
-    let sample_count++
     write_persist_file || fail
     write_cube_persist_file || fail
   fi
@@ -517,7 +524,6 @@ begin_function
   if type execute_update &>/dev/null; then
     new_stage execute-update || fail
     local rc delay=$retry_delay
-    update_successful=f
     for ((retry=0; retry < retry_max; retry++)); do
       execute_update; rc=$?
       case $rc in
@@ -540,6 +546,9 @@ begin_function
   else
     update_successful=t
   fi
+  if [[ $update_successful == f ]]; then
+    local_failure=t
+  fi
 end_function
 handle_return
 }
@@ -561,7 +570,7 @@ begin_function
 
   if [[ $maybe_deps_changed == t && "$cube_up_path" ]]; then
     new_stage update-deps || fail
-    cell_update_deps || fail
+    cell_update_deps || { needs_update=f; update_successful=f; }
   fi
 
   if [[ $needs_update == t ]]; then
@@ -572,14 +581,10 @@ begin_function
 
       if [[ "${update_id:-}" ]]; then
         let update_id++
-      else
-        update_id=1000
       fi
 
       maybe_apply_cooldown || fail
 
-    else
-      update_id=1000
     fi
 
     if [[ "$lock_path" && $has_lock == f ]]; then
@@ -589,14 +594,18 @@ begin_function
       has_lock=t
     fi
 
-    local cell_up_dep
-    if [[ ! -d $up_path ]]; then
-      err "Internal error: invalid up_path=$up_path"
-      fail1
+    if [[ "$up_path" ]]; then
+      local cell_up_dep
+      if [[ ! -d $up_path ]]; then
+        err "Internal error: invalid up_path=$up_path"
+        stack_trace
+        fail1
+      fi
+
+      begin_for cell_up_dep in $(find1 $up_path); doo or_fail
+        handle_cube_reply $cell_up_dep || fail
+      true; end_for
     fi
-    begin_for cell_up_dep in $(find1 $up_path); doo or_fail
-      handle_cube_reply $cell_up_dep || fail
-    true; end_for
 
   fi
 
@@ -638,11 +647,11 @@ handle_return
 new_stage() {
 local stage=$1
 if [[ "${previous_stage:-}" ]]; then
-  trace $log_trace "Finished stage $previous_stage" \
+  trace $log_trace2 "Finished stage $previous_stage" \
     "in $(echo "$EPOCHSECONDS - $stage_start_time" | bc) seconds"
 fi
 [[ "$log_path" ]] && echo "$stage $EPOCHSECONDS" >>"$log_path/stage-timing-current"
-trace $log_trace "Starting stage $stage"
+trace $log_trace2 "Starting stage $stage"
 stage_start_time=$EPOCHSECONDS
 previous_stage=$stage
 }
@@ -735,7 +744,7 @@ begin_function
       update_dep "$dep" &
       processes+=" $!"
     else
-      update_dep "$dep" || fail
+      ( update_dep "$dep" ) || fail
     fi
   end_for
 
@@ -743,7 +752,7 @@ begin_function
     cell_update_deps_serial &
     processes+=" $!"
   else
-    cell_update_deps_serial || fail
+    ( cell_update_deps_serial ) || fail
   fi
 
   wait_for_sub_processes || fail
@@ -832,7 +841,15 @@ begin_function
 
             choice_cell=$up_path/$cube_dep_name/$choice_name/only
             if [[ ! -d $choice_cell ]]; then
-              incomplete "Can't handle multiple cells in a multi-path dependency yet: $choice_cell"
+              local cells=( $(find1 ${choice_cell%/*}) )
+              if [[ ${#cells[*]} -lt 2 ]]; then
+                err "Invalid up_path: $choice_cell, will attempt to repair."
+                err "Rerun this update to see if it worked."
+                rm -r $up_path || fail
+                fail1
+              else
+                incomplete "Can't handle multiple cells in a multi-path dependency yet: $choice_cell"
+              fi
             fi
 
             result=${results[$i]}
@@ -876,7 +893,7 @@ begin_function
   # attempt update of each option, until one succeeds
   begin_for choice in ${choices[*]}; doo
     failed=f
-    view= fresh= called_from=$cube_name parent= cube_update $choice || failed=t
+    view= fresh=${fresh2:-} fresh2= called_from=$cube_name parent= cube_update $choice || failed=t
     if [[ $failed == f ]]; then
       chosen=$choice
       break
@@ -1084,16 +1101,21 @@ begin_function
     local_inputs_changed=f
   fi
 
-  if [[ -n "$up_before_path" && 
-     ( "$up_before_path" -nt "$status_path/updated" 
-     || "$cube_up_before_path" -nt "$status_path/updated" 
-     || -f $status_path/upstream-changed 
-     )
-     || -n "$up_path" && 
-     ( "$up_path" -nt "$status_path/updated" 
-     || "$cube_up_path" -nt "$status_path/updated" 
-     || -f $status_path/upstream-changed 
-     ) ]]; then
+  if [[ "${fresh2:-}" ]]; then
+    trace $log_trace "Fresh2 is set, so forcing update of upstream"
+  elif [[ "$up_before_path" && 
+       ( "$up_before_path" -nt "$status_path/updated" 
+       || "$cube_up_before_path" -nt "$status_path/updated" 
+       || -f $status_path/upstream-changed 
+       )
+       ]]; then
+    trace $log_trace "Up-before changes were made, needs update"
+  elif [[ "$up_path" && 
+       ( "$up_path" -nt "$status_path/updated" 
+       || "$cube_up_path" -nt "$status_path/updated" 
+       || -f $status_path/upstream-changed 
+       ) 
+       ]]; then
     trace $log_trace "Upstream changes were made, needs update"
   else
     maybe_deps_changed=f
@@ -1303,7 +1325,7 @@ init_context() {
   retry_scale=2 \
   cube_expiration= \
   high_volume_cube=f \
-  strategies='crl' \
+  default_strategies=crl \
   # chance out of 1000 of not following the computed strategy order
   shuffle_chance=100 \
   features=
@@ -1507,7 +1529,16 @@ begin_function_flat
     local link_count=0
     begin_for dep_cell_id in $cell_ids; doo
 
-      local up_cell=$real_dep/cell/$dep_cell_id
+      local up_cell=$real_dep/cell
+      if [[ ! -d $up_cell ]]; then
+        err "Internal error: folder doesn't exist: $up_cell"
+        fail1
+      fi
+      up_cell+=/$dep_cell_id
+      if [[ ! -d $up_cell ]]; then
+        mkdir $up_cell || fail
+      fi
+
       safe_link $up_cell $target/ || fail
       local up_down_path=$up_cell/down/$cube_name/$cell_id
 
@@ -1574,7 +1605,7 @@ handle_return
 # inputs: short_cube cube_path
 # outputs: dimensions dim_string
 gather_dims() {
-trace $log_trace "Gathering dimensions for $short_cube"
+trace $log_trace2 "Gathering dimensions for $short_cube"
 local dimension dimension_file dimension_plural
 localize_dim_vars=
 dimensions=()
@@ -1608,7 +1639,7 @@ handle_return
 # input: dim
 # output: values 
 expand_values() {
-trace $log_trace "Expanding values for $dim"
+trace $log_trace2 "Expanding values for $dim"
 begin_function
 
   local dims=${dim}s
@@ -1739,7 +1770,7 @@ begin_function
   if [[ "$cell_dim_part" ]]; then
     cell_dim_part=${cell_dim_part%,}
     cell_id=$cell_dim_part
-    trace $log_trace "Cell id calculated: $cell_id"
+    trace $log_trace2 "Cell id calculated: $cell_id"
     if [[ $high_volume_cube == t ]]; then
       hash=$(echo "$cell_dim_part" | cksum -a md5 | awk '{ print $4 }') 
       hash=${hash:0:2}
