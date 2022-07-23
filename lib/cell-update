@@ -162,6 +162,9 @@ execute_update_copy() {
 if [[ "$cube_in_path" && "$out_path" ]]; then
   rsync -a --exclude='*.safe' $cube_in_path/ $out_path.new/ || return 1
 fi
+if [[ "$in_path" && "$out_path" ]]; then
+  rsync -a --exclude='*.safe' $in_path/ $out_path.new/ || return 1
+fi
 return 0
 }
 
@@ -238,8 +241,8 @@ trace $log_info "Updating cell $short_cube $dim_string"
 begin_function
 
   local start_time=$EPOCHSECONDS
-  cell_validate || fail
   cell_feature_setup || fail
+  cell_validate || fail
 
   if [[ "$cube_up_before_path" ]]; then
     new_stage update-deps-before || fail
@@ -448,7 +451,7 @@ begin_function
       rm $status_path/upstream-changed || fail
     fi
     if [[ $cell_was_changed == t ]]; then
-      trace $log_trace "Notifying downstream cells of change"
+      trace $log_trace2 "Notifying downstream cells of change"
       notify_downstream_of_change $cell_path || fail
     fi
     touch $status_path/updated || fail
@@ -478,7 +481,7 @@ fi
 }
 
 notify_downstream_of_change() {
-trace $log_trace "Notifying downstream deps of change"
+debug_start
 begin_function
   local cell=$1 down_cell down_cube
   if [[ -d $cell/down ]]; then
@@ -488,6 +491,7 @@ begin_function
         trace $log_trace "Removing broken link: $down_cell"
         rm $down_cell || fail
       elif [[ ! -f $down_cell/status/upstream-changed ]]; then
+        trace $log_trace2 "Notifying ${down_cell#*/work/} of change"
         if [[ ! -d $down_cell/status ]]; then
           mkdir -p $down_cell/status || fail
         fi
@@ -900,7 +904,9 @@ begin_function
   # attempt update of each option, until one succeeds
   begin_for choice in ${choices[*]}; doo
     failed=f
-    view= fresh=$new_fresh fresh2=$new_fresh2 called_from=$cube_name parent= cube_update $choice || failed=t
+    view= fresh=$new_fresh fresh2=$new_fresh2 \
+      called_from=$cube_name parent= force_update= \
+      cube_update $choice || failed=t
     if [[ $failed == f ]]; then
       chosen=$choice
       break
@@ -934,6 +940,7 @@ trace $log_trace "Calculating cached score for $choice"
 begin_function
 
   local needs_update
+  setup_path_vars $choice_cell || fail
   does_cell_need_update $choice_cell || fail
 
   if [[ $needs_update == t ]]; then
@@ -1092,8 +1099,6 @@ begin_function
 
   needs_update=t local_inputs_changed=t maybe_deps_changed=t not_fresh=t
 
-  setup_path_vars $cell_path || fail
-
   if [[ ! -d "$out_path" ]]; then
     trace $log_trace "Out path is missing, needs update"
   elif [[ -n "$in_path" && 
@@ -1104,6 +1109,8 @@ begin_function
     trace $log_trace "Local changes were made, needs update"
   elif [[ $cube_path/cube-context -nt $status_path/updated ]]; then
     trace $log_trace "cube-context has changed, needs update"
+  elif [[ $cube_path/cube-vars -nt $status_path/updated ]]; then
+    trace $log_trace "cube-vars has changed, needs update"
   else
     local_inputs_changed=f
   fi
@@ -1343,6 +1350,7 @@ init_context() {
   default_strategies=crl \
   # chance out of 1000 of not following the computed strategy order
   shuffle_chance=100 \
+  force_update=${force_update:-f} \
   features=
 
   # override this if there are parameter requirements that must be met before attempting to update the cell
@@ -1773,7 +1781,7 @@ get_cell_id() {
 
 local dim dims cell_dim_part= value hash 
 
-trace $log_trace "Computing cell id for $short_cube"
+trace $log_trace2 "Computing cell id for $short_cube"
 begin_function
   
   for dim in "${dimensions[@]}"; do
