@@ -229,7 +229,8 @@ cell_update() {
 
 lock_timeout=${lock_timeout:-30} \
 
-debug_path= in_path= cube_in_path= up_path= cube_up_path= down_path= lock_path= cube_log_path= \
+debug_path= in_path= cube_in_path= up_path= cube_up_path= \
+cube_down_path= down_path= lock_path= cube_log_path= \
 log_path= status_path= cube_status_path= out_path= tmp_path= cleanup_on_exit= \
 cell_id= dim_string= cell_path= cube_up_before_path= up_before_path=
 
@@ -256,6 +257,14 @@ begin_function
     fi
     mkdir $up_path || fail
     cell_setup_up || { rm -r $up_path; fail1; }
+  fi
+
+  if [[ "$cube_down_path" && "$cube_down_path" -nt "$down_path" ]]; then
+    if [[ -d $down_path ]]; then
+      rm -r $down_path || fail
+    fi
+    mkdir $down_path || fail
+    cell_setup_down || { rm -r $down_path; fail1; }
   fi
 
   local maybe_deps_changed=t \
@@ -481,7 +490,6 @@ fi
 }
 
 notify_downstream_of_change() {
-debug_start
 begin_function
   local cell=$1 down_cell down_cube
   if [[ -d $cell/down ]]; then
@@ -491,7 +499,9 @@ begin_function
         trace $log_trace "Removing broken link: $down_cell"
         rm $down_cell || fail
       elif [[ ! -f $down_cell/status/upstream-changed ]]; then
-        trace $log_trace2 "Notifying ${down_cell#*/work/} of change"
+        local nice_down_cell=
+        should_trace && nice_down_cell=$(realpath $down_cell)
+        trace $log_trace2 "Notifying ${nice_down_cell#*/work/} of change"
         if [[ ! -d $down_cell/status ]]; then
           mkdir -p $down_cell/status || fail
         fi
@@ -939,7 +949,9 @@ strategy_cached() {
 trace $log_trace "Calculating cached score for $choice"
 begin_function
 
-  local needs_update
+  local needs_update cube_path= out_path= in_path= cube_in_path= status_path= \
+    up_before_path= up_path= cube_up_before_path= cube_up_path= \
+    cube_status_path=
   setup_path_vars $choice_cell || fail
   does_cell_need_update $choice_cell || fail
 
@@ -1090,9 +1102,7 @@ return 0
 }
 
 does_cell_need_update() {
-local cell_path=$1 cube_path= out_path= in_path= cube_in_path= status_path= \
-  up_before_path= up_path= cube_up_before_path= cube_up_path= \
-  cube_status_path=
+local cell_path=$1
   
 trace $log_trace "Checking if update is needed for ${cell_path#*/work/}"
 begin_function
@@ -1158,7 +1168,7 @@ begin_function
       local min_upstream_freshness=inf
 
       if [[ ! -f $cube_status_path/min-upstream-freshness ]]; then
-        derive_min_upstream_freshness $up_path || fail
+        derive_min_upstream_freshness "$up_path" || fail
         echo "min_upstream_freshness=$min_upstream_freshness" >$cube_status_path/min-upstream-freshness || fail
       else
         source $cube_status_path/min-upstream-freshness || fail
@@ -1191,6 +1201,7 @@ handle_return
 # output: min_upstream_freshness
 derive_min_upstream_freshness() {
 local up_path=$1
+[[ ! "$up_path" || ! -d "$up_path" ]] && return 0
 begin_function
 
   local cube default_fresh=inf \
@@ -1492,6 +1503,11 @@ if [[ -d $cube_path/up ]]; then
   up_path=$cell_path/up
 fi
 
+if [[ -d $cube_path/down ]]; then
+  cube_down_path=$cube_path/down
+  down_path=$cell_path/down
+fi
+
 status_path=$cell_path/status
 cube_status_path=$cube_path/status
 
@@ -1510,25 +1526,38 @@ begin_function
     dep_name=${group##*/}
     target=$up_path/$dep_name
     mkdir $target || fail
-    cell_setup_up_deps $group $target || fail
+    cell_setup_x_deps up $group $target || fail
   true; end_for
 
-  cell_setup_up_deps $cube_up_path $up_path || fail
+  cell_setup_x_deps up $cube_up_path $up_path || fail
 
 end_function
 handle_return
 
 }
 
-cell_setup_up_deps() {
+cell_setup_down() {
+
+trace $log_trace "Setting up 'down' folder for cell"
+begin_function
+
+  cell_setup_x_deps down $cube_down_path $down_path || fail
+
+end_function
+handle_return
+
+}
+
+cell_setup_x_deps() {
 
 begin_function_flat
 
-  local cube_up_path=$1; shift
-  local cell_up_path=$1
+  local direction=$1; shift
+  local cube_x_path=$1; shift
+  local cell_x_path=$1
   
   local dep dep_name target cell_ids dep_cell_id
-  begin_for dep in $(find1 $cube_up_path -not -name '*\?'); doo or_fail
+  begin_for dep in $(find1 $cube_x_path -not -name '*\?'); doo or_fail
 
     if [[ ! -f $dep/cube-context ]]; then
       err "$dep is not a cube"
@@ -1538,49 +1567,56 @@ begin_function_flat
     dep_name=${dep##*/}
     local real_dep=$(realpath $dep)
 
-    if [[ ! -e $dep/down/$cube_name ]]; then
-      if [[ ! -d $dep/down ]]; then
-        mkdir $dep/down || fail
+    if [[ $direction == up ]]; then
+      if [[ ! -e $dep/down/$cube_name ]]; then
+        if [[ ! -d $dep/down ]]; then
+          mkdir $dep/down || fail
+        fi
+        trace $log_trace "Creating cube down link: $dep/down/$cube_name"
+        safe_link $real_dep $dep/down/$cube_name || fail
       fi
-      trace $log_trace "Creating cube down link: $dep/down/$cube_name"
-      safe_link $real_dep $dep/down/$cube_name || fail
     fi
 
     local cell_dep_name=$dep_name
     if [[ $cell_dep_name =~ ^[0-9]+-(.*) ]]; then
       cell_dep_name=${BASH_REMATCH[1]}
     fi
-    target=$cell_up_path/$cell_dep_name
+    target=$cell_x_path/$cell_dep_name
     mkdir $target || fail
     get_cell_ids $dep || fail
 
     local link_count=0
     begin_for dep_cell_id in $cell_ids; doo
 
-      local up_cell=$real_dep/cell
-      if [[ ! -d $up_cell ]]; then
-        err "Internal error: folder doesn't exist: $up_cell"
+      local x_cell=$real_dep/cell
+      if [[ ! -d $x_cell ]]; then
+        err "Internal error: folder doesn't exist: $x_cell"
         fail1
       fi
-      up_cell+=/$dep_cell_id
-      if [[ ! -d $up_cell ]]; then
-        mkdir $up_cell || fail
+      x_cell+=/$dep_cell_id
+      if [[ ! -d $x_cell ]]; then
+        mkdir $x_cell || fail
       fi
 
-      safe_link $up_cell $target/ || fail
-      local up_down_path=$up_cell/down/$cube_name/$cell_id
+      safe_link $x_cell $target/ || fail
 
-      if [[ ! -e $up_down_path ]]; then
-        if [[ ! -d $up_cell/down/$cube_name ]]; then
-          mkdir -p $up_cell/down/$cube_name || fail
+      if [[ $direction == up ]]; then
+
+        local up_down_path=$x_cell/down/$cube_name/$cell_id
+
+        if [[ ! -e $up_down_path ]]; then
+          if [[ ! -d $x_cell/down/$cube_name ]]; then
+            mkdir -p $x_cell/down/$cube_name || fail
+          fi
+          safe_link $cell_path $up_down_path || fail
         fi
-        safe_link $cell_path $up_down_path || fail
-      fi
 
-      if [[ $link_count == 0 ]]; then
-        safe_link $up_cell $target/only || fail
-      elif [[ $link_count == 1 ]]; then
-        rm $target/only || fail
+        if [[ $link_count == 0 ]]; then
+          safe_link $x_cell $target/only || fail
+        elif [[ $link_count == 1 ]]; then
+          rm $target/only || fail
+        fi
+
       fi
 
       let link_count++
