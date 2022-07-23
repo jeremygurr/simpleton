@@ -174,7 +174,7 @@ local dim=${dimensions[$index]}
 local dim_file=${dimension_files[$index]}
 local processes=
 
-trace $log_trace "Pivoting $short_cube: $dim"
+trace $log_trace2 "Pivoting $short_cube: $dim"
 begin_function_flat
 
   get_dim_functions || fail
@@ -361,7 +361,9 @@ begin_function
         cell_was_changed=t
       fi
 
-      touch -d @$start_time $status_path/freshness || fail
+      if [[ $cube_type == external ]]; then
+        touch -d @$start_time $status_path/freshness || fail
+      fi
 
     fi
 
@@ -1133,7 +1135,9 @@ begin_function
       out_timestamp=$(date -r $status_path/freshness +%s)
     fi
 
-    if [[ ! "$out_timestamp" || $out_timestamp -lt $fresh_cutoff ]]; then
+    if [[ $cube_type == external 
+      && ( ! "$out_timestamp" || $out_timestamp -lt $fresh_cutoff )
+      ]]; then
 
       trace $log_trace "Freshness requirement ($fresh) not met, needs update"
 
@@ -1300,6 +1304,11 @@ cell_validate() {
 
 begin_function
 
+  if ! are_cell_params_valid; then
+    err "Invalid parameters."
+    fail1
+  fi
+
   if ! is_cell_id_valid; then
     trace $log_trace "Skipping cell because of mismatching cell id: $cell_id"
     return_value=$skip
@@ -1325,10 +1334,16 @@ init_context() {
   retry_scale=2 \
   cube_expiration= \
   high_volume_cube=f \
+  cube_type=external \
   default_strategies=crl \
   # chance out of 1000 of not following the computed strategy order
   shuffle_chance=100 \
   features=
+
+  # override this if there are parameter requirements that must be met before attempting to update the cell
+  are_cell_params_valid() {
+    return 0
+  }
 
   # override this if there are some cell id combinations which are not valid even when
   # composed of valid dim members
