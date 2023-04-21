@@ -1,0 +1,197 @@
+echo "Executing shell-start.sh"
+export PATH=$SIMPLETON_REPO/bin:$PATH
+
+prompt_name=${prompt_name:-simpleton }
+NL=$'\n'
+
+alias ls='ls --color=auto'
+alias l='ls --color=auto -l'
+alias ll='ls --color=auto -la'
+alias rmr='rm -rf'
+alias u='cd ..'
+alias vi=vim
+alias x=simpleton-execute
+
+# git stuff
+alias gc='git checkout'
+alias gb='git branch -vv'
+alias gs='git status -uno'
+alias gsu='git status'
+alias ga='git add'
+alias gcb='git checkout -B'
+alias gu='git reset --hard && git clean -df'
+alias grm='git reset main'
+alias gsc='git clone --depth 1'
+alias gp='git pull'
+alias gd='git diff'
+alias push='git push'
+alias gbs='git bisect start'
+alias gbg='git bisect good'
+alias gbb='git bisect bad'
+alias gr='git remote'
+
+real () {
+cd $(realpath .)
+}
+
+vigr() {
+  files=$(grep -D skip -srIl "$@" *);
+  vim $files
+}
+
+rcp() {
+  local shell="ssh";
+  if [ "${port:-}" ]; then
+      shell="ssh -p $port"
+  fi
+  RSYNC_RSH="$shell" rsync -a --append --inplace --partial --progress "$@"
+}
+
+unset gl
+gl() {
+  git --no-pager log -n ${lines:-20} --decorate --pretty=tformat:"%Cblue %h %Creset %<(25)%ci %C(auto)%d%Creset %s" "$@"
+}
+
+unset gB
+gB() {
+  git --no-pager log -n ${lines:-20} --simplify-by-decoration --all --date-order --decorate --pretty=tformat:"%Cblue %h %Creset %<(25)%ci %C(auto)%d%Creset %s" "$@"
+}
+
+unset gcm
+gcm() {
+local message="$1"; shift
+if [ "$message" ]; then
+    git commit -m "$message" "$@" || return 1
+else
+    git commit || return 1
+fi
+}
+
+deep() {
+git fetch --unshallow
+git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+git fetch origin
+}
+
+unset ifout
+ifout() {
+awk 'BEGIN { rc=1 } length($0) > 0 { rc=0; print } END { exit rc }'
+}
+
+alias f1='find . -maxdepth 1 -not -path "*/.git*"'
+alias f2='find . -maxdepth 2 -not -path "*/.git*"'
+alias f3='find . -maxdepth 3 -not -path "*/.git*"'
+alias f4='find . -maxdepth 4 -not -path "*/.git*"'
+
+unset f
+f() {
+  local return_code=0
+  if [ "$*" ]; then
+    find . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -name "$@" 2>/dev/null | ifout || return_code=1
+  elif [ "${depth:-}" ]; then
+    find . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -maxdepth $depth 2>/dev/null | ifout || return_code=1
+  else
+    find . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' 2>/dev/null | ifout || return_code=1
+  fi
+
+  return $return_code
+}
+
+unset fd
+fd() {
+  local depth=$1; shift
+  local return_code=0
+  find . -mindepth $depth -maxdepth $depth -name "$@" 2>/dev/null | ifout || return_code=1
+
+  return $return_code
+}
+
+unset ff
+ff() {
+  local i
+  for ((i = 1; i < 20; i++)); do
+    echo "searching depth $i..."
+    fd $i "$@"
+    if [ "$?" != 0 ]; then
+      echo -e "$MOVE_UP"
+    fi
+  done
+}
+
+unset grepr
+grepr() {
+grep -D skip -n -s -r -I "$@" *
+}
+
+unset grepri
+grepri() {
+grep -D skip -n -s -r -i -I "$@" *
+}
+
+alias cutf='cut -d " " -f'
+alias short='cut -c -160'
+alias short2='cut -c -320'
+alias short3='cut -c -640'
+
+set -o vi
+set +H
+export SHELL="/bin/bash"
+export LS_OPTIONS='--color=auto'
+export EDITOR=vim
+
+unset parse_git_branch
+parse_git_branch() {
+  local p=$PWD
+  while [[ "$p" =~ / ]]; do
+    if [ -d $p/.git ]; then
+      local r=$(cat $p/.git/HEAD)
+      if [[ "$r" =~ refs/heads ]]; then
+        echo "$r" | sed -E 's/.*refs\/heads\/(.*)/(\1) /'
+      else
+        git branch 2>/dev/null | sed -E -e '/^[^*]/d' -e 's/^\* (.*)/\1 /'
+      fi
+      break
+    fi
+    p=${p%/*}
+  done
+}
+
+RED="\[\033[0;31m\]"
+LIGHT_RED="\[\033[1;31m\]"
+NO_COLOUR="\[\033[0m\]"
+BLUE="\[\033[0;34m\]"
+LIGHT_BLUE="\[\033[1;34m\]"
+PURPLE="\[\033[0;35m\]"
+LIGHT_PURPLE="\[\033[1;35m\]"
+CYAN="\[\033[0;36m\]"
+LIGHT_GREEN=$'\033[0;32m'
+
+custom_prompt_status() {
+  :
+}
+
+prompt_error_string() {
+local rc=$?
+[[ $rc > 0 ]] && echo -n "err $rc "
+}
+
+big_prompt() {
+if [ ! "$BASH" ]; then
+  return 0
+fi
+
+export PS1="| ${RED}\$(prompt_error_string)${LIGHT_GREEN}\$prompt_name$PURPLE\u $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
+| $LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+export PS2='> '
+export PS4='+ '
+}
+
+medium_prompt() {
+export PS1="${LIGHT_GREEN}\$prompt_name$PURPLE\u $LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+}
+
+small_prompt() {
+export PS1="$LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+}
+
+big_prompt

@@ -1,0 +1,99 @@
+#!/bin/bash
+
+set -u
+err() { echo "$*" >&2; }
+# Set this to true to more easily debug the docker build process
+debug=${debug:-f}
+
+if [[ ! -f build-docker-image ]]; then
+  err "This script must be run from within the same folder it exists in."
+  exit 1
+fi
+
+if [[ ! "${TIME_ZONE:-}" ]]; then
+  err "The TIME_ZONE env var must be set. It should be a standard linux time zone path." 
+  err "Different options can be found in this path in most linux docker images: /usr/share/zoneinfo"
+  err "Examples:"
+  err "  export TIME_ZONE=US/Arizona"
+  err "  export TIME_ZONE=US/Eastern"
+  err "  export TIME_ZONE=US/Central"
+  exit 1
+fi
+
+if [[ "$PWD" =~ .*\ .* ]]; then
+  err "You must not have a space in the name of any parent folder of this directory: $PWD"
+  err "Please put your repos in a different place or rename the parent folder to not have spaces and try again."
+  exit 1
+fi
+
+repo_folders="$(find .. -mindepth 1 -maxdepth 1 | sort)"
+
+mkdir -p build || exit 1
+cp Dockerfile shell-start.sh repositories sudoers init build/ || exit 1
+
+echo -n '
+launch_command="
+docker run -it --rm -u $uid --name $name -e COLUMNS=$COLUMNS \
+  -v $SIMPLETON_BASE:/repo \
+  -v $SIMPLETON_HOME:/home \
+' | tee build/launch-command-fast >build/launch-command-persist || exit 1
+
+echo 'docker_copy_command="' >build/docker-copy-command
+
+repo_folders="$(find .. -mindepth 1 -maxdepth 1 | sort)"
+
+for repo_folder in $repo_folders; do
+
+  if [[ -f "$repo_folder/before-docker-build" ]]; then
+    source "$repo_folder/before-docker-build" || exit 1
+  fi
+
+  if [[ -f "$repo_folder/after-Dockerfile" ]]; then
+    cat $repo_folder/after-Dockerfile >>build/Dockerfile || exit 1
+  fi
+
+  if [[ -f "$repo_folder/after-shell-start.sh" ]]; then
+    cat $repo_folder/after-shell-start.sh >>build/shell-start.sh || exit 1
+  fi
+
+  if [[ -d $repo_folder/work ]]; then
+    for workspace in $(find $repo_folder/work -mindepth 1 -maxdepth 1 -type d); do
+      workspace_name=${workspace##*/}
+      workspace=$(readlink -f $workspace)
+      echo "  -v $workspace:/work/$workspace_name \\" >>build/launch-command-persist || exit 1
+      echo "docker cp $workspace \$name:/work/$workspace_name" >>build/docker-copy-command || exit 1
+    done
+  fi
+
+done
+
+echo '  -e prompt_name=\"$name \" \
+  -e USER=$user \
+  -e NO_PROXY='${NO_PROXY:-}' \
+  -e HTTPS_PROXY='${HTTPS_PROXY:-}' \
+  -e HTTP_PROXY='${HTTP_PROXY:-}' \
+  $name 
+"' | tee -a build/launch-command-fast >>build/launch-command-persist || exit 1
+
+echo '"' >>build/docker-copy-command
+
+ALPINE_IMAGE=${ALPINE_IMAGE:-alpine:latest}
+ALPINE_REPO=${ALPINE_REPO:-https://dl-cdn.alpinelinux.org/alpine/}
+
+if [[ "$debug" == t ]]; then
+  set -x
+  DOCKER_BUILDKIT=0 docker build -f build/Dockerfile --rm=false -t simpleton \
+    --build-arg TIME_ZONE=$TIME_ZONE \
+    --build-arg ALPINE_IMAGE=$ALPINE_IMAGE \
+    --build-arg ALPINE_REPO=$ALPINE_REPO \
+    .
+  set +x
+else
+  set -x
+  docker build -f build/Dockerfile -t simpleton \
+    --build-arg TIME_ZONE=$TIME_ZONE \
+    --build-arg ALPINE_IMAGE=$ALPINE_IMAGE \
+    --build-arg ALPINE_REPO=$ALPINE_REPO \
+    .
+  set +x
+fi

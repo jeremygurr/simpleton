@@ -1,0 +1,1003 @@
+#!/bin/bash
+
+# some required defaults
+export tmp_folder="${tmp_folder:-/tmp}"
+export tracing=${tracing:-f}
+export no_trace_depth=${no_trace_depth:-0}
+export trace=${trace:-5}
+let trace-- || true # to make calls to commands within a command be lower trace level
+export trace_indent=${trace_indent:-f}
+export trace_max=${trace_max:-$trace}
+export trace_force=${trace_force:-f}
+export trace_pid=${trace_pid:-f}
+export trace_debug=${trace_debug:-f}
+export bash_trace=${bash_trace:-100}
+export debug=${debug:-f}
+export EDITOR=${EDITOR:-vim}
+
+export log_warn3=${log_warn3:-30}
+export log_warn2=${log_warn2:-20}
+export log_warn=${log_warn:-10}
+export log_info=${log_info:-0}
+export log_trace=${log_trace:--10}
+export log_trace2=${log_trace2:--20}
+export log_trace3=${log_trace3:--30}
+
+alias outdent='trace=$((trace+1))'
+alias outdent5='trace=$((trace+5))'
+alias indent='trace=$((trace-1))'
+alias indent5='trace=$((trace-5))'
+
+alias begin_no_tracing_zone='[[ $no_trace_depth == 0 && $tracing == t ]] && set +x || true; let no_trace_depth++ || true'
+alias end_no_tracing_zone='let no_trace_depth-- || true; [[ $no_trace_depth -le 0 && $tracing == t ]] && set -x || true'
+
+# usage example:
+#   do_stuff() {
+#     begin_function
+#       open_connection || fail
+#       begin_for ((i = 0; i < 10; i++)); doo
+#         stuff || fail
+#       end_for
+#      
+#       more_stuff
+#     end_function
+#     close_connection
+#     handle_return
+#   }
+
+if [[ $trace -gt $bash_trace ]]; then
+  alias       begin_function='let trace-- || true; [[ $trace -lt $bash_trace ]] && {set +x; tracing=f;} || {set -x; tracing=t;}; local return_value=0 break_out=f; while true; do'
+  alias  begin_function_flat='[[ $trace -lt $bash_trace ]] && {set +x; tracing=f;} || {set -x; tracing=t;}; local return_value=0 break_out=f; while true; do'
+  alias          begin_while='break_out=f; while'
+  alias            begin_for='break_out=f; for'
+  alias           begin_loop='break_out=f; while true; do'
+  alias         end_function='break; done; let trace++ || true; [[ $trace -ge $bash_trace ]] && {set -x; tracing=t;}'
+  alias    end_function_flat='break; done; [[ $trace -ge $bash_trace ]] && {set -x; tracing=t;}'
+  alias            end_while='done; [[ $break_out == t ]] && break; true'
+  alias              end_for='done; [[ $break_out == t ]] && break; true'
+  alias             end_loop='done; [[ $break_out == t ]] && break; true'
+else
+  alias       begin_function='let trace-- || true; local return_value=0 break_out=f; while true; do'
+  alias  begin_function_flat='local return_value=0 break_out=f; while true; do'
+  alias          begin_while='break_out=f; while'
+  alias            begin_for='break_out=f; for'
+  alias           begin_loop='break_out=f; while true; do'
+  alias         end_function='break; done; let trace++ || true'
+  alias    end_function_flat='break; done'
+  alias            end_while='done; [[ $break_out == t ]] && break; true'
+  alias              end_for='done; [[ $break_out == t ]] && break; true'
+  alias             end_loop='done; [[ $break_out == t ]] && break; true'
+fi
+
+# to avoid bash syntax parsing problems
+alias doo='do'
+
+# used after a direct command which may fail: cd /somewhere || fail
+alias fail='{ return_value=$?; break_out=t; break; }'
+alias fail1='{ return_value=1; break_out=t; break; }'
+alias fail2='{ return_value=2; break_out=t; break; }'
+
+# used to check if something failed: failed && break
+alias failed='[[ $return_value -gt 0 ]]'
+
+# used when a subshell or pipeline may fail: value=$(cat /tmp/f | jq .value); or_fail
+alias or_fail='[[ "${PIPESTATUS[-1]}" -gt 0 ]] && { return_value=${PIPESTATUS[-1]}; break_out=t; break; }'
+alias command_failed='[[ "${PIPESTATUS[-1]}" -gt 0 ]]'
+
+alias succeed='{ return_value=0; break_out=t; break; }'
+alias succeeded='[[ $return_value -eq 0 ]]'
+
+# should be at the end of every function which contains a try / end_try block
+alias handle_return='return $return_value'
+alias handle_exit='exit $return_value'
+
+plural() {
+local count=$1 word=$2
+if [[ $count -eq 1 ]]; then
+  echo "$count $word"
+else
+  echo "$count ${word}s"
+fi
+}
+
+find1() {
+if [[ ! -d "${1:-}" ]]; then
+  err "find1: directory missing: ${1:-}"
+  stack_trace
+  return 1
+fi
+local path=$1; shift
+find -L "$path" -mindepth 1 -maxdepth 1 "$@"
+}
+
+# make sure we clean up after ourselves whether we've launched a background job or allocated resources
+# this needs to be run again whenever forking to a subprocess
+setup_exit_trap() {
+trap 'trace_indent=f trace $log_trace2 "Cleaning up"; eval "${cleanup_on_exit:-}" || true;
+  { kill $(jobs -p); } 2>/dev/null || true; 
+  ' EXIT
+}
+setup_exit_trap
+
+NL=$'\n'
+TAB=$'\t'
+
+   LIGHT_RED=$'\033[0;31m'
+         RED=$'\033[1;31m'
+ LIGHT_GREEN=$'\033[0;32m'
+       GREEN=$'\033[1;32m'
+LIGHT_YELLOW=$'\033[0;33m'
+      YELLOW=$'\033[1;33m'
+  LIGHT_BLUE=$'\033[0;34m'
+        BLUE=$'\033[1;34m'
+LIGHT_PURPLE=$'\033[0;35m'
+      PURPLE=$'\033[1;35m'
+  LIGHT_CYAN=$'\033[0;36m'
+        CYAN=$'\033[1;36m'
+ LIGHT_WHITE=$'\033[0;37m'
+       WHITE=$'\033[1;37m'
+ LIGHT_BLACK=$'\033[0;38m'
+       BLACK=$'\033[1;38m'
+       RESET=$'\033[0m'
+  CLEAR_LINE=$'\033[2K\r'
+       CLEAR=$'\033[2J'
+CLEAR_SCREEN=$'\033[2J\r\033[H'
+   CURSOR_UP=$'\033[1A'
+     REVERSE=$'\033[7m'
+
+COL10=$'\n\e[A\e[10G'
+COL20=$'\n\e[A\e[20G'
+COL30=$'\n\e[A\e[30G'
+COL40=$'\n\e[A\e[40G'
+COL50=$'\n\e[A\e[50G'
+COL60=$'\n\e[A\e[60G'
+COL70=$'\n\e[A\e[70G'
+COL80=$'\n\e[A\e[80G'
+COL90=$'\n\e[A\e[90G'
+COL100=$'\n\e[A\e[100G'
+COL110=$'\n\e[A\e[110G'
+COL120=$'\n\e[A\e[120G'
+COL130=$'\n\e[A\e[130G'
+COL140=$'\n\e[A\e[140G'
+COL150=$'\n\e[A\e[150G'
+COL160=$'\n\e[A\e[160G'
+COL170=$'\n\e[A\e[170G'
+COL180=$'\n\e[A\e[180G'
+COL190=$'\n\e[A\e[190G'
+COL200=$'\n\e[A\e[200G'
+
+hydrate_template() {
+if [[ "$line" =~ \$ ]]; then
+  line="${line//\"/\\\"}"
+  eval "echo \"$line\"" || return 1
+else
+  echo "$line"
+fi
+}
+
+stack_trace() {
+begin_no_tracing_zone
+local start_frame=${start_frame:-1}
+local count=${#FUNCNAME[*]}
+local p n
+
+if [ ${tracing_midline:-f} == t ]; then
+  tracing_midline=f
+  echo >&$fd_trace
+fi
+
+echo "Stack trace:" >&$fd_original_err
+for ((n = count - 1; n >= start_frame; n--)) ; do
+  let p=n-1
+  echo "  ${BASH_SOURCE[$n]} ${FUNCNAME[$n]} ${BASH_LINENO[$p]}" >&2
+done
+end_no_tracing_zone
+return 0
+}
+
+# write output to standard error
+#   can be overridden to provide a different behavior
+err() {
+  begin_no_tracing_zone
+  local flags=
+  if [[ "$1" == -n ]]; then
+    flags=-n
+    shift
+  fi
+
+  if [[ ${tracing_midline:-f} == t ]]; then
+    tracing_midline=f
+    echo >&$fd_trace
+  fi
+
+  if [[ ${parallel_execution:-f} == t && $trace_pid == t ]]; then
+    echo -n "$BASH_SUBSHELL:$BASHPID "
+  fi
+
+  if [[ ${trace_indent:-f} == t ]]; then
+    [[ $trace -gt $trace_max ]] && trace_max=$trace
+    local pad_size=$((trace_max-trace))
+    printf "%${pad_size}s" >&2
+  fi
+
+  echo $flags "${RED:-}$*${RESET:-}" >&2
+  end_no_tracing_zone
+  return 0
+}
+
+warn() {
+  begin_no_tracing_zone
+  local flags=
+  if [[ "$1" == -n ]]; then
+    flags=-n
+    shift
+  fi
+
+  if [[ ${tracing_midline:-f} == t ]]; then
+    tracing_midline=f
+    echo >&$fd_trace
+  fi
+
+  if [[ ${parallel_execution:-f} == t && $trace_pid == t ]]; then
+    echo -n "$BASH_SUBSHELL:$BASHPID "
+  fi
+
+  if [[ ${trace_indent:-f} == t ]]; then
+    [[ $trace -gt $trace_max ]] && trace_max=$trace
+    local pad_size=$((trace_max-trace))
+    printf "%${pad_size}s" >&2
+  fi
+
+  echo $flags "${YELLOW:-}$*${RESET:-}" >&2
+  end_no_tracing_zone
+}
+
+# prompt_ynsq {message} {var to save result into}
+# Allows: (y)es (n)o (s)kip (q)uit
+prompt_ynq() {
+  begin_no_tracing_zone
+  local message=$1 var=$2
+  if [[ ${tracing_midline:-f} == t ]]; then
+    tracing_midline=f
+    echo >&$fd_trace
+  fi
+
+  while true; do
+    read -s -n 1 -p "${GREEN:-}$message${RESET:-}" $var >&2
+    case ${!var} in
+      y)
+        echo "Yes" >&2  
+        ;;
+      n)
+        echo "No" >&2 
+        ;;
+      q)
+        echo "Quit" >&2 
+        ;;
+      *)
+        err "Pick one of: (y)es (n)o (q)uit"
+        continue
+        ;;
+    esac
+    break
+  done
+  end_no_tracing_zone
+}
+
+# are we tracing in the middle of a line, or are we at the beginning of a new line?
+tracing_midline=f
+
+# use this to log based on current trace level
+# usage: trace [-a] [-n] {importance} {string to output}
+#   -a uses echo_align to align columns
+#   -n skips newline at end
+trace() {
+  begin_no_tracing_zone
+  local nonewline=f align=f emphasize=f
+  while true; do
+    case "$1" in
+      -a)
+        align=t
+        ;;
+      -n)
+        nonewline=t
+        ;;
+      -e)
+        emphasize=t
+        ;;
+      *)
+        break
+        ;;
+    esac
+    shift || true
+  done
+
+  local importance
+  let importance=$1 || true; shift || true
+  if [[ ! "$importance" =~ ^-?[0-9]+$ ]]; then
+    err "Invalid importance level: $importance"
+    return 1
+  fi
+
+  if [[ $((trace+importance)) -gt 0 || $trace_force == t ]]; then
+    if [[ $nonewline == t ]]; then
+      if [[ $tracing_midline == f ]]; then
+        if [[ ${trace_debug:-f} == t ]]; then
+          local pad_size=$((trace_max-trace))
+          printf "%3d " $((pad_size+1)) >&$fd_trace
+        elif [[ $trace_indent == t ]]; then
+          local pad_size=$((trace_max-trace))
+          printf "%${pad_size}s" >&$fd_trace
+        fi
+        tracing_midline=t
+      fi
+      if [[ $align == t ]]; then
+        echo_align -n >&$fd_trace "$@"
+      else
+        echo -n >&$fd_trace "$@"
+      fi
+    else
+      if [[ $tracing_midline == t ]]; then
+        echo >&$fd_trace
+        tracing_midline=f
+      fi
+      if [[ ${trace_debug:-f} == t ]]; then
+        local pad_size=$((trace_max-trace))
+        local imp=$importance
+        let imp=-imp || true
+        [[ $imp -ge 0 ]] && imp=+$imp
+        printf "%3d%+3d " $((pad_size+1)) $imp >&$fd_trace
+      elif [ $trace_indent == t ]; then
+        local pad_size=$((trace_max-trace))
+        printf "%${pad_size}s" >&$fd_trace
+      fi
+      if [[ ${parallel_execution:-f} == t && $trace_pid == t ]]; then
+        echo -n "$BASH_SUBSHELL:$BASHPID " >&$fd_trace
+      fi
+      if [[ $emphasize == t ]]; then
+        echo -n "${YELLOW:-}"
+      fi
+      if [[ $align == t ]]; then
+        echo_align >&$fd_trace "$@"
+      else
+        echo >&$fd_trace "$@"
+      fi
+      if [[ $emphasize == t ]]; then
+        echo -n "${RESET:-}"
+      fi
+    fi
+  fi
+
+  end_no_tracing_zone
+  return 0
+}
+
+# usage: tracex {trace importance} {command to execute}
+# trace then execute command
+tracex() {
+  local importance=$1; shift
+  local command=$*
+  trace $importance "$command" 
+  eval "$command"
+}
+
+out() {
+  begin_no_tracing_zone
+
+  if [ ${tracing_midline:-f} == t ]; then
+    tracing_midline=f
+    echo >&$fd_trace
+  fi
+
+  if [[ ${parallel_execution:-f} == t ]]; then
+    echo -n "$BASH_SUBSHELL:$BASHPID "
+  fi
+
+  echo "$@"
+  end_no_tracing_zone
+  return 0
+}
+
+incomplete() {
+  begin_no_tracing_zone
+  if [ ${tracing_midline:-f} == t ]; then
+    tracing_midline=f
+    echo >&$fd_trace
+  fi
+  if [ "${1:-}" ]; then
+    echo "Not implemented yet: ${1:-}" >&2
+  else
+    echo "Not implemented yet." >&2
+  fi
+  start_frame=2 stack_trace
+  end_no_tracing_zone
+  exit 1
+}
+
+# should pass in a single command or a { } block of commands
+# will run this command after script terminates (whether successfully or in error)
+defer() {
+eval "cleanup_on_exit+='$1 &>/dev/null || true;'"
+}
+
+# usage: random {p=number of possibilities}
+#   sets r={random number between 0 and p-1}
+#   it will be fairly evenly distributed below about 1000, but will become more biased as it gets higher
+unset random
+random() {
+  local p=$1
+  r=$((RANDOM % p))
+}
+
+# usage: random_sleep {min} {max}
+#   will sleep for a random interval between min and max
+unset random_sleep
+random_sleep() {
+  local min=$1; shift
+  local max=$1
+  random $((max-min))
+  sleep $((min+r))
+}
+
+split_to_array() {
+  local var=$1; shift
+  local separator=${1:-$'\n'}
+
+  local OIFS=$IFS
+  IFS=$separator
+  eval "$var=( \$$var )"
+
+  IFS=$OIFS
+}
+
+escape_regex() {
+  local var=$1
+
+  eval "$var="'${'"$var"'//\"/\\\"}'
+  eval "$var="'${'"$var"'// /\\ }'
+  eval "$var="'${'"$var"'//\(/\\\(}'
+  eval "$var="'${'"$var"'//)/\\)}'
+  eval "$var="'${'"$var"'//\?/\\\?}'
+}
+
+# usage: echo -e "\n\n blah  \n\n" | trim_newlines
+# will trim empty lines from beginning and end of given string
+# will leave exactly one trailing newline at the end
+trim_nl() {
+  begin_no_tracing_zone
+  local block
+  read -r -d '' block
+  block=${block##*($NL)}
+  block=${block%%*($NL)}
+  echo "$block"
+  end_no_tracing_zone
+}
+
+# usage: echo " blah   " | trim
+# will trim whitespace from beginning and end of each line in the given input
+trim() {
+  sed 's/^[[:space:]]*\(.*\)[[:space:]]*$/\1/' | grep -v '^$'
+}
+
+to_lower() {
+  tr '[:upper:]' '[:lower:]'
+}
+
+to_upper() {
+  tr '[:lower:]' '[:upper:]'
+}
+
+spaces_to_minus() {
+  sed 's/  */-/g'
+}
+
+upper_first_char() {
+  local string=$1
+  local first=${string:0:1}
+  first=$(echo -n "$first" | tr '[:lower:]' '[:upper:]')
+  echo -n "$first${string:1}"
+}
+
+convert_to_seconds() {
+  local from=$1; shift
+  local to=$1
+  case "$from" in
+    *s)
+      eval "$to=${from%s}"
+    ;;
+    *m)
+      eval "$to=$((${from%m}*60))"
+    ;;
+    *h)
+      eval "$to=$((${from%h}*60*60))"
+    ;;
+    *d)
+      eval "$to=$((${from%d}*24*60*60))"
+    ;;
+    *w)
+      eval "$to=$((${from%w}*7*24*60*60))"
+    ;;
+    *y)
+      eval "$to=$((${from%y}*365*24*60*60))"
+    ;;
+    *)
+      if [[ "$from" =~ ^[0-9]+$ ]]; then
+        # default to seconds
+        eval "$to=$from"
+      else
+        err "Unknown time format, use something like: 4h, 3d, 5m"
+        return 1
+      fi
+    ;;
+  esac
+  return 0
+}
+
+# echo_align behaves much like echo, except that it aligns columns based on the maximum size of previous lines
+# echo_align_reset # will reset the column sizes
+# echo_align -n "somestring" # will print the string but not end the line yet
+# you can't combine the flags like -rn
+# echo_align "string1" "string2" "string3" # the three strings will be in separate columns, possibly padded with spaces to make them align with the preceeding lines
+#
+# global vars
+#   echo_current_column
+#   echo_columns
+#   echo_previous_column_size
+#
+# you can preset column widths like this:
+#   echo_columns=( 20 10 40 )
+
+echo_align() {
+begin_no_tracing_zone
+local output=()
+local no_new_line no_new_column silent block=
+local append
+local rigid=f
+
+while [[ $# -gt 0 ]]; do
+  local key="$1"; shift
+
+  case $key in
+    -b|--block)
+      silent=t
+      block=t
+    ;;
+    -r|--rigid)
+      rigid=t
+    ;;
+    -s|--silent)
+      silent=t
+    ;;
+    -n|--no-new-line)
+      no_new_line=t
+    ;;
+    -N|--no-new-column)
+      no_new_column=t
+    ;;
+    *)
+      output+=("$key")
+    ;;
+  esac
+done
+
+if [ ${tracing_tiny:-f} == t ]; then
+  tracing_tiny=f
+  echo
+fi
+
+if [ "$block" ]; then
+  echo_block+=( "${output[*]}" )
+fi
+
+local column_text column_text_size column_max pad_size pad output_column_count echo_columns_count current_column
+
+echo_current_column=${echo_current_column:-0}
+echo_previous_column_size=${echo_previous_column_size:-0}
+echo_min_pad=${echo_min_pad:-1}
+
+output_column_count=${#output[*]}
+let output_column_count+=echo_current_column
+
+if [ "${echo_columns:-}" ]; then
+  echo_columns_count=${#echo_columns[*]}
+else
+  echo_columns_count=0
+fi
+
+[ $echo_columns_count -gt $output_column_count ] && output_column_count=$echo_columns_count
+
+current_column=0
+for column_text in "${output[@]:-}"; do
+  let current_column++ || true
+  # only pad if we aren't the last column
+  if [ $current_column -lt $output_column_count -o "$no_new_line" ]; then
+    column_max=${echo_columns[$echo_current_column]:-0}
+    column_text_size=${#column_text}
+    let column_text_size+=echo_previous_column_size || true
+
+    if [[ $column_text_size -gt $column_max ]]; then
+      column_max=$column_text_size
+      pad_size=$echo_min_pad
+
+      if [ $rigid == f ]; then
+        echo_columns[$echo_current_column]=$column_max
+      fi
+      [ "${echo_debug:-}" ] && echo_debug
+    else
+      let pad_size=column_max-column_text_size+echo_min_pad || true
+    fi
+
+    if [ ! "$no_new_column" ]; then
+      [ "$pad_size" -le 0 ] && pad_size=$echo_min_pad
+      printf -v pad %${pad_size}s
+      column_text="${column_text}${pad}"
+    fi
+  fi
+  let echo_current_column++ || true
+
+  [ ! "$silent" ] && echo -n "$column_text"
+done
+
+if [ ! "$no_new_line" ]; then
+  [ ! "$silent" ] && echo
+  echo_current_column=0
+fi
+
+if [ "$no_new_column" ]; then
+  echo_previous_column_size=$column_text_size
+else
+  echo_previous_column_size=0
+fi
+
+end_no_tracing_zone
+return 0
+}
+
+echo_align_reset() {
+unset echo_columns
+echo_block=( )
+echo_current_column=0
+}
+
+echo_debug() {
+echo
+echo "echo_columns=( ${echo_columns[*]:-} )"
+echo "echo_current_column=${echo_current_column:-0}"
+}
+
+# example: {complex command} | echo_align_stream 
+echo_align_stream() {
+begin_no_tracing_zone
+local line line_array
+while IFS= read -r line || [ "${line:-}" ]; do
+  line_array=( $line )
+  echo_align "${line_array[@]}"
+  unset line
+done
+end_no_tracing_zone
+return 0
+}
+
+# example: {complex command} | echo_align_block
+# will read the whole input at once, and determine alignment, then output it
+# this is the opposite of echo_align_stream
+echo_align_block() {
+begin_no_tracing_zone
+local line line_array block=()
+while IFS= read -r line || [ "${line:-}" ]; do
+  line_array=( $line )
+  echo_align -b "${line_array[@]:-}"
+  unset line
+done
+
+echo_align_dump
+end_no_tracing_zone
+return 0
+}
+
+echo_align_dump() {
+for line in "${echo_block[@]:-}"; do
+  line_array=( $line )
+  echo_align "${line_array[@]:-}"
+done
+}
+
+get_overlap() {
+  local i
+  result=
+  for ((i=0; i<${#1}; i++)); do
+    [[ "${1:$i:1}" != "${2:$i:1}" ]] && break
+    result+=${1:$i:1}
+  done
+}
+
+# usage: convert_to_seconds {from time period} {to var name}
+convert_to_seconds() {
+  local from=$1; shift
+  local to=$1
+  case "$from" in
+    *s)
+      eval "$to=${from%s}"
+      ;;
+    *m)
+      eval "$to=$((${from%m}*60))"
+      ;;
+    *h)
+      eval "$to=$((${from%h}*60*60))"
+      ;;
+    *d)
+      eval "$to=$((${from%d}*24*60*60))"
+      ;;
+    *w)
+      eval "$to=$((${from%w}*7*24*60*60))"
+      ;;
+    *y)
+      eval "$to=$((${from%y}*365*24*60*60))"
+      ;;
+    *)
+      err "Unknown time format, use something like: 4h, 3d, 5m"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# inputs: folder_to_lock timeout pid_file
+# if timeout is not given, then attempt will immediately fail if it can't get the lock right away
+#   otherwise it will keep trying until the timeout is reached or the lock is obtained.
+folder_lock() {
+local folder_to_lock=${folder_to_lock}
+local timeout=${timeout:-}
+local pid_file=${pid_file:-$folder_to_lock/pid}
+
+trace $log_trace "Attempting to obtain lock for $folder_to_lock"
+
+begin_function
+
+  if [[ -d "$folder_to_lock" ]]; then
+
+    trace $log_trace2 "Lock folder exists already: $folder_to_lock"
+    local pid=
+
+    if [[ -f "$pid_file" ]]; then
+      pid=$(<"$pid_file")
+      if [[ "$pid" == $$ ]]; then
+        trace $log_trace2 "This process already owns the lock, so we are done."
+        succeed
+      fi
+    fi
+
+    # check to see if the process is still running
+    if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
+      rm -rf "$folder_to_lock" || fail
+      trace $log_trace2 "Removed stale lock: $folder_to_lock with pid: $pid"
+    fi
+
+  fi
+
+  local timeleft
+  let timeleft=timeout*1000
+  local delay=250
+  local success=f
+  begin_while true; doo
+    mkdir "$folder_to_lock" &>/dev/null && success=t
+    if [[ $success == t ]]; then
+      echo $$ >"$pid_file" || fail
+      break
+    fi
+
+    if [ ! "$timeout" ]; then
+      break
+    fi
+
+    local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
+    trace $log_info "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
+    sleep $seconds_to_wait
+    timeleft=$((timeleft-delay))
+    let delay*=2
+    if [ "$timeleft" -le 0 ]; then
+      out "Timeout reached. Couldn't obtain the lock in time."
+      break
+    fi
+  end_while
+
+  if [[ $success == f ]]; then
+    trace $log_warn "Failed to obtain lock."
+    fail
+  fi
+
+  defer "rm -r '$pid_file' '$folder_to_lock' &>/dev/null"
+
+  # lock obtained
+  trace $log_trace2 "Succeeded in obtaining lock."
+
+end_function
+handle_return
+}
+
+folder_is_locked() {
+local folder_to_lock=$folder_to_lock
+local pid_file=${pid_file:-$folder_to_lock/pid}
+local is_locked=f
+if [[ -d "$folder_to_lock" ]]; then
+  if [[ -f "$pid_file" ]]; then
+    pid=$(<"$pid_file")
+    if [[ "$pid" ]] && ps $pid &>/dev/null; then
+      is_locked=t
+    fi
+  fi
+fi
+[[ "$is_locked" == t ]]
+}
+
+# inputs: folder_to_unlock pid_file
+folder_unlock() {
+local folder_to_unlock=$folder_to_unlock
+local pid_file=${pid_file:-$folder_to_unlock/pid}
+
+if [[ ! "$folder_to_unlock" ]]; then
+  err "Usage: folder_to_unlock=... folder_unlock "
+  return 1
+fi
+
+if [[ -d "$folder_to_unlock" ]]; then
+  rm -r "$folder_to_unlock" || return 1
+fi
+
+if [[ -f "$pid_file" ]]; then
+  rm "$pid_file" || return 1
+fi
+
+return 0
+}
+
+fd_read_lock() {
+local lock_path=$1
+local timeout=${2:-$lock_timeout}
+flock -s -w $lock_timeout $lock_fd || {
+  err "Failed to get read lock for $lock_path within $timeout seconds"
+  return 1
+  }
+}
+
+fd_write_lock() {
+local lock_path=$1
+local timeout=${2:-$lock_timeout}
+flock -e -w $lock_timeout $lock_fd || {
+  err "Failed to get write lock for $lock_path within $timeout seconds"
+  return 1
+  }
+}
+
+fd_unlock() {
+flock -u $1
+}
+
+get_next_fd() {
+next_fd=$(ls -1 /proc/self/fd | tail -n1)
+let next_fd++
+}
+
+update_modify_times() {
+local from_inclusive=$1; shift
+local to_exclusive=$1
+local current=$from_inclusive
+while [[ ${#current} > 1 && $current =~ / && $current != $to_exclusive ]]; do
+  touch $current || return 1
+  current=${current%/*}
+done
+return 0
+}
+
+is_dir_empty() {
+eval "local contents=( $1/* )"
+local first=${contents[0]}
+[[ "${first%\*}" != "$first" ]]
+}
+
+pretend=${pretend:-ask}
+maybe() {
+local command_to_execute="$*"
+local execute
+
+case $pretend in
+  f)
+    execute=t
+  ;;
+  t)
+    echo "Pretending: $command_to_execute" >&$fd_trace
+    execute=f
+  ;;
+  a|ask)
+    local response
+    echo "Will execute: $command_to_execute" >&$fd_trace
+    sleep 0.5
+    read -p 'Are you sure? [yes/no/All/None/quit] ' -s -n1 response >&$fd_trace
+    case $response in
+      y)
+        echo "yes" >&$fd_trace
+        execute=t
+      ;;
+      A)
+        echo "all" >&$fd_trace
+        pretend=f
+        execute=t
+      ;;
+      N)
+        echo "none" >&$fd_trace
+        pretend=t
+        execute=f
+      ;;
+      q)
+        echo "quit" >&$fd_trace
+        exit 1
+      ;;
+      *)
+        echo "no" >&$fd_trace
+        execute=f
+      ;;
+    esac
+  ;;
+  *)
+    err "Invalid pretend setting: $pretend. Must be one of: t f ask"
+    return 1
+  ;;
+esac
+
+if [[ $execute == t ]]; then
+  trace $log_info "Executing: $command_to_execute"
+  eval "$command_to_execute" || return $?
+fi
+
+return 0
+}
+
+min() {
+result=$1
+if [[ $1 == inf || $2 -lt $1 ]]; then
+  result=$2
+fi
+}
+
+max() {
+result=$1
+if [[ $2 == inf || $2 -gt $1 ]]; then
+  result=$2
+fi
+}
+
+# input: $1 (name of array variable which was already populated with string values)
+enum() {
+local i count array=$1 var
+eval "count=\${#$array[*]}"
+for ((i=0; i < count; i++)); do
+  eval "var=\${$array[$i]}"
+  eval "$var=$i"
+done
+}
+
+safe_link() {
+local from=$1 to=$2
+if [[ $to != */ && ( -e "$to" || -L "$to" ) ]]; then
+  rm -r "$to" || return 1
+fi
+if [[ ! -e "$from" ]]; then
+  err "Internal error: Source of link doesn't exist: $from"
+  stack_trace
+  return 1
+fi
+ln -s "$from" "$to" 
+}
+
+pause() {
+read -p "${1:-Press any key}" -n 1 none || true
+}
+
+# used in if condition to be more clear.
+# instead of:
+#   if ! diff $f1 $f2; then ...
+# write:
+#   if are_different $f1 $f2; then ...
+alias files_are_different='! diff'
+alias files_are_same='diff'
+

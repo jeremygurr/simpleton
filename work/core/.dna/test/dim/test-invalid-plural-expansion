@@ -1,0 +1,41 @@
+$ mkdir -p test-cube/.dna
+
+$ cube edit test-cube/.dna/context content='
+  batch_dims=( env )
+  out_path=out
+
+  expand_members_env() {
+    local value=$value
+    case $value in
+      prod)
+        new_values=( prod1 prod2 )
+      ;;
+      dev|prod*)
+        new_values=( $value )
+      ;;
+      all)
+        new_values=( dev prod1 prod2 )
+      ;;
+      *)
+        new_values=( )
+      ;;
+    esac
+    return 0
+  }
+
+  execute_update() { 
+    echo "env=$env" >$batch_out_path/value
+  }
+  '
+
+# Should fail to update because 'all' is not exactly one env
+$ cell update test-cube env=all &>/dev/null || true
+$ [[ ! -f test-cube/.cyto/batch/dim/env/dev/out/value ]]
+
+$ rm -rf test-cube/.cyto
+# Should work this time
+$ cell update test-cube envs=all
+$ [[ -f test-cube/.cyto/batch/dim/env/dev/out/value ]]
+$ [[ -f test-cube/.cyto/batch/dim/env/prod1/out/value ]]
+$ [[ -f test-cube/.cyto/batch/dim/env/prod2/out/value ]]
+

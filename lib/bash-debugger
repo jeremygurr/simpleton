@@ -1,0 +1,1017 @@
+#!/bin/bash
+
+######################################################
+# BASH Debugger
+# Usage: {command} debug=t
+# press '?' for list of commands while debugging
+######################################################
+
+# used by debugger, in case input or output is redirected from somewhere else during debugging
+exec {fd_original_in}<&0
+exec {fd_original_out}>&1
+exec {fd_original_err}>&2
+exec {fd_original_trace}>&${fd_trace:-2}
+
+NL=$'\n'
+TAB=$'\t'
+
+   LIGHT_RED=$'\033[0;31m'
+         RED=$'\033[1;31m'
+ LIGHT_GREEN=$'\033[0;32m'
+       GREEN=$'\033[1;32m'
+LIGHT_YELLOW=$'\033[0;33m'
+      YELLOW=$'\033[1;33m'
+  LIGHT_BLUE=$'\033[0;34m'
+        BLUE=$'\033[1;34m'
+LIGHT_PURPLE=$'\033[0;35m'
+      PURPLE=$'\033[1;35m'
+  LIGHT_CYAN=$'\033[0;36m'
+        CYAN=$'\033[1;36m'
+ LIGHT_WHITE=$'\033[0;37m'
+       WHITE=$'\033[1;37m'
+ LIGHT_BLACK=$'\033[0;38m'
+       BLACK=$'\033[1;38m'
+       RESET=$'\033[0m'
+  CLEAR_LINE=$'\033[2K\r'
+       CLEAR=$'\033[2J'
+CLEAR_SCREEN=$'\033[2J\r\033[H'
+   CURSOR_UP=$'\033[1A'
+     REVERSE=$'\033[7m'
+
+tmp_folder=${tmp_folder:-/tmp}
+debug_state_file=$tmp_folder/debug-state-$$
+
+debug_cleanup='
+  if [[ $BASH_SUBSHELL -eq 0 ]]; then
+    rm "$debug_state_file" &>/dev/null || true
+  fi
+  '
+if type defer &>/dev/null; then
+  defer "$debug_cleanup"
+else
+  trap "$debug_cleanup" EXIT
+fi
+
+COLUMNS=${COLUMNS:-120}
+
+debug_expansion_clean() {
+  cat "$1" | grep --line-buffered -v '^++'
+}
+
+debug_output_reversed_line() {
+  echo -n "$REVERSE" >&$fd_original_err
+  local line=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file")
+  local pad_size line_length=${#line}
+  let pad_size=COLUMNS-line_length
+  echo -n "$line" >&$fd_original_err
+  printf %${pad_size}s >&$fd_original_err
+  echo "$RESET" >&$fd_original_err
+}
+
+debug_display_source() {
+  local debug_start_line=$((debug_list_offset+debug_line_num))
+  local debug_end_line=$((debug_start_line+19))
+
+  [[ $debug_start_line -lt 1 ]] && debug_start_line=1
+
+  if [[ $debug_start_line -le $debug_line_num && $debug_line_num -le $debug_end_line ]]; then
+    if [[ $debug_start_line -lt $debug_line_num ]]; then
+      sed -n "$debug_start_line,$((debug_line_num-1))p;$((debug_line_num-1))q" "$debug_path_to_source_file" >&$fd_original_err
+    fi
+    debug_output_reversed_line
+    if [[ $debug_line_num -lt $debug_end_line ]]; then
+      sed -n "$((debug_line_num+1)),${debug_end_line}p;${debug_end_line}q" "$debug_path_to_source_file" >&$fd_original_err
+    fi
+  else
+    sed -n "$debug_start_line,${debug_end_line}p;$((debug_end_line))q" "$debug_path_to_source_file" >&$fd_original_err
+  fi
+}
+
+debug_trap() {
+  debug_rewind=f
+  local IFS=$'\n'$'\t'" "
+
+  local debug_full_path=${debug_full_path:-f}
+  local debug_path_to_source_file=$1; shift
+  local debug_source_file=${debug_path_to_source_file##*/}
+  local raw_debug_path_to_source_file=$debug_path_to_source_file
+  if [[ $debug_full_path == t ]]; then
+    debug_source_file=$debug_path_to_source_file
+  fi
+
+  local debug_line_num=$1; shift
+
+  # if code inside the debug trap is changed, you may need to adjust this offset to ensure the code displayed in the debugger lines up with what is actually being executed.
+  # the number being subtracted is the number of source lines in the trap which are executed before this function is called
+  let debug_line_num-=11 || true
+
+  if [[ "$debug_line" ]]; then
+    local line_part=$debug_line file_part=
+
+    if [[ $debug_line =~ .+:.+ ]]; then
+      line_part=${debug_line##*:}
+      file_part=${debug_line%:*}
+    fi
+
+    if [[ ! "$file_part" && "$debug_line_num" -ne "$line_part" \
+       || "$file_part" && \
+                       ( "$debug_line_num" -ne "$line_part" \
+                       || "$debug_source_file" != "$file_part" \
+                       ) \
+       ]]; then
+      debug_subshell=t
+
+      if [[ $debug_debug == t ]]; then
+        echo "debug_debug[$debug_current_depth]: Skipping because we are waiting for line $debug_line" >&$fd_original_err
+      fi
+
+      return 0
+    else
+      debug_line_old=$debug_line
+      debug_line=
+    fi
+
+  fi
+
+  local debug_function=$1; shift
+  local debug_command=$1; shift
+
+  local debug_current_depth=${#FUNCNAME[*]}
+  if [[ "$debug_function" =~ ^$debug_ignore$ ]]; then
+    if [[ $debug_debug == t ]]; then
+      echo "debug_debug[$debug_current_depth]: Skipping because function $debug_function is ignored by $debug_ignore" >&$fd_original_err
+    fi
+    return 0
+  fi
+
+  local debug_r=-1
+
+  if [[ $debug_debug == t ]]; then
+    local d=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
+    local r=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
+    #echo "[$debug_current_depth]: $debug_command" >&$fd_original_err
+    echo "debug_debug[$debug_current_depth]: $r" >&$fd_original_err
+  fi
+
+  if [[ -f "$debug_state_file" ]]; then
+    local state_timestamp=$(date -r "$debug_state_file" +%s)
+    if [[ $state_timestamp -gt $debug_last_state_load ]]; then
+      # echo "Loaded state from $debug_state_file because $state_timestamp > $debug_last_state_load" >&$fd_original_err
+      source "$debug_state_file" || return 1
+      debug_last_state_load=$EPOCHSECONDS
+    else
+      :
+      # echo "Not loading state because $state_timestamp < $debug_last_state_load" >&$fd_original_err
+    fi
+  fi
+
+  [[ $debug_exit == t ]] && exit 1
+
+  if [[ "$debug_search" ]]; then
+    local fixed_command
+    fixed_command=${debug_command}
+    fixed_command=${fixed_command//\\/**BS**}
+    fixed_command=${fixed_command//\\\$/\\\\\$}
+    # temporarily hide this so we can keep $(( but transform $(
+    fixed_command=${fixed_command//\$((/{{{}
+    fixed_command=${fixed_command//\$(/\\\$(}
+    # restore {{{ to $((
+    fixed_command=${fixed_command//{{{/\$((}
+    fixed_command=${fixed_command//\"/\\\"}
+    fixed_command=${fixed_command//**BS**/\\}
+    if [ "$debug_expanded_search" == t ]; then
+      set +u
+      eval "local expanded_command=\"$fixed_command\"" || return 1
+      set -u
+    else
+      local expanded_command=
+    fi
+
+    if [[ $debug_search_deep == t \
+       || $debug_current_depth -le $debug_max_depth ]] \
+       && [[ " $debug_command " =~ $debug_search \
+       || " $expanded_command " =~ $debug_search ]]; then
+      debug_search=
+      debug_max_depth=$debug_current_depth
+    else
+      debug_subshell=t
+      debug_r=0
+      if [[ $debug_debug == t ]]; then
+        echo "debug_debug[$debug_current_depth]: Skipping because we haven't found what we are looking for: $debug_search" >&$fd_original_err
+      fi
+      return 0
+    fi
+  else
+    if [[ $debug_current_depth -gt $debug_max_depth && -z "$debug_stop_at" ]]; then
+      if [[ $debug_debug == t ]]; then
+        echo "debug_debug[$debug_current_depth]: Skipping because we are too deep: $debug_current_depth > $debug_max_depth" >&$fd_original_err
+      fi
+      return 0
+    fi
+  fi
+
+  if [[ $debug_step_to_next_line == t \
+     && -z "$debug_stop_at" \
+     && "$raw_debug_path_to_source_file $debug_line_num" == "$debug_last_location" \
+     && $debug_function != none ]]; then
+    if [[ $debug_debug == t ]]; then
+      echo "debug_debug[$debug_current_depth]: Skipping because we are on the same line: $debug_last_location" >&$fd_original_err
+    fi
+    return 0
+  fi
+
+  if [[ "$debug_stop_at" ]]; then
+    if [[ "$raw_debug_path_to_source_file $debug_line_num" != "$debug_stop_at" ]]; then
+      debug_r=0
+      return 0
+    else
+      debug_max_depth=$debug_current_depth
+      debug_stop_at=
+    fi
+  fi
+
+  if [[ $debug_step_to_later_line == t \
+     && "$debug_line_num" -le "$debug_prev_line" \
+     && $debug_function != none ]]; then
+    debug_r=0
+    return 0
+  else
+    debug_step_to_later_line=f
+  fi
+
+  if [[ $debug_step_to_next_function == t && \
+     "$debug_function" == "$debug_prev_function" \
+     ]]; then
+    debug_r=0
+    debug_subshell=t
+    return 0
+  fi
+
+  if [[ $debug_step_to_next_file == t ]] && [[ \
+     "$debug_function" == "$debug_prev_function" || \
+     "$debug_source_file" == "$debug_prev_source_file" \
+     ]]; then
+    debug_r=0
+    debug_subshell=t
+    return 0
+  fi
+
+  if [[ $debug_continue == t ]]; then
+    debug_r=0
+    return 0
+  fi
+
+  debug_last_location="$debug_path_to_source_file $debug_line_num"
+
+  if [ $debug_highlight == t ]; then
+
+    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
+    local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
+    if [ ! -f "$highlighted_source" ]; then
+      mkdir -p "${highlighted_source%/*}"
+      #cat "$debug_path_to_source_file" | highlight -S shellscript -O ansi >"$highlighted_source"
+      cat "$debug_path_to_source_file" | source-highlight -s bash -f esc >"$highlighted_source"
+    fi
+    debug_path_to_source_file=$highlighted_source
+
+  fi
+
+  local backlog=
+  if [[ "$debug_prev_function" == "$debug_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
+    local start_line=$((debug_prev_line+1))
+    local end_line=$((debug_line_num-1))
+    backlog=$(sed -n "$start_line,${end_line}p;${end_line}q" "$debug_path_to_source_file")
+  fi
+
+  debug_prev_line="$debug_line_num"
+  debug_prev_function=$debug_function
+  debug_prev_source_file=$debug_source_file
+  debug_step_to_next_function=f
+  debug_step_to_next_file=f
+
+  if [[ $debug_expansion == 1 && $debug_long_command == f || $debug_expansion == 2 ]]; then
+    if [[ -f "$debug_out_path" ]]; then
+      rm "$debug_fifo_path" &>/dev/null
+      cat "$debug_out_path" >&$fd_original_err
+      [[ "${debug_expansion_pid:-}" ]] && kill $debug_expansion_pid &>/dev/null
+      debug_expansion_pid=
+      BASH_XTRACEFD=
+    fi
+  elif [[ -f "$debug_out_path" ]]; then
+    rm "$debug_out_path"
+  fi
+
+  if [[ "$debug_watch_once" ]]; then
+    set +u
+    local w wn
+    for w in $debug_watch_once; do
+      if [[ $debug_watch_style == compact ]]; then
+        eval "echo -n \"+ \$$w \"" >&$fd_original_err
+      else
+        wn=${w#\$}
+        eval "echo -n \"+ \$wn=\$$w \"" >&$fd_original_err
+      fi
+    done
+    echo >&$fd_original_err
+    debug_watch_once=
+    set -u
+  fi
+
+  local display_command=$debug_command
+  local raw_display_command=$display_command
+  if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] \
+     && [[ $debug_function != none ]]; then
+    display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
+    raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
+  fi
+
+  debug_step_to_next_line=f
+
+  debug_prev_command=$raw_display_command
+
+  local debug_c debug_array no_follow_once=f
+  while [[ $debug_r == -1 ]]; do
+
+    echo >&$fd_original_err
+
+    local current_source_line_without_comment=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file" \
+      | sed -E 's/^ *(.*) *$/\1/' \
+      | sed -E 's/#.*//'
+      )
+    if [[ $debug_follow_source == t && "$current_source_line_without_comment" ]]; then
+      if [[ $no_follow_once == t ]]; then
+        no_follow_once=f
+      else
+        # echo >&$fd_original_err
+        let debug_list_offset=-9
+        debug_display_source
+        debug_list_dir=forwards
+        let debug_list_offset+=20
+      fi
+    else
+      if [[ "$backlog" ]]; then
+        echo "$backlog"
+        backlog=
+      fi
+    fi
+
+    set +u
+    if [[ "$debug_watch" ]]; then
+      local w wn
+      for w in $debug_watch; do
+        if [[ $debug_watch_style == compact ]]; then
+          eval "echo -n \"\$$w \"" >&$fd_original_err
+        else
+          wn=${w#\$}
+          eval "echo -n \"\$wn=\$$w \"" >&$fd_original_err
+        fi
+      done
+      echo >&$fd_original_err
+    fi
+    set -u
+
+    if [[ $debug_debug == t ]]; then
+      echo "debug_debug[$debug_current_depth]: BASH_SUBSHELL=$BASH_SUBSHELL" >&$fd_original_err
+    fi
+
+    local prefix=
+    if [[ $BASH_SUBSHELL -gt 0 ]]; then
+      prefix="$YELLOW$BASH_SUBSHELL:$BASHPID "
+    fi
+    echo -n "$prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
+    echo -n " $GREEN$debug_function $RESET:" >&$fd_original_err
+
+    if [[ $debug_follow_source == t ]]; then
+      echo -n " $debug_command " >&$fd_original_err
+    else
+      if [[ $debug_highlight == t ]]; then
+        echo -n " $display_command " >&$fd_original_err
+      else
+        echo -n " $raw_display_command " >&$fd_original_err
+      fi
+    fi
+
+    if [[ $raw_display_command =~ for\ (.*)\ in ]]; then
+      debug_watch_once=${BASH_REMATCH[1]}
+    fi
+
+    debug_long_command=f
+    read -s -n1 debug_c <&$fd_original_in
+
+    if [[ "$debug_c" != l && "$debug_c" != L ]]; then
+      debug_list_offset=0
+      debug_list_dir=none
+    fi
+
+    if [[ "$debug_c" == l && $debug_list_dir != none ]]; then
+      echo -n "$CLEAR_LINE" >&$fd_original_err
+      echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
+      if [[ "$debug_watch" ]]; then
+        echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
+      fi
+    fi
+
+    if [[ "$debug_c" == L ]]; then
+      echo -n "$CLEAR_SCREEN" >&$fd_original_err
+    fi
+
+    BASH_REMATCH=( "${debug_rematch[@]}" )
+
+    case "$debug_c" in
+      a)
+        echo >&$fd_original_err
+        read -e -p "Name of array variable: " debug_array <&$fd_original_in >&$fd_original_err
+        if [[ "${debug_array:-}" ]]; then
+          set +u
+          local i size
+          eval "size=\${#${debug_array}[*]}"
+          echo "size=$size" >&$fd_original_err
+          for ((i=0; i<size; i++)); do
+            eval "echo \"$i: \\\"\${$debug_array[$i]}\\\"\"" >&$fd_original_err
+          done
+          set -u
+        fi
+        no_follow_once=t
+        ;;
+      c)
+        echo "# Continuing..." >&$fd_original_err
+        trap - DEBUG
+        [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
+        debug_continue=t
+        debug_r=0
+        debug_long_command=t
+        debug_save_state
+        ;;
+      C)
+        echo >&$fd_original_err
+        echo >&$fd_original_err
+        let debug_list_offset=-9
+        debug_display_source
+        debug_list_dir=forwards
+        let debug_list_offset+=20
+        no_follow_once=t
+        ;;
+      d)
+        echo >&$fd_original_err
+        read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
+        debug_display=${debug_display#\$}
+        local d
+        for d in $debug_display; do
+          set +u
+          eval 'echo "$d=${!d}"' >&$fd_original_err
+          set -u
+        done
+        no_follow_once=t
+        ;;
+      D)
+        echo >&$fd_original_err
+        set +u
+        eval 'echo "[${!debug_display}]"' >&$fd_original_err
+        set -u
+        no_follow_once=t
+        ;;
+      e)
+        echo >&$fd_original_err
+        read -er -p "Eval: " debug_expression <&$fd_original_in >&$fd_original_err
+        set +u
+        eval "$debug_expression" >&$fd_original_err
+        set -u
+        no_follow_once=t
+        ;;
+      E)
+        echo >&$fd_original_err
+        set +u
+        eval "$debug_expression" >&$fd_original_err
+        set -u
+        no_follow_once=t
+        ;;
+      f)
+        echo >&$fd_original_err
+        read -e -p "Deep Find: " debug_search <&$fd_original_in >&$fd_original_err
+        if [[ "${debug_search:-}" ]]; then
+          if [[ "$debug_search" == ~* ]]; then
+            # use unescaped to support regex if expression starts with ~
+            debug_search=${debug_search#~}
+          else
+            debug_search=${debug_search//\\/\\\\}
+            debug_search=${debug_search//\$/\\\$}
+            debug_search=${debug_search//[/\\[}
+          fi
+          debug_prev_search=$debug_search
+          debug_search_deep=t
+          debug_r=0
+          debug_long_command=t
+          debug_subshell=t
+          debug_save_state
+        fi
+        ;;
+      F)
+        if [[ $debug_expanded_search == t ]]; then
+          echo "# Expanded search is now off" >&$fd_original_err
+          debug_expanded_search=f
+        else
+          echo "# Expanded search is now on" >&$fd_original_err
+          debug_expanded_search=t
+        fi
+        debug_save_state
+        ;;
+      g)
+        echo >&$fd_original_err
+        echo "You may specify either {line number} or {file}:{line number} format" >&$fd_original_err
+        read -e -p "Go until line number: " debug_line <&$fd_original_in >&$fd_original_err
+        if [[ "${debug_line:-}" ]]; then
+          debug_r=0
+          debug_long_command=t
+          debug_subshell=t
+          debug_save_state
+        fi
+        ;;
+      G)
+        if [[ "${debug_line_old:-}" ]]; then
+          debug_line=$debug_line_old
+          echo "# Continuing until we reach line $debug_line" >&$fd_original_err
+          debug_r=0
+          debug_long_command=t
+          debug_subshell=t
+          debug_save_state
+        fi
+        ;;
+      h)
+        if [[ $debug_highlight == t ]]; then
+          echo "# Syntax highlighting is now off" >&$fd_original_err
+          debug_path_to_source_file=$raw_debug_path_to_source_file
+          debug_highlight=f
+        else
+          echo "# Syntax highlighting is now on" >&$fd_original_err
+          # debug_path_to_source_file=$highlighted_source
+          debug_highlight=t
+        fi
+        debug_save_state
+        no_follow_once=t
+        ;;
+      i)
+        echo "# Stepping in" >&$fd_original_err
+        debug_r=0
+        let debug_max_depth+=10
+        export debug_subshell=t debug=t trace debug_max_depth
+        ;;
+      j)
+        echo >&$fd_original_err
+        read -e -p "Shallow Find: " debug_search <&$fd_original_in >&$fd_original_err
+        if [[ "${debug_search:-}" ]]; then
+          if [[ "$debug_search" == ~* ]]; then
+            # use unescaped to support regex if expression starts with ~
+            debug_search=${debug_search#~}
+          else
+            debug_search=${debug_search//\\/\\\\}
+            debug_search=${debug_search//\$/\\\$}
+            debug_search=${debug_search//[/\\[}
+          fi
+          debug_prev_search=$debug_search
+          debug_search_deep=f
+          debug_r=0
+          debug_long_command=t
+          debug_save_state
+        fi
+        ;;
+      k)
+        echo "# Skipping..." >&$fd_original_err
+        debug_r=1
+        ;;
+      l)
+        echo >&$fd_original_err
+        [[ $debug_list_dir == none ]] && echo >&$fd_original_err
+        [[ $debug_list_dir == backwards ]] && let debug_list_offset+=20
+        debug_display_source
+        let debug_list_offset+=20
+        debug_list_dir=forwards
+        no_follow_once=t
+        ;;
+      L)
+        echo >&$fd_original_err
+        [[ $debug_list_dir == forwards ]] && let debug_list_offset-=20
+        let debug_list_offset-=20
+        debug_display_source
+        debug_list_dir=backwards
+        no_follow_once=t
+        ;;
+      n)
+        echo "# Stepping over" >&$fd_original_err
+        debug_r=0
+        debug_max_depth=$debug_current_depth
+        debug_step_to_next_line=t
+        debug_subshell=t
+        debug_save_state
+        export -n debug
+        ;;
+      N)
+        echo "# Stepping until next line is reached" >&$fd_original_err
+        debug_r=0
+        debug_max_depth=$debug_current_depth
+        debug_step_to_later_line=t
+        #debug_subshell=t
+        debug_save_state
+        ;;
+      o)
+        echo "# Stepping out" >&$fd_original_err
+        debug_max_depth=$((debug_current_depth-1))
+        debug_r=0
+        # debug_long_command=t
+        debug_save_state
+        ;;
+      p)
+        echo >&$fd_original_err
+        local fixed_command
+        fixed_command=${debug_command}
+        fixed_command=${fixed_command//\\/**BS**}
+        fixed_command=${fixed_command//\\\$/\\\\\$}
+        # temporarily hide this so we can keep $(( but transform $(
+        fixed_command=${fixed_command//\$((/{{{}
+        fixed_command=${fixed_command//\$(/\\\$(}
+        # restore {{{ to $((
+        fixed_command=${fixed_command//{{{/\$((}
+        fixed_command=${fixed_command//\"/\\\"}
+        fixed_command=${fixed_command//**BS**/\\}
+        set +u
+        eval "echo \"$fixed_command\"" >&$fd_original_err
+        set -u
+        no_follow_once=t
+        ;;
+      P)
+        echo >&$fd_original_err
+        local fixed_command
+        fixed_command=${debug_command}
+        fixed_command=${fixed_command//\\/**BS**}
+        fixed_command=${fixed_command//\\\$/\\\\\$}
+        fixed_command=${fixed_command//\[\[ /~~dbo~~}
+        fixed_command=${fixed_command// \]\]/~~dbc~~}
+        fixed_command=${fixed_command//\[ /\$(\[ }
+        fixed_command=${fixed_command// ]/ ] && echo true || echo false)}
+        fixed_command=${fixed_command//~~dbo~~/\$(\[\[ }
+        fixed_command=${fixed_command//~~dbc~~/ ]] \&\& echo true || echo false)}
+        fixed_command=${fixed_command//**BS**/\\}
+        set +u
+        eval "echo \"$fixed_command\"" >&$fd_original_err
+        set -u
+        no_follow_once=t
+        ;;
+      q) 
+        echo "# Quitting" >&$fd_original_err
+        debug_exit=t
+        if [[ -f "$debug_out_path" ]]; then
+          rm "$debug_out_path"
+        fi
+        debug_save_state
+        exit 1
+        ;;
+      r)
+        echo "# Rewinding..." >&$fd_original_err
+        debug_rewind=t
+        debug_r=0
+        ;;
+      s)
+        echo "# Stepping over small" >&$fd_original_err
+        debug_r=0
+        debug_max_depth=$debug_current_depth
+        debug_step_to_next_line=f
+        debug_subshell=t
+        debug_save_state
+        ;;
+      S)
+        echo "# Show call stack" >&$fd_original_err
+        start_frame=2 stack_trace
+        no_follow_once=t
+        ;;
+      t)
+        if [[ "${#PS4}" -lt 5 ]]; then
+          PS4='$EPOCHREALTIME\011+ '
+          echo "# Enabled time tracing" >&fd_original_err
+        else
+          PS4='+ '
+          echo "# Disabled time tracing" >&fd_original_err
+        fi
+        debug_save_state
+        no_follow_once=t
+        ;;
+      w)
+        echo >&$fd_original_err
+        read -e -p "Watch: " debug_watch <&$fd_original_in >&$fd_original_err
+        debug_watch=${debug_watch#\$}
+        debug_save_state
+        no_follow_once=t
+        ;;
+      W)
+        if [[ $debug_watch_style == wide ]]; then
+          debug_watch_style=compact
+        else
+          debug_watch_style=wide
+        fi
+        echo "# Debug watch style is now $debug_watch_style" >&$fd_original_err
+        debug_save_state
+        no_follow_once=t
+        ;;
+      x)
+        if [[ $debug_expansion == 1 ]]; then
+          echo "# Command expansion is now off" >&$fd_original_err
+          debug_expansion=0
+        else
+          echo "# Short command expansion is now on" >&$fd_original_err
+          debug_expansion=1
+        fi
+        debug_save_state
+        no_follow_once=t
+        ;;
+      X)
+        if [[ $debug_expansion == 2 ]]; then
+          echo "# Command expansion is now off" >&$fd_original_err
+          debug_expansion=0
+        else
+          echo "# Extended command expansion is now on" >&$fd_original_err
+          debug_expansion=2
+        fi
+        debug_save_state
+        no_follow_once=t
+        ;;
+      =)
+        echo "# Running until this line is reached again" >&$fd_original_err
+        debug_stop_at="$raw_debug_path_to_source_file $debug_line_num"
+        debug_r=0
+        debug_long_command=t
+        debug_subshell=t
+        debug_step_to_next_line=f
+        debug_save_state
+        ;;
+      \])
+        echo "# Running until a new function is reached" >&$fd_original_err
+        let debug_max_depth++
+        debug_step_to_next_function=t
+        debug_subshell=t
+        debug_r=0
+        debug_save_state
+        ;;
+      \})
+        echo "# Running until a new file is reached" >&$fd_original_err
+        let debug_max_depth++
+        debug_step_to_next_file=t
+        debug_subshell=t
+        debug_r=0
+        debug_save_state
+        ;;
+      .)
+        if [[ "${debug_prev_search:-}" ]]; then
+          echo "# Repeating search for $debug_prev_search" >&$fd_original_err
+          debug_search=${debug_prev_search:-}
+          debug_r=0
+          debug_long_command=t
+          debug_subshell=t
+          debug_save_state
+        else
+          echo "No previous search." >&$fd_original_err
+        fi
+        ;;
+      ^)
+        if [[ $debug_follow_source == t ]]; then
+          echo "# Follow source is now off" >&$fd_original_err
+          debug_follow_source=f
+        else
+          echo "# Follow source is now on" >&$fd_original_err
+          debug_follow_source=t
+        fi
+        debug_save_state
+        ;;
+      \?)
+        echo >&$fd_original_err
+        echo >&$fd_original_err
+        echo "a  display array" >&$fd_original_err
+        echo "c  continue execution without stopping" >&$fd_original_err
+        echo "C  list 10 lines of source code before and after current line" >&$fd_original_err
+        echo "d  display an expression with variables substituted" >&$fd_original_err
+        echo "D  repeat last display command" >&$fd_original_err
+        echo "e  evaluate an expression" >&$fd_original_err
+        echo "E  repeat last eval expression command" >&$fd_original_err
+        echo "f  continue until a line contains the substring given" >&$fd_original_err
+        echo "   put a ~ at the beginning of the search string to do a regex search" >&$fd_original_err
+        echo "F  toggle expanded search mode, which enables searching on evaluated string expressions" >&$fd_original_err
+        echo "g  continue until the given line number is reached" >&$fd_original_err
+        echo "   It will usually be a better DX to use f or j instead of g" >&$fd_original_err
+        echo "G  continue until the previously given line number is reached" >&$fd_original_err
+        echo "h  toggle syntax highlighting" >&$fd_original_err
+        echo "i  next instruction, stepping into function calls" >&$fd_original_err
+        echo "j  jump ahead: shallow substring find" >&$fd_original_err
+        echo "k  skip current command" >&$fd_original_err
+        echo "l  list next 20 lines of source code" >&$fd_original_err
+        echo "L  list previous 20 lines of source code" >&$fd_original_err
+        echo "n  next line of code (even if it resolves to several different statements)," >&$fd_original_err
+        echo "   not stepping into function calls" >&$fd_original_err
+        echo "   WARNING: In the rare case that the debugger hangs after this command is run on a line of code, exit (control-c) and start over" >&$fd_original_err
+        echo "   the debugging, except when you get to this line, press 's' to do a small step first, and then 'n' and usually it will work" >&$fd_original_err
+        echo "N  continue executing until we reach a line later than the current line, completing loops if needed" >&$fd_original_err
+        echo "o  step out from the current function" >&$fd_original_err
+        echo "p  print variables in current line" >&$fd_original_err
+        echo "P  print conditional test results of current line" >&$fd_original_err
+        echo "q  quit: exit the program entirely" >&$fd_original_err
+        echo "r  rewind: go back to the start of the last looping / try block" >&$fd_original_err
+        echo "s  execute next small statement, even if multiple statements are on a line," >&$fd_original_err
+        echo "   not stepping into function calls" >&$fd_original_err
+        echo "S  show stack trace" >&$fd_original_err
+        echo "t  add timestamps to each debug trace line" >&$fd_original_err
+        echo "w  set or clear current watched variable" >&$fd_original_err
+        echo "W  toggle debug watch style" >&$fd_original_err
+        echo "x  toggle expanded command mode. If on, will expand each *short* command that is executed" >&$fd_original_err
+        echo "X  toggle extended expanded command mode. If on, will expand *all* commands that are executed" >&$fd_original_err
+        echo "=  continue until the current line is reached again" >&$fd_original_err
+        echo "]  continue until we reach a different function" >&$fd_original_err
+        echo "}  continue until we reach a different file" >&$fd_original_err
+        echo ".  repeat previous deep or shallow search" >&$fd_original_err
+        echo "^  toggle source following (displays source context after every command)" >&$fd_original_err
+        no_follow_once=t
+        ;;
+      *)
+        echo "# Unknown command" >&$fd_original_err
+        echo "Press ? for a list of commands" >&$fd_original_err
+        no_follow_once=t
+        ;;
+    esac
+  done
+
+  if [[ $debug_expansion -gt 0 ]]; then
+    rm "$debug_fifo_path" &>/dev/null
+    mkfifo "$debug_fifo_path"
+    debug_expansion_clean "$debug_fifo_path" >"$debug_out_path" &
+    debug_expansion_pid=$!
+    exec {fd_bash_trace}>"$debug_fifo_path"
+    BASH_XTRACEFD=$fd_bash_trace
+  fi
+
+  return $debug_r
+}
+
+debug_save_state() {
+# We don't need to save the state if there are no parent shells to recall that state
+if [[ $BASH_SUBSHELL -gt 0 ]]; then
+echo "
+debug_continue='$debug_continue'
+debug_display='$debug_display'
+debug_exit='$debug_exit'
+debug_expanded_search='$debug_expanded_search'
+debug_expansion='$debug_expansion'
+debug_expression='$debug_expression'
+debug_follow_source='$debug_follow_source'
+debug_highlight='$debug_highlight'
+debug_line='$debug_line'
+debug_line_old='$debug_line_old'
+debug_max_depth='$debug_max_depth'
+debug_prev_search='$debug_prev_search'
+debug_search='$debug_search'
+debug_search_deep='$debug_search_deep'
+debug_step_to_later_line='$debug_step_to_later_line'
+debug_step_to_next_line='$debug_step_to_next_line'
+debug_step_to_next_file='$debug_step_to_next_file'
+debug_step_to_next_function='$debug_step_to_next_function'
+debug_stop_at='$debug_stop_at'
+debug_watch='$debug_watch'
+debug_watch_style='$debug_watch_style'
+PS4='$PS4'
+" >"$debug_state_file" || return 1
+debug_last_state_load=$EPOCHSECONDS
+fi
+# echo "Saved state to $debug_state_file at $debug_last_state_load" >&$fd_original_err
+return 0
+}
+
+set_return_code() {
+  return $1
+}
+
+if [[ ! "${debug_highlight:-}" ]]; then
+  if which source-highlight >/dev/null; then
+    debug_highlight=t
+  else
+    debug_highlight=f
+  fi
+fi
+
+if [[ $debug_highlight == t ]]; then
+  if ! which source-highlight >/dev/null; then
+    err "You set debug_highlight=t, but are missing the highlight command."
+    err "You can use 'brew install highlight' to install it if you want."
+    exit 1
+  fi
+
+  rm -rf $tmp_folder/debug_highlight &>/dev/null
+  mkdir -p $tmp_folder/debug_highlight || exit 1
+fi
+
+reserve_tmp_file() {
+  local var=$1; shift
+  local base=${1:-$var}; shift
+  
+  local internal_tmp_file=$(mktemp $tmp_folder/$base.$$.XXXXXX)
+  eval "$var=$internal_tmp_file"
+  eval "cleanup_on_exit+='rm ${internal_tmp_file} &>/dev/null || true;'"
+}
+
+debugging=f
+debug_start() {
+  if [[ $debugging == f ]]; then
+    export debugging=t
+    export debug=t
+    export debug_continue=${debug_continue:-f}
+    export debug_debug=${debug_debug:-f}
+    export debug_dir=$PWD
+    export debug_display=${debug_display:-none}
+    export debug_exit=${debug_exit:-f}
+    export debug_expanded_search=${debug_expanded_search:-f}
+    export debug_expansion=${debug_expansion:-1}
+    export debug_expression=${debug_expression:-echo none}
+    export debug_expanded_search=${debug_expanded_search:-f}
+    export debug_follow_source=${debug_follow_source:-t}
+    export debug_ignore=${debug_ignore:-(echo_align|trace|out|warn|err)}
+    export debug_last_location=${debug_last_location:-}
+    export debug_line=${debug_line:-}
+    export debug_line_old=${debug_line_old:-}
+    export debug_list_dir=${debug_list_dir:-none}
+    export debug_list_offset=${debug_list_offset:-0}
+    export debug_long_command=${debug_long_command:-f}
+    export debug_max_depth=${debug_max_depth:-99}
+    export debug_prev_command=${debug_prev_command:-none}
+    export debug_prev_function=${debug_prev_function:-none}
+    export debug_prev_line=${debug_prev_line:-0}
+    export debug_prev_search=${debug_prev_search:-}
+    export debug_prev_source_file=${debug_prev_source_file:-none}
+    export debug_rewind=${debug_rewind:-f}
+    export debug_search=${debug_search:-}
+    export debug_search_deep=${debug_search_deep:-t}
+    export debug_step_to_later_line=${debug_step_to_later_line:-f}
+    export debug_step_to_next_file=${debug_step_to_next_file:-f}
+    export debug_step_to_next_function=${debug_step_to_next_function:-f}
+    export debug_step_to_next_line=${debug_step_to_next_line:-f}
+    export debug_stop_at=${debug_stop_at:-}
+    export debug_subshell=${debug_subshell:-f}
+    export debug_watch=${debug_watch:-}
+    export debug_watch_once=${debug_watch_once:-}
+    export debug_watch_style=${debug_watch_style:-wide}
+    export debug_last_state_load=$EPOCHSECONDS
+
+    reserve_tmp_file debug_fifo_path || exit 1
+    reserve_tmp_file debug_out_path || exit 1
+
+    shopt -s extdebug
+    # If you add or remove lines from this trap code, you will need to update the line offset as well
+    # so that debug execution and current line to execute will be correct.
+    # Look for code starting with something like: let debug_line_num-4
+    # and adjust the -4 part based on how many lines were added or removed. If you get it right,
+    # debugging will show the right line compared to what is being executed. 
+    trap '
+      set +x
+      tracing=f
+      set +T
+      debug_rematch=( "${BASH_REMATCH[@]}" )
+      if [[ "${FUNCNAME:-}" ]]; then 
+        debug_depth=${#FUNCNAME[*]}
+      else
+        debug_depth=0
+      fi
+      [[ $debug_debug == t ]] && echo "debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell" >&$fd_original_err
+      debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
+      [[ $debug_rewind == t ]] && continue
+      [[ $debug_exit == t ]] && exit 1
+      if [[ $debug_expansion -gt 0 && -n "${debug_expansion_pid:-}" ]]; then
+        [[ $debug_expansion == 1 ]] && [[ ! " $debug_prev_command " =~ \ $debug_ignore\  ]] && { tracing=t; set -x; }
+        [[ $debug_expansion -gt 1 ]] && { tracing=t; set -x; }
+      fi
+      [[ $debug_subshell == t ]] && set -T
+      BASH_REMATCH=( "${debug_rematch[@]}" )
+      set +e # so returning 1 does not cause failure
+      set_return_code $debug_rc
+      ' DEBUG
+  fi
+}
+
+if [[ "${debug:-f}" == t || -n "${debug_search:-}" || -n "${debug_line:-}" ]]; then
+  if [[ "${debug_search:-}" ]]; then
+    if [[ "$debug_search" == ~* ]]; then
+      # use unescaped to support regex if expression starts with ~
+      debug_search=${debug_search#\~}
+    else
+      debug_search=${debug_search//\\/\\\\}
+      debug_search=${debug_search//\$/\\\$}
+      debug_search=${debug_search//[/\\[}
+    fi
+    # echo "debug_search=$debug_search" >&$fd_original_err
+    debug_prev_search=$debug_search
+    debug_search_deep=t
+    debug_long_command=t
+    debug_subshell=t
+    debug=t
+  fi
+  if [[ "${debug_line:-}" ]]; then
+    debug_search_deep=t
+    debug_long_command=t
+    debug_subshell=t
+    debug=t
+  fi
+  debug_prev_search=${debug_prev_search:-${debug_search:-}}
+  debug_start
+fi
+

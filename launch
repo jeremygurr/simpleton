@@ -1,0 +1,67 @@
+#!/bin/bash
+
+set -u
+
+if [[ ! -f launch ]]; then
+  err "This script must be run from within the same folder it exists in."
+  exit 1
+fi
+
+name=${1:-${name:-simpleton}}
+as_root=${as_root:-f}
+persist=${persist:-t}
+SIMPLETON_BASE=${SIMPLETON_BASE:-$(realpath ..)}
+SIMPLETON_HOME=${SIMPLETON_HOME:-$(realpath ~/.simpletonHome)}
+
+err() { echo "$*" >&2; }
+
+if [[ ! -d $SIMPLETON_HOME ]]; then
+  mkdir -p $SIMPLETON_HOME || exit 1
+fi
+
+cp -Rn home/ $SIMPLETON_HOME 
+
+if docker ps | grep simpleton >/dev/null; then
+  err "Simpleton container is already running. Either stop the existing one first, or use the 'join' script to join the existing container."
+  exit 1
+fi
+
+if [[ $as_root == t ]]; then
+  uid=0
+  user=root
+else
+  uid=$UID
+  user=$USER
+fi
+
+if [[ $persist == t ]]; then
+  if [[ ! -f build/launch-command-persist ]]; then
+    err "build files missing. Did you run ./build-docker-image first?"
+    exit 1
+  fi
+
+  source build/launch-command-persist || exit 1
+else
+  if [[ ! -f build/launch-command-fast ]]; then
+    err "build files missing. Did you run ./build-docker-image first?"
+    exit 1
+  fi
+
+  source build/launch-command-fast || exit 1
+  source build/docker-copy-command || exit 1
+fi
+
+copy_workspace() {
+  sleep 5
+  echo -en "\r\nCopying workspace..." >&2
+  { $docker_copy_command; } || { err -e "Failed to copy workspace.\r"; return 1; }
+  echo -e "Done.\r" >&2
+}
+
+if [[ $persist == t ]]; then
+  eval "$launch_command"
+else
+  copy_workspace & pid=$!
+  eval "$launch_command" || kill $pid
+fi
+

@@ -1,0 +1,65 @@
+$ mkdir -p test-cube/.dna
+
+$ cube edit test-cube/.dna/context content='
+  batch_dims=( env project )
+  out_path=out
+
+  expand_members_project() {
+    local value=$value
+    case $value in
+      mw|my-web)
+        new_values=( my-web )
+      ;;
+      mws|my-web-staging)
+        new_values=( my-web-staging )
+      ;;
+      mwt|my-web-test)
+        new_values=( my-web-test )
+      ;;
+      all)
+        new_values=( my-web my-web-staging my-web-test )
+      ;;
+      *)
+        new_values=
+      ;;
+    esac
+    return 0
+  }
+
+  expand_members_env() {
+    local value=$value
+    case $value in
+      prod)
+        new_values=( prod1 prod2 prod3 )
+      ;;
+      dev|qa|prod*)
+        new_values=( $value )
+      ;;
+      all)
+        new_values=( dev qa prod1 prod2 prod3 )
+      ;;
+      *)
+        new_values=( )
+      ;;
+    esac
+    return 0
+  }
+
+  is_batch_id_valid() {
+    if [[ $env == prod* && $project == my-web-test ]]; then
+      return 1
+    fi
+    return 0
+  }
+
+  execute_update() { 
+    echo "env=$env project=$project" >$batch_out_path/value
+  }
+  ' || { echo "Edit returned failure"; false; }
+
+$ cell update test-cube envs=all projects=all
+$ grep 'env=dev project=my-web-test' test-cube/.cyto/batch/dim/env/dev/dim/project/my-web-test/out/value >/dev/null 
+$ grep 'env=qa project=my-web-staging' test-cube/.cyto/batch/dim/env/qa/dim/project/my-web-staging/out/value >/dev/null 
+# Should not exist because my-web-test doesn't exist in prod3
+$ [[ ! -f test-cube/.cyto/batch/dim/env/prod3/dim/project/my-web-test/out/value ]]
+
