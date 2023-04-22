@@ -5,7 +5,7 @@ err() { echo "$*" >&2; }
 # Set this to true to more easily debug the docker build process
 debug=${debug:-f}
 
-if [[ ! -f build-docker-image ]]; then
+if [[ ! -f build ]]; then
   err "This script must be run from within the same folder it exists in."
   exit 1
 fi
@@ -28,20 +28,22 @@ fi
 
 repo_folders="$(find .. -mindepth 1 -maxdepth 1 | sort)"
 
-mkdir -p build || exit 1
-cp Dockerfile shell-start.sh repositories sudoers init build/ || exit 1
+build_dir=target
+mkdir -p $build_dir || exit 1
+cp Dockerfile shell-start.sh repositories sudoers init $build_dir/ || exit 1
 
 echo -n '
 launch_command="
 docker run -it --rm -u $uid --name $name -e COLUMNS=$COLUMNS \
   -v $SIMPLETON_BASE:/repo \
   -v $SIMPLETON_HOME:/home \
-' | tee build/launch-command-fast >build/launch-command-persist || exit 1
+' | tee $build_dir/launch-command-fast >$build_dir/launch-command-persist || exit 1
 
-echo 'docker_copy_command="' >build/docker-copy-command
+echo 'docker_copy_command="' >$build_dir/docker-copy-command
 
 repo_folders="$(find .. -mindepth 1 -maxdepth 1 | sort)"
 
+names=
 for repo_folder in $repo_folders; do
 
   if [[ -f "$repo_folder/before-docker-build" ]]; then
@@ -49,19 +51,26 @@ for repo_folder in $repo_folders; do
   fi
 
   if [[ -f "$repo_folder/after-Dockerfile" ]]; then
-    cat $repo_folder/after-Dockerfile >>build/Dockerfile || exit 1
+    cat $repo_folder/after-Dockerfile >>$build_dir/Dockerfile || exit 1
   fi
 
   if [[ -f "$repo_folder/after-shell-start.sh" ]]; then
-    cat $repo_folder/after-shell-start.sh >>build/shell-start.sh || exit 1
+    cat $repo_folder/after-shell-start.sh >>$build_dir/shell-start.sh || exit 1
   fi
 
   if [[ -d $repo_folder/work ]]; then
     for workspace in $(find $repo_folder/work -mindepth 1 -maxdepth 1 -type d); do
-      workspace_name=${workspace##*/}
+      base_workspace_name=${workspace##*/}
+      workspace_name=$base_workspace_name
+      count=1
+      while [[ $names =~ \ $workspace_name\  ]]; do
+        let count++
+        workspace_name=$base_workspace_name$count
+      done
+      names+=" $workspace_name "
       workspace=$(readlink -f $workspace)
-      echo "  -v $workspace:/work/$workspace_name \\" >>build/launch-command-persist || exit 1
-      echo "docker cp $workspace \$name:/work/$workspace_name" >>build/docker-copy-command || exit 1
+      echo "  -v $workspace:/work/$workspace_name \\" >>$build_dir/launch-command-persist || exit 1
+      echo "docker cp $workspace \$name:/work/$workspace_name" >>$build_dir/docker-copy-command || exit 1
     done
   fi
 
@@ -73,16 +82,16 @@ echo '  -e prompt_name=\"$name \" \
   -e HTTPS_PROXY='${HTTPS_PROXY:-}' \
   -e HTTP_PROXY='${HTTP_PROXY:-}' \
   $name 
-"' | tee -a build/launch-command-fast >>build/launch-command-persist || exit 1
+"' | tee -a $build_dir/launch-command-fast >>$build_dir/launch-command-persist || exit 1
 
-echo '"' >>build/docker-copy-command
+echo '"' >>$build_dir/docker-copy-command
 
 ALPINE_IMAGE=${ALPINE_IMAGE:-alpine:latest}
 ALPINE_REPO=${ALPINE_REPO:-https://dl-cdn.alpinelinux.org/alpine/}
 
 if [[ "$debug" == t ]]; then
   set -x
-  DOCKER_BUILDKIT=0 docker build -f build/Dockerfile --rm=false -t simpleton \
+  DOCKER_BUILDKIT=0 docker build -f $build_dir/Dockerfile --rm=false -t simpleton \
     --build-arg TIME_ZONE=$TIME_ZONE \
     --build-arg ALPINE_IMAGE=$ALPINE_IMAGE \
     --build-arg ALPINE_REPO=$ALPINE_REPO \
@@ -90,7 +99,7 @@ if [[ "$debug" == t ]]; then
   set +x
 else
   set -x
-  docker build -f build/Dockerfile -t simpleton \
+  docker build -f $build_dir/Dockerfile -t simpleton \
     --build-arg TIME_ZONE=$TIME_ZONE \
     --build-arg ALPINE_IMAGE=$ALPINE_IMAGE \
     --build-arg ALPINE_REPO=$ALPINE_REPO \
