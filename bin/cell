@@ -8,117 +8,90 @@ optional_var trace           5             # 0 means no tracing output, higher n
 
 source $SIMPLETON_REPO/lib/post-bash || exit 1
 source $SIMPLETON_REPO/lib/bash-debugger || exit 1
+if [[ ${omni_log:-t} == t ]]; then
+  source $SIMPLETON_REPO/lib/omni-log || exit 1
+fi
 source $SIMPLETON_REPO/lib/cell-lib || exit 1
-
-called_from=cli
 
 handle_command() {
 
-local command=${1:-help}; shift
-local parameters=( "$@" )
-trace $log_trace "Handling cell command $command"
+local subject_type=$0
+subject_type=${subject_type##*/}
+local commands=( "$@" )
+local stems=${stems:-${stem:-.}}
 
 begin_function_flat
 
-  case $command in 
-    get)
-      load_subjects || fail
-      begin_for subject in "${subjects[@]}"; doo
-        focus_on $subject || fail
-        make_request $subject || fail
-        maybe_update $subject ${extra:-} || fail
-        show_value $subject || fail
-      end_for
-      ;;
-    up|update)
-      load_subjects || fail
-      local delayed_requests=0
-      begin_for subject in "${subjects[@]}"; doo
-        focus_on $subject || fail
-        make_request $subject || fail
-        maybe_update $subject ${extra:-} || fail
-      end_for
-      ;;
-    fix)
-      require_valid_subjects=f load_subjects || fail
-      begin_for subject in "${subjects[@]}"; doo
-        fix_cube $subject ${extra:-} || fail
-      end_for
-      ;;
-    low)
-      handle_low_command "$@" || fail
-      ;;
-    *)
-      if [[ $command != help && $command != ? ]]; then
-        err "Unknown command: $command"
-      fi
-      show_cell_usage
+  local stem
+  begin_for stem in $stems; doo
+
+    stem=$(realpath $stem) || fail
+
+    if [[ $stem == help || $stem == \? || $stem == --help ]]; then
+      show_usage
       fail1
-      ;;
-  esac
+    fi
+
+    if [[ ! -d $stem/.dna ]]; then
+      err "$stem is not a stem"
+      show_usage
+      fail1
+    fi
+
+    if [[ ! -d $stem/.cyto ]]; then
+      make_cyto $stem || fail 
+    fi
+
+    local command
+    begin_for command in $commands; doo
+      execute_command $stem $command || fail
+    end_for
+
+  end_for
+
 end_function_flat
 handle_return
 }
 
-handle_low_command() {
-local command=${1:-help}; shift 
-local parameters=( "$@" )
-case $command in 
-  update-local)
-    load_subjects || return 1
-    begin_for subject in "${subjects[@]}"; doo
-      focus_on $subject || return 1
-      setup_batch_path_vars || return 1
-      batch_execute_update || return 1
-    end_for
-    ;;
-  req|request)
-    load_subjects || return 1
-    begin_for subject in "${subjects[@]}"; doo
-      make_request $subject ${extra:-} || return 1
-    end_for
-    ;;
-  *)
-    if [[ $command != help && $command != ? ]]; then
-      err "Unknown command: $command"
-    fi
-    show_low_cell_usage
-    return 1
-    ;;
-esac
-}
-
-load_subjects() {
-subjects=()
-local subject require_valid_subjects=${require_valid_subjects:-t}
-for subject in "${parameters[@]}"; do
-  subject=$(realpath "$subject")
-  if [[ $require_valid_subjects == t && ! -d "$subject" ]]; then
-    err "Subject does not exist or is not a folder: $subject"
-    exit 1
+execute_command() {
+local stem=$1 command=$2
+begin_function stem command
+  local command_path=$stem/.cyto/command/$command
+  if [[ -e $command_path ]]; then
+    execute_command_step $command_path || fail
   fi
-  subjects+=( "$subject" )
-done
+end_function
+handle_return
+}
 
-if [[ ! "${subjects:-}" ]]; then
-  subjects=( $PWD )
+show_usage() {
+warn "Usage: ${0##*/} {command(s)}"
+local command
+if [[ -d "$stem/.cyto" ]]; then
+  warn "commands:"
+  for command in $(find1 $stem/.cyto/command); do
+    if [[ -f $command ]]; then
+      source $command || fail
+    elif [[ -d $command ]]; then
+      local first_file=$(find1 -type f | sort | head -n 1)
+      if [[ "$first_file" ]]; then
+        source $first_file || fail
+      fi
+    fi
+    local command_name=${command##*/}
+    local command_description=describe_${command_name}
+    command_description=${!command_description:-}
+    if [[ "$command_description" ]]; then
+      warn "  $command_name $COL20$command_description"
+    else
+      warn "  $command_name ${COL20}Please add a description to this command in $command"
+    fi
+  done
+else
+  warn "  either run this command inside of a stem cell folder, or specify"
+  warn "  the stem variable with the path to a stem cell. "
+  warn "  example: cell stem=/some/stem update"
 fi
-}
-
-show_cell_usage() {
-warn "Usage: ${0##*/} {command} [{cells}]"
-warn "  commands:"
-warn "    fix       fix broken cell (or create a cell from a folder)"
-warn "    get       shows current value(s) of the given cell(s)"
-warn "    low       run a low level command"
-warn "    update    update cells"
-return 0
-}
-
-show_low_cell_usage() {
-warn "Usage: ${0##*/} low {command} [{cells}]"
-warn "  commands:"
-warn "    req       make a new request for an update"
 return 0
 }
 
