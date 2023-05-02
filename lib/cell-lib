@@ -34,20 +34,12 @@ begin_function
   fi
   if [[ -d $stem_from/.dna ]]; then
     local lib
-    begin_for lib in $(find1 $stem_from/.dna/lib); doo
-      if [[ -f $lib ]]; then
-        ln -sf $lib $stem_to/.cyto/lib/ || fail
-      elif [[ -d $lib ]]; then
-        inherit_lib_folder $lib $stem_to/.cyto/lib || fail
-      fi
-    end_for
-    begin_for lib in $(find1 $stem_from/.dna/command); doo
-      if [[ -f $lib ]]; then
-        ln -sf $lib $stem_to/.cyto/command/ || fail
-      elif [[ -d $lib ]]; then
-        inherit_lib_folder $lib $stem_to/.cyto/command || fail
-      fi
-    end_for
+    if [[ -d $stem_from/.dna/lib ]]; then
+      inherit_lib_folder $stem_from/.dna/lib $stem_to/.cyto/lib || fail
+    fi
+    if [[ -d $stem_from/.dna/command ]]; then
+      inherit_lib_folder $stem_from/.dna/command $stem_to/.cyto/command || fail
+    fi
   fi
 end_function
 handle_return
@@ -60,9 +52,23 @@ begin_function
   mkdir -p $to/$folder_name
   local lib
   to=$to/$folder_name
-  begin_for lib in $(find1 $from); doo
+  begin_for lib in $(find1 -not -name '.*' $from); doo
     if [[ -f $lib ]]; then
-      ln -sf $lib $to/ || fail
+      local source_path=${lib%/*} target_file=${lib##*/} base index
+      if [[ ! $target_file =~ ([0-9]+)-(.*) ]]; then
+        index=000
+        base=$target_file
+        found=( $(find1 $to -regex '[0-9]+-'$base'$' | sort -g) ) || fail
+        if [[ "$found" ]]; then
+          target_file=$found
+          if [[ "${#found[*]}" -gt 1 ]]; then
+            warn "Found more than one match for $lib in $to. Will use $target_file."
+          fi
+        else
+          target_file=$index-$base
+        fi
+      fi
+      ln -sf $lib $to/$target_file || fail
     elif [[ -d $lib ]]; then
       inherit_lib_folder $lib $to/$folder_name || fail
     fi
@@ -71,6 +77,173 @@ end_function
 handle_return
 }
 
+execute_command() {
+local stem=$1 command=$2
+vars='stem command'; begin_function
+  local command_path=$stem/.cyto/command/$command
+  if [[ -e $command_path ]]; then
+    execute_command_step $command_path || fail
+  fi
+end_function
+handle_return
+}
+
+# executes a step of the folder language
+# folder language
+#   {stem}                update the given stem with the current coordinates
+#   choose-{n}-{name}     multi-path, stopping after {n} choices are successful. {name} is optional
+#   each-{var}-in-{vars}  loop over {vars} storing current value in {var}
+#                         can be file or folder
+#   each-{var}            loop over {vars} (adds 's' to index var)
+#   {file}.go             execute go code
+#                         should define a single method named after the file which will be executed
+#   {file}.py             execute python script
+#   {file}.js             execute js code
+#   {file}.java           execute java code
+#   {file}.bash           execute bash code
+#   {folder}              go through each item in folder and execute according to folder language
+execute_command_step() {
+local step=$1
+vars=step; begin_function
+  local step_name=${step##*/}
+  if [[ -d $step/.dna ]]; then
+    # recursive
+    execute_command $step update || fail
+  elif [[ -d $step ]]; then
+    if [[ $step_name =~ ^choose-.* ]]; then
+      # TODO ...
+      incomplete
+    elif [[ $step_name =~ ^each-.* ]]; then
+      local ref ref_group
+      if [[ $step_name =~ ^each-([^-]+)-in-([^-]+) ]]; then
+        ref=${BASH_REMATCH[1]}
+        ref_group=${BASH_REMATCH[2]}
+      elif [[ $step_name =~ ^each-([^-]+) ]]; then
+        ref=${BASH_REMATCH[1]}
+        ref_group=${ref}s
+      fi
+      if [[ ! -v $ref_group ]]; then
+        err "var doesn't exist: $ref_group"
+        fail1
+      fi
+      local v a
+      eval "a=( \"$ref_group[@]}\" )"
+      begin_for v in "${a[@]}"; doo
+        let "$ref=\$v"
+        execute_command_step_plain_folder $step || fail
+      end_for
+    else
+      execute_command_step_plain_folder $step || fail
+    fi
+  elif [[ -f $step ]]; then
+    case $step in
+      *.py)
+        err "Python steps not implemented yet"
+        fail1
+      ;;
+      *.js)
+        err "JavaScript steps not implemented yet"
+        fail1
+      ;;
+      *.go)
+        err "GoLang steps not implemented yet"
+        fail1
+      ;;
+      *.java)
+        err "Java steps not implemented yet"
+        fail1
+      ;;
+      *.bash)
+        source $step || fail
+        local function_name=${step%.bash}
+        function_name=${function_name##*/}
+        local function_exists=`type -t $function_name &>/dev/null && echo true`
+        if [[ "$function_exists" ]]; then
+          $function_name || fail
+        else
+          err "Step $step requires that a function named $function_name be defined in that file."
+          fail1
+        fi
+      ;;
+      *)
+        err "Unknown file format for $step. Can't execute."
+        fail1
+      ;;
+    esac
+  else 
+    err "I don't know how to process this step: $step"
+    fail1
+  fi
+end_function
+handle_return
+}
+
+execute_command_step_plain_folder() {
+local step=$1
+begin_function_flat
+
+  local contents=$(find1 -not -name ".*" $step | sort -g) || fail
+  local files i=0 file_index
+  if [[ ! "$contents" ]] && succeed
+
+  begin_loop
+
+    files=( ${contents[$i]} )
+    if [[ $files =~ ([0-9]+)-.* ]]; then
+      file_index=${BASH_REMATCH[1]}
+      # does next file have same index?
+    else
+      file_index=-1
+    fi
+
+    # gather all files with the same index
+    local next_file_index=$file_index next_file n=$i
+    begin_loop
+      let n++ || true
+      [[ $n -gt ${#contents[*]} ]] && break
+      next_file=${contents[$n]}
+      if [[ $next_file =~ ([0-9]+)-.* ]]; then
+        next_file_index=${BASH_REMATCH[1]}
+      else
+        next_file_index=-1
+      fi
+      if [[ $next_file_index -eq $file_index ]]; then
+        files+=( $next_file )
+        let i++ || true
+      else
+        break
+      fi
+    end_loop
+
+    local parallel=f
+    if [[ "${#files[*]}" -gt 1 ]]; then
+      if [[ "$parallel_execution" == t ]]; then
+        parallel=t
+        wait_for_low_load || fail
+      fi
+    fi
+
+    begin_for step in "${files[@]}"; doo
+      if [[ $parallel == t ]]; then
+        # recursive
+        execute_command_step $step &
+        processes+=" $!"
+      else
+        # recursive
+        execute_command_step $step || fail
+      fi
+    end_for
+
+    wait_for_sub_processes || fail
+
+    let i++ || true
+    [[ $i -gt ${#contents[*]} ]] && break
+
+  end_loop
+
+end_function_flat
+handle_return
+}
 
 # input: $* = batch values in dim order
 # output: batch_node = string path to batch from batch path
