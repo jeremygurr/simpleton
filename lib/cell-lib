@@ -81,6 +81,9 @@ vars='stem command'; begin_function
   local command_path=$stem/.cyto/command/$command
   if [[ -e $command_path ]]; then
     execute_command_step $command_path || fail
+  else
+    err "Command $command doesn't exist in $command_path"
+    fail1
   fi
 end_function
 handle_return
@@ -414,14 +417,14 @@ handle_return
 setup_cube_path_vars() {
 begin_function_flat
 
-  if [[ ! "${top_path:-}" ]]; then
-    get_top_path "$subject" || fail
+  if [[ ! "${top_stem:-}" ]]; then
+    get_top_stem "$subject" || fail
   fi
 
   cube_path=$(realpath $1) \
     dna_path=$cube_path/.dna \
     cube_cyto_path=$cube_path/.cyto \
-    short_cube=${cube_path#$top_path}
+    short_cube=${cube_path#$top_stem}
 
   if [[ ! -d $dna_path ]]; then
 
@@ -501,19 +504,31 @@ end_function_flat
 handle_return
 }
 
-get_top_path() {
+# will set top_stem, which will be empty if no stem cells are found
+get_top_stem() {
 local subject=$1
-subject=${subject%%/.dna*}
-subject=${subject%%/.cyto*}
 local parent=${subject%/*}
-if [[ -d $parent/.dna ]]; then
-  if [[ ! -d $parent/.cyto ]]; then
-    init_cube $parent || return 1
-  fi
+top_stem=
+if [[ -d $subject/.dna ]]; then
+  top_stem=$subject
+fi
+# recursive
+if [[ ${#parent} -gt 1 ]]; then
+  get_top_stem $parent || return 1
+fi
+return 0
+}
+
+# will set bottom_stem, which will be empty if no stem cells are found
+get_bottom_stem() {
+local subject=$1
+local parent=${subject%/*}
+bottom_stem=
+if [[ -d $subject/.dna ]]; then
+  bottom_stem=$subject
+elif [[ ${#parent} -gt 1 ]]; then
   # recursive
-  get_top_path $parent || return 1
-else
-  top_path=$parent/
+  get_bottom_stem $parent || return 1
 fi
 return 0
 }
@@ -604,7 +619,7 @@ init_context() {
   current_pause=250 \
   cube_type=info \
   max_pause=60000 \
-  top_path=${top_path:-}
+  top_stem=${top_stem:-}
 
   # override this if there are parameter requirements that must be met before attempting to update the cell
   are_batch_params_valid() {
@@ -778,7 +793,7 @@ get_workspace() {
 local subject=$1
 workspace=
 while [[ ${#subject} -gt 1 && $subject =~ / ]]; do
-  if [[ "$subject" == "$top_path"/* ]]; then
+  if [[ "$subject" == "$top_stem"/* ]]; then
     workspace=$subject
     break
   fi
@@ -1128,8 +1143,8 @@ is_cube() {
 
 is_inside_of_cube() {
 local c=$1
-if [[ $c == "$top_path"/* ]]; then
-  while [[ $c == "$top_path"/* ]]; do
+if [[ $c == "$top_stem"/* ]]; then
+  while [[ $c == "$top_stem"/* ]]; do
     if [[ -d $c/.dna ]]; then
       return 0
     fi
