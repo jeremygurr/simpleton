@@ -108,7 +108,7 @@ local step=$1
 vars=step; begin_function
   local step_name=${step##*/} prefix=
 
-  if [[ $target_file =~ ([0-9]+|\^+)-(.*) ]]; then
+  if [[ $target_file =~ ([0-9]+)-(.*) ]]; then
     prefix=${BASH_REMATCH[1]}
     base=${BASH_REMATCH[2]}
   fi
@@ -125,11 +125,11 @@ vars=step; begin_function
       # TODO ...
       incomplete
     elif [[ $base =~ ^loop-.* ]]; then
-      ( serial=t execute_command_step_each ) || fail
+      serial=t execute_command_step_loop || fail
     elif [[ $base =~ ^each-.* ]]; then
-      ( serial=f execute_command_step_each ) || fail
+      serial=f execute_command_step_loop || fail
     else
-      ( execute_command_step_plain_folder $step ) || fail
+      execute_command_step_plain_folder $step || fail
     fi
   elif [[ -f $step ]]; then
     execute_command_step_file $step || fail
@@ -182,7 +182,7 @@ end_function_flat
 handle_return
 }
 
-execute_command_step_each() {
+execute_command_step_loop() {
 local serial=$serial
 begin_function_flat
 
@@ -193,24 +193,33 @@ begin_function_flat
   elif [[ $base =~ (each|loop)-([^-]+) ]]; then
     ref=${BASH_REMATCH[2]}
     ref_group=${ref}s
+    if [[ ! "${!ref_group:-}" ]]; then
+      ref_group=${ref%?}ies
+    fi
   fi
 
   setup_default_each_handler || fail
-  local prep_code_files=( $(find1 $step -regex '.*/\^+-.*') )
-  local prep_code_file
-  begin_for prep_code_file in "${prep_code_files[@]}"; doo
-    execute_command_step "$prep_code_file" || fail
+  local before_block_files=( $(find1 $step -regex 'before-block.*') ) || fail
+  local before_block_file
+  begin_for before_block_file in "${before_block_files[@]}"; doo
+    execute_command_step "$before_block_file" || fail
   end_for
 
   # This can be overridden in a prep_code_file to provide custom looping
-  handle_step_each || fail
+  handle_step_loop || fail
+
+  local after_block_files=( $(find1 $step -regex 'after-block.*') ) || fail
+  local after_block_file
+  begin_for after_block_file in "${after_block_files[@]}"; doo
+    execute_command_step "$after_block_file" || fail
+  end_for
 
 end_function_flat
 handle_return
 }
 
 setup_default_each_handler() {
-  handle_step_each() {
+  handle_step_loop() {
 
   begin_function_flat
 
@@ -235,7 +244,9 @@ setup_default_each_handler() {
         execute_command_step_plain_folder $step &
         processes+=" $!"
       else
-        ( execute_command_step_plain_folder $step ) || fail
+        do_after=
+        execute_command_step_plain_folder $step || fail
+        [[ "$do_after" == break ]] && break
       fi
     end_for
 
