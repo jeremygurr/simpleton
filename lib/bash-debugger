@@ -454,13 +454,15 @@ debug_trap() {
       d)
         echo >&$fd_original_err
         read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
-        debug_display=${debug_display#\$}
-        local d
-        for d in $debug_display; do
-          set +u
-          eval 'echo "$d=${!d}"' >&$fd_original_err
-          set -u
-        done
+        set +u
+        if [[ "$debug_display" =~ ^[a-zA-Z_]+$ ]]; then
+          eval 'echo "\$'$debug_display'=$'$debug_display'"' >&$fd_original_err
+        elif [[ "$debug_display" =~ ^\$[a-zA-Z_]+$ ]]; then
+          eval 'echo "$debug_display='$debug_display'"' >&$fd_original_err
+        else
+          eval 'echo "'$debug_display'"' >&$fd_original_err
+        fi
+        set -u
         no_follow_once=t
         ;;
       D)
@@ -840,7 +842,7 @@ debug_trap() {
     debug_expansion_clean "$debug_fifo_path" >"$debug_out_path" &
     debug_expansion_pid=$!
     exec {fd_bash_trace}>"$debug_fifo_path"
-    debug_original_tracefd=$BASH_XTRACEFD
+    debug_original_tracefd=${BASH_XTRACEFD:-}
     BASH_XTRACEFD=$fd_bash_trace
   fi
 
