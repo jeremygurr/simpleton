@@ -19,14 +19,14 @@ log_depth=0
 
 alias begin_function='
   local return_value=0 break_out=f
-  write_to_log "level=info action=call function=${FUNCNAME[0]}"
+  write_to_log "level=trace action=call function=${FUNCNAME[0]}"
   let log_depth++ || true
   while true; do
 '
 
 alias end_function='
   break; done; let log_depth-- || true
-  write_to_log "level=info action=return function=${FUNCNAME[0]}"
+  write_to_log "level=trace action=return function=${FUNCNAME[0]}"
 '
 
 change_log_file() {
@@ -42,7 +42,7 @@ change_log_file() {
 
   if [[ "${log_file:-}" ]]; then
     untee_output 
-    write_to_log "level=info action=branch new_log=$new_log_file"
+    write_to_log "level=trace action=branch new_log=$new_log_file"
   fi
 
   old_log_file=${log_file:-}
@@ -54,11 +54,32 @@ change_log_file() {
     fail1
   fi
 
-  [[ "$old_log_file" ]] && write_to_log "level=info action=from_log old_log=$old_log_file"
+  [[ "$old_log_file" ]] && write_to_log "level=trace action=from_log old_log=$old_log_file"
   BASH_XTRACEFD=2
   tee_output_to $log_file 
   set -x
   tracing=t
+}
+
+info() {
+  begin_no_tracing_zone
+    while true; do
+      case "$1" in
+        -*)
+          ;;
+        *)
+          break
+          ;;
+      esac
+      shift || true
+    done
+    shift || true # ignore importance parameter
+    if [[ $log_depth -le $trace ]]; then
+      out "$@"
+    fi
+    write_to_log "level=info $@"
+  end_no_tracing_zone
+  return 0
 }
 
 trace() {
@@ -77,7 +98,7 @@ trace() {
     if [[ $log_depth -le $trace ]]; then
       out "$@"
     fi
-    write_to_log "level=info $@"
+    write_to_log "level=trace $@"
   end_no_tracing_zone
   return 0
 }
@@ -135,7 +156,7 @@ write_to_log() {
       message+=" $var=$value"
     done
     vars=
-    echo "= $EPOCHREALTIME depth=$log_depth $message" | tee -a $log_file
+    echo "= $EPOCHREALTIME depth=$log_depth $message" >> $log_file
   fi
 }
 
