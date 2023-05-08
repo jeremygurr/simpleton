@@ -110,15 +110,12 @@ local step=$1
 vars=step; begin_function
   local step_name=${step##*/} prefix=
 
-  if [[ $step_name =~ ([0-9]+)-(.*) ]]; then
-    prefix=${BASH_REMATCH[1]}
-    base=${BASH_REMATCH[2]}
+  if [[ $step_name =~ [0-9]+-([^/]*)$ ]]; then
+    base=${BASH_REMATCH[1]}
+  else
+    base=$step_name
   fi
   
-  if [[ ! "$prefix" ]]; then
-    succeed # only execute steps that have a numeric prefix
-  fi
-
   if [[ -d $step/.dna ]]; then
     # recursive
     execute_command $step update || fail
@@ -131,7 +128,7 @@ vars=step; begin_function
     elif [[ $base =~ ^each-.* ]]; then
       serial=f execute_command_step_loop || fail
     else
-      execute_command_step_plain_folder $step || fail
+      execute_command_step_plain_folder || fail
     fi
   elif [[ -f $step ]]; then
     execute_command_step_file $step || fail
@@ -145,7 +142,7 @@ handle_return
 
 execute_command_step_file() {
 begin_function_flat
-  case $step in
+  case $base in
     *.py)
       err "Python steps not implemented yet"
       fail1
@@ -164,7 +161,7 @@ begin_function_flat
     ;;
     *.bash)
       source $step || fail
-      local function_name=${step%.bash}
+      local function_name=${base%.bash}
       function_name=${function_name##*/}
       function_name=${function_name//-/_}
       local function_exists=$(type -t $function_name &>/dev/null && echo true)
@@ -196,12 +193,14 @@ begin_function_flat
     ref=${BASH_REMATCH[2]}
     ref_group=${ref}s
     if [[ ! "${!ref_group:-}" ]]; then
+      ref_group=${ref}es
+    elif [[ ! "${!ref_group:-}" ]]; then
       ref_group=${ref%?}ies
     fi
   fi
 
   setup_default_each_handler || fail
-  local before_block_files=( $(find1 $step -regex 'before-block.*') ) || fail
+  local before_block_files=( $(find1 $step -regex '.*/before-block.*') ) || fail
   local before_block_file
   begin_for before_block_file in "${before_block_files[@]}"; doo
     execute_command_step "$before_block_file" || fail
@@ -210,7 +209,7 @@ begin_function_flat
   # This can be overridden in a prep_code_file to provide custom looping
   handle_step_loop || fail
 
-  local after_block_files=( $(find1 $step -regex 'after-block.*') ) || fail
+  local after_block_files=( $(find1 $step -regex '.*/after-block.*') ) || fail
   local after_block_file
   begin_for after_block_file in "${after_block_files[@]}"; doo
     execute_command_step "$after_block_file" || fail
@@ -243,11 +242,11 @@ setup_default_each_handler() {
     begin_for v in "${a[@]}"; doo
       let "$ref=\$v"
       if [[ $parallel == t ]]; then
-        execute_command_step_plain_folder $step &
+        execute_command_step_plain_folder &
         processes+=" $!"
       else
         do_after=
-        execute_command_step_plain_folder $step || fail
+        execute_command_step_plain_folder || fail
         [[ "$do_after" == break ]] && break
       fi
     end_for
@@ -262,19 +261,17 @@ setup_default_each_handler() {
 
 # may be run in a subshell
 execute_command_step_plain_folder() {
-local step=$1
+local step=$step
 begin_function_flat
 
-  change_log_file || fail
-
-  local contents=$(find1 -not -name ".*" -not -name "*^-*" $step | sort -g) || fail
+  local contents=( $(find1 $step -not -name ".*" -not -name "*^-*" | sort -g) ) || fail 
   local files i=0 file_index
-  [[ ! "$contents" ]] && succeed
+  [[ ! "${contents:-}" ]] && succeed
 
   begin_loop
 
     files=( ${contents[$i]} )
-    if [[ $files =~ ([0-9]+)-.* ]]; then
+    if [[ $files =~ ([0-9]+)-[^/]*$ ]]; then
       file_index=${BASH_REMATCH[1]}
       # does next file have same index?
     else
@@ -285,9 +282,9 @@ begin_function_flat
     local next_file_index=$file_index next_file n=$i
     begin_loop
       let n++ || true
-      [[ $n -gt ${#contents[*]} ]] && break
+      [[ $n -ge ${#contents[*]} ]] && break
       next_file=${contents[$n]}
-      if [[ $next_file =~ ([0-9]+)-.* ]]; then
+      if [[ $next_file =~ ([0-9]+)-[^/]*$ ]]; then
         next_file_index=${BASH_REMATCH[1]}
       else
         next_file_index=-1
@@ -308,6 +305,7 @@ begin_function_flat
       fi
     fi
 
+    local processes=
     begin_for step in "${files[@]}"; doo
       if [[ $parallel == t ]]; then
         # recursive
@@ -315,7 +313,7 @@ begin_function_flat
         processes+=" $!"
       else
         # recursive
-        ( execute_command_step $step ) || fail
+        execute_command_step $step || fail
       fi
     end_for
 
@@ -452,14 +450,14 @@ handle_return
 
 # input must be a folder
 setup_stem_path_vars() {
+stem_path=$(realpath $1)
 begin_function_flat
 
   if [[ ! "${top_stem:-}" ]]; then
-    get_top_stem "$subject" || fail
+    get_top_stem $stem_path || fail
   fi
 
-  stem_path=$(realpath $1) \
-    dna_path=$stem_path/.dna \
+  dna_path=$stem_path/.dna \
     stem_cyto_path=$stem_path/.cyto \
     short_stem=${stem_path#$top_stem}
 
@@ -698,7 +696,7 @@ begin_function_flat
   if [[ "${batch_values:-}" ]]; then
     local i d v
     batch_id=
-    for ((i=0; i < ${#batch_values[*]}; i++)); do
+    begin_for ((i=0; i < ${#batch_values[*]}; i++)); doo
 
       d=${batch_dims[$i]}
       if [[ ! "$d" ]]; then
@@ -718,7 +716,7 @@ begin_function_flat
       batch_id+=${v}_
       batch_value_path+=/$v
 
-    done
+    end_for
     batch_id=${batch_id%_}
   fi
 
@@ -800,6 +798,20 @@ begin_function_flat
     batch_out_path=
   fi
 
+end_function_flat
+handle_return
+}
+
+update_batch_value_file() {
+begin_function_flat
+  if [[ "${batch_values:-}" && ! -f $batch_path/batch_values ]]; then
+    local v s='batch_values=( '
+    for v in "${batch_values[@]}"; do
+      s+="\"$v\" "
+    done
+    s+=')'
+    echo "$s" >$batch_path/batch_values || fail
+  fi
 end_function_flat
 handle_return
 }
@@ -1048,6 +1060,105 @@ handle_return
 
 }
 
+# input: dim
+# output: values 
+expand_values() {
+begin_function_flat
+
+  local dims=${dim}s \
+        new_value_list= new_values= value \
+        has_member_expand_function=f
+
+  values=( ${!dim:-} )
+  type -t ${dim}_member_expand >/dev/null && has_member_expand_function=t
+
+  if [[ ! "${values:-}" ]]; then
+    expand_values_plural || fail
+  else
+    expand_values_single || fail
+  fi
+
+  values=( $new_value_list )
+
+end_function_flat
+handle_return
+}
+
+expand_values_single() {
+
+begin_function_flat
+
+  if [[ "${#values[*]}" -gt 1 ]]; then
+    err "Too many values for a singular dim $dim." \
+      "Use plural dim $dims if you intend to have multiple values."
+    fail1
+  fi
+
+  if [[ $has_member_expand_function == t ]]; then
+    value=$values ${dim}_member_expand || fail
+    if [[ ! "${values:-}" ]]; then
+      err "Dim $dim has invalid value '$value'"
+      fail1
+    fi
+    if [[ "${#values[*]}" -gt 1 ]]; then
+      err "Too many values for a singular dim $dim." \
+        "Use plural dim $dims if you intend to have multiple values."
+      fail1
+    fi
+  fi
+
+  new_value_list="$values"
+
+end_function_flat
+handle_return
+
+}
+
+expand_values_plural() {
+
+begin_function_flat
+
+  values=( ${!dims:-} )
+
+  if [[ ! "${values:-}" ]]; then
+
+    if [[ $has_member_expand_function == t ]]; then
+      value= ${dim}_member_expand || fail
+      new_values=( "${values[@]}" )
+    else
+      err "Missing value for dimension: $RESET$dim"
+      fail1
+    fi
+
+  else
+
+    if [[ $has_member_expand_function == t ]]; then
+      begin_for value in "${values[@]}"; doo
+        value=$value ${dim}_member_expand || fail
+        if [[ ! "${values:-}" ]]; then
+          err "Dim $dims has invalid value '$value'"
+          fail1
+        fi
+        new_values+=( "${values[@]}" )
+      end_for
+    else
+      new_values=( "${values[@]}" )
+    fi
+
+  fi
+
+  # remove duplicate values
+  local new_value
+  for new_value in "${new_values[@]}"; do
+    if [[ ! $new_value_list =~ \ $new_value\  ]]; then
+      new_value_list+=" $new_value "
+    fi
+  done
+
+end_function_flat
+handle_return
+}
+
 # input: values (array)
 batch_pivot_values() {
 begin_function_flat
@@ -1199,17 +1310,49 @@ return 1
 }
 
 load_context() {
-local subject=$1
-last_context_loaded=${last_context_loaded:-}
-[[ "$last_context_loaded" == $subject ]] && return 0
-init_context || return 1
-if [[ -f $subject/.dna/context ]]; then
-  source $subject/.dna/context || return 1
-fi
-for op in $subject/.dna/op/*; do
-  source $op || return 1
-done
-last_context_loaded=$subject
+local stem=$1
+vars=stem; begin_function
+
+  last_context_loaded=${last_context_loaded:-}
+  [[ "$last_context_loaded" == $stem ]] && succeed
+  init_context || fail
+  if [[ -f $stem/.dna/context ]]; then
+    source $stem/.dna/context || fail
+  fi
+
+  begin_for op in $stem/.dna/op/*; doo
+    source $op || fail
+  end_for
+
+  local dim dim_var
+  batch_dims=( )
+  if [[ -d $stem/.dna/dim ]]; then
+    begin_for dim in $(find1 $stem/.dna/dim -not -name ".*" | sort -g); doo
+      source $dim || fail
+      dim_var=${dim##*/}
+      if [[ $dim_var =~ [0-9]+-(.*) ]]; then
+        dim_var=${BASH_REMATCH[1]}
+      fi
+      batch_dims+=( $dim_var )
+    end_for
+  fi
+
+  cell_dims=( )
+  if [[ -d $stem/.dna/cell-dim ]]; then
+    begin_for dim in $(find1 $stem/.dna/cell-dim -not -name ".*" | sort -g); doo
+      source $dim || fail
+      dim_var=${dim##*/}
+      if [[ $dim_var =~ [0-9]+-(.*) ]]; then
+        dim_var=${BASH_REMATCH[1]}
+      fi
+      cell_dims+=( $dim_var )
+    end_for
+  fi
+
+  last_context_loaded=$stem
+
+end_function
+handle_return
 }
 
 readonly context_vars='
