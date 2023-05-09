@@ -140,24 +140,37 @@ warn() {
 }
 
 write_to_log() {
-  if [[ "${log_file:-}" ]]; then
-    local message=$1
-    local var value
-    for var in $vars; do
-      value=${!var}
-      if [[ $value =~ \  ]]; then
-        value=${value//\\/\\\\}
-        #   double quoted
-        value="\"${value//\"/\\\"}\""
-        #   escaped spaces
-        # value=${value//\\/\\\\}
-        # value=${value// /\\ }
-      fi
-      message+=" $var=$value"
-    done
-    vars=
-    echo "= $EPOCHREALTIME depth=$log_depth $message" >> $log_file
+local message=$1
+local var value
+
+for var in $vars; do
+  value=${!var}
+  if [[ $value =~ \  ]]; then
+    value=${value//\\/\\\\}
+    #   double quoted
+    value="\"${value//\"/\\\"}\""
+    #   escaped spaces
+    # value=${value//\\/\\\\}
+    # value=${value// /\\ }
   fi
+  message+=" $var=$value"
+done
+
+vars=
+local output="= $EPOCHREALTIME depth=$log_depth $message"
+
+if [[ $log == file && "${log_file:-}" ]]; then
+  echo "$output" >> $log_file
+elif [[ $log == out ]]; then
+  echo "$output" >&$fd_trace
+elif [[ $log == both ]]; then
+  if [[ "${log_file:-}" ]]; then
+    echo "$output" | tee -a $log_file >&$fd_trace
+  else
+    echo "$output" >&$fd_trace
+  fi
+fi
+
 }
 
 out() {

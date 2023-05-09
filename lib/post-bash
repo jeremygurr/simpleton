@@ -20,6 +20,7 @@ export trace_debug=${trace_debug:-f}
 export bash_trace=${bash_trace:-100}
 export debug=${debug:-f}
 export EDITOR=${EDITOR:-vim}
+export log=${log:-file}
 
 export log_warn3=${log_warn3:-30}
 export log_warn2=${log_warn2:-20}
@@ -753,12 +754,13 @@ convert_to_seconds() {
 #   otherwise it will keep trying until the timeout is reached or the lock is obtained.
 folder_lock() {
 local folder_to_lock=${folder_to_lock}
-local timeout=${timeout:-}
+local timeout=${timeout:-$lock_timeout}
 local pid_file=${pid_file:-$folder_to_lock/pid}
+local remove_folder_when_unlocked=${remove_folder_when_unlocked:-f}
 
-trace $log_trace "Attempting to obtain lock for $folder_to_lock"
+# trace $log_trace "Attempting to obtain lock for $folder_to_lock"
 
-begin_function
+vars='folder_to_lock timeout'; begin_function
 
   if [[ -d "$folder_to_lock" ]]; then
 
@@ -812,7 +814,9 @@ begin_function
     fail
   fi
 
-  defer "rm -r '$pid_file' '$folder_to_lock' &>/dev/null"
+  if [[ $remove_folder_when_unlocked == t ]]; then
+    defer "rm -r '$pid_file' '$folder_to_lock' &>/dev/null"
+  fi
 
   # lock obtained
   trace $log_trace2 "Succeeded in obtaining lock."
@@ -860,7 +864,7 @@ return 0
 fd_read_lock() {
 local lock_path=$1
 local timeout=${2:-$lock_timeout}
-flock -s -w $lock_timeout $lock_fd || {
+flock -s -w $timeout $lock_fd || {
   err "Failed to get read lock for $lock_path within $timeout seconds"
   return 1
   }
@@ -869,7 +873,7 @@ flock -s -w $lock_timeout $lock_fd || {
 fd_write_lock() {
 local lock_path=$1
 local timeout=${2:-$lock_timeout}
-flock -e -w $lock_timeout $lock_fd || {
+flock -e -w $timeout $lock_fd || {
   err "Failed to get write lock for $lock_path within $timeout seconds"
   return 1
   }
