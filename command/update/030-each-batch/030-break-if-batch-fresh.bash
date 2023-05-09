@@ -1,9 +1,11 @@
 break_if_batch_fresh() {
 begin_function_flat
 
-  get_needs_update $batch_status_path || fail
-  if [[ $needs_update == f ]]; then
-    do_after=break
+  if [[ "$batch_status_path" ]]; then
+    get_needs_update $batch_status_path || fail
+    if [[ $needs_update == f ]]; then
+      do_after=break
+    fi
   fi
 
 end_function_flat
@@ -11,10 +13,9 @@ handle_return
 }
 
 get_needs_update() {
+local -r node_status_path=$1
+needs_update=f
 begin_function_flat
-
-  local -r node_status_path=$1
-  needs_update=f
 
   if [[ ! -d $node_status_path
      || -e $node_status_path/outdated
