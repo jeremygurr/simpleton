@@ -16,6 +16,7 @@
 
 first_log=t
 log_depth=0
+log_id=0
 
 alias begin_function='
   local return_value=0 break_out=f
@@ -26,7 +27,7 @@ alias begin_function='
 
 alias end_function='
   break; done; let log_depth-- || true
-  write_to_log "level=trace action=return function=${FUNCNAME[0]}"
+  write_to_log "level=trace action=return rc=$return_value function=${FUNCNAME[0]}"
 '
 
 change_log_file() {
@@ -83,24 +84,25 @@ info() {
 }
 
 trace() {
-  begin_no_tracing_zone
-    while true; do
-      case "$1" in
-        -*)
-          ;;
-        *)
-          break
-          ;;
-      esac
-      shift || true
-    done
-    shift || true # ignore importance parameter
-    if [[ $log_depth -le $trace ]]; then
-      out "$@"
-    fi
-    write_to_log "level=trace $@"
-  end_no_tracing_zone
-  return 0
+begin_no_tracing_zone
+  while true; do
+    case "$1" in
+      -a|-n|-e)
+        ;;
+      *)
+        break
+        ;;
+    esac
+    shift || true
+  done
+  shift || true # ignore importance parameter
+  local message="$*"
+  if [[ $log_depth -le $trace && $log != both && $log != out ]]; then
+    out "$message"
+  fi
+  write_to_log "level=trace message=\"$message\""
+end_no_tracing_zone
+return 0
 }
 
 err() {
@@ -157,7 +159,8 @@ for var in ${vars:-}; do
 done
 
 vars=
-local output="= $EPOCHREALTIME depth=$log_depth $message"
+local output="= $EPOCHREALTIME log_id=$log_id depth=$log_depth $message"
+let log_id++ || true
 
 if [[ $log == file && "${log_file:-}" ]]; then
   echo "$output" >> $log_file
