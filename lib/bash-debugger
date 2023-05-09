@@ -125,7 +125,9 @@ debug_trap() {
         echo "debug_debug[$debug_current_depth]: Skipping because we are waiting for line $debug_line" >&$fd_original_err
       fi
 
-      return 0
+      if [[ $debug_immediate == f ]]; then
+        return 0
+      fi
     else
       debug_line_old=$debug_line
       debug_line=
@@ -141,7 +143,9 @@ debug_trap() {
     if [[ $debug_debug == t ]]; then
       echo "debug_debug[$debug_current_depth]: Skipping because function $debug_function is ignored by $debug_ignore" >&$fd_original_err
     fi
-    return 0
+    if [[ $debug_immediate == f ]]; then
+      return 0
+    fi
   fi
 
   local debug_r=-1
@@ -203,14 +207,18 @@ debug_trap() {
       if [[ $debug_debug == t ]]; then
         echo "debug_debug[$debug_current_depth]: Skipping because we haven't found what we are looking for: $debug_search" >&$fd_original_err
       fi
-      return 0
+      if [[ $debug_immediate == f ]]; then
+        return 0
+      fi
     fi
   else
     if [[ $debug_current_depth -gt $debug_max_depth && -z "$debug_stop_at" ]]; then
       if [[ $debug_debug == t ]]; then
         echo "debug_debug[$debug_current_depth]: Skipping because we are too deep: $debug_current_depth > $debug_max_depth" >&$fd_original_err
       fi
-      return 0
+      if [[ $debug_immediate == f ]]; then
+        return 0
+      fi
     fi
   fi
 
@@ -221,13 +229,17 @@ debug_trap() {
     if [[ $debug_debug == t ]]; then
       echo "debug_debug[$debug_current_depth]: Skipping because we are on the same line: $debug_last_location" >&$fd_original_err
     fi
-    return 0
+    if [[ $debug_immediate == f ]]; then
+      return 0
+    fi
   fi
 
   if [[ "$debug_stop_at" ]]; then
     if [[ "$raw_debug_path_to_source_file $debug_line_num" != "$debug_stop_at" ]]; then
       debug_r=0
-      return 0
+      if [[ $debug_immediate == f ]]; then
+        return 0
+      fi
     else
       debug_max_depth=$debug_current_depth
       debug_stop_at=
@@ -238,7 +250,9 @@ debug_trap() {
      && "$debug_line_num" -le "$debug_prev_line" \
      && $debug_function != none ]]; then
     debug_r=0
-    return 0
+    if [[ $debug_immediate == f ]]; then
+      return 0
+    fi
   else
     debug_step_to_later_line=f
   fi
@@ -248,7 +262,9 @@ debug_trap() {
      ]]; then
     debug_r=0
     debug_subshell=t
-    return 0
+    if [[ $debug_immediate == f ]]; then
+      return 0
+    fi
   fi
 
   if [[ $debug_step_to_next_file == t ]] && [[ \
@@ -257,12 +273,16 @@ debug_trap() {
      ]]; then
     debug_r=0
     debug_subshell=t
-    return 0
+    if [[ $debug_immediate == f ]]; then
+      return 0
+    fi
   fi
 
   if [[ $debug_continue == t ]]; then
     debug_r=0
-    return 0
+    if [[ $debug_immediate == f ]]; then
+      return 0
+    fi
   fi
 
   debug_last_location="$debug_path_to_source_file $debug_line_num"
@@ -330,8 +350,8 @@ debug_trap() {
   fi
 
   debug_step_to_next_line=f
-
   debug_prev_command=$raw_display_command
+  debug_immediate=f
 
   local debug_c debug_array no_follow_once=f
   while [[ $debug_r == -1 ]]; do
@@ -933,6 +953,7 @@ debug_start() {
     export debug_expanded_search=${debug_expanded_search:-f}
     export debug_follow_source=${debug_follow_source:-t}
     export debug_ignore=${debug_ignore:-(echo_align|trace|out|warn|err)}
+    export debug_immediate=${debug_immediate:-f}
     export debug_last_location=${debug_last_location:-}
     export debug_line=${debug_line:-}
     export debug_line_old=${debug_line_old:-}
@@ -992,6 +1013,8 @@ debug_start() {
       set +e # so returning 1 does not cause failure
       set_return_code $debug_rc
       ' DEBUG
+  else
+    debug_immediate=t
   fi
 }
 
