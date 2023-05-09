@@ -11,6 +11,8 @@ parallel_default=t
 [[ $debug == t ]] && parallel_default=f
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
+# This is run if stem hasn't been initialized = missing .cyto folder
+# Context should be loaded before this is run
 make_cyto() {
 local stem=$1 cyto=$stem/.cyto.new
 begin_function
@@ -24,6 +26,25 @@ begin_function
   mkdir -p $cyto/command || fail
   mkdir -p $cyto/lib || fail
   inherit_lib $stem $stem || fail
+  local feature
+  if [[ "${stem_features:-}" ]]; then
+    begin_for feature in "${stem_features[@]}"; doo
+      case $feature in
+        req)
+          mkdir -p $cyto/$feature/new || fail
+        ;;
+        log)
+          mkdir -p $cyto/$feature || fail
+        ;;
+        *)
+          err "Unknown feature $feature"
+          fail1
+        ;;
+      esac
+    end_for
+  fi
+  mkdir $cyto/batch \
+        $cyto/status || fail
   mv $cyto $stem/.cyto || fail
 end_function
 handle_return
@@ -206,6 +227,14 @@ begin_function_flat
   begin_for before_block_file in "${before_block_files[@]}"; doo
     execute_command_step "$before_block_file" || fail
   end_for
+
+  if [[ "$ref_group" && ! "${!ref_group:-}" ]]; then
+    err "Problem executing step $step"
+    err "Could not find ref group for $ref. Should be named either ${ref}s, ${ref}es, or ${ref%?}ies, "
+    err "or override it with a different folder name."
+    err "Or if this is a custom loop with a before-block file in it, set ref_group= (to nothing) in that file."
+    fail1
+  fi
 
   # This can be overridden in a prep_code_file to provide custom looping
   handle_step_loop || fail
@@ -573,39 +602,6 @@ elif [[ ${#parent} -gt 1 ]]; then
   get_bottom_stem $parent || return 1
 fi
 return 0
-}
-
-# This is run if stem hasn't been initialized = missing .cyto folder
-# Context should be loaded before this is run
-init_stem() {
-local subject=$1
-begin_function_flat
-  stem_cyto_path=$subject/.cyto
-  mkdir $stem_cyto_path || fail
-  local feature
-  stem_lock_path=
-  if [[ "${stem_features:-}" ]]; then
-    begin_for feature in "${stem_features[@]}"; doo
-      case $feature in
-        req)
-          mkdir -p $stem_cyto_path/$feature/new || fail
-        ;;
-        log)
-          mkdir -p $stem_cyto_path/$feature || fail
-        ;;
-        *)
-          err "Unknown feature $feature"
-          fail1
-        ;;
-      esac
-    end_for
-  fi
-  if [[ -d $subject/.dna ]]; then
-    mkdir $stem_cyto_path/batch \
-          $stem_cyto_path/status || fail
-  fi
-end_function_flat
-handle_return
 }
 
 # should be run before spawn update function

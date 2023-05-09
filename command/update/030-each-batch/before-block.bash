@@ -1,5 +1,7 @@
 #!/bin/bash
 
+ref_group=
+
 before_block() {
 
 handle_step_loop() {
