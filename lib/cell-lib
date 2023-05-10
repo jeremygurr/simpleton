@@ -11,8 +11,6 @@ parallel_default=t
 [[ $debug == t ]] && parallel_default=f
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
-trace_update=${trace_update:-f}
-
 # This is run if stem hasn't been initialized = missing .cyto folder
 # Context should be loaded before this is run
 make_cyto() {
@@ -100,6 +98,24 @@ end_function
 handle_return
 }
 
+# Usage: execute_op {op name}
+execute_op() {
+local op_name=$1 op
+vars=op_name; begin_function
+  begin_for op in $op_path/$op_name $op_path/$op_name.*; doo
+    if [[ -e $op ]]; then
+      local trace_step_execution=f
+      if [[ $trace_op == $op_name ]]; then
+        trace_step_execution=t
+      fi
+      execute_command_step $op || fail
+      break
+    fi
+  end_for
+end_function
+handle_return
+}
+
 execute_command() {
 local stem=$1 command=$2
 vars='stem command'; begin_function
@@ -120,7 +136,9 @@ handle_return
 #   choose-{n}-{name}     multi-path, stopping after {n} choices are successful. {name} is optional
 #   each-{var}-in-{vars}  loop over {vars} storing current value in {var}
 #                         can be file or folder
+#                         executes each element in parallel
 #   each-{var}            loop over {vars} (adds 's' to index var)
+#   loop-{var}-in-{vars}  same as each, except executes sequentially
 #   {file}.go             execute go code
 #                         should define a single method named after the file which will be executed
 #   {file}.py             execute python script
@@ -189,7 +207,13 @@ begin_function_flat
       function_name=${function_name//-/_}
       local function_exists=$(type -t $function_name &>/dev/null && echo true)
       if [[ "$function_exists" ]]; then
+        if [[ $trace_step_execution == t ]]; then
+          start_tracing
+        fi
         $function_name || fail
+        if [[ $trace_step_execution == t ]]; then
+          stop_tracing
+        fi
       else
         err "Step $step requires that a function named $function_name be defined in that file."
         fail1
@@ -511,6 +535,8 @@ begin_function_flat
     else
       key_path=
     fi
+
+    op_path=$dna_path/op
 
   fi
 
@@ -1342,12 +1368,6 @@ vars=stem; begin_function
   if [[ -f $stem/.dna/context ]]; then
     source $stem/.dna/context || fail
   fi
-
-  begin_for op in $stem/.dna/op/*; doo
-    if [[ "$op" != .* && -f "$op" ]]; then
-      source $op || fail
-    fi
-  end_for
 
   local dim dim_var
   batch_dims=( )
