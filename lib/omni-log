@@ -30,10 +30,16 @@ alias end_function='
   write_to_log "level=trace action=return rc=$return_value function=${FUNCNAME[0]}"
 '
 
+# Usage:
+#   change_log_file {log file base}   point to new log file
+#   change_log_file                   point to same base but new pid (forked)
+#   change_log_file -                 stop logging
 change_log_file() {
   local new_base=${1:-} new_log_file old_log_file
 
-  if [[ "$new_base" ]]; then
+  if [[ "$new_base" == - ]]; then
+    new_log_file=
+  elif [[ "$new_base" ]]; then
     base_log_file=$new_base
     new_log_file=$base_log_file-$$-first.olog
   else
@@ -46,20 +52,26 @@ change_log_file() {
     write_to_log "level=trace action=branch new_log=$new_log_file"
   fi
 
-  old_log_file=${log_file:-}
-  log_file=$new_log_file
+  if [[ "$new_log_file" ]]; then
+    old_log_file=${log_file:-}
+    log_file=$new_log_file
 
-  # [[ -f $log_file ]] && rm $log_file
-  if [[ -f $log_file ]]; then
-    err "log file already exists: $log_file"
-    fail1
+    # [[ -f $log_file ]] && rm $log_file
+    if [[ -f $log_file ]]; then
+      err "log file already exists: $log_file"
+      fail1
+    fi
+
+    [[ "$old_log_file" ]] && write_to_log "level=trace action=from_log old_log=$old_log_file"
+    BASH_XTRACEFD=2
+    tee_output_to $log_file 
+    set -x
+    tracing=t
+  else
+    set +x
+    tracing=f
+    BASH_XTRACEFD=
   fi
-
-  [[ "$old_log_file" ]] && write_to_log "level=trace action=from_log old_log=$old_log_file"
-  BASH_XTRACEFD=2
-  tee_output_to $log_file 
-  set -x
-  tracing=t
 }
 
 info() {
