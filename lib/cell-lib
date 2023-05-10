@@ -11,6 +11,14 @@ parallel_default=t
 [[ $debug == t ]] && parallel_default=f
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
+stem_context_load() {
+load_context $stem || return 1
+if [[ ! -d $stem/.cyto ]]; then
+  make_cyto $stem || return 1
+fi
+setup_stem_path_vars $stem || return 1
+}
+
 # This is run if stem hasn't been initialized = missing .cyto folder
 # Context should be loaded before this is run
 make_cyto() {
@@ -27,8 +35,8 @@ begin_function
   mkdir -p $cyto/lib || fail
   inherit_lib $stem $stem || fail
   local feature
-  if [[ "${stem_features:-}" ]]; then
-    begin_for feature in "${stem_features[@]}"; doo
+  if [[ "${cell_features:-}" ]]; then
+    begin_for feature in "${cell_features[@]}"; doo
       case $feature in
         req)
           mkdir -p $cyto/$feature/new || fail
@@ -53,7 +61,7 @@ handle_return
 inherit_lib() {
 local stem_from=$1 stem_to=$2
 local parent=${stem_from%/*}
-begin_function
+begin_function_flat
   if [[ "${#parent}" -gt 1 ]]; then
     inherit_lib $parent $stem_to || fail
   fi
@@ -66,7 +74,7 @@ begin_function
       inherit_lib_folder $stem_from/.dna/command $stem_to/.cyto.new/command || fail
     fi
   fi
-end_function
+end_function_flat
 handle_return
 }
 
@@ -156,6 +164,7 @@ handle_return
 #   {file}.java           execute java code
 #   {file}.bash           execute bash code
 #   {folder}              go through each item in folder and execute according to folder language
+# should be run in a subshell to avoid messing up parent vars
 execute_command_step() {
 local step=$1
 vars=step; begin_function
@@ -169,7 +178,7 @@ vars=step; begin_function
   
   if [[ -d $step/.dna ]]; then
     # recursive
-    execute_command $step update || fail
+    ( execute_command $step update ) || fail
     ln -sf $step $batch_source_path/$base || fail
   elif [[ -d $step ]]; then
     if [[ $base =~ ^choose-.* ]]; then
@@ -1357,14 +1366,6 @@ else
   done
 fi
 return 1
-}
-
-stem_context_load() {
-load_context $stem || return 1
-if [[ ! -d $stem/.cyto ]]; then
-  make_cyto $stem || return 1
-fi
-setup_stem_path_vars $stem || return 1
 }
 
 load_context() {
