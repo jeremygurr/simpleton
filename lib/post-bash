@@ -776,27 +776,33 @@ vars='folder_to_lock timeout'; begin_function
   let timeleft=timeout*1000
   local delay=250
   local success=f
-  begin_while true; doo
-    mkdir "$folder_to_lock" &>/dev/null && success=t
-    if [[ $success == t ]]; then
-      echo $$ >"$pid_file" || fail
-      break
-    fi
+  local parent=${folder_to_lock%/*}
+  if [[ -d "$parent" ]]; then
+    begin_while true; doo
+      mkdir "$folder_to_lock" &>/dev/null && success=t
+      if [[ $success == t ]]; then
+        echo $$ >"$pid_file" || fail
+        break
+      fi
 
-    if [ ! "$timeout" ]; then
-      break
-    fi
+      if [ ! "$timeout" ]; then
+        break
+      fi
 
-    local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
-    trace $log_info "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
-    sleep $seconds_to_wait
-    timeleft=$((timeleft-delay))
-    let delay*=2
-    if [ "$timeleft" -le 0 ]; then
-      out "Timeout reached. Couldn't obtain the lock in time."
-      break
-    fi
-  end_while
+      local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
+      trace $log_info "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
+      sleep $seconds_to_wait
+      timeleft=$((timeleft-delay))
+      let delay*=2
+      if [ "$timeleft" -le 0 ]; then
+        out "Timeout reached. Couldn't obtain the lock in time."
+        break
+      fi
+    end_while
+  else
+    err "Attempting to obtain a folder lock when it's parent doesn't exist: $parent"
+    fail
+  fi
 
   if [[ $success == f ]]; then
     trace $log_warn "Failed to obtain lock."
