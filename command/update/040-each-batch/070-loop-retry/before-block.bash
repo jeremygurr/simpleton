@@ -3,9 +3,9 @@ retries=$(seq $retry_max)
 
 handle_step_loop() {
 for ((retry=0; retry < retry_max; retry++)); do
-  local do_after=
+  local can_retry=f update_successful=f
   execute_command_step_plain_folder || return 1
-  [[ "$do_after" == break ]] && break
+  [[ $can_retry == f || $update_successful == t ]] && break
 done
 return 0
 }
