@@ -1,3 +1,5 @@
+before_block() {
+
 delay=$retry_delay
 retries=$(seq $retry_max)
 
@@ -10,3 +12,4 @@ done
 return 0
 }
 
+}

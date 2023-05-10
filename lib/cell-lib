@@ -170,10 +170,12 @@ vars=step; begin_function
   if [[ -d $step/.dna ]]; then
     # recursive
     execute_command $step update || fail
+    ln -sf $step $batch_source_path/$base || fail
   elif [[ -d $step ]]; then
     if [[ $base =~ ^choose-.* ]]; then
       # TODO ...
       incomplete
+      ln -sf $choice $batch_source_path/$last_part || fail
     elif [[ $base =~ ^loop-.* ]]; then
       serial=t execute_command_step_loop || fail
     elif [[ $base =~ ^each-.* ]]; then
@@ -550,11 +552,6 @@ begin_function_flat
 
   fi
 
-  stem_up_path=$dna_path/up
-  if [[ ! -d $stem_up_path ]]; then
-    stem_up_path=
-  fi
-
   stem_down_path=$stem_cyto_path/down
   if [[ ! -d $stem_down_path ]]; then
     stem_down_path=
@@ -729,9 +726,6 @@ init_context() {
     let cooldown_delay*=2
   }
 
-  # override this function to implement custom update logic
-  unset execute_update
-
 }
 
 # batch_id should be figured out before this, 
@@ -802,14 +796,6 @@ begin_function_flat
     batch_debug_path=
   fi
 
-  if [[ "$stem_up_path" ]]; then
-    batch_up_path=$batch_path/up
-    # Don't create the up path here, but instead allow it to be created 
-    #   inside of batch_update -> batch_setup_up
-  else
-    batch_up_path=
-  fi
-
   if [[ "$stem_down_path" ]]; then
     batch_down_path=$batch_path/down
     # Created on demand
@@ -855,6 +841,11 @@ begin_function_flat
     batch_job_path=
   else
     batch_log_path=$batch_job_path/current/log
+  fi
+
+  batch_source_path=$batch_path/source
+  if [[ ! -d "$batch_source_path" ]]; then
+    mkdir $batch_source_path || fail
   fi
 
 end_function_flat
@@ -1368,6 +1359,14 @@ fi
 return 1
 }
 
+stem_context_load() {
+load_context $stem || return 1
+if [[ ! -d $stem/.cyto ]]; then
+  make_cyto $stem || return 1
+fi
+setup_stem_path_vars $stem || return 1
+}
+
 load_context() {
 local stem=$1
 vars=stem; begin_function
@@ -1432,7 +1431,7 @@ init_context() {
   # min_pause:
   #   number of ms to wait between cycles
   #   this number doubles each time there is nothing to do, until it reaches max_pause
-  # cube_type:
+  # stem_type:
   #   can be: constant info change
   #   constant means it just holds a fixed value that never changes
   #   info means it only fetches information 
@@ -1444,8 +1443,8 @@ init_context() {
   in_paths= \
   out_path= \
   out_paths= \
-  cube_in_path= \
-  cube_out_path= \
+  stem_in_path= \
+  stem_out_path= \
   batch_in_path= \
   batch_out_path= \
   default_fresh=inf \
@@ -1466,7 +1465,7 @@ init_context() {
   generators=gen_copy \
   min_pause=250 \
   current_pause=250 \
-  cube_type=info \
+  stem_type=info \
   max_pause=60000 \
   top_path=${top_path:-}
 
@@ -1487,9 +1486,6 @@ init_context() {
     [[ -z "${cooldown_delay:-}" ]] && cooldown_delay=1
     let cooldown_delay*=2
   }
-
-  # override this function to implement custom update logic
-  unset execute_update
 
 }
 
