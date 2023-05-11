@@ -8,7 +8,7 @@ begin_function_flat
       if [[ ! -d $batch_log_path ]]; then
         mkdir -p $batch_log_path || fail
       fi
-      change_log_file $batch_log_path || fail
+      change_log_file $batch_log_path/update || fail
     fi
   fi
 end_function_flat
