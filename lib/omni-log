@@ -20,14 +20,14 @@ log_id=0
 
 alias begin_function='
   local return_value=0 break_out=f
-  write_to_log "level=trace action=call function=${FUNCNAME[0]}"
+  write_to_log trace call
   let log_depth++ || true
   while true; do
 '
 
 alias end_function='
   break; done; let log_depth-- || true
-  write_to_log "level=trace action=return rc=$return_value function=${FUNCNAME[0]}"
+  write_to_log trace "return($return_value)"
 '
 
 # Usage:
@@ -49,7 +49,7 @@ change_log_file() {
 
   if [[ "${log_file:-}" ]]; then
     untee_output 
-    write_to_log "level=trace action=branch new_log=$new_log_file"
+    vars=new_log_file write_to_log trace branch
   fi
 
   if [[ "$new_log_file" ]]; then
@@ -62,7 +62,7 @@ change_log_file() {
       fail1
     fi
 
-    [[ "$old_log_file" ]] && write_to_log "level=trace action=from_log old_log=$old_log_file"
+    [[ "$old_log_file" ]] && vars=old_log_file write_to_log trace from_log
     #BASH_XTRACEFD=2
     tee_output_to $log_file 
     #start_tracing
@@ -89,7 +89,7 @@ info() {
     if [[ $log_depth -le $trace && log_out=f ]]; then
       out "$@"
     fi
-    write_to_log "level=info $@"
+    write_to_log info '' "$*"
   end_no_tracing_zone
   return 0
 }
@@ -111,7 +111,7 @@ begin_no_tracing_zone
   if [[ $log_depth -le $((trace+importance)) && $log_out == f ]]; then
     out "$message"
   fi
-  write_to_log "level=trace message=\"$message\""
+  write_to_log trace '' "$message"
 end_no_tracing_zone
 return 0
 }
@@ -129,7 +129,7 @@ err() {
       shift || true
     done
     out "${RED:-}$@${RESET:-}"
-    write_to_log "level=error $@"
+    write_to_log error '' "$*"
   end_no_tracing_zone
   return 0
 }
@@ -147,13 +147,13 @@ warn() {
       shift || true
     done
     out "${YELLOW:-}$@${RESET:-}"
-    write_to_log "level=warn $@"
+    write_to_log warn '' "$*"
   end_no_tracing_zone
   return 0
 }
 
 write_to_log() {
-local message=$1 var value var_log=
+local level=$1 action=$2 message=${3:-} var value var_log=
 
 for var in ${vars:-}; do
   value=${!var}
@@ -169,7 +169,16 @@ for var in ${vars:-}; do
 done
 
 vars=
-local output="= $EPOCHREALTIME log_id=$log_id depth=$log_depth$var_log $message"
+local function=${FUNCNAME[2]}
+local output="= $EPOCHREALTIME pid=$$ log_id=$log_id depth=$log_depth level=$level"
+if [[ "$action" ]]; then
+  output+=" action=$action"
+fi
+output+=" function=$function$var_log"
+if [[ "$message" ]]; then
+  output+=" message=\"${message//\"/\\\"}\""
+fi
+
 let log_id++ || true
 
 if [[ $log_to_file == t && "${log_file:-}" ]]; then
