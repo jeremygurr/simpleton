@@ -37,8 +37,6 @@ esac
 
 export tracing_depth=${tracing_depth:-0}
 export no_trace_depth=${no_trace_depth:-0}
-alias start_tracing='[[ $tracing_depth == 0 ]] && set -x; let tracing_depth++ || true'
-alias stop_tracing='let tracing_depth-- || true; [[ $tracing_depth == 0 ]] && set +x'
 
 export log_warn3=${log_warn3:-30}
 export log_warn2=${log_warn2:-20}
@@ -47,61 +45,6 @@ export log_info=${log_info:-0}
 export log_trace=${log_trace:--10}
 export log_trace2=${log_trace2:--20}
 export log_trace3=${log_trace3:--30}
-
-alias outdent='trace=$((trace+1))'
-alias outdent5='trace=$((trace+5))'
-alias indent='trace=$((trace-1))'
-alias indent5='trace=$((trace-5))'
-
-alias begin_no_tracing_zone='[[ $no_trace_depth == 0 && $tracing_depth -gt 0 ]] && set +x || true; let no_trace_depth++ || true'
-alias end_no_tracing_zone='let no_trace_depth-- || true; [[ $no_trace_depth -le 0 && $tracing_depth -gt 0 ]] && set -x || true'
-
-# usage example:
-#   do_stuff() {
-#     begin_function
-#       open_connection || fail
-#       begin_for ((i = 0; i < 10; i++)); doo
-#         stuff || fail
-#       end_for
-#      
-#       more_stuff
-#     end_function
-#     close_connection
-#     handle_return
-#   }
-
-alias       begin_function='let trace-- || true; local return_value=0 break_out=f; while true; do'
-alias  begin_function_flat='local return_value=0 break_out=f; while true; do'
-alias          begin_while='break_out=f; while'
-alias            begin_for='break_out=f; for'
-alias           begin_loop='break_out=f; while true; do'
-alias         end_function='break; done; let trace++ || true'
-alias    end_function_flat='break; done'
-alias            end_while='done; [[ $break_out == t ]] && break; true'
-alias              end_for='done; [[ $break_out == t ]] && break; true'
-alias             end_loop='done; [[ $break_out == t ]] && break; true'
-
-# to avoid bash syntax parsing problems
-alias doo='do'
-
-# used after a direct command which may fail: cd /somewhere || fail
-alias fail='{ return_value=$?; break_out=t; break; }'
-alias fail1='{ return_value=1; break_out=t; break; }'
-alias fail2='{ return_value=2; break_out=t; break; }'
-
-# used to check if something failed: failed && break
-alias failed='[[ $return_value -gt 0 ]]'
-
-# used when a subshell or pipeline may fail: value=$(cat /tmp/f | jq .value); or_fail
-alias or_fail='[[ "${PIPESTATUS[-1]}" -gt 0 ]] && { return_value=${PIPESTATUS[-1]}; break_out=t; break; }'
-alias command_failed='[[ "${PIPESTATUS[-1]}" -gt 0 ]]'
-
-alias succeed='{ return_value=0; break_out=t; break; }'
-alias succeeded='[[ $return_value -eq 0 ]]'
-
-# should be at the end of every function which contains a try / end_try block
-alias handle_return='return $return_value'
-alias handle_exit='exit $return_value'
 
 plural() {
 local count=$1 word=$2
@@ -763,19 +706,17 @@ local timeout=${timeout:-$lock_timeout}
 local pid_file=${pid_file:-$folder_to_lock/pid}
 local remove_folder_when_unlocked=${remove_folder_when_unlocked:-f}
 
-# trace $log_trace "Attempting to obtain lock for $folder_to_lock"
-
 vars='folder_to_lock timeout'; begin_function
 
   if [[ -d "$folder_to_lock" ]]; then
 
-    trace $log_trace2 "Lock folder exists already: $folder_to_lock"
+    debug "Lock folder exists already: $folder_to_lock"
     local pid=
 
     if [[ -f "$pid_file" ]]; then
       pid=$(<"$pid_file")
       if [[ "$pid" == $$ ]]; then
-        trace $log_trace2 "This process already owns the lock, so we are done."
+        debug "This process already owns the lock, so we are done."
         succeed
       fi
     fi
@@ -783,7 +724,7 @@ vars='folder_to_lock timeout'; begin_function
     # check to see if the process is still running
     if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
       rm -rf "$folder_to_lock" || fail
-      trace $log_trace2 "Removed stale lock: $folder_to_lock with pid: $pid"
+      debug "Removed stale lock: $folder_to_lock with pid: $pid"
     fi
 
   fi
@@ -806,12 +747,12 @@ vars='folder_to_lock timeout'; begin_function
       fi
 
       local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
-      trace $log_info "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
+      debug "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
       sleep $seconds_to_wait
       timeleft=$((timeleft-delay))
       let delay*=2
       if [ "$timeleft" -le 0 ]; then
-        out "Timeout reached. Couldn't obtain the lock in time."
+        warn "Timeout reached. Couldn't obtain the lock in time."
         break
       fi
     end_while
@@ -822,7 +763,7 @@ vars='folder_to_lock timeout'; begin_function
   fi
 
   if [[ $success == f ]]; then
-    trace $log_warn "Failed to obtain lock."
+    debug "Failed to obtain lock."
     fail1
   fi
 
@@ -831,7 +772,7 @@ vars='folder_to_lock timeout'; begin_function
   fi
 
   # lock obtained
-  trace $log_trace2 "Succeeded in obtaining lock."
+  debug "Succeeded in obtaining lock."
 
 end_function
 handle_return
@@ -1015,14 +956,6 @@ ln -s "$from" "$to"
 pause() {
 read -p "${1:-Press any key}" -n 1 none || true
 }
-
-# used in if condition to be more clear.
-# instead of:
-#   if ! diff $f1 $f2; then ...
-# write:
-#   if are_different $f1 $f2; then ...
-alias files_are_different='! diff'
-alias files_are_same='diff'
 
 tee_output_to() {
 local target=$1

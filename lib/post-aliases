@@ -1,0 +1,68 @@
+#!/bin/bash
+
+alias start_tracing='[[ $tracing_depth == 0 ]] && set -x; let tracing_depth++ || true'
+alias stop_tracing='let tracing_depth-- || true; [[ $tracing_depth == 0 ]] && set +x'
+
+alias outdent='trace=$((trace+1))'
+alias outdent5='trace=$((trace+5))'
+alias indent='trace=$((trace-1))'
+alias indent5='trace=$((trace-5))'
+
+alias begin_no_tracing_zone='[[ $no_trace_depth == 0 && $tracing_depth -gt 0 ]] && set +x || true; let no_trace_depth++ || true'
+alias end_no_tracing_zone='let no_trace_depth-- || true; [[ $no_trace_depth -le 0 && $tracing_depth -gt 0 ]] && set -x || true'
+
+# usage example:
+#   do_stuff() {
+#     begin_function
+#       open_connection || fail
+#       begin_for ((i = 0; i < 10; i++)); doo
+#         stuff || fail
+#       end_for
+#      
+#       more_stuff
+#     end_function
+#     close_connection
+#     handle_return
+#   }
+
+alias       begin_function='let trace-- || true; local return_value=0 break_out=f; while true; do'
+alias  begin_function_flat='local return_value=0 break_out=f; while true; do'
+alias          begin_while='break_out=f; while'
+alias            begin_for='break_out=f; for'
+alias           begin_loop='break_out=f; while true; do'
+alias         end_function='break; done; let trace++ || true'
+alias    end_function_flat='break; done'
+alias            end_while='done; [[ $break_out == t ]] && break; true'
+alias              end_for='done; [[ $break_out == t ]] && break; true'
+alias             end_loop='done; [[ $break_out == t ]] && break; true'
+
+# to avoid bash syntax parsing problems
+alias doo='do'
+
+# used after a direct command which may fail: cd /somewhere || fail
+alias fail='{ return_value=$?; break_out=t; break; }'
+alias fail1='{ return_value=1; break_out=t; break; }'
+alias fail2='{ return_value=2; break_out=t; break; }'
+
+# used to check if something failed: failed && break
+alias failed='[[ $return_value -gt 0 ]]'
+
+# used when a subshell or pipeline may fail: value=$(cat /tmp/f | jq .value); or_fail
+alias or_fail='[[ "${PIPESTATUS[-1]}" -gt 0 ]] && { return_value=${PIPESTATUS[-1]}; break_out=t; break; }'
+alias command_failed='[[ "${PIPESTATUS[-1]}" -gt 0 ]]'
+
+alias succeed='{ return_value=0; break_out=t; break; }'
+alias succeeded='[[ $return_value -eq 0 ]]'
+
+# should be at the end of every function which contains a try / end_try block
+alias handle_return='return $return_value'
+alias handle_exit='exit $return_value'
+
+# used in if condition to be more clear.
+# instead of:
+#   if ! diff $f1 $f2; then ...
+# write:
+#   if are_different $f1 $f2; then ...
+alias files_are_different='! diff'
+alias files_are_same='diff'
+
