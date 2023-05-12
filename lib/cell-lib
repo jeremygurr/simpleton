@@ -12,11 +12,16 @@ parallel_default=t
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
 stem_context_load() {
-load_context $stem || return 1
-if [[ ! -d $stem/.cyto ]]; then
-  make_cyto $stem || return 1
+last_context_loaded=${last_context_loaded:-}
+if [[ "$last_context_loaded" != $stem ]]; then
+  last_context_loaded=$stem
+  load_context $stem || return 1
+  if [[ ! -d $stem/.cyto ]]; then
+    make_cyto $stem || return 1
+  fi
+  setup_stem_path_vars $stem || return 1
 fi
-setup_stem_path_vars $stem || return 1
+return 0
 }
 
 # This is run if stem hasn't been initialized = missing .cyto folder
@@ -150,6 +155,7 @@ handle_return
 execute_command() {
 local stem=$1 command=$2
 vars='stem command'; begin_function
+  stem_context_load || fail
   local command_path=$stem/.cyto/command/$command
   if [[ -e $command_path ]]; then
     execute_command_step $command_path || fail
@@ -329,7 +335,7 @@ setup_default_each_handler() {
       fi
     fi
 
-    local processes= break_out=0
+    local processes= leave_loop=0
     begin_for v in "${a[@]}"; doo
       let "$ref=\$v"
       if [[ $parallel == t ]]; then
@@ -337,8 +343,8 @@ setup_default_each_handler() {
         processes+=" $!"
       else
         execute_command_step_plain_folder || fail
-        if [[ $break_out -gt 0 ]]; then
-          let break_out-- || true
+        if [[ $leave_loop -gt 0 ]]; then
+          let leave_loop-- || true
           break
         fi
       fi
@@ -381,7 +387,7 @@ begin_function_flat
       fi
     fi
 
-    local processes= break_out=0
+    local processes= leave_loop=0
     begin_for step in "${files[@]}"; doo
       if [[ $parallel == t ]]; then
         # recursive
@@ -390,8 +396,8 @@ begin_function_flat
       else
         # recursive
         execute_command_step $step || fail
-        if [[ $break_out -gt 0 ]]; then
-          let break_out-- || true
+        if [[ $leave_loop -gt 0 ]]; then
+          let leave_loop-- || true
           break
         fi
       fi
@@ -561,8 +567,9 @@ begin_function_flat
   fi
 
   dna_path=$stem_path/.dna \
-    stem_cyto_path=$stem_path/.cyto \
-    short_stem=${stem_path#$top_stem}
+    cyto_path=$stem_path/.cyto \
+    short_stem=${stem_path#$top_stem/} \
+    command_path=$cyto_path/command
 
   if [[ ! -d $dna_path ]]; then
 
@@ -581,7 +588,7 @@ begin_function_flat
 
   fi
 
-  stem_down_path=$stem_cyto_path/down
+  stem_down_path=$cyto_path/down
   if [[ ! -d $stem_down_path ]]; then
     stem_down_path=
   fi
@@ -607,27 +614,27 @@ begin_function_flat
     fi
   fi
 
-  stem_status_path=$stem_cyto_path/status
+  stem_status_path=$cyto_path/status
   if [[ ! -d $stem_status_path ]]; then
     stem_status_path=
   fi
 
-  stem_debug_path=$stem_cyto_path/debug
+  stem_debug_path=$cyto_path/debug
   if [[ ! -d $stem_debug_path ]]; then
     stem_debug_path=
   fi
 
-  stem_req_path=$stem_cyto_path/req
+  stem_req_path=$cyto_path/req
   if [[ ! -d $stem_req_path ]]; then
     stem_req_path=
   fi
 
-  stem_log_path=$stem_cyto_path/log
+  stem_log_path=$cyto_path/log
   if [[ ! -d $stem_log_path ]]; then
     stem_log_path=
   fi
 
-  stem_job_path=$stem_cyto_path/job
+  stem_job_path=$cyto_path/job
   if [[ ! -d $stem_job_path ]]; then
     stem_job_path=
   else
@@ -635,7 +642,7 @@ begin_function_flat
   fi
 
   # if there are dims, this will be overridden in setup_batch_path_vars
-  stem_batch_path=$stem_cyto_path/batch
+  stem_batch_path=$cyto_path/batch
 
 end_function_flat
 handle_return
@@ -653,7 +660,7 @@ get_top_stem2() {
 local subject=$1
 local parent=${subject%/*}
 if [[ -d $subject/.dna ]]; then
-  top_stem=$subject/
+  top_stem=$subject
 fi
 # recursive
 if [[ ${#parent} -gt 1 ]]; then
@@ -674,7 +681,7 @@ get_bottom_stem2() {
 local subject=$1
 local parent=${subject%/*}
 if [[ -d $subject/.dna ]]; then
-  bottom_stem=$subject/
+  bottom_stem=$subject
 elif [[ ${#parent} -gt 1 ]]; then
   # recursive
   get_bottom_stem2 $parent || return 1
@@ -715,8 +722,7 @@ init_context() {
   stem_out_path= \
   batch_in_path= \
   batch_out_path= \
-  default_fresh=inf \
-  require_fresh_greater_than= \
+  required_freshness=${required_freshness:-} \
   retry_max=1 \
   retry_delay=1 \
   retry_scale=2 \
@@ -763,7 +769,7 @@ init_context() {
 setup_batch_path_vars() {
 begin_function_flat
 
-  require_var stem_path stem_cyto_path
+  require_var stem_path cyto_path
 
   # batch id is quite different than batch path, given new structure: .cyto/dim/env/e1...
   batch_path=$stem_batch_path
@@ -1404,8 +1410,6 @@ load_context() {
 local stem=$1
 vars=stem; begin_function
 
-  last_context_loaded=${last_context_loaded:-}
-  [[ "$last_context_loaded" == $stem ]] && succeed
   init_context || fail
   if [[ -f $stem/.dna/context ]]; then
     source $stem/.dna/context || fail
@@ -1435,8 +1439,6 @@ vars=stem; begin_function
       cell_dims+=( $dim_var )
     end_for
   fi
-
-  last_context_loaded=$stem
 
 end_function
 handle_return
@@ -1520,5 +1522,21 @@ init_context() {
     let cooldown_delay*=2
   }
 
+}
+
+# Used by the help system to describe a command and it's parameters to the user
+new_command() {
+local name=$name description=$description
+command_description=$description
+parameter_names=( )
+parameter_descriptions=( )
+parameter_defaults=( )
+}
+
+add_parameter() {
+local name=$name description=$description default=${default:-}
+parameter_names+=( "$name" ) 
+parameter_descriptions+=( "$description" ) 
+parameter_defaults+=( "$default" ) 
 }
 

@@ -1,10 +1,10 @@
-break_if_batch_fresh() {
+break_if_not_changed() {
 begin_function_flat
 
   if [[ "$batch_status_path" ]]; then
     get_needs_update $batch_status_path || fail
     if [[ $needs_update == f ]]; then
-      break_out=1
+      leave_loop=1
     fi
   fi
 
@@ -19,8 +19,8 @@ begin_function_flat
 
   if [[ ! -d $node_status_path
      || -e $node_status_path/outdated
-     || ! -e $node_status_path/update_succeeded
-     || $node_status_path/update_requested -nt $node_status_path/update_started ]]; then
+     || ! -e $node_status_path/last-successful-update
+     ]]; then
     needs_update=t
   else
     get_is_stale $node_status_path || fail
@@ -29,13 +29,11 @@ begin_function_flat
     fi
   fi
 
-  if [[ $needs_update=t && ${prevalidate:-f} == t ]] && type batch_read_external &>/dev/null; then
-    if [[ ! "${value:-}" ]]; then
-      err "batch_read_external is defined, but value was not given, so we can't use it."
-      fail1
-    fi
-    batch_read_external || fail
-    if [[ "$result" == "$value" ]]; then
+  if [[ $needs_update=t && ${prevalidate:-f} == t ]] && type check &>/dev/null; then
+    check || fail
+    if [[ "${status:-}" && "${status:-}" == good ]]; then
+      needs_update=f
+    elif [[ "${value:-}" && "${result:-}" == "${value:-}" ]]; then
       needs_update=f
     fi
   fi
@@ -48,11 +46,11 @@ get_is_stale() {
 begin_function_flat
   local -r node_status_path=$1
   is_stale=t
-  if [[ ! "$fresh" || "$fresh" == inf ]]; then
+  if [[ ! "$required_freshness" || "$required_freshness" == inf ]]; then
     is_stale=f
-  elif [[ $fresh != 0 ]]; then
+  elif [[ $required_freshness != 0 ]]; then
     local fresh_seconds
-    convert_to_seconds $fresh fresh_seconds || fail
+    convert_to_seconds $required_freshness fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
     local out_timestamp=
     if [[ -f $node_status_path/oldest-update ]]; then

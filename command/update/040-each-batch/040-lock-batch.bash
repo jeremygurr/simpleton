@@ -11,6 +11,9 @@ begin_function_flat
       change_log_file $batch_log_path/update || fail
     fi
   fi
+  if [[ "$batch_status_path" ]]; then
+    touch $batch_status_path/last-started-update || fail
+  fi
 end_function_flat
 handle_return
 }

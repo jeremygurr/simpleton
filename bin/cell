@@ -15,7 +15,6 @@ source $SIMPLETON_REPO/lib/bash-debugger || exit 1
 source $SIMPLETON_REPO/lib/cell-lib || exit 1
 
 handle_command() {
-
 local subject_type=$0
 subject_type=${subject_type##*/}
 local commands=( "$@" )
@@ -28,16 +27,16 @@ begin_function_flat
 
     stem=$(realpath $stem) || fail
 
-    local command validated_stem=f
-    begin_for command in $commands; doo
+    local command validated_stem=f i next
+    begin_for ((i=0; i<${#commands[*]}; i++)); doo
+      command=${commands[$i]}
       case $command in
         help|?|--help)
-          show_usage
+          handle_help_command "${commands[@]:$((i+1))}"
           fail1
         ;;
         clean)
           get_bottom_stem $stem || fail
-          bottom_stem=${bottom_stem%/}
           if [[ ! "$bottom_stem" ]]; then
             err "Not a valid stem cell: $stem"
             fail1
@@ -57,25 +56,18 @@ begin_function_flat
           fi
         ;;
         *)
-
-          get_bottom_stem $stem || fail
-          stem=${bottom_stem%/}
-          if [[ $validated_stem == f ]]; then
-
-            if [[ ! -d $stem/.dna ]]; then
-              err "$stem is not a stem"
-              show_usage
-              fail1
-            fi
-
-            stem_context_load || fail 
-
-            validated_stem=t
-
+          next=
+          if [[ $((i+1)) -lt ${#commands[*]} ]]; then
+            next=${commands[$((i+1))]}
           fi
-
-          execute_command $stem $command || fail
-
+          if [[ $next == --help || $next == -h || $next == help ]]; then
+            show_help_for_command $command
+            fail1
+          else
+            get_bottom_stem $stem || fail
+            stem=$bottom_stem
+            execute_command $stem $command || fail
+          fi
         ;;
       esac
 
@@ -83,6 +75,44 @@ begin_function_flat
 
   end_for
 
+end_function_flat
+handle_return
+}
+
+handle_help_command() {
+local commands=( "$@" ) command
+begin_function_flat
+  begin_for command in "${commands[@]}"; doo
+    show_help_for_command $command || fail
+  end_for
+end_function_flat
+handle_return
+}
+
+show_help_for_command() {
+local command=$1
+begin_function_flat
+  get_bottom_stem $stem || fail
+  if [[ "$bottom_stem" ]]; then
+    local stem=$bottom_stem
+    stem_context_load || fail
+    if [[ -f $command_path/$command.info ]]; then
+      source $command_path/$command.info || fail
+      warn "$command: $command_description"
+      local name description default default_string i
+      warn "parameters:"
+      begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
+        parameter="${parameter_names[$i]}"
+        description="${parameter_descriptions[$i]}"
+        default="${parameter_defaults[$i]}"
+        default_string=
+        [[ "$default" ]] && default_string=" default: $default"
+        warn "  $parameter: $description$default_string"
+      end_for
+    else
+      warn "$command: No description available"
+    fi
+  fi
 end_function_flat
 handle_return
 }
