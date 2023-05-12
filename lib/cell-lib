@@ -34,6 +34,8 @@ begin_function
   mkdir -p $cyto/command || fail
   mkdir -p $cyto/lib || fail
   inherit_lib $stem $stem || fail
+  cell_features=( )
+  load_features $stem || fail
   local feature
   if [[ "${cell_features:-}" ]]; then
     begin_for feature in "${cell_features[@]}"; doo
@@ -41,7 +43,7 @@ begin_function
         req)
           mkdir -p $cyto/$feature/new || fail
         ;;
-        log|job)
+        log|job|status)
           mkdir -p $cyto/$feature || fail
         ;;
         *)
@@ -51,11 +53,22 @@ begin_function
       esac
     end_for
   fi
-  mkdir $cyto/batch \
-        $cyto/status || fail
+  mkdir $cyto/batch || fail
   mv $cyto $stem/.cyto || fail
 end_function
 handle_return
+}
+
+load_features() {
+local stem=$1 
+local parent=${stem%/*}
+if [[ ${#parent} -gt 1 && "$parent" != $stem ]]; then
+  load_features $parent || return 1
+fi
+if [[ -f $stem/.dna/features ]]; then 
+  source $stem/.dna/features || return 1
+fi
+return 0
 }
 
 inherit_lib() {
@@ -308,7 +321,7 @@ setup_default_each_handler() {
     local v a
     eval "a=( \"$ref_group[@]}\" )"
 
-    local parallel=f processes=
+    local parallel=f
     if [[ "${#a[*]}" -gt 1 ]]; then
       if [[ "$parallel_execution" == t && $serial == f ]]; then
         parallel=t
@@ -316,15 +329,18 @@ setup_default_each_handler() {
       fi
     fi
 
+    local processes= break_out=0
     begin_for v in "${a[@]}"; doo
       let "$ref=\$v"
       if [[ $parallel == t ]]; then
         execute_command_step_plain_folder &
         processes+=" $!"
       else
-        do_after=
         execute_command_step_plain_folder || fail
-        [[ "$do_after" == break ]] && break
+        if [[ $break_out -gt 0 ]]; then
+          let break_out-- || true
+          break
+        fi
       fi
     end_for
 
@@ -365,7 +381,7 @@ begin_function_flat
       fi
     fi
 
-    local processes=
+    local processes= break_out=0
     begin_for step in "${files[@]}"; doo
       if [[ $parallel == t ]]; then
         # recursive
@@ -374,6 +390,10 @@ begin_function_flat
       else
         # recursive
         execute_command_step $step || fail
+        if [[ $break_out -gt 0 ]]; then
+          let break_out-- || true
+          break
+        fi
       fi
     end_for
 

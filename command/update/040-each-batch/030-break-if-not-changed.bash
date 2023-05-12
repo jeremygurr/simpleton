@@ -4,7 +4,7 @@ begin_function_flat
   if [[ "$batch_status_path" ]]; then
     get_needs_update $batch_status_path || fail
     if [[ $needs_update == f ]]; then
-      do_after=break
+      break_out=1
     fi
   fi
 
