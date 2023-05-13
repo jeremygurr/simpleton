@@ -19,7 +19,7 @@ begin_function_flat
 
   if [[ ! -d $node_status_path
      || -e $node_status_path/outdated
-     || ! -e $node_status_path/last-successful-update
+     || ! -e $node_status_path/last-good-update
      ]]; then
     needs_update=t
   else
