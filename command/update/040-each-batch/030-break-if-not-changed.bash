@@ -15,17 +15,23 @@ handle_return
 get_needs_update() {
 local -r node_status_path=$1
 needs_update=f
+local log_message="No update needed"
 begin_function_flat
 
-  if [[ ! -d $node_status_path
-     || -e $node_status_path/outdated
-     || ! -e $node_status_path/last-good-update
-     ]]; then
+  if [[ ! -d $node_status_path ]]; then
     needs_update=t
+    log_message="Needs update because status path doesn't exist"
+  elif [[ -e $node_status_path/outdated ]]; then
+    needs_update=t
+    log_message="Needs update because cell is outdated"
+  elif [[ ! -e $node_status_path/last-good-update ]]; then
+    needs_update=t
+    log_message="Needs update because cell has never been updated"
   else
     get_is_stale $node_status_path || fail
     if [[ $is_stale == t ]]; then
       needs_update=t
+      log_message="Needs update because cell is stale"
     fi
   fi
 
@@ -33,10 +39,14 @@ begin_function_flat
     check || fail
     if [[ "${status:-}" && "${status:-}" == good ]]; then
       needs_update=f
+      log_message="No update needed because remote value already matches intended value"
     elif [[ "${value:-}" && "${result:-}" == "${value:-}" ]]; then
       needs_update=f
+      log_message="No update needed because remote value already matches intended value"
     fi
   fi
+
+  write_to_log debug update_check "$log_message"
 
 end_function_flat
 handle_return
