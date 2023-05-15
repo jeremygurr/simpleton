@@ -1,7 +1,7 @@
 unlock_batch() {
 if [[ "$batch_job_path" ]]; then
   if [[ "$batch_status_path" ]]; then
-    if [[ $update_successful == t ]]; then"
+    if [[ $update_successful == t ]]; then
       touch $batch_status_path/last-good-update || fail
       [[ -f $batch_status_path/outdated ]] && rm $batch_status_path/outdated
     else

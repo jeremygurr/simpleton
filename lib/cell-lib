@@ -11,6 +11,7 @@ parallel_default=t
 [[ $debug == t ]] && parallel_default=f
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
+# make sure stem's parents are the realpath and not links before calling this
 stem_context_load() {
 last_context_loaded=${last_context_loaded:-}
 if [[ "$last_context_loaded" != $stem ]]; then
@@ -28,17 +29,31 @@ return 0
 # Context should be loaded before this is run
 make_cyto() {
 local stem=$1 cyto=$stem/.cyto.new
-begin_function
+vars=stem begin_function
+
   if [[ ! -d $stem/.dna ]]; then
     err "$stem is not a stem cell"
     fail1
   fi
+
   if [[ -d $cyto ]]; then
     rm -rf $cyto || fail
   fi
+  mkdir -p $cyto || fail
+
+  local parent=${stem%/*}
+  if [[ ${#parent} -gt 1 ]]; then
+    record_parent_context $parent || fail
+  fi
+  if [[ -f $stem/.dna/context ]]; then
+    echo "# generated from: $stem/.dna/context" >>$cyto/context || fail
+    cat $stem/.dna/context >>$cyto/context || fail
+  fi
+
   mkdir -p $cyto/command || fail
   mkdir -p $cyto/lib || fail
   inherit_lib $stem $stem || fail
+
   cell_features=( )
   load_features $stem || fail
   local feature
@@ -57,9 +72,12 @@ begin_function
         ;;
       esac
     end_for
+
   fi
+
   mkdir $cyto/batch || fail
   mv $cyto $stem/.cyto || fail
+
 end_function
 handle_return
 }
@@ -153,7 +171,7 @@ handle_return
 }
 
 execute_command() {
-local stem=$1 command=$2
+local stem=$(realpath $1) command=$2
 vars='stem command'; begin_function
   stem_context_load || fail
   local command_path=$stem/.cyto/command/$command
@@ -734,9 +752,8 @@ init_context() {
   shuffle_chance=100 \
   force_update=${p_force_update:-f} \
   lock_timeout=${lock_timeout:-30} \
-  prevalidate=f \
-  postvalidate=f \
-  generators=gen_copy \
+  pre_validate=f \
+  post_validate=f \
   min_pause=250 \
   current_pause=250 \
   stem_type=info \
@@ -1411,8 +1428,16 @@ local stem=$1
 vars=stem; begin_function
 
   init_context || fail
-  if [[ -f $stem/.dna/context ]]; then
-    source $stem/.dna/context || fail
+  if [[ -f $stem/.cyto/context ]]; then
+    source $stem/.cyto/context || fail
+  else
+    local parent=${stem%/*}
+    if [[ ${#parent} -gt 1 ]]; then
+      load_parent_context $parent || fail
+    fi
+    if [[ -f $stem/.dna/context ]]; then
+      source $stem/.dna/context || fail
+    fi
   fi
 
   local dim dim_var
@@ -1444,84 +1469,29 @@ end_function
 handle_return
 }
 
-readonly context_vars='
-batch_dims
-cell_dims
-'
+load_parent_context() { 
+local stem=$1
+local parent=${stem%/*}
+if [[ ${#parent} -gt 1 ]]; then
+  load_parent_context $parent || return 1
+fi
+if [[ -f $stem/.dna/context ]]; then
+  source $stem/.dna/context || return 1
+fi
+return 0
+}
 
-# should be run before spawn update function
-init_context() {
-
-  # default_fresh:
-  #   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
-  #   1w means refresh if it's older than a week.
-  # high_volume_cell:
-  #   does the cell have thousands of cells or more? If so we will use another folder level
-  # ignore_fresh:
-  #   whether freshness is used to determine if a cell needs to be updated
-  # cell_storage:
-  #   contains pairs of var_name/default values used to store data in this cell
-  # shuffle_chance:
-  #   chance out of 1000 of not following the computed strategy order
-  # min_pause:
-  #   number of ms to wait between cycles
-  #   this number doubles each time there is nothing to do, until it reaches max_pause
-  # stem_type:
-  #   can be: constant info change
-  #   constant means it just holds a fixed value that never changes
-  #   info means it only fetches information 
-  #   change means that it applies a change
-
-  batch_dims= \
-  cell_dims= \
-  in_path= \
-  in_paths= \
-  out_path= \
-  out_paths= \
-  stem_in_path= \
-  stem_out_path= \
-  batch_in_path= \
-  batch_out_path= \
-  default_fresh=inf \
-  require_fresh_greater_than= \
-  retry_max=1 \
-  retry_delay=1 \
-  retry_scale=2 \
-  cell_expiration= \
-  high_volume_cell=f \
-  ignore_fresh=f \
-  default_strategies=crl \
-  cell_storage=() \
-  shuffle_chance=100 \
-  force_update=${p_force_update:-f} \
-  lock_timeout=${lock_timeout:-30} \
-  prevalidate=f \
-  postvalidate=f \
-  generators=gen_copy \
-  min_pause=250 \
-  current_pause=250 \
-  stem_type=info \
-  max_pause=60000 \
-  top_path=${top_path:-}
-
-  # override this if there are parameter requirements that must be met before attempting to update the cell
-  are_batch_params_valid() {
-    return 0
-  }
-
-  # override this if there are some batch id combinations which are not valid even when
-  # composed of valid dim members
-  # returns 0 if it's not a valid combination of members
-  skip_batch() {
-    return 1
-  }
-
-  # this may be overridden to provide a custom cooldown calculation
-  get_cooldown_delay() {
-    [[ -z "${cooldown_delay:-}" ]] && cooldown_delay=1
-    let cooldown_delay*=2
-  }
-
+record_parent_context() {
+local stem=$1
+local parent=${stem%/*}
+if [[ ${#parent} -gt 1 ]]; then
+  record_parent_context $parent || return 1
+fi
+if [[ -f $stem/.dna/context ]]; then
+  echo "# generated from: $stem/.dna/context" >>$cyto/context || return 1
+  echo | cat $stem/.dna/context - >>$cyto/context || return 1
+fi
+return 0
 }
 
 # Used by the help system to describe a command and it's parameters to the user
