@@ -16,7 +16,15 @@ stem_context_load() {
 last_context_loaded=${last_context_loaded:-}
 if [[ "$last_context_loaded" != $stem ]]; then
   last_context_loaded=$stem
-  load_context $stem || return 1
+  init_context || return 1
+
+  if [[ -f $stem/.cyto/context ]]; then
+    source $stem/.cyto/context || fail
+  else
+    load_context $stem || fail
+  fi
+
+  setup_dims || return 1
   if [[ ! -d $stem/.cyto ]]; then
     make_cyto $stem || return 1
   fi
@@ -41,21 +49,12 @@ vars=stem begin_function
   fi
   mkdir -p $cyto || fail
 
-  local parent=${stem%/*}
-  if [[ ${#parent} -gt 1 ]]; then
-    record_parent_context $parent || fail
-  fi
-  if [[ -f $stem/.dna/context ]]; then
-    echo "# generated from: $stem/.dna/context" >>$cyto/context || fail
-    echo | cat $stem/.dna/context - >>$cyto/context || return 1
-  fi
+  record_context $stem || fail
 
   mkdir -p $cyto/command || fail
   mkdir -p $cyto/lib || fail
   inherit_lib $stem $stem || fail
 
-  cell_features=( )
-  load_features $stem || fail
   local feature
   if [[ "${cell_features:-}" ]]; then
     begin_for feature in "${cell_features[@]}"; doo
@@ -80,18 +79,6 @@ vars=stem begin_function
 
 end_function
 handle_return
-}
-
-load_features() {
-local stem=$1 
-local parent=${stem%/*}
-if [[ ${#parent} -gt 1 && "$parent" != $stem ]]; then
-  load_features $parent || return 1
-fi
-if [[ -f $stem/.dna/features ]]; then 
-  source $stem/.dna/features || return 1
-fi
-return 0
 }
 
 inherit_lib() {
@@ -1425,48 +1412,40 @@ return 1
 
 load_context() {
 local stem=$1
-vars=stem; begin_function
+local parent=${stem%/*}
+if [[ ${#parent} -gt 1 ]]; then
+  load_context $parent || fail
+fi
+if [[ -f $stem/.dna/context ]]; then
+  source $stem/.dna/context || fail
+fi
+}
 
-  init_context || fail
-  if [[ -f $stem/.cyto/context ]]; then
-    source $stem/.cyto/context || fail
-  else
-    local parent=${stem%/*}
-    if [[ ${#parent} -gt 1 ]]; then
-      load_parent_context $parent || fail
+setup_dims() {
+local dim dim_var
+batch_dims=( )
+if [[ -d $stem/.dna/dim ]]; then
+  for dim in $(find1 $stem/.dna/dim -not -name ".*" | sort -g); do
+    source $dim || return 1
+    dim_var=${dim##*/}
+    if [[ $dim_var =~ [0-9]+-(.*) ]]; then
+      dim_var=${BASH_REMATCH[1]}
     fi
-    if [[ -f $stem/.dna/context ]]; then
-      source $stem/.dna/context || fail
+    batch_dims+=( $dim_var )
+  done
+fi
+
+cell_dims=( )
+if [[ -d $stem/.dna/cell-dim ]]; then
+  for dim in $(find1 $stem/.dna/cell-dim -not -name ".*" | sort -g); do
+    source $dim || return 1
+    dim_var=${dim##*/}
+    if [[ $dim_var =~ [0-9]+-(.*) ]]; then
+      dim_var=${BASH_REMATCH[1]}
     fi
-  fi
-
-  local dim dim_var
-  batch_dims=( )
-  if [[ -d $stem/.dna/dim ]]; then
-    begin_for dim in $(find1 $stem/.dna/dim -not -name ".*" | sort -g); doo
-      source $dim || fail
-      dim_var=${dim##*/}
-      if [[ $dim_var =~ [0-9]+-(.*) ]]; then
-        dim_var=${BASH_REMATCH[1]}
-      fi
-      batch_dims+=( $dim_var )
-    end_for
-  fi
-
-  cell_dims=( )
-  if [[ -d $stem/.dna/cell-dim ]]; then
-    begin_for dim in $(find1 $stem/.dna/cell-dim -not -name ".*" | sort -g); doo
-      source $dim || fail
-      dim_var=${dim##*/}
-      if [[ $dim_var =~ [0-9]+-(.*) ]]; then
-        dim_var=${BASH_REMATCH[1]}
-      fi
-      cell_dims+=( $dim_var )
-    end_for
-  fi
-
-end_function
-handle_return
+    cell_dims+=( $dim_var )
+  done
+fi
 }
 
 load_parent_context() { 
@@ -1481,11 +1460,11 @@ fi
 return 0
 }
 
-record_parent_context() {
+record_context() {
 local stem=$1
 local parent=${stem%/*}
 if [[ ${#parent} -gt 1 ]]; then
-  record_parent_context $parent || return 1
+  record_context $parent || return 1
 fi
 if [[ -f $stem/.dna/context ]]; then
   echo "# generated from: $stem/.dna/context" >>$cyto/context || return 1
