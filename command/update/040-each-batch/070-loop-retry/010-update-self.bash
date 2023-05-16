@@ -9,6 +9,7 @@ begin_function
     if [[ -d $batch_out_path ]]; then
       rm -rf $batch_out_path || fail
     fi
+    mkdir $batch_out_path || fail
   fi
 
   execute_op update || fail
