@@ -9,8 +9,12 @@ alias l='ls --color=auto -l'
 alias ll='ls --color=auto -la'
 alias rmr='rm -rf'
 alias u='cd ..'
+alias uu='cd ../..'
+alias uuu='cd ../../..'
 alias vi=vim
-alias x=simpleton-execute
+
+alias up='cell update'
+alias clean='cell clean'
 
 # git stuff
 alias gc='git checkout'
@@ -32,6 +36,25 @@ alias gr='git remote'
 
 real () {
 cd $(realpath .)
+}
+
+# this unlinks a linked file by copying what it links to locally
+unset localize
+localize() {
+for file in $* ; do
+  dirOfFile=`dirname $file`
+  fileName=`basename $file`
+  cd "$dirOfFile"
+  description=`file $fileName`
+  target=`echo $description | grep "symbolic link" | sed "s/.*symbolic link to \(.*\)/\1/" | sed "s/'//g" | sed "s/\\\`//g"`
+# echo "Target: $target"
+  if [ ! -z "$target" ]; then
+    rm "$fileName"
+    cp -R -a -p "${target}" "${fileName}"
+  else
+    echo "$file is not a symbolic link."
+  fi
+done
 }
 
 vigr() {
