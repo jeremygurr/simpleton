@@ -1,5 +1,6 @@
 before_block() {
 
+ref_group=none
 delay=$retry_delay
 
 handle_step_loop() {
@@ -9,7 +10,7 @@ for ((retry=0; retry < retry_max; retry++)); do
   [[ $can_retry == f || $update_successful == t ]] && break
   write_to_log debug update_retry "Waiting $delay seconds" || return 1
   sleep $delay
-  let 'delay *= retry_scale'
+  let 'delay *= retry_scale' || true
 done
 return 0
 }

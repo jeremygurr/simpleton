@@ -192,7 +192,7 @@ handle_return
 execute_command_step() {
 local step=$1
 vars=step; begin_function
-  local step_name=${step##*/} prefix=
+  local step_name=${step##*/} prefix= base
 
   if [[ $step_name =~ [0-9]+-([^/]*)$ ]]; then
     base=${BASH_REMATCH[1]}
@@ -277,44 +277,52 @@ execute_command_step_loop() {
 local serial=$serial
 begin_function_flat
 
-  local ref ref_group
-  if [[ $base =~ (each|loop)-([^-]+)-in-([^-]+) ]]; then
-    ref=${BASH_REMATCH[2]}
-    ref_group=${BASH_REMATCH[3]}
-  elif [[ $base =~ (each|loop)-([^-]+) ]]; then
-    ref=${BASH_REMATCH[2]}
-    ref_group=${ref}s
-    if [[ ! "${!ref_group:-}" ]]; then
-      ref_group=${ref}es
-    fi
-    if [[ ! "${!ref_group:-}" ]]; then
-      ref_group=${ref%?}ies
-    fi
-  fi
+  local ref= ref_group=
 
   setup_default_each_handler || fail
-  local before_block_files=( $(find1 $step -regex '.*/before-block.*') ) || fail
+  local before_block_files=( $(find1 $step -regex '.*/before-block.*' | sort -g) ) || fail
   local before_block_file
   begin_for before_block_file in "${before_block_files[@]}"; doo
+    # recursive
     execute_command_step "$before_block_file" || fail
   end_for
 
-  if [[ "$ref_group" && ! "${!ref_group:-}" ]]; then
-    err "Problem executing step $step"
-    err "Could not find ref group for $ref. Should be named either ${ref}s, ${ref}es, or ${ref%?}ies, "
-    err "or override it with a different folder name."
-    err "Or if this is a custom loop with a before-block file in it, set ref_group= (to nothing) in that file."
-    fail1
+  if [[ ! "$ref_group" ]]; then
+
+    if [[ $base =~ (each|loop)-([^-]+)-in-([^-]+) ]]; then
+      ref=${BASH_REMATCH[2]}
+      ref_group=${BASH_REMATCH[3]}
+    elif [[ $base =~ (each|loop)-([^-]+) ]]; then
+      ref=${BASH_REMATCH[2]}
+      ref_group=${ref}s
+      if [[ ! "${!ref_group:-}" ]]; then
+        ref_group=${ref}es
+      fi
+      if [[ ! "${!ref_group:-}" ]]; then
+        ref_group=${ref%?}ies
+      fi
+    fi
+
+    if [[ "$ref_group" && ! "${!ref_group:-}" ]]; then
+      err "Problem executing step $step"
+      err "Could not find ref group for $ref. Should be named either ${ref}s, ${ref}es, or ${ref%?}ies, "
+      err "or override it with a different folder name."
+      err "Or if this is a custom loop with a before-block file in it, set ref_group= (to nothing) in that file."
+      fail1
+    fi
+
   fi
 
   # This can be overridden in a prep_code_file to provide custom looping
   handle_step_loop || fail
 
-  local after_block_files=( $(find1 $step -regex '.*/after-block.*') ) || fail
-  local after_block_file
-  begin_for after_block_file in "${after_block_files[@]}"; doo
-    execute_command_step "$after_block_file" || fail
-  end_for
+  # NOT USED YET
+  # local after_block_files=( $(find1 $step -regex '.*/after-block.*') ) || fail
+  # local after_block_file
+  # begin_for after_block_file in "${after_block_files[@]}"; doo
+  #   # recursive
+  #   execute_command_step "$after_block_file" || fail
+  # end_for
 
 end_function_flat
 handle_return
@@ -326,11 +334,11 @@ setup_default_each_handler() {
   begin_function_flat
 
     if [[ ! -v $ref_group ]]; then
-      err "var doesn't exist: $ref_group"
+      err "var doesn't exist: ref_group"
       fail1
     fi
     local v a
-    eval "a=( \"$ref_group[@]}\" )"
+    eval "a=( \"\${$ref_group[@]}\" )"
 
     local parallel=f
     if [[ "${#a[*]}" -gt 1 ]]; then
@@ -342,7 +350,7 @@ setup_default_each_handler() {
 
     local processes= leave_loop=0
     begin_for v in "${a[@]}"; doo
-      let "$ref=\$v"
+      eval "$ref=\$v" || fail
       if [[ $parallel == t ]]; then
         execute_command_step_plain_folder &
         processes+=" $!"

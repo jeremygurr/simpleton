@@ -1,6 +1,6 @@
 #!/bin/bash
 
-ref_group=
+ref_group=none
 
 before_block() {
 
