@@ -18,48 +18,51 @@ handle_command() {
 local subject_type=$0
 subject_type=${subject_type##*/}
 local commands=( "$@" )
-local stems=${stems:-${stem:-.}}
+local cells=${cells:-${cell:-.}}
+local multi_cell=f
+[[ "$cells" == *\ * ]] && multi_cell=t
 
 begin_function_flat
 
-  local stem
-  begin_for stem in $stems; doo
+  local cell first_cell=t
+  begin_for cell in $cells; doo
 
-    stem=$(realpath $stem) || fail
+    cell=$(realpath $cell) || fail
 
-    local command validated_stem=f i next
+    local command i next
     begin_for ((i=0; i<${#commands[*]}; i++)); doo
+
       command=${commands[$i]}
       case $command in
         help|?|--help)
           handle_help_command "${commands[@]:$((i+1))}"
-          fail1
+          succeed
         ;;
         clean)
-          get_bottom_stem $stem || fail
-          if [[ ! "$bottom_stem" ]]; then
-            err "Not a valid stem cell: $stem"
+          get_bottom_cell $cell || fail
+          if [[ ! "$bottom_cell" ]]; then
+            err "Not a valid cell: $cell"
             fail1
           fi
-          trace $log_info "Cleaning $bottom_stem..." 
-          local clean_file=$bottom_stem/.dna/op/clean.bash
+          trace $log_info "Cleaning $bottom_cell..." 
+          local clean_file=$bottom_cell/.dna/op/clean.bash
           if [[ -f $clean_file ]]; then
             source $clean_file || fail
-            stem=$bottom_stem
+            cell=$bottom_cell
             clean || fail
           else
             local dir
             begin_for dir in out build; doo
-              if [[ -d $bottom_stem/$dir ]]; then
-                rm -rf $bottom_stem/$dir/* &>/dev/null
+              if [[ -d $bottom_cell/$dir ]]; then
+                rm -rf $bottom_cell/$dir/* &>/dev/null
               fi
             end_for
           fi
-          if [[ -e "$bottom_stem/.cyto" ]]; then
-            rm -rf $bottom_stem/.cyto || fail
-            trace $log_info "Cleaned."
+          if [[ -e "$bottom_cell/.cyto" ]]; then
+            rm -rf $bottom_cell/.cyto || fail
+            info "Cleaned."
           else
-            trace $log_info "Already clean."
+            info "Already clean."
           fi
         ;;
         *)
@@ -71,12 +74,14 @@ begin_function_flat
             show_help_for_command $command
             fail1
           else
-            get_bottom_stem $stem || fail
-            stem=$bottom_stem
-            execute_command $stem $command || fail
+            get_bottom_cell $cell || fail
+            cell=$bottom_cell
+            execute_command $cell $command || fail
           fi
         ;;
       esac
+
+      first_cell=f
 
     end_for
 
@@ -87,11 +92,52 @@ handle_return
 }
 
 handle_help_command() {
-local commands=( "$@" ) command
+local commands=( "$@" ) command first_command=t
 begin_function_flat
-  begin_for command in "${commands[@]}"; doo
-    show_help_for_command $command || fail
-  end_for
+  if [[ "${commands:-}" ]]; then
+    begin_for command in "${commands[@]}"; doo
+      show_help_for_command $command || fail
+      first_command=f
+    end_for
+  else
+    show_cell_help
+  fi
+end_function_flat
+handle_return
+}
+
+show_cell_help() {
+begin_function_flat
+
+  get_bottom_cell $cell || {
+    err "No cell found here: $cell"
+    fail1
+    }
+  cell=$bottom_cell
+  cell_context_load || fail
+  if [[ $multi_cell == t ]]; then
+    out "===================================================================================================="
+    out "Cell: $short_cell"
+  fi
+
+  if [[ "${cell_description:-}" ]]; then
+    out "Description: $cell_description"
+  fi
+
+  if [[ "${#cell_dims[*]}" -gt 0 ]]; then
+    local dim description values
+    out "Dimensions:"
+    begin_for dim in ${cell_dims[*]}; doo
+      eval "description=${dim}_description" || fail
+      out "  $dim: $description"
+      values=
+      eval "value='' ${dim}_member_expand" || true
+      if [[ "$values" ]]; then
+        out "    default: ${values[*]}"
+      fi
+    end_for
+  fi
+
 end_function_flat
 handle_return
 }
@@ -99,24 +145,27 @@ handle_return
 show_help_for_command() {
 local command=$1
 begin_function_flat
-  get_bottom_stem $stem || fail
-  if [[ "$bottom_stem" ]]; then
-    local stem=$bottom_stem
-    stem_context_load || fail
+  get_bottom_cell $cell || fail
+  if [[ "$bottom_cell" ]]; then
+    local cell=$bottom_cell
+    cell_context_load || fail
+    [[ $first_command == f ]] && out ''
     out "command: $command"
     if [[ -f $command_path/$command.info ]]; then
       source $command_path/$command.info || fail
       out "  $command_description"
       local name description default default_string i
-      out "parameters:"
-      begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
-        parameter="${parameter_names[$i]}"
-        description="${parameter_descriptions[$i]}"
-        default="${parameter_defaults[$i]}"
-        default_string=
-        [[ "$default" ]] && default_string=" default: $default"
-        out "  $parameter: $description$default_string"
-      end_for
+      if [[ "${parameter_names:-}" ]]; then
+        out "parameters:"
+        begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
+          parameter="${parameter_names[$i]}"
+          description="${parameter_descriptions[$i]}"
+          default="${parameter_defaults[$i]}"
+          default_string=
+          [[ "$default" ]] && default_string=" default: $default"
+          out "  $parameter: $description$default_string"
+        end_for
+      fi
     fi
   fi
 end_function_flat
@@ -126,9 +175,9 @@ handle_return
 show_usage() {
 warn "Usage: ${0##*/} {command(s)}"
 local command
-if [[ -d "$stem/.cyto" ]]; then
+if [[ -d "$cell/.cyto" ]]; then
   warn "commands:"
-  for command in $(find1 $stem/.cyto/command | sort); do
+  for command in $(find1 $cell/.cyto/command | sort); do
     if [[ -f $command ]]; then
       source $command || fail
     elif [[ -d $command ]]; then
@@ -147,9 +196,9 @@ if [[ -d "$stem/.cyto" ]]; then
     fi
   done
 else
-  warn "  either run this command inside of a stem cell folder, or specify"
-  warn "  the stem variable with the path to a stem cell. "
-  warn "  example: cell stem=/some/stem update"
+  warn "  either run this command inside of a cell folder, or specify"
+  warn "  the cell variable with the path to a cell. "
+  warn "  example: cell cell=/some/cell update"
 fi
 return 0
 }

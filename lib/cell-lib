@@ -1,6 +1,6 @@
 #!/bin/bash
 
-type -t make_cyto >/dev/null && return 0
+type -t cell_context_load >/dev/null && return 0
 
 # don't let other users read any files written by these scripts
 umask 0077
@@ -13,90 +13,127 @@ parallel_default=t
 [[ $debug == t ]] && parallel_default=f
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
-# make sure stem's parents are the realpath and not links before calling this
-stem_context_load() {
-last_context_loaded=${last_context_loaded:-}
-if [[ "$last_context_loaded" != $stem ]]; then
-  last_context_loaded=$stem
-  init_context || return 1
+# make sure cell's parents are the realpath and not links before calling this
+cell_context_load() {
+vars=cell begin_function
 
-  if [[ -f $stem/.cyto/context ]]; then
-    source $stem/.cyto/context || fail
-  else
-    load_context $stem || fail
-  fi
-
-  setup_dims || return 1
-  if [[ ! -d $stem/.cyto ]]; then
-    make_cyto $stem || return 1
-  fi
-  setup_stem_path_vars $stem || return 1
-fi
-return 0
-}
-
-# This is run if stem hasn't been initialized = missing .cyto folder
-# Context should be loaded before this is run
-make_cyto() {
-local stem=$1 cyto=$stem/.cyto.new
-vars=stem begin_function
-
-  if [[ ! -d $stem/.dna ]]; then
-    err "$stem is not a stem cell"
+  if [[ ! -e $cell/.dna ]]; then
+    err "$cell is not a cell"
     fail1
   fi
+
+  last_context_loaded=${last_context_loaded:-}
+  if [[ "$last_context_loaded" != $cell ]]; then
+
+    last_context_loaded=$cell
+    init_context || fail
+
+    if [[ ! -f $cell/.cyto/context ]]; then
+      make_cyto $cell || fail
+      source $cell/.cyto/context || fail
+      setup_features || fail
+    else
+      source $cell/.cyto/context || fail
+    fi
+
+    setup_dims || fail
+    setup_cell_path_vars $cell || fail
+
+  fi
+
+end_function
+handle_return
+}
+
+# This is run if cell hasn't been initialized = missing .cyto folder
+# Context should be loaded before this is run
+make_cyto() {
+local cell=$1 cyto=$cell/.cyto.new
+begin_function_flat
 
   if [[ -d $cyto ]]; then
     rm -rf $cyto || fail
   fi
   mkdir -p $cyto || fail
 
-  record_context $stem || fail
+  record_context $cell || fail
 
   mkdir -p $cyto/command || fail
   mkdir -p $cyto/lib || fail
-  inherit_lib $stem $stem || fail
+  inherit_lib $cell $cell || fail
+  mv $cyto $cell/.cyto || fail
 
-  local feature
-  if [[ "${cell_features:-}" ]]; then
-    begin_for feature in "${cell_features[@]}"; doo
-      case $feature in
-        req)
-          mkdir -p $cyto/$feature/new || fail
-        ;;
-        log|job|status)
-          mkdir -p $cyto/$feature || fail
-        ;;
-        *)
-          err "Unknown feature $feature"
-          fail1
-        ;;
-      esac
-    end_for
-
-  fi
-
-  mkdir $cyto/batch || fail
-  mv $cyto $stem/.cyto || fail
-
-end_function
+end_function_flat
 handle_return
 }
 
+record_context() {
+local cell=$1
+local parent=${cell%/*}
+
+if [[ ${#parent} -gt 1 ]]; then
+  record_context_before $parent || return 1
+fi
+
+local context_local_path=$cell/.dna/context-local
+local dna_path=$cell/.dna
+local new_context=$cyto/context
+
+if [[ -f $context_local_path ]]; then
+  echo "# generated from: $context_local_path" >>$new_context || return 1
+  echo | cat $context_local_path - >>$new_context || return 1
+elif [[ -f $dna_path ]]; then
+  echo "# generated from: $dna_path" >>$new_context || return 1
+  echo | cat $dna_path - >>$new_context || return 1
+fi
+
+if [[ ${#parent} -gt 1 ]]; then
+  record_context_after $parent || return 1
+fi
+
+return 0
+}
+
+record_context_before() {
+local cell=$1
+local parent=${cell%/*}
+if [[ ${#parent} -gt 1 ]]; then
+  record_context_before $parent || return 1
+fi
+local context_before_path=$cell/.dna/context-before
+if [[ -f $context_before_path ]]; then
+  echo "# generated from: $context_before_path" >>$new_context || return 1
+  echo | cat $context_before_path - >>$new_context || return 1
+fi
+}
+
+record_context_after() {
+local cell=$1
+local parent=${cell%/*}
+local context_after_path=$cell/.dna/context-after
+if [[ -f $context_after_path ]]; then
+  echo "# generated from: $context_after_path" >>$new_context || return 1
+  echo | cat $context_after_path - >>$new_context || return 1
+fi
+if [[ ${#parent} -gt 1 ]]; then
+  record_context_after $parent || return 1
+fi
+}
+
 inherit_lib() {
-local stem_from=$1 stem_to=$2
-local parent=${stem_from%/*}
+local cell_from=$1 cell_to=$2
+local parent=${cell_from%/*}
 begin_function_flat
   if [[ "${#parent}" -gt 1 ]]; then
-    inherit_lib $parent $stem_to || fail
+    inherit_lib $parent $cell_to || fail
   fi
-  if [[ -d $stem_from/.dna ]]; then
+  if [[ -d $cell_from/.dna ]]; then
     local lib
-    if [[ -d $stem_from/.dna/lib ]]; then
-      inherit_lib_folder $stem_from/.dna/lib $stem_to/.cyto.new/lib || fail
+    if [[ -d $cell_from/.dna/lib ]]; then
+      inherit_lib_folder $cell_from/.dna/lib $cell_to/.cyto.new/lib || fail
     fi
-    if [[ -d $stem_from/.dna/command ]]; then
-      inherit_lib_folder $stem_from/.dna/command $stem_to/.cyto.new/command || fail
+    if [[ -d $cell_from/.dna/command ]]; then
+      inherit_lib_folder $cell_from/.dna/command $cell_to/.cyto.new/command || fail
     fi
   fi
 end_function_flat
@@ -131,6 +168,31 @@ end_function_flat
 handle_return
 }
 
+setup_features() {
+begin_function_flat
+
+  local feature
+  if [[ "${cell_features:-}" ]]; then
+    begin_for feature in "${cell_features[@]}"; doo
+      case $feature in
+        req)
+          mkdir -p $cyto/$feature/new || fail
+        ;;
+        log|job|status)
+          mkdir -p $cyto/$feature || fail
+        ;;
+        *)
+          err "Unknown feature $feature"
+          fail1
+        ;;
+      esac
+    end_for
+  fi
+
+end_function_flat
+handle_return
+}
+
 trace_step_execution=${trace_step_execution:-f}
 trace_op=${trace_op:-}
 
@@ -160,10 +222,10 @@ handle_return
 }
 
 execute_command() {
-local stem=$(realpath $1) command=$2
-vars='stem command'; begin_function
-  stem_context_load || fail
-  local command_path=$stem/.cyto/command/$command
+local cell=$(realpath $1) command=$2
+vars='cell command'; begin_function
+  cell_context_load || fail
+  local command_path=$cell/.cyto/command/$command
   if [[ -e $command_path ]]; then
     execute_command_step $command_path || fail
   else
@@ -176,7 +238,7 @@ handle_return
 
 # executes a step of the folder language
 # folder language
-#   {stem}                update the given stem with the current coordinates
+#   {cell}                update the given cell with the current coordinates
 #   choose-{n}-{name}     multi-path, stopping after {n} choices are successful. {name} is optional
 #   each-{var}-in-{vars}  loop over {vars} storing current value in {var}
 #                         can be file or folder
@@ -206,12 +268,12 @@ vars=step; begin_function
     # recursive
     ( change_log_file; execute_command $step update ) || { after_fork; fail; }
     after_fork
-    ln -sf $step $batch_source_path/$base || fail
+    ln -sf $step $cell_source_path/$base || fail
   elif [[ -d $step ]]; then
     if [[ $base =~ ^choose-.* ]]; then
       # TODO ...
       incomplete
-      ln -sf $choice $batch_source_path/$last_part || fail
+      ln -sf $choice $cell_source_path/$last_part || fail
     elif [[ $base =~ ^loop-.* ]]; then
       serial=t execute_command_step_loop || fail
     elif [[ $base =~ ^each-.* ]]; then
@@ -468,42 +530,42 @@ end_function_flat
 handle_return
 }
 
-# input: $* = batch values in dim order
-# output: batch_node = string path to batch from batch path
-get_batch_node() {
+# input: $* = cell values in dim order
+# output: cell_node = string path to cell from cell path
+get_cell_node() {
 local v i=0 d
-batch_node=
+cell_node=
 for v in "$@"; do
-  d=${batch_dims[$i]}
+  d=${cell_dims[$i]}
   get_sane_value "$v"
   v=$sane_value
-  batch_node+=/dim/$d/$v
+  cell_node+=/dim/$d/$v
   let i++ || true
 done
 }
 
-# input: $* = batch values in dim order
-# output: batch_id = string batch id
-get_batch_id() {
+# input: $* = cell values in dim order
+# output: cell_id = string cell id
+get_cell_id() {
 local v
-batch_id=
+cell_id=
 for v in "$@"; do
   get_sane_value "$v"
   v=$sane_value
-  batch_id+=_$v
+  cell_id+=_$v
 done
-batch_id=${batch_id#_}
+cell_id=${cell_id#_}
 }
 
-get_stem_path() {
+get_cell_path() {
 local subject=$1
-stem_path=
+cell_path=
 if [[ -d $subject/.cyto || -d $subject/.dna ]]; then
-  stem_path=$subject
+  cell_path=$subject
 else
   subject=${subject%/*}
   if [[ "$subject" =~ / ]]; then
-    get_stem_path $subject
+    get_cell_path $subject
   fi
 fi
 }
@@ -548,7 +610,7 @@ begin_function
   if [[ $changed == t ]]; then
     from=$new_unsafe_file to=$new_file encrypt_file || fail
     mv $new_file $old_file || fail
-    update_modify_times "${new_file%/*}" "${current_stem}" || fail
+    update_modify_times "${new_file%/*}" "${current_cell}" || fail
   fi
 
 end_function
@@ -581,30 +643,130 @@ begin_function
 
   if [[ $changed == t ]]; then
     mv $new_file $old_file || fail
-    update_modify_times "${new_file%/*}" "$stem_path" || fail
+    update_modify_times "${new_file%/*}" "$cell_path" || fail
   fi
 
 end_function
 handle_return
 }
 
+# will set top_cell, which will be empty if no cell cells are found
+get_top_cell() {
+local subject=$1
+top_cell=
+get_top_cell2 $subject || return 1
+return 0
+}
+
+get_top_cell2() {
+local subject=$1
+local parent=${subject%/*}
+if [[ -e $subject/.dna ]]; then
+  top_cell=$subject
+fi
+# recursive
+if [[ ${#parent} -gt 1 ]]; then
+  get_top_cell2 $parent || return 1
+fi
+return 0
+}
+
+# will set bottom_cell, which will be empty if no cell cells are found
+get_bottom_cell() {
+local subject=$1
+bottom_cell=
+get_bottom_cell2 $subject || return 1
+return 0
+}
+
+get_bottom_cell2() {
+local subject=$1
+local parent=${subject%/*}
+if [[ ! -e $subject/.dna ]]; then
+  link_dna_from_seed $subject || return 1
+fi
+if [[ -e $subject/.dna ]]; then
+  bottom_cell=$subject
+elif [[ ${#parent} -gt 1 ]]; then
+  # recursive
+  get_bottom_cell2 $parent || return 1
+fi
+return 0
+}
+
+link_dna_from_seed() {
+local subject=$1
+local parent=${subject%/*}
+local seed_dna
+find_seed_dna $parent ${subject##*/} || return 1
+if [[ "$seed_dna" ]]; then
+  ln -sf $seed_dna $subject/.dna || return 1
+fi
+return 0
+}
+
+# returns seed_dna
+find_seed_dna() {
+local subject=$1
+local parent=${subject%/*}
+local path_to_cell=$2
+seed_dna=$subject/.dna/sub/$path_to_cell/.dna
+if [[ ! -e $seed_dna ]]; then
+  seed_dna=
+  if [[ ${#parent} -gt 1 ]]; then
+    # recursive
+    find_seed_dna $parent ${subject##*/}/$path_to_cell || return 1
+  fi
+fi
+return 0
+}
+
+init_context() {
+
+  # required_freshness:
+  #   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
+  #   1w means refresh if it's older than a week.
+  # shuffle_chance:
+  #   chance out of 1000 of not following the computed strategy order
+  # min_pause:
+  #   number of ms to wait between cycles
+  #   this number doubles each time there is nothing to do, until it reaches max_pause
+
+  default_freshness=${default_freshness:-} \
+  required_freshness=${required_freshness:-${fresh:-$default_freshness}} \
+  retry_max=1 \
+  retry_delay=1 \
+  retry_scale=2 \
+  cell_expiration= \
+  cell_is_persistent=f \
+  default_strategies=crl \
+  shuffle_chance=100 \
+  lock_timeout=${lock_timeout:-30} \
+  pre_validate=f \
+  post_validate=f \
+  min_pause=250 \
+  current_pause=250 \
+  max_pause=60000
+
+}
+
 # input must be a folder
-setup_stem_path_vars() {
-stem_path=$(realpath $1)
+setup_cell_path_vars() {
+cell_path=$(realpath $1)
 begin_function_flat
 
-  if [[ ! "${top_stem:-}" ]]; then
-    get_top_stem $stem_path || fail
+  if [[ ! "${top_cell:-}" ]]; then
+    get_top_cell $cell_path || fail
   fi
 
-  dna_path=$stem_path/.dna \
-    cyto_path=$stem_path/.cyto \
-    short_stem=${stem_path#$top_stem/} \
+  dna_path=$cell_path/.dna \
+    cyto_path=$cell_path/.cyto \
+    short_cell=${cell_path#$top_cell/} \
     command_path=$cyto_path/command
 
   if [[ ! -d $dna_path ]]; then
 
-    stem_type=constant
+    cell_type=constant
     dna_path=
 
   else
@@ -617,16 +779,16 @@ begin_function_flat
 
     op_path=$dna_path/op
 
-    stem_up_path=$dna_path/up
-    if [[ ! -d $stem_up_path ]]; then
-      stem_up_path=
+    cell_up_path=$dna_path/up
+    if [[ ! -d $cell_up_path ]]; then
+      cell_up_path=
     fi
 
   fi
 
-  stem_down_path=$cyto_path/down
-  if [[ ! -d $stem_down_path ]]; then
-    stem_down_path=
+  cell_down_path=$cyto_path/down
+  if [[ ! -d $cell_down_path ]]; then
+    cell_down_path=
   fi
 
   # context can override these as needed
@@ -636,322 +798,85 @@ begin_function_flat
 
   if [[ "$in_path" ]]; then
     if [[ "$in_path" == . ]]; then
-      stem_in_path=$stem_path
+      cell_in_path=$cell_path
     else
-      stem_in_path=$stem_path/$in_path
+      cell_in_path=$cell_path/$in_path
     fi
   fi
 
   if [[ "$out_path" ]]; then
     if [[ "$out_path" == . ]]; then
-      stem_out_path=$stem_path
+      cell_out_path=$cell_path
     else
-      stem_out_path=$stem_path/$out_path
+      cell_out_path=$cell_path/$out_path
     fi
   fi
 
-  stem_status_path=$cyto_path/status
-  if [[ ! -d $stem_status_path ]]; then
-    stem_status_path=
+  cell_status_path=$cyto_path/status
+  if [[ ! -d $cell_status_path ]]; then
+    cell_status_path=
   fi
 
-  stem_debug_path=$cyto_path/debug
-  if [[ ! -d $stem_debug_path ]]; then
-    stem_debug_path=
+  cell_debug_path=$cyto_path/debug
+  if [[ ! -d $cell_debug_path ]]; then
+    cell_debug_path=
   fi
 
-  stem_req_path=$cyto_path/req
-  if [[ ! -d $stem_req_path ]]; then
-    stem_req_path=
+  cell_req_path=$cyto_path/req
+  if [[ ! -d $cell_req_path ]]; then
+    cell_req_path=
   fi
 
-  stem_log_path=$cyto_path/log
-  if [[ ! -d $stem_log_path ]]; then
-    stem_log_path=
+  cell_log_path=$cyto_path/log
+  if [[ ! -d $cell_log_path ]]; then
+    cell_log_path=
   fi
 
-  stem_job_path=$cyto_path/job
-  if [[ ! -d $stem_job_path ]]; then
-    stem_job_path=
+  cell_job_path=$cyto_path/job
+  if [[ ! -d $cell_job_path ]]; then
+    cell_job_path=
   else
-    stem_log_path=$stem_job_path/current/log
+    cell_log_path=$cell_job_path/current/log
   fi
 
-  # if there are dims, this will be overridden in setup_batch_path_vars
-  stem_batch_path=$cyto_path/batch
+  cell_tmp_path=$cell_path/tmp
+  if [[ ! -d $cell_tmp_path ]]; then
+    mkdir -p $cell_tmp_path || fail
+  fi
+
+  # if there are dims, this will be overridden in setup_cell_path_vars
+  cell_cell_path=$cyto_path/cell
 
 end_function_flat
 handle_return
 }
 
-# will set top_stem, which will be empty if no stem cells are found
-get_top_stem() {
-local subject=$1
-top_stem=
-get_top_stem2 $subject || return 1
-return 0
-}
-
-get_top_stem2() {
-local subject=$1
-local parent=${subject%/*}
-if [[ -d $subject/.dna ]]; then
-  top_stem=$subject
-fi
-# recursive
-if [[ ${#parent} -gt 1 ]]; then
-  get_top_stem2 $parent || return 1
-fi
-return 0
-}
-
-# will set bottom_stem, which will be empty if no stem cells are found
-get_bottom_stem() {
-local subject=$1
-bottom_stem=
-get_bottom_stem2 $subject || return 1
-return 0
-}
-
-get_bottom_stem2() {
-local subject=$1
-local parent=${subject%/*}
-if [[ -d $subject/.dna ]]; then
-  bottom_stem=$subject
-elif [[ ${#parent} -gt 1 ]]; then
-  # recursive
-  get_bottom_stem2 $parent || return 1
-fi
-return 0
-}
-
-# should be run before spawn update function
-init_context() {
-
-  # required_freshness:
-  #   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
-  #   1w means refresh if it's older than a week.
-  # high_volume_cell:
-  #   does the cell have thousands of cells or more? If so we will use another folder level
-  # ignore_fresh:
-  #   whether freshness is used to determine if a cell needs to be updated
-  # cell_storage:
-  #   contains pairs of var_name/default values used to store data in this cell
-  # shuffle_chance:
-  #   chance out of 1000 of not following the computed strategy order
-  # min_pause:
-  #   number of ms to wait between cycles
-  #   this number doubles each time there is nothing to do, until it reaches max_pause
-  # stem_type:
-  #   can be: constant info change
-  #   constant means it just holds a fixed value that never changes
-  #   info means it only fetches information 
-  #   change means that it applies a change
-
-  batch_dims= \
-  cell_dims= \
-  in_path= \
-  in_paths= \
-  out_path= \
-  out_paths= \
-  stem_in_path= \
-  stem_out_path= \
-  batch_in_path= \
-  batch_out_path= \
-  default_freshness=${default_freshness:-} \
-  required_freshness=${required_freshness:-${fresh:-$default_freshness}} \
-  retry_max=1 \
-  retry_delay=1 \
-  retry_scale=2 \
-  cell_expiration= \
-  high_volume_cell=f \
-  ignore_fresh=f \
-  default_strategies=crl \
-  cell_storage=() \
-  shuffle_chance=100 \
-  force_update=${p_force_update:-f} \
-  lock_timeout=${lock_timeout:-30} \
-  pre_validate=f \
-  post_validate=f \
-  min_pause=250 \
-  current_pause=250 \
-  stem_type=info \
-  max_pause=60000 \
-  top_stem=${top_stem:-}
-
-  # override this if there are parameter requirements that must be met before attempting to update the cell
-  are_batch_params_valid() {
-    return 0
-  }
-
-  # override this if there are some batch id combinations which are not valid even when
-  # composed of valid dim members
-  # returns 0 if it's not a valid combination of members
-  skip_batch() {
-    return 1
-  }
-
-  # this may be overridden to provide a custom cooldown calculation
-  get_cooldown_delay() {
-    [[ -z "${cooldown_delay:-}" ]] && cooldown_delay=1
-    let cooldown_delay*=2
-  }
-
-}
-
-# batch_id should be figured out before this, 
-#   although it may be empty if no dims in this batch
-#   each element should be expanded and validated beforehand
-setup_batch_path_vars() {
+update_cell_value_file() {
 begin_function_flat
-
-  require_var stem_path cyto_path
-
-  # batch id is quite different than batch path, given new structure: .cyto/dim/env/e1...
-  batch_path=$stem_batch_path
-  batch_dna_path=$dna_path/batch
-  batch_id=only
-  batch_value_path=
-
-  if [[ "${batch_values:-}" ]]; then
-    local i d v
-    batch_id=
-    begin_for ((i=0; i < ${#batch_values[*]}; i++)); doo
-
-      d=${batch_dims[$i]}
-      if [[ ! "$d" ]]; then
-        err "Invalid stem config: batch_values array has more elements than the number of batch_dims"
-        fail1
-      fi
-      if [[ ! "$d" =~ ^[A-Za-z0-9_\.:]+$ ]]; then
-        err "Invalid stem config: Bad dim name: $RESET'$d'"
-        fail1
-      fi
-
-      get_sane_value "${batch_values[$i]}" || fail
-      v=$sane_value
-
-      local dim_part=/dim/$d/$v
-      batch_path+=$dim_part
-      batch_id+=${v}_
-      batch_value_path+=/$v
-
-    end_for
-    batch_id=${batch_id%_}
-  fi
-
-  if [[ ! -d $batch_path ]]; then
-    mkdir -p $batch_path || fail
-  fi
-
-  update_batch_value_file || fail
-
-  if [[ "$stem_status_path" ]]; then
-    batch_status_path=$batch_path/status
-    if [[ ! -d $batch_status_path ]]; then
-      mkdir -p $batch_status_path || fail
-    fi
-  else
-    batch_status_path=
-  fi
-
-  batch_tmp_path=$batch_path/tmp
-  if [[ ! -d $batch_tmp_path ]]; then
-    mkdir -p $batch_tmp_path || fail
-  fi
-
-  if [[ "$stem_debug_path" ]]; then
-    batch_debug_path=$batch_path/debug
-    mkdir -p $batch_debug_path || fail
-  else
-    batch_debug_path=
-  fi
-
-  if [[ "$stem_down_path" ]]; then
-    batch_down_path=$batch_path/down
-    # Created on demand
-  else
-    batch_down_path=
-  fi
-
-  if [[ "$in_path" ]]; then
-    if [[ "$in_path" == . ]]; then
-      batch_in_path=$stem_path$batch_value_path
-    else
-      batch_in_path=$stem_in_path$batch_value_path
-    fi
-    mkdir -p $batch_in_path || fail
-  else
-    batch_in_path=
-  fi
-
-  if [[ "$out_path" ]]; then
-    if [[ "$out_path" == . ]]; then
-      batch_out_path=$stem_path$batch_value_path
-    else
-      batch_out_path=$stem_out_path$batch_value_path
-    fi
-    mkdir -p $batch_out_path || fail
-  else
-    batch_out_path=
-  fi
-
-  batch_req_path=$batch_path/req
-  if [[ ! -d $stem_req_path ]]; then
-    batch_req_path=
-  fi
-
-  if [[ "$stem_log_path" ]]; then
-    batch_log_path=$batch_path/log
-  else
-    batch_log_path=
-  fi
-
-  batch_job_path=$batch_path/job
-  if [[ ! "$stem_job_path" ]]; then
-    batch_job_path=
-  else
-    batch_log_path=$batch_job_path/current/log
-    if [[ ! -d "$batch_job_path" ]]; then
-      mkdir $batch_job_path || fail
-    fi
-  fi
-
-  batch_source_path=$batch_path/source
-  if [[ ! -d "$batch_source_path" ]]; then
-    mkdir $batch_source_path || fail
-  fi
-
-end_function_flat
-handle_return
-}
-
-update_batch_value_file() {
-begin_function_flat
-  if [[ "${batch_values:-}" && ! -f $batch_path/batch_values ]]; then
-    local v s='batch_values=( '
-    for v in "${batch_values[@]}"; do
+  if [[ "${cell_values:-}" && ! -f $cell_path/cell_values ]]; then
+    local v s='cell_values=( '
+    for v in "${cell_values[@]}"; do
       s+="\"$v\" "
     done
     s+=')'
-    echo "$s" >$batch_path/batch_values || fail
+    echo "$s" >$cell_path/cell_values || fail
   fi
 end_function_flat
 handle_return
 }
 
-get_stem() {
-stem_path=$1
-[[ ${#stem_path} -lt 3 ]] && return 1
-[[ -d $stem_path/.dna ]] && return 0
-[[ -d $stem_path/.cyto ]] && return 0
-get_stem ${stem_path%/*} || return 1
+get_cell() {
+cell_path=$1
+[[ ${#cell_path} -lt 3 ]] && return 1
+[[ -d $cell_path/.dna ]] && return 0
+[[ -d $cell_path/.cyto ]] && return 0
+get_cell ${cell_path%/*} || return 1
 return 0
 }
 
 setup_tmp_path() {
 if [[ ! "$tmp_path" ]]; then
-  err "Missing tmp_path. Maybe you needed to run setup_stem_path_vars first"
+  err "Missing tmp_path. Maybe you needed to run setup_cell_path_vars first"
   return 1
 fi
 if [[ ! -d $tmp_path ]]; then
@@ -966,7 +891,7 @@ get_workspace() {
 local subject=$1
 workspace=
 while [[ ${#subject} -gt 1 && $subject =~ / ]]; do
-  if [[ "$subject" == "$top_stem"/* ]]; then
+  if [[ "$subject" == "$top_cell"/* ]]; then
     workspace=$subject
     break
   fi
@@ -976,9 +901,9 @@ done
 }
 
 get_tmp_path() {
-local current_stem=$1
-if [[ -d $current_stem/tmp ]]; then
-  tmp_path=$current_stem/tmp
+local current_cell=$1
+if [[ -d $current_cell/tmp ]]; then
+  tmp_path=$current_cell/tmp
 elif [[ -d ~/tmp ]]; then
   tmp_path=~/tmp
 else
@@ -987,7 +912,7 @@ fi
 return 0
 }
 
-# inputs: from to tmp_path current_stem
+# inputs: from to tmp_path current_cell
 # will write output to file at $to
 decrypt_file() {
 
@@ -1025,7 +950,7 @@ begin_function
   fi
 
   if [[ ! -f "$key_path/key.$USER" ]]; then
-    err "You don't have a key for this stem ($USER). Ask someone who does to add you. Existing keys:" 
+    err "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
     find -L $key_path -name "key.*" >&2
     fail1
   fi
@@ -1089,13 +1014,13 @@ begin_function
 
     if [[ $key_count -gt 0 ]]; then
 
-      err "You don't have a key for this stem ($USER). Ask someone who does to add you. Existing keys:" 
+      err "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
       find -L $key_path -name "key.*" >&2
       fail1
 
     else
 
-      trace $log_info "There are no keys for this stem yet. Will create a new key."
+      trace $log_info "There are no keys for this cell yet. Will create a new key."
 
       # create a new main key
       if ! openssl rand -base64 40 >$tmp_path/main; then
@@ -1139,21 +1064,21 @@ handle_return
 }
 
 # dim vars and functions should be set before this is called
-# will construct batch_values array with current set of values of the
-#   batch dims, which can be used in branch or leaf functions
-for_each_batch() {
+# will construct cell_values array with current set of values of the
+#   cell dims, which can be used in branch or leaf functions
+for_each_cell() {
 
 local leaf_function=${leaf_function:-} \
   branch_function=${branch_function:-} \
   fork_leaves=${fork_leaves:-t} \
-  batch_values=( ) \
-  multi_batch=${multi_batch:-f} \
+  cell_values=( ) \
   multi_cell=${multi_cell:-f} \
-  remaining_batch_dims=( "$@" ) 
+  multi_cell=${multi_cell:-f} \
+  remaining_cell_dims=( "$@" ) 
 
-if [[ "${remaining_batch_dims:-}" ]]; then
+if [[ "${remaining_cell_dims:-}" ]]; then
   local finished=f
-  batch_pivot "${remaining_batch_dims[@]}" || return 1
+  cell_pivot "${remaining_cell_dims[@]}" || return 1
 else
   if [[ "$leaf_function" ]]; then
     if [[ $fork_leaves == t ]]; then
@@ -1172,18 +1097,18 @@ fi
 # check if the dim exists before calling this
 # other inputs: function
 # *sometimes* runs as a subshell
-batch_pivot() {
+cell_pivot() {
 
-local -r remaining_batch_dims=( "$@" ) 
-local -r dim=$remaining_batch_dims
+local -r remaining_cell_dims=( "$@" ) 
+local -r dim=$remaining_cell_dims
 local values=() \
-  batch_values=( "${batch_values[@]}" ) \
+  cell_values=( "${cell_values[@]}" ) \
   processes= 
 
 begin_function_flat
 
   expand_values || fail
-  batch_pivot_values || fail
+  cell_pivot_values || fail
 
 end_function_flat
 handle_return
@@ -1290,13 +1215,13 @@ handle_return
 }
 
 # input: values (array)
-batch_pivot_values() {
+cell_pivot_values() {
 begin_function_flat
 
   local parallel=f \
         go_deeper=t 
   if [[ "${#values[*]}" -gt 1 ]]; then
-    multi_batch=t
+    multi_cell=t
     if [[ "$parallel_execution" == t ]]; then
       parallel=t
       wait_for_low_load || fail
@@ -1305,12 +1230,12 @@ begin_function_flat
 
   local value sane_value processes=
 
-  batch_values+=( only )
+  cell_values+=( only )
 
   begin_for value in "${values[@]}"; doo
 
     eval "local $dim='$value' d_$dim='$value'"
-    batch_values[-1]=$value
+    cell_values[-1]=$value
 
     if [[ "$branch_function" ]]; then
       $branch_function || fail
@@ -1320,18 +1245,18 @@ begin_function_flat
       break
     fi
 
-    if [[ ${#remaining_batch_dims[*]} -gt 1 
+    if [[ ${#remaining_cell_dims[*]} -gt 1 
        && $go_deeper == t
        ]]; then
 
       if [[ $parallel == t ]]; then
         # recursive
-        batch_pivot "${remaining_batch_dims[@]:1}" &
+        cell_pivot "${remaining_cell_dims[@]:1}" &
         after_fork
         processes+=" $!"
       else
         # recursive
-        batch_pivot "${remaining_batch_dims[@]:1}" || fail
+        cell_pivot "${remaining_cell_dims[@]:1}" || fail
       fi
 
     else
@@ -1422,14 +1347,14 @@ fi
 return 0
 }
 
-is_stem() {
+is_cell() {
 [[ -d "$1/.dna" ]]
 }
 
-is_inside_of_stem() {
+is_inside_of_cell() {
 local c=$1
-if [[ $c == "$top_stem"/* ]]; then
-  while [[ $c == "$top_stem"/* ]]; do
+if [[ $c == "$top_cell"/* ]]; then
+  while [[ $c == "$top_cell"/* ]]; do
     if [[ -d $c/.dna ]]; then
       return 0
     fi
@@ -1447,33 +1372,33 @@ return 1
 }
 
 load_context() {
-local stem=$1
-local parent=${stem%/*}
+local cell=$1
+local parent=${cell%/*}
 if [[ ${#parent} -gt 1 ]]; then
   load_context $parent || fail
 fi
-if [[ -f $stem/.dna/context ]]; then
-  source $stem/.dna/context || fail
+if [[ -f $cell/.dna/context ]]; then
+  source $cell/.dna/context || fail
 fi
 }
 
 setup_dims() {
 local dim dim_var
-batch_dims=( )
-if [[ -d $stem/.dna/dim ]]; then
-  for dim in $(find1 $stem/.dna/dim -not -name ".*" | sort -g); do
+cell_dims=( )
+if [[ -d $cell/.dna/dim ]]; then
+  for dim in $(find1 $cell/.dna/dim -not -name ".*" | sort -g); do
     source $dim || return 1
     dim_var=${dim##*/}
     if [[ $dim_var =~ [0-9]+-(.*) ]]; then
       dim_var=${BASH_REMATCH[1]}
     fi
-    batch_dims+=( $dim_var )
+    cell_dims+=( $dim_var )
   done
 fi
 
 cell_dims=( )
-if [[ -d $stem/.dna/cell-dim ]]; then
-  for dim in $(find1 $stem/.dna/cell-dim -not -name ".*" | sort -g); do
+if [[ -d $cell/.dna/cell-dim ]]; then
+  for dim in $(find1 $cell/.dna/cell-dim -not -name ".*" | sort -g); do
     source $dim || return 1
     dim_var=${dim##*/}
     if [[ $dim_var =~ [0-9]+-(.*) ]]; then
@@ -1485,26 +1410,13 @@ fi
 }
 
 load_parent_context() { 
-local stem=$1
-local parent=${stem%/*}
+local cell=$1
+local parent=${cell%/*}
 if [[ ${#parent} -gt 1 ]]; then
   load_parent_context $parent || return 1
 fi
-if [[ -f $stem/.dna/context ]]; then
-  source $stem/.dna/context || return 1
-fi
-return 0
-}
-
-record_context() {
-local stem=$1
-local parent=${stem%/*}
-if [[ ${#parent} -gt 1 ]]; then
-  record_context $parent || return 1
-fi
-if [[ -f $stem/.dna/context ]]; then
-  echo "# generated from: $stem/.dna/context" >>$cyto/context || return 1
-  echo | cat $stem/.dna/context - >>$cyto/context || return 1
+if [[ -f $cell/.dna/context ]]; then
+  source $cell/.dna/context || return 1
 fi
 return 0
 }
