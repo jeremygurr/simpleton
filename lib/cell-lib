@@ -236,12 +236,17 @@ execute_command() {
 local cell=$(realpath $1) command=$2
 vars='cell command'; begin_function
   cell_context_load || fail
-  local command_path=$cell/.cyto/command/$command
-  if [[ -e $command_path ]]; then
-    execute_command_step $command_path || fail
+  local function_exists=$(type -t $command &>/dev/null && echo true)
+  if [[ "$function_exists" ]]; then
+    $command || fail
   else
-    err "Command $command doesn't exist in $command_path"
-    fail1
+    local command_path=$cell/.cyto/command/$command
+    if [[ -e $command_path ]]; then
+      execute_command_step $command_path || fail
+    else
+      err "Command $command doesn't exist in $command_path or as a function"
+      fail1
+    fi
   fi
 end_function
 handle_return
@@ -1357,17 +1362,6 @@ else
   done
 fi
 return 1
-}
-
-load_context() {
-local cell=$1
-local parent=${cell%/*}
-if [[ ${#parent} -gt 1 ]]; then
-  load_context $parent || fail
-fi
-if [[ -f $cell/.dna/context ]]; then
-  source $cell/.dna/context || fail
-fi
 }
 
 setup_dims() {
