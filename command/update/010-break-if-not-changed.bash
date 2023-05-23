@@ -1,8 +1,8 @@
 break_if_not_changed() {
 begin_function_flat
 
-  if [[ "$batch_status_path" ]]; then
-    get_needs_update $batch_status_path || fail
+  if [[ "$status_path" ]]; then
+    get_needs_update $status_path || fail
     if [[ $needs_update == f ]]; then
       leave_loop=1
     fi

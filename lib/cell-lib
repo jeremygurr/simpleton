@@ -28,11 +28,10 @@ vars=cell begin_function
     last_context_loaded=$cell
     init_context || fail
 
-    local context_path=$cell/.cyto/context
-    if [[ ! -e $cell/.cyto ]]; then
+    local cyto_path=$cell/.cyto
+    local context_path=$cyto_path/context
+    if [[ ! -e $cyto_path ]]; then
       make_cyto $cell || fail
-      [[ -f "$context_path" ]] && { source $context_path || fail; }
-      setup_features || fail
     else
       [[ -f "$context_path" ]] && { source $context_path || fail; } 
     fi
@@ -67,6 +66,11 @@ begin_function_flat
   mkdir -p $new_cyto/command || fail
   mkdir -p $new_cyto/lib || fail
   inherit_lib $cell || fail
+
+  local context_path=$new_cyto/context
+  [[ -f "$context_path" ]] && { source $context_path || fail; }
+  setup_features || fail
+
   mv $new_cyto $cell/.cyto || fail
 
 end_function_flat
@@ -76,6 +80,7 @@ handle_return
 record_context() {
 local cell=$1
 local parent=${cell%/*}
+local new_context=$new_cyto/context
 
 if [[ ${#parent} -gt 1 ]]; then
   record_context_before $parent || return 1
@@ -83,7 +88,6 @@ fi
 
 local context_local_path=$cell/.dna/context-local
 local dna_path=$cell/.dna
-local new_context=$new_cyto/context
 
 if [[ -f $context_local_path ]]; then
   echo "# generated from: $context_local_path" >>$new_context || return 1
@@ -183,10 +187,10 @@ begin_function_flat
     begin_for feature in "${cell_features[@]}"; doo
       case $feature in
         req)
-          mkdir -p $cyto/$feature/new || fail
+          mkdir -p $cyto_path/$feature/new || fail
         ;;
         log|job|status)
-          mkdir -p $cyto/$feature || fail
+          mkdir -p $cyto_path/$feature || fail
         ;;
         *)
           err "Unknown feature $feature"
@@ -1368,7 +1372,7 @@ fi
 
 setup_dims() {
 local dim dim_var
-cell_dims=( )
+leaf_dims=( )
 if [[ -d $cell/.dna/dim ]]; then
   for dim in $(find1 $cell/.dna/dim -not -name ".*" | sort -g); do
     source $dim || return 1
@@ -1376,7 +1380,7 @@ if [[ -d $cell/.dna/dim ]]; then
     if [[ $dim_var =~ [0-9]+-(.*) ]]; then
       dim_var=${BASH_REMATCH[1]}
     fi
-    cell_dims+=( $dim_var )
+    leaf_dims+=( $dim_var )
   done
 fi
 
