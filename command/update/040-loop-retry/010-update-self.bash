@@ -3,25 +3,25 @@ begin_function
   update_successful=f 
   can_retry=f
 
-  if [[ "$batch_out_path" ]]; then
-    local original_batch_out=$batch_out_path
-    batch_out_path=$batch_out_path.new
-    if [[ -d $batch_out_path ]]; then
-      rm -rf $batch_out_path || fail
+  if [[ "$out_path" ]]; then
+    local original_out=$out_path
+    local out_path=$out_path.new
+    if [[ -d $out_path ]]; then
+      rm -rf $out_path || fail
     fi
-    mkdir $batch_out_path || fail
+    mkdir $out_path || fail
   fi
 
   execute_op update || fail
 
-  if [[ "$batch_out_path" ]]; then
-    batch_out_path=$original_batch_out
+  if [[ "$out_path" ]]; then
+    out_path=$original_out
     if [[ $update_successful == t ]]; then
-      if [[ -e $batch_out_path.old ]]; then
-        rm -rf $batch_out_path.old || fail
+      if [[ -e $out_path.old ]]; then
+        rm -rf $out_path.old || fail
       fi
-      mv $batch_out_path $batch_out_path.old || fail
-      mv $batch_out_path.new $batch_out_path || fail
+      mv $out_path $out_path.old || fail
+      mv $out_path.new $out_path || fail
     fi
   fi
 

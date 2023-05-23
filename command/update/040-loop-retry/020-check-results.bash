@@ -11,11 +11,11 @@ if [[ $update_successful == t ]]; then
   fi
 fi
 
-if [[ "$batch_status_path" ]]; then
+if [[ "$status_path" ]]; then
   if [[ $update_successful == t ]]; then
-    touch $batch_status_path/last-good-update || return 1
+    touch $status_path/last-good-update || return 1
   else
-    touch $batch_status_path/last-bad-update || return 1
+    touch $status_path/last-bad-update || return 1
   fi
 fi
 

@@ -16,6 +16,9 @@ if [[ "$log_path" ]]; then
   fi
   change_log_file $log_path/update || return 1
 fi
+if [[ "$status_path" ]]; then
+  touch $status_path/last-start || return 1
+fi
 return 0
 }
 
