@@ -20,7 +20,9 @@ begin_function
       if [[ -e $out_path.old ]]; then
         rm -rf $out_path.old || fail
       fi
-      mv $out_path $out_path.old || fail
+      if [[ -d $out_path ]]; then
+        mv $out_path $out_path.old || fail
+      fi
       mv $out_path.new $out_path || fail
     fi
   fi

@@ -430,7 +430,7 @@ vars=step; begin_function
   
   if [[ -d $step/.dna ]]; then
     # recursive
-    ( change_log_file; execute_command $step update ) || { after_fork; fail; }
+    ( change_log_file; execute_command $step update ) || { after_fork; fail1; }
     after_fork
     ln -sf $step $cell_source_path/$base || fail
   elif [[ -d $step ]]; then
@@ -940,13 +940,14 @@ init_context() {
   post_validate=f \
   min_pause=250 \
   current_pause=250 \
-  max_pause=60000
-
+  max_pause=60000 \
+  in_path= \
+  out_path= 
 }
 
 # input must be a folder
 setup_cell_path_vars() {
-cell_path=$(realpath $1)
+cell_path=$1
 begin_function_flat
 
   if [[ ! "${top_cell:-}" ]]; then
@@ -977,9 +978,16 @@ begin_function_flat
   fi
 
   # context can override these as needed
-  # should be a relative path
+  # could be a relative path
   in_path=${in_path:-}
+  if [[ "$in_path" && "$in_path" != /* ]]; then
+    in_path=$cell_path/$in_path
+  fi
+
   out_path=${out_path:-}
+  if [[ "$out_path" && "$out_path" != /* ]]; then
+    out_path=$cell_path/$out_path
+  fi
 
   status_path=$cyto_path/status
   if [[ ! -d $status_path ]]; then
@@ -1238,7 +1246,7 @@ for_each_member() {
 local dim=$1 parallel=f multi_cell=f \
   member sane_value processes= \
   function=$function finished=f \
-  fork_function=${fork_function:-f}
+  fork_function=${fork_function:-t}
 
 vars=dim begin_function
 
@@ -1262,7 +1270,7 @@ vars=dim begin_function
       processes+=" $!"
     else
       if [[ $fork_function == t ]]; then
-        ( $function ) || { after_fork; fail; }
+        ( $function ) || { after_fork; fail1; }
         after_fork
       else
         $function || fail
@@ -1486,7 +1494,7 @@ begin_function_flat
           processes+=" $!"
         else
           if [[ $fork_leaves == t ]]; then
-            ( $leaf_function ) || { after_fork; fail; }
+            ( $leaf_function ) || { after_fork; fail1; }
             after_fork
           else
             $leaf_function || fail
