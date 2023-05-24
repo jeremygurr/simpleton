@@ -36,7 +36,7 @@ vars=cell begin_function
       [[ -f "$context_path" ]] && { source $context_path || fail; } 
     fi
 
-    setup_dims || fail
+    setup_dims $cell || fail
     setup_cell_path_vars $cell || fail
 
   fi
@@ -262,7 +262,7 @@ handle_return
 create_sub_leaf() {
 begin_function_flat
   local trunk_cell
-  find_trunk_cell || {
+  find_trunk_cell $cell || {
     err "Could not find trunk cell for $cell"
     fail1
     }
@@ -273,11 +273,13 @@ begin_function_flat
   if [[ -d $trunk_cell/.dna/up ]]; then
     mkdir $sub_dna_path/up || fail
     local uptream_cell leaf_cell upstream_name
-    local upstream_cells=$(find1 $trunk_cell/.dna/up -not -name '.*' \
+    local upstream_cells=$(find1 $trunk_cell/.dna/up \
+      -not -name '.*' \
+      -not -name '*.prep' \
       | sort -g) || fail
     begin_for upstream_cell in $upstream_cells; doo
       upstream_name=${upstream_cell##*/}
-      get_leaf_cell $upstream_cells || fail
+      get_upstream_leaf_cell $trunk_cell $upstream_cell || fail
       ln -s $(realpath $leaf_cell) $sub_dna_path/up/$upstream_name || fail
     end_for
   fi
@@ -286,9 +288,57 @@ handle_return
 }
 
 find_trunk_cell() {
+local cell=$1
+local parent=${cell%/*}
+local parent_part=${parent%%*/}
+if [[ $parent_part == .dim ]]; then
+  local grandparent=${parent%/*}
+  if [[ "$grandparent" != "$parent" ]]; then
+    # recursive
+    find_trunk_cell $grandparent || return 1
+  else
+    return 1
+  fi
+elif [[ ! -e $cell/.dna ]]; then
+  if [[ "$parent" != "$cell" ]]; then
+    # recursive
+    find_trunk_cell $parent || return 1
+  else
+    return 1
+  fi
+else
+  trunk_cell=$cell
+fi
+return 0
 }
 
-get_leaf_cell() {
+# usage: get_upstream_leaf_cell {trunk cell} {upstream cell}
+# returns leaf_cell
+get_upstream_leaf_cell() {
+local trunk_cell=$1 upstream_cell=$2
+begin_function_flat
+  if [[ "$localize_dim_vars" ]]; then
+    eval "$localize_dim_vars" || fail
+  fi
+  local prep_file=$upstream_cell.prep
+  if [[ -f $prep_file ]]; then
+    source $prep_file || fail
+    prep || fail
+  fi
+  setup_dims $upstream_cell || fail
+  # do this again for the upstream cell, in case it has different dims
+  if [[ "$localize_dim_vars" ]]; then
+    eval "$localize_dim_vars" || fail
+  fi
+  local dim member
+  leaf_cell=$upstream_cell
+  begin_for dim in ${leaf_dims[*]}; doo
+    member=${!dim} || fail
+    get_sane_value "$member" || fail
+    leaf_cell+=/.dim/$sane_value
+  end_for
+end_function_flat
+handle_return
 }
 
 trace_step_execution=${trace_step_execution:-f}
@@ -1532,8 +1582,9 @@ return 1
 }
 
 setup_dims() {
-local dim dim_var
+local dim dim_var cell=$1
 leaf_dims=( )
+localize_dim_vars=
 if [[ -d $cell/.dna/dim ]]; then
   for dim in $(find1 $cell/.dna/dim -not -name ".*" | sort -g); do
     source $dim || return 1
@@ -1542,6 +1593,7 @@ if [[ -d $cell/.dna/dim ]]; then
       dim_var=${BASH_REMATCH[1]}
     fi
     leaf_dims+=( $dim_var )
+    localize_dim_vars+="local $dim_var ${dim_var}s; "
   done
 fi
 
@@ -1554,6 +1606,7 @@ if [[ -d $cell/.dna/sub-dim ]]; then
       dim_var=${BASH_REMATCH[1]}
     fi
     sub_dims+=( $dim_var )
+    localize_dim_vars+="local $dim_var ${dim_var}s; "
   done
 fi
 }
