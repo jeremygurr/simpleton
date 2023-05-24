@@ -208,18 +208,14 @@ create_sub_cell() {
 local cell=$1
 vars=cell; begin_function
   if [[ ! -d $cell ]]; then
+    if [[ -d $cell.new ]]; then
+      rm -rf $cell.new || fail
+    fi
     local parent_part=${cell%/*}
     parent_part=${parent_part##*/}
     if [[ "$parent_part" == .dim ]]; then
-      local trunk_cell
-      find_trunk_cell || {
-        err "Could not find trunk cell for $cell"
-        fail1
-        }
+      create_sub_branch_or_leaf $cell.new || fail
     else
-      if [[ -d $cell.new ]]; then
-        rm -rf $cell.new || fail
-      fi
       mkdir -p $cell.new || fail
       link_dna_from_seed $cell.new || {
         err "Failed to link dna from seed for $cell"
@@ -230,6 +226,69 @@ vars=cell; begin_function
   fi
 end_function
 handle_return
+}
+
+create_sub_branch_or_leaf() {
+local cell=$1
+begin_function_flat
+  debug_start
+  local sub_dna_path=$cell/.dna super_dims
+  mkdir $sub_dna_path || fail
+  super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
+  if [[ "$super_dims" ]]; then
+    local i super_dim_count=${#super_dims[*]} from_dim= to_dim
+    if [[ "$super_dim_count" -gt 1 ]]; then
+      create_sub_branch || fail
+    else
+      create_sub_leaf || fail
+    fi
+  fi
+end_function_flat
+handle_return
+}
+
+create_sub_branch() {
+begin_function_flat
+  mkdir $sub_dna_path/dim || fail
+  begin_for ((i=1; i<super_dim_count; i++)); doo
+    from_dim=$(realpath ${super_dims[$i]}) || fail
+    to_dim=$sub_dna_path/dim/${from_dim##*/}
+    ln -s $from_dim $to_dim || fail
+  end_for
+end_function_flat
+handle_return
+}
+
+create_sub_leaf() {
+begin_function_flat
+  local trunk_cell
+  find_trunk_cell || {
+    err "Could not find trunk cell for $cell"
+    fail1
+    }
+  local op_leaf=$trunk_cell/.dna/op-leaf
+  if [[ -d $op_leaf ]]; then
+    ln -s $op_leaf $sub_dna_path/op || fail
+  fi
+  if [[ -d $trunk_cell/.dna/up ]]; then
+    mkdir $sub_dna_path/up || fail
+    local uptream_cell leaf_cell upstream_name
+    local upstream_cells=$(find1 $trunk_cell/.dna/up -not -name '.*' \
+      | sort -g) || fail
+    begin_for upstream_cell in $upstream_cells; doo
+      upstream_name=${upstream_cell##*/}
+      get_leaf_cell $upstream_cells || fail
+      ln -s $(realpath $leaf_cell) $sub_dna_path/up/$upstream_name || fail
+    end_for
+  fi
+end_function_flat
+handle_return
+}
+
+find_trunk_cell() {
+}
+
+get_leaf_cell() {
 }
 
 trace_step_execution=${trace_step_execution:-f}
