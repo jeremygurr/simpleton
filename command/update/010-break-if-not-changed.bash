@@ -21,12 +21,15 @@ begin_function_flat
   if [[ ! -d $node_status_path ]]; then
     needs_update=t
     log_message="Needs update because status path doesn't exist"
-  elif [[ -e $node_status_path/outdated ]]; then
+  elif [[ ! -e $node_status_path/subs-up-to-date ]]; then
     needs_update=t
-    log_message="Needs update because cell is outdated"
+    log_message="Needs update because a sub cell is outdated"
+  elif [[ ! -e $node_status_path/deps-up-to-date ]]; then
+    needs_update=t
+    log_message="Needs update because a dependency is outdated"
   elif [[ ! -e $node_status_path/last-good-update ]]; then
     needs_update=t
-    log_message="Needs update because cell has never been updated"
+    log_message="Needs update because cell has never been updated successfully"
   else
     get_is_stale $node_status_path || fail
     if [[ $is_stale == t ]]; then
@@ -61,14 +64,17 @@ begin_function_flat
   elif [[ $required_freshness != 0 ]]; then
     local fresh_seconds
     convert_to_seconds $required_freshness fresh_seconds || fail
-    local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
-    local out_timestamp=
-    if [[ -f $node_status_path/oldest-update ]]; then
-      out_timestamp=$(date -r $node_status_path/freshness +%s)
-    fi
-    if [[ "$out_timestamp" && $out_timestamp -ge $fresh_cutoff ]]; then
-      is_stale=f
-    fi
+    local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds)) \
+      out_timestamp= freshness_file
+    is_stale=f
+    begin_for freshness_file in sub-freshness dep-freshness last-good-update; doo
+      if [[ -f $node_status_path/$freshness_file ]]; then
+        out_timestamp=$(date -r $node_status_path/freshness_file +%s)
+      fi
+      if [[ "$out_timestamp" && $out_timestamp -lt $fresh_cutoff ]]; then
+        is_stale=t
+      fi
+    end_for
   fi
 end_function_flat
 handle_return
