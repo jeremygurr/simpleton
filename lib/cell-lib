@@ -7,7 +7,7 @@ umask 0077
 
 readonly failed_but_can_retry=2 skip=2 \
   somethings_wrong=1 everythings_fine=0 \
-  empty_dim=_ 
+  empty_member=_ 
 
 parallel_default=t 
 [[ $debug == t ]] && parallel_default=f
@@ -231,7 +231,6 @@ handle_return
 create_sub_branch_or_leaf() {
 local cell=$1
 begin_function_flat
-  debug_start
   if [[ -d $cell ]]; then
     err "Cell already exists $cell"
     fail1
@@ -295,7 +294,7 @@ handle_return
 find_trunk_cell() {
 local cell=$1
 local parent=${cell%/*}
-local parent_part=${parent%%*/}
+local parent_part=${parent##*/}
 if [[ $parent_part == .dim ]]; then
   local grandparent=${parent%/*}
   if [[ "$grandparent" != "$parent" ]]; then
@@ -339,6 +338,10 @@ begin_function_flat
   leaf_cell=$upstream_cell
   begin_for dim in ${leaf_dims[*]}; doo
     member=${!dim} || fail
+    if [[ ! "$member" ]]; then
+      err "Missing member for $dim"
+      fail1
+    fi
     get_sane_value "$member" || fail
     leaf_cell+=/.dim/$sane_value
   end_for
@@ -352,7 +355,7 @@ trace_op=${trace_op:-}
 # Usage: execute_op {op name}
 execute_op() {
 local op_name=$1 op found_op=f ignore_missing=${ignore_missing:-f}
-vars=op_name; begin_function
+vars='cell_path op_name'; begin_function
   begin_for op in $op_path/$op_name $op_path/$op_name.*; doo
     if [[ -e $op ]]; then
       found_op=t
@@ -375,7 +378,7 @@ handle_return
 }
 
 execute_command() {
-local cell=$(realpath $1) command=$2
+local cell=$1 command=$2
 vars='cell command'; begin_function
   cell_context_load || {
     err "Context failed to load for $cell"
@@ -1587,7 +1590,7 @@ return 1
 }
 
 setup_dims() {
-local dim dim_var cell=$1
+local dim dim_var dim_var_plural cell=$1
 leaf_dims=( )
 localize_dim_vars=
 if [[ -d $cell/.dna/dim ]]; then
@@ -1597,8 +1600,9 @@ if [[ -d $cell/.dna/dim ]]; then
     if [[ $dim_var =~ [0-9]+-(.*) ]]; then
       dim_var=${BASH_REMATCH[1]}
     fi
+    dim_var_plural=${dim_var}s
     leaf_dims+=( $dim_var )
-    localize_dim_vars+="local $dim_var ${dim_var}s; "
+    localize_dim_vars+="local $dim_var=\${$dim_var:-} $dim_var_plural=\${$dim_var_plural:-}; "
   done
 fi
 
@@ -1610,8 +1614,9 @@ if [[ -d $cell/.dna/sub-dim ]]; then
     if [[ $dim_var =~ [0-9]+-(.*) ]]; then
       dim_var=${BASH_REMATCH[1]}
     fi
+    dim_var_plural=${dim_var}s
     sub_dims+=( $dim_var )
-    localize_dim_vars+="local $dim_var ${dim_var}s; "
+    localize_dim_vars+="local $dim_var=\${$dim_var:-} $dim_var_plural=\${$dim_var_plural:-}; "
   done
 fi
 }
