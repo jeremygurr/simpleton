@@ -108,7 +108,7 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  if [[ $log_depth -le $((trace-5)) && log_out=f ]]; then
+  if [[ $log_depth -le $((trace-5)) && $log_to_out == f ]]; then
     out "$@"
   fi
   log_function=${FUNCNAME[1]} write_to_log debug '' "$*"
@@ -117,20 +117,23 @@ return 0
 }
 
 info() {
-  begin_no_tracing_zone
-    while true; do
-      case "$1" in
-        -*)
-          ;;
-        *)
-          break
-          ;;
-      esac
-      shift || true
-    done
-    log_function=${FUNCNAME[1]} write_to_log info '' "$*"
-  end_no_tracing_zone
-  return 0
+begin_no_tracing_zone
+  while true; do
+    case "$1" in
+      -*)
+        ;;
+      *)
+        break
+        ;;
+    esac
+    shift || true
+  done
+  if [[ $log_to_out == f ]]; then
+    out "$@"
+  fi
+  log_function=${FUNCNAME[1]} write_to_log info '' "$*"
+end_no_tracing_zone
+return 0
 }
 
 trace() {
@@ -191,6 +194,13 @@ end_no_tracing_zone
 return 0
 }
 
+log_and_run() {
+begin_no_tracing_zone
+  log_function=${FUNCNAME[1]} write_to_log trace command "$*"
+end_no_tracing_zone
+eval "$*"
+}
+
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
 begin_no_tracing_zone
@@ -210,7 +220,6 @@ for var in $trace_var ${vars:-}; do
   var_log+=" $var=$value"
 done
 
-#vars=
 local output="= $EPOCHREALTIME pid=$BASHPID log_id=$log_id depth=$log_depth level=$level"
 if [[ "$action" ]]; then
   output+=" action=$action"
@@ -228,7 +237,19 @@ let log_id++ || true
 if [[ $log_to_file == t && "${log_file:-}" && $log_to_out == f ]]; then
   echo "$output" >>$log_file
 elif [[ $log_to_out == t ]]; then
-  echo "$output" >&$fd_trace
+  if [[ ! "$log_action" || $action =~ "$log_action" ]]; then
+    case $log_out_width in
+      mid)
+        echo "$log_function$var_log $action $message" >&$fd_trace
+      ;;
+      tiny)
+        echo "$action $message" >&$fd_trace
+      ;;
+      *)
+        echo "$output" >&$fd_trace
+      ;;
+    esac
+  fi
 fi
 
 end_no_tracing_zone
