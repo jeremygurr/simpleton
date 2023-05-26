@@ -228,44 +228,55 @@ end_function_flat
 handle_return
 }
 
-create_sub_cell() {
-local cell=$1
-local vars=cell; begin_function
-  if [[ ! -d $cell ]]; then
-    if [[ -d $cell.new ]]; then
-      rm -rf $cell.new || fail
+create_sub_cells() {
+if [[ "$sub_path" ]]; then
+  create_sub_cells2 $cell_path '' || return 1
+fi
+return 0
+}
+
+create_sub_cells2() {
+local seed=$1 relative_path=$2 sub_full sub 
+[[ "$relative_path" ]] && relative_path=/$relative_path
+local sub_path=$seed/.dna/sub$relative_path
+local subs=$(find1 $sub_path -not -name ".*" -not -name "$wild_sub_path" | sort -g) || return 1
+for sub_full in $subs; do
+  sub=${sub_full##*/}
+  if [[ -f $sub_full ]]; then
+    ln -sf $(realpath $sub_full) $seed$relative_path/$sub || return 1
+  elif [[ -d $sub_full ]]; then
+    create_sub_cell $seed $seed$relative_path/$sub || return 1
+    if [[ "$relative_path" ]]; then
+      create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
+    else
+      create_sub_cells2 $seed $sub || return 1
     fi
-    local parent=${cell%/*}
+  fi
+done
+}
+
+create_sub_cell() {
+local seed=$1 sub_cell=$2
+local vars=sub_cell; begin_function
+  if [[ ! -d $sub_cell ]]; then
+    if [[ -d $sub_cell.new ]]; then
+      rm -rf $sub_cell.new || fail
+    fi
+    local parent=${sub_cell%/*}
     local parent_part=${parent##*/}
     if [[ "$parent_part" == .dim ]]; then
-      create_sub_branch_or_leaf $cell.new || fail
+      create_sub_branch_or_leaf $sub_cell.new || fail
     else
-      mkdir -p $cell.new || fail
-      find_seed_dna $parent ${cell#$parent/} || fail
+      mkdir -p $sub_cell.new || fail
+      find_seed_dna $parent ${sub_cell#$parent/} || fail
       if [[ "$seed_dna" ]]; then
-        ln -sf $seed_dna $cell.new/.dna || fail
+        ln -sf $(realpath seed_dna) $sub_cell.new/.dna || fail
       fi
     fi
-    mv $cell.new $cell || fail
+    mv $sub_cell.new $sub_cell || fail
   fi
 end_function
 handle_return
-}
-
-link_dna_from_seed() {
-local subject=$1
-local parent=${subject%/*}
-local seed_dna
-if [[ "${#parent}" -gt 1 ]]; then
-  find_seed_dna $parent ${subject#$parent/} || {
-    err "Could not find seed dna for $subject"
-    return 1
-    }
-  if [[ "$seed_dna" ]]; then
-    return 0
-  fi
-fi
-return 1
 }
 
 # returns seed_dna
