@@ -139,7 +139,7 @@ debug_trap() {
   local debug_command=$1; shift
 
   local debug_current_depth=${#FUNCNAME[*]}
-  if [[ "$debug_function" =~ ^$debug_ignore$ ]]; then
+  if [[ "$debug_ignore" == *\ "$debug_function"\ * ]]; then
     if [[ $debug_debug == t ]]; then
       echo "debug_debug[$debug_current_depth]: Skipping because function $debug_function is ignored by $debug_ignore" >&$fd_original_err
     fi
@@ -259,8 +259,7 @@ debug_trap() {
   fi
 
   if [[ $debug_step_to_next_function == t ]] && [[ \
-     "$debug_function" == "$debug_prev_function" || \
-     "$debug_function" =~ "$debug_ignore_jump" \
+     "$debug_function" == "$debug_prev_function" \
      ]]; then
     debug_r=0
     debug_subshell=t
@@ -271,7 +270,6 @@ debug_trap() {
 
   if [[ $debug_step_to_next_file == t ]] && [[ \
      "$debug_function" == "$debug_prev_function" || \
-     "$debug_function" =~ "$debug_ignore_jump" || \
      "$debug_source_file" == "$debug_prev_source_file" \
      ]]; then
     debug_r=0
@@ -423,7 +421,7 @@ debug_trap() {
     fi
 
     debug_long_command=f
-    read -s -n1 debug_c <&$fd_original_in
+    read -rs -n1 debug_c <&$fd_original_in
 
     if [[ "$debug_c" != l && "$debug_c" != L ]]; then
       debug_list_offset=0
@@ -784,6 +782,12 @@ debug_trap() {
         debug_r=0
         debug_save_state
         ;;
+      \\)
+        echo "# Adding $debug_function to function ignore list" >&$fd_original_err
+        debug_ignore+="$debug_function "
+        debug_r=0
+        debug_save_state
+        ;;
       .)
         if [[ "${debug_prev_search:-}" ]]; then
           echo "# Repeating search for $debug_prev_search" >&$fd_original_err
@@ -849,6 +853,7 @@ debug_trap() {
         echo "=  continue until the current line is reached again" >&$fd_original_err
         echo "]  continue until we reach a different function" >&$fd_original_err
         echo "}  continue until we reach a different file" >&$fd_original_err
+        echo "\  add current function to jump ignore list, so using ] will not hit this function again" >&$fd_original_err
         echo ".  repeat previous deep or shallow search" >&$fd_original_err
         echo "^  toggle source following (displays source context after every command)" >&$fd_original_err
         no_follow_once=t
@@ -887,7 +892,6 @@ debug_expression='$debug_expression'
 debug_follow_source='$debug_follow_source'
 debug_highlight='$debug_highlight'
 debug_ignore='$debug_ignore'
-debug_ignore_jump='$debug_ignore_jump'
 debug_line='$debug_line'
 debug_line_old='$debug_line_old'
 debug_max_depth='$debug_max_depth'
@@ -957,8 +961,7 @@ debug_start() {
     export debug_expression=${debug_expression:-echo none}
     export debug_expanded_search=${debug_expanded_search:-f}
     export debug_follow_source=${debug_follow_source:-t}
-    export debug_ignore=${debug_ignore:-(find1|echo_align|trace|out|warn|err)}
-    export debug_ignore_jump=${debug_ignore_jump:-(write_to_log|log|out|trace)}
+    export debug_ignore=${debug_ignore:- find1 echo_align trace out warn err write_to_log }
     export debug_immediate=${debug_immediate:-f}
     export debug_last_location=${debug_last_location:-}
     export debug_line=${debug_line:-}
