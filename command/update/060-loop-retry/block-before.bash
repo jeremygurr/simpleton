@@ -1,4 +1,4 @@
-before_block() {
+block_before() {
 
 ref_group=none
 delay=$retry_delay

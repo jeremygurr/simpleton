@@ -1,6 +1,6 @@
 #!/bin/bash
 
-before_block() {
+block_before() {
 if [[ "$up_path" ]]; then
   upstreams=( $(find1 $up_path \
     -not -name '.*' \

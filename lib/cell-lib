@@ -235,6 +235,7 @@ fi
 return 0
 }
 
+# seed must not be empty here
 create_sub_cells2() {
 local seed=$1 relative_path=$2 sub_full sub 
 [[ "$relative_path" ]] && relative_path=/$relative_path
@@ -256,19 +257,35 @@ done
 }
 
 create_sub_cell() {
+# seed is allowed to be empty, meaning no seed exists at this location
 local seed=$1 sub_cell=$2
 local vars=sub_cell; begin_function
+
+  if [[ "$sub_cell" =~ .dna ]]; then
+    err "Internal error: Invalid sub_cell $sub_cell."
+    err "We should not be creating a sub cell inside of a dna folder"
+    fail1
+  fi
+
   if [[ ! -d $sub_cell ]]; then
+
     if [[ -d $sub_cell.new ]]; then
       rm -rf $sub_cell.new || fail
     fi
+
     local parent=${sub_cell%/*}
+    if [[ "$parent" == "$sub_cell" ]]; then
+      err "Can't create sub cells in a cell without parents: $sub_cell"
+      stack_trace
+      fail1
+    fi
+
     local parent_part=${parent##*/}
     if [[ "$parent_part" == .dim ]]; then
       create_sub_branch_or_leaf $sub_cell.new || fail
     else
       mkdir -p $sub_cell.new || fail
-      find_seed_dna $parent ${sub_cell#$parent/} || fail
+      find_seed_dna ${seed:-$parent} ${sub_cell#$parent/} || fail
       if [[ "$seed_dna" ]]; then
         ln -sf $(realpath $seed_dna) $sub_cell.new/.dna || fail
       fi
@@ -277,41 +294,6 @@ local vars=sub_cell; begin_function
   fi
 end_function
 handle_return
-}
-
-# returns seed_dna
-find_seed_dna() {
-local subject=$1
-local parent=${subject%/*}
-local path_to_cell=$2
-path_to_cell=${path_to_cell%.new}
-seed_dna=$subject/.dna/sub/$path_to_cell/.dna
-if [[ ! -e $seed_dna ]]; then
-  seed_dna=
-  if [[ -d $subject/.dna/sub ]]; then
-    seed_dna=$subject/.dna/sub
-    local path_array=( ${path_to_cell//\// } ) \
-      failed=f
-    for path_part in "${path_array[@]}"; do
-      if [[ -d $seed_dna/$path_part ]]; then
-        seed_dna+=/$path_part
-      elif [[ -d $seed_dna/$wild_sub_path ]]; then
-        seed_dna+=/$wild_sub_path
-      else
-        failed=t
-        break
-      fi
-    done
-    seed_dna+=/.dna
-    if [[ $failed == t || ! -d $seed_dna ]]; then
-      seed_dna=
-    fi
-  elif [[ ${#parent} -gt 1 ]]; then
-    # recursive
-    find_seed_dna $parent ${subject#$parent/}/$path_to_cell || return 1
-  fi
-fi
-return 0
 }
 
 create_sub_branch_or_leaf() {
@@ -324,9 +306,9 @@ begin_function_flat
   mkdir $cell || fail
   local sub_dna_path=$cell/.dna super_dims
   mkdir $sub_dna_path || fail
-  super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
+  super_dims=( $(find1 $sub_dna_path/dim -not -name '.*' | sort -g) ) || fail
   if [[ "$super_dims" ]]; then
-    local i super_dim_count=${#super_dims[*]} from_dim= to_dim
+    local super_dim_count=${#super_dims[*]} 
     if [[ "$super_dim_count" -gt 1 ]]; then
       create_sub_branch || fail
     else
@@ -341,10 +323,11 @@ create_sub_branch() {
 begin_function_flat
   mkdir $sub_dna_path/dim || fail
   begin_for ((i=1; i<super_dim_count; i++)); doo
-    from_dim=$(realpath ${super_dims[$i]}) || fail
-    to_dim=$sub_dna_path/dim/${from_dim##*/}
-    ln -s $from_dim $to_dim || fail
+    local from_dim=${super_dims[$i]}
+    local to_dim=$sub_dna_path/dim/${from_dim##*/}
+    ln -s $(realpath $from_dim) $to_dim || fail
   end_for
+  # TODO link .dna to this branch, but prefer seed info vs. shortcuts
 end_function_flat
 handle_return
 }
@@ -356,6 +339,7 @@ begin_function_flat
     err "Could not find trunk cell for $cell"
     fail1
     }
+  # TODO link .dna to this branch, but prefer seed info vs. shortcuts
   local op_leaf=$trunk_cell/.dna/op-leaf
   if [[ -d $op_leaf ]]; then
     ln -s $op_leaf $sub_dna_path/op || fail
@@ -375,6 +359,57 @@ begin_function_flat
   fi
 end_function_flat
 handle_return
+}
+
+# given a cell, find the nearest seed searching it's ancestors
+# returns: seed
+find_seed() {
+local cell=$1
+seed=
+if [[ -d $cell/.dna/sub ]]; then
+  seed=$cell
+else
+  local parent=${cell%/*}
+  if [[ "${#parent}" -gt 1 && "$parent" != $cell ]]; then
+    find_seed $parent || return 1
+  fi
+fi
+return 0
+}
+
+# returns seed_dna
+find_seed_dna() {
+local seed=$1
+local parent=${seed%/*}
+local path_to_cell=$2
+path_to_cell=${path_to_cell%.new}
+seed_dna=$seed/.dna/sub/$path_to_cell/.dna
+if [[ ! -e $seed_dna ]]; then
+  seed_dna=
+  if [[ -d $seed/.dna/sub ]]; then
+    seed_dna=$seed/.dna/sub
+    local path_array=( ${path_to_cell//\// } ) \
+      failed=f
+    for path_part in "${path_array[@]}"; do
+      if [[ -d $seed_dna/$path_part ]]; then
+        seed_dna+=/$path_part
+      elif [[ -d $seed_dna/$wild_sub_path ]]; then
+        seed_dna+=/$wild_sub_path
+      else
+        failed=t
+        break
+      fi
+    done
+    seed_dna+=/.dna
+    if [[ $failed == t || ! -d $seed_dna ]]; then
+      seed_dna=
+    fi
+  elif [[ ${#parent} -gt 1 ]]; then
+    # recursive
+    find_seed_dna $parent ${seed#$parent/}/$path_to_cell || return 1
+  fi
+fi
+return 0
 }
 
 find_trunk_cell() {
@@ -597,7 +632,7 @@ begin_function_flat
   local ref= ref_group=
 
   setup_default_each_handler || fail
-  local before_block_files=( $(find1 $step -regex '.*/before-block.*' | sort -g) ) || fail
+  local before_block_files=( $(find1 $step -regex '.*/block-before.*' | sort -g) ) || fail
   local before_block_file
   begin_for before_block_file in "${before_block_files[@]}"; doo
     # recursive
@@ -627,7 +662,7 @@ begin_function_flat
     #   err "Problem executing step $step"
     #   err "Could not find ref group for $ref. Should be named either ${ref}s, ${ref}es, or ${ref%?}ies, "
     #   err "or override it with a different folder name."
-    #   err "Or if this is a custom loop with a before-block file in it, set ref_group= (to nothing) in that file."
+    #   err "Or if this is a custom loop with a block-before file in it, set ref_group= (to nothing) in that file."
     #   fail1
     # fi
 
@@ -701,9 +736,9 @@ setup_default_each_handler() {
 # may be run in a subshell
 execute_command_step_plain_folder() {
 local step=$step
-begin_function_flat
+vars=step; begin_function
 
-  local contents=( $(find1 $step -not -name ".*" -not -name "before-block*" -not -name "after-block*" | sort -g) ) || fail 
+  local contents=( $(find1 $step -not -name ".*" -not -name "*-before*" -not -name "after-block*" | sort -g) ) || fail 
   local files i=0 file_index
   [[ ! "${contents:-}" ]] && succeed
 
@@ -754,7 +789,7 @@ begin_function_flat
 
   end_loop
 
-end_function_flat
+end_function
 handle_return
 }
 

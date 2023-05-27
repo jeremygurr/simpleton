@@ -34,7 +34,7 @@ alias gbg='git bisect good'
 alias gbb='git bisect bad'
 alias gr='git remote'
 
-real () {
+real() {
 cd $(realpath .)
 }
 

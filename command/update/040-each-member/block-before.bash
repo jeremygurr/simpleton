@@ -2,7 +2,7 @@
 
 ref_group=none
 
-before_block() {
+block_before() {
 
 handle_step_loop() {
 if [[ "${leaf_dims:-}" ]]; then

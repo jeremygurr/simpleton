@@ -7,7 +7,9 @@ vars=member; begin_function
     if [[ ! -d $cell_path/.dim ]]; then
       mkdir $cell_path/.dim || fail
     fi
-    create_sub_cell $member_path || fail
+    find_seed $cell_path || fail
+    # supports empty seed string, meaning no seed was found.
+    create_sub_cell "$seed" $member_path || fail
   fi
   execute_command $member_path update || fail
 end_function

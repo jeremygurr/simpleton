@@ -47,18 +47,13 @@ debug_state_file=$tmp_folder/debug-state-$$
 #   fi
 #   '
 
-rm $tmp_folder/debug-state-* &>/dev/null || true
-debug_cleanup='
-  if [[ -f "$debug_state_file" ]]; then
-    echo "debug state is stored here: $debug_state_file" >&$fd_original_err
-  fi
-  '
+rm $tmp_folder/debug-* &>/dev/null || true
 
-if type defer &>/dev/null; then
-  defer "$debug_cleanup"
-else
-  trap "$debug_cleanup" EXIT
-fi
+# if type defer &>/dev/null; then
+#   defer "$debug_cleanup"
+# else
+#   trap "$debug_cleanup" EXIT
+# fi
 
 COLUMNS=${COLUMNS:-120}
 
@@ -689,12 +684,12 @@ debug_trap() {
         no_follow_once=t
         ;;
       q) 
-        echo "# Quitting" >&$fd_original_err
+        echo "# Quitting (debug state: $debug_state_file)" >&$fd_original_err
         debug_exit=t
         if [[ -f "$debug_out_path" ]]; then
           rm "$debug_out_path"
         fi
-        debug_save_state
+        force_save=t debug_save_state
         exit 1
         ;;
       r)
@@ -889,7 +884,7 @@ debug_trap() {
 
 debug_save_state() {
 # We don't need to save the state if there are no parent shells to recall that state
-if [[ $BASH_SUBSHELL -gt 0 ]]; then
+if [[ $BASH_SUBSHELL -gt 0 || ${force_save:-f} == t ]]; then
 echo "
 debug_continue='$debug_continue'
 debug_display='$debug_display'
@@ -998,8 +993,8 @@ debug_start() {
     export debug_watch_style=${debug_watch_style:-wide}
     export debug_last_state_load=$EPOCHSECONDS
 
-    reserve_tmp_file debug_fifo_path || exit 1
-    reserve_tmp_file debug_out_path || exit 1
+    reserve_tmp_file debug_fifo_path debug-fifo || exit 1
+    reserve_tmp_file debug_out_path debug-out || exit 1
 
     shopt -s extdebug
     # If you add or remove lines from this trap code, you will need to update the line offset as well
