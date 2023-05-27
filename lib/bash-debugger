@@ -102,12 +102,7 @@ debug_trap() {
   [[ $debug_exit == t ]] && exit 1
 
   if [[ "$debug_ignore" == *\ "$debug_function"\ * ]]; then
-    if [[ $debug_debug == t ]]; then
-      echo "debug_debug[$debug_current_depth]: Skipping because function $debug_function is ignored by $debug_ignore" >&$fd_original_err
-    fi
-    if [[ $debug_immediate == f ]]; then
-      return 0
-    fi
+    return 0
   fi
 
   let debug_id_current++ || true
@@ -123,7 +118,7 @@ debug_trap() {
 
   # if code inside the debug trap is changed, you may need to adjust this offset to ensure the code displayed in the debugger lines up with what is actually being executed.
   # the number being subtracted is the number of source lines in the trap which are executed before this function is called
-  let debug_line_num-=10 || true
+  let debug_line_num-=13 || true
 
   local line_part=$debug_line file_part=
   if [[ "$debug_line" ]]; then
@@ -159,6 +154,7 @@ debug_trap() {
   fi
 
   if [[ -f "$debug_state_file" ]]; then
+    echo "loading debug_state_file" >&$fd_original_err
     local state_timestamp=$(date -r "$debug_state_file" +%s)
     if [[ $state_timestamp -gt $debug_last_state_load ]]; then
       # echo "Loaded state from $debug_state_file because $state_timestamp > $debug_last_state_load" >&$fd_original_err
@@ -170,16 +166,19 @@ debug_trap() {
   local ok_to_debug=f
 
   if [[ $debug_immediate == t ]]; then
+    echo "Stopping because of debug_immediate" >&$fd_original_err
     ok_to_debug=t
     debug_immediate=f
 
   elif [[ "$debug_id" != t && $debug_id_current -ge "$debug_id" ]]; then
+    echo "Stopping because of debug_id" >&$fd_original_err
     ok_to_debug=t
 
   elif [[ -n "$debug_line" \
           && -z "$file_part" \
           && "$debug_line_num" -eq "$line_part" \
        ]]; then
+    echo "Stopping because of debug_line" >&$fd_original_err
     ok_to_debug=t
     debug_line_old=$debug_line
     debug_line=
@@ -191,6 +190,7 @@ debug_trap() {
              && "$debug_source_file" == "$file_part" \
              ) \
        ]]; then
+    echo "Stopping because of debug_line" >&$fd_original_err
     ok_to_debug=t
     debug_line_old=$debug_line
     debug_line=
@@ -198,6 +198,7 @@ debug_trap() {
   elif [[ $debug_stepping == t \
           && $debug_current_depth -le $debug_max_depth \
        ]]; then
+    echo "Stopping because of debug_stepping" >&$fd_original_err
     debug_stepping=f
     ok_to_debug=t
 
@@ -210,6 +211,7 @@ debug_trap() {
              || " $expanded_command " =~ $debug_search \
              ) \
        ]]; then
+    echo "Stopping because of debug_search" >&$fd_original_err
     debug_search=
     debug_max_depth=$debug_current_depth
     ok_to_debug=t
@@ -220,6 +222,7 @@ debug_trap() {
              || $debug_function == none \
              ) \
        ]]; then
+    echo "Stopping because of debug_step_to_next_line" >&$fd_original_err
     debug_step_to_next_line=f
     ok_to_debug=t
 
@@ -227,12 +230,14 @@ debug_trap() {
           && "$debug_line_num" -gt "$debug_prev_line" \
           || $debug_function != none \
        ]]; then
+    echo "Stopping because of debug_step_to_later_line" >&$fd_original_err
     debug_step_to_later_line=f
     ok_to_debug=t
 
   elif [[ "$debug_stop_at" \
           && "$raw_debug_path_to_source_file $debug_line_num" == "$debug_stop_at" \
        ]]; then
+    echo "Stopping because of debug_stop_at" >&$fd_original_err
     debug_max_depth=$debug_current_depth
     debug_stop_at=
     ok_to_debug=t
@@ -240,6 +245,7 @@ debug_trap() {
   elif [[ $debug_step_to_next_function == t \
           && "$debug_function" != "$debug_prev_function" \
        ]]; then
+    echo "Stopping because of debug_step_to_next_function" >&$fd_original_err
     debug_step_to_next_function=f
     ok_to_debug=t
 
@@ -247,6 +253,7 @@ debug_trap() {
           && "$debug_function" != "$debug_prev_function" \
           && "$debug_source_file" != "$debug_prev_source_file" \
        ]]; then
+    echo "Stopping because of debug_step_to_next_file" >&$fd_original_err
     debug_step_to_next_file=f
     ok_to_debug=t
 
@@ -366,10 +373,6 @@ debug_trap() {
       echo >&$fd_original_err
     fi
     set -u
-
-    if [[ $debug_debug == t ]]; then
-      echo "debug_debug[$debug_current_depth]: BASH_SUBSHELL=$BASH_SUBSHELL" >&$fd_original_err
-    fi
 
     local prefix=
     if [[ $BASH_SUBSHELL -gt 0 ]]; then
@@ -855,6 +858,7 @@ debug_trap() {
 debug_save_state() {
 # We don't need to save the state if there are no parent shells to recall that state
 if [[ $BASH_SUBSHELL -gt 0 || ${force_save:-f} == t ]]; then
+echo "saving debug_state_file" >&$fd_original_err
 echo "
 debug_display='$debug_display'
 debug_exit='$debug_exit'
@@ -973,6 +977,7 @@ debug_start() {
     export debug_stepping=${debug_stepping:-t}
     export debug_stop_at=${debug_stop_at:-}
     export debug_subshell=${debug_subshell:-f}
+    export debug_var=${debug_var:-}
     export debug_watch=${debug_watch:-}
     export debug_watch_once=${debug_watch_once:-}
     export debug_watch_style=${debug_watch_style:-wide}
@@ -995,6 +1000,9 @@ debug_start() {
         debug_depth=${#FUNCNAME[*]}
       else
         debug_depth=0
+      fi
+      if [[ "$debug_var" ]]; then
+        set +u; echo "${CYAN}$debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
       fi
       [[ $debug_debug == t ]] && echo "debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell" >&$fd_original_err
       debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
@@ -1019,6 +1027,7 @@ if [[ "${debug:-f}" == t || \
    -n "${debug_search:-}" || \
    -n "${debug_search_deep:-}" || \
    -n "${debug_id:-}" || \
+   -n "${debug_var:-}" || \
    -n "${debug_line:-}" ]]; then
   if [[ "${debug_search:-}" == =* ]]; then
     debug_search=${debug_search#=}
@@ -1045,8 +1054,15 @@ if [[ "${debug:-f}" == t || \
     debug_subshell=t
     debug_stepping=f
   fi
+  if [[ "${debug_var:-}" ]]; then
+    echo "${RED}Will debug var $debug_var" >&$fd_original_err
+    debug_subshell=t
+    debug_stepping=f
+  fi
   if [[ "${debug_id:-}" ]]; then
-    echo "${RED}Will debug starting at debug_id $debug_id or later.${RESET}" >&$fd_original_err
+    if [[ "$debug_id" != t ]]; then
+      echo "${RED}Will debug starting at debug_id $debug_id or later.${RESET}" >&$fd_original_err
+    fi
     debug_subshell=t
     debug_stepping=f
   fi
