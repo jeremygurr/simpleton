@@ -91,6 +91,24 @@ debug_display_source() {
 }
 
 debug_trap() {
+
+  local debug_path_to_source_file=$1; shift
+  local debug_line_num=$1; shift
+  local debug_function=$1; shift
+  local debug_command=$1; shift
+  local debug_current_depth=${#FUNCNAME[*]}
+
+  if [[ "$debug_ignore" == *\ "$debug_function"\ * ]]; then
+    if [[ $debug_debug == t ]]; then
+      echo "debug_debug[$debug_current_depth]: Skipping because function $debug_function is ignored by $debug_ignore" >&$fd_original_err
+    fi
+    if [[ $debug_immediate == f ]]; then
+      return 0
+    fi
+  fi
+
+  let debug_id_current++ || true
+
   if [[ "$debug_id" \
      && $debug_id_current -lt $debug_id \
      && $debug_immediate == f 
@@ -102,18 +120,15 @@ debug_trap() {
   local IFS=$'\n'$'\t'" "
 
   local debug_full_path=${debug_full_path:-f}
-  local debug_path_to_source_file=$1; shift
   local debug_source_file=${debug_path_to_source_file##*/}
   local raw_debug_path_to_source_file=$debug_path_to_source_file
   if [[ $debug_full_path == t ]]; then
     debug_source_file=$debug_path_to_source_file
   fi
 
-  local debug_line_num=$1; shift
-
   # if code inside the debug trap is changed, you may need to adjust this offset to ensure the code displayed in the debugger lines up with what is actually being executed.
   # the number being subtracted is the number of source lines in the trap which are executed before this function is called
-  let debug_line_num-=11 || true
+  let debug_line_num-=10 || true
 
   if [[ "$debug_line" ]]; then
     local line_part=$debug_line file_part=
@@ -143,19 +158,6 @@ debug_trap() {
       debug_line=
     fi
 
-  fi
-
-  local debug_function=$1; shift
-  local debug_command=$1; shift
-
-  local debug_current_depth=${#FUNCNAME[*]}
-  if [[ "$debug_ignore" == *\ "$debug_function"\ * ]]; then
-    if [[ $debug_debug == t ]]; then
-      echo "debug_debug[$debug_current_depth]: Skipping because function $debug_function is ignored by $debug_ignore" >&$fd_original_err
-    fi
-    if [[ $debug_immediate == f ]]; then
-      return 0
-    fi
   fi
 
   local debug_r=-1
@@ -1018,7 +1020,6 @@ debug_start() {
     trap '
       set +x
       set +T
-      let debug_id_current++ || true
       debug_rematch=( "${BASH_REMATCH[@]}" )
       if [[ "${FUNCNAME:-}" ]]; then 
         debug_depth=${#FUNCNAME[*]}
