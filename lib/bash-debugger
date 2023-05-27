@@ -105,6 +105,10 @@ debug_trap() {
     return 0
   fi
 
+  if [[ "$debug_var" ]]; then
+    set +u; echo "${CYAN}inside debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
+  fi
+
   let debug_id_current++ || true
 
   debug_rewind=f
@@ -228,8 +232,9 @@ debug_trap() {
 
   elif [[ $debug_step_to_later_line == t \
           && "$debug_line_num" -gt "$debug_prev_line" \
-          || $debug_function != none \
        ]]; then
+# not sure why this was part of it
+#          || $debug_function != none \
     echo "Stopping because of debug_step_to_later_line" >&$fd_original_err
     debug_step_to_later_line=f
     ok_to_debug=t
@@ -1002,10 +1007,13 @@ debug_start() {
         debug_depth=0
       fi
       if [[ "$debug_var" ]]; then
-        set +u; echo "${CYAN}$debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
+        set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
       fi
       [[ $debug_debug == t ]] && echo "debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell" >&$fd_original_err
       debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
+      if [[ "$debug_var" ]]; then
+        set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
+      fi
       [[ $debug_rewind == t ]] && continue
       [[ $debug_exit == t ]] && exit 1
       if [[ $debug_expansion -gt 0 && -n "${debug_expansion_pid:-}" && \
