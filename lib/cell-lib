@@ -120,9 +120,7 @@ local cell=$1
 local parent=${cell%/*}
 local new_context=$new_cyto/context
 
-if [[ ${#parent} -gt 1 ]]; then
-  record_context_before $parent || return 1
-fi
+record_context_before $cell || return 1
 
 local context_local_path=$cell/.dna/context-local
 local dna_path=$cell/.dna
@@ -135,9 +133,7 @@ elif [[ -f $dna_path ]]; then
   echo | cat $dna_path - >>$new_context || return 1
 fi
 
-if [[ ${#parent} -gt 1 ]]; then
-  record_context_after $parent || return 1
-fi
+record_context_after $cell || return 1
 
 return 0
 }
@@ -312,22 +308,30 @@ handle_return
 }
 
 create_sub_branch_or_leaf() {
-local cell=$1
+local cell=$1 seed seed_dna
 begin_function_flat
   if [[ -d $cell ]]; then
     err "Cell already exists $cell"
     fail1
   fi
   mkdir $cell || fail
-  local sub_dna_path=$cell/.dna super_dims
-  mkdir $sub_dna_path || fail
-  super_dims=$(find1 $sub_dna_path/dim -not -name '.*' | sort -g) || fail
-  if [[ "$super_dims" ]]; then
-    local super_dim_count=${#super_dims[*]} 
-    if [[ "$super_dim_count" -gt 1 ]]; then
-      create_sub_branch || fail
-    else
-      create_sub_leaf || fail
+  find_seed $cell || fail
+  if [[ "$seed" ]]; then
+    find_seed_dna $seed ${cell#$seed/} || fail
+  fi
+  if [[ "$seed_dna" ]]; then
+    ln -sf $(realpath $seed_dna) $cell/ || fail
+  else
+    local sub_dna_path=$cell/.dna super_dims
+    mkdir $sub_dna_path || fail
+    super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
+    if [[ "$super_dims" ]]; then
+      local super_dim_count=${#super_dims[*]} 
+      if [[ "$super_dim_count" -gt 1 ]]; then
+        create_sub_branch || fail
+      else
+        create_sub_leaf || fail
+      fi
     fi
   fi
 end_function_flat
@@ -342,33 +346,32 @@ begin_function_flat
     local to_dim=$sub_dna_path/dim/${from_dim##*/}
     ln -s $(realpath $from_dim) $to_dim || fail
   end_for
-  # TODO link .dna to this branch, but prefer seed info vs. shortcuts
+  begin_for part in op up context-local; doo
+    if [[ -e $dna_path/$part ]]; then
+      ln -s $(realpath $dna_path/$part) $sub_dna_path/ || fail
+    fi
+  end_for 
 end_function_flat
 handle_return
 }
 
 create_sub_leaf() {
 begin_function_flat
-  local trunk_cell
-  find_trunk_cell $cell || {
-    err "Could not find trunk cell for $cell"
-    fail1
-    }
-  # TODO link .dna to this branch, but prefer seed info vs. shortcuts
-  local op_leaf=$trunk_cell/.dna/op-leaf
-  if [[ -d $op_leaf ]]; then
-    ln -s $op_leaf $sub_dna_path/op || fail
-  fi
-  if [[ -d $trunk_cell/.dna/up ]]; then
+  begin_for part in op up context-local; doo
+    if [[ -e $dna_path/leaf/$part ]]; then
+      ln -s $(realpath $dna_path/leaf/$part) $sub_dna_path/ || fail
+    fi
+  end_for 
+  if [[ -d $dna_path/.dna/up && ! -d $sub_dna_path/up ]]; then
     mkdir $sub_dna_path/up || fail
     local uptream_cell leaf_cell upstream_name
-    local upstream_cells=$(find1 $trunk_cell/.dna/up \
+    local upstream_cells=$(find1 $dna_path/up \
       -not -name '.*' \
-      -not -name '*.prep' \
+      -not -name '*-before*' \
       | sort -g) || fail
     begin_for upstream_cell in $upstream_cells; doo
       upstream_name=${upstream_cell##*/}
-      get_upstream_leaf_cell $trunk_cell $upstream_cell || fail
+      get_upstream_leaf_cell $cell_path $upstream_cell || fail
       ln -s $(realpath $leaf_cell) $sub_dna_path/up/$upstream_name || fail
     end_for
   fi
@@ -455,16 +458,24 @@ return 0
 # usage: get_upstream_leaf_cell {trunk cell} {upstream cell}
 # returns leaf_cell
 get_upstream_leaf_cell() {
-local trunk_cell=$1 upstream_cell=$2
+local cell_path=$1 upstream_cell=$2
 begin_function_flat
+
   if [[ "$localize_dim_vars" ]]; then
     eval "$localize_dim_vars" || fail
   fi
-  local prep_file=$upstream_cell.prep
-  if [[ -f $prep_file ]]; then
-    source $prep_file || fail
-    prep || fail
+
+  local extension=${upstream_cell#*.}
+  if [[ "$extension" != $upstream_cell ]]; then
+    extension=.$extension
+  else
+    extension=
   fi
+  local before_step=${upstream_cell%.*}-before$extension
+  if [[ -f $before_step ]]; then
+    execute_command_step $before_step || fail
+  fi
+
   setup_dims $upstream_cell || fail
   # do this again for the upstream cell, in case it has different dims
   if [[ "$localize_dim_vars" ]]; then
