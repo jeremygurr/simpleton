@@ -95,13 +95,13 @@ debug_trap() {
 
   local debug_path_to_source_file=$1 \
     debug_line_num=$2 \
-    debug_function=$3 \
+    debug_current_function=$3 \
     debug_command=$4 \
     debug_current_depth=${#FUNCNAME[*]}
 
   [[ $debug_exit == t ]] && exit 1
 
-  if [[ "$debug_ignore" == *\ "$debug_function"\ * ]]; then
+  if [[ "$debug_ignore" == *\ "$debug_current_function"\ * ]]; then
     return 0
   fi
 
@@ -206,6 +206,15 @@ debug_trap() {
     debug_max_depth=$debug_current_depth
     ok_to_debug=t
 
+  elif [[ "$debug_function" \
+          && $debug_function == $debug_current_function \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_function${RESET}" >&$fd_original_err
+    debug_function_old=$debug_function
+    debug_function=
+    debug_max_depth=$debug_current_depth
+    ok_to_debug=t
+
   elif [[ "$debug_search" \
           && ( \
              $debug_search_deep == t \
@@ -223,7 +232,7 @@ debug_trap() {
   elif [[ $debug_step_to_next_line == t \
           && "$raw_debug_path_to_source_file $debug_line_num" != "$debug_last_location" \
           && $debug_current_depth -le $debug_max_depth \
-          && $debug_function != none \
+          && $debug_current_function != none \
        ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_line${RESET}" >&$fd_original_err
     debug_step_to_next_line=f
@@ -231,7 +240,7 @@ debug_trap() {
 
   elif [[ $debug_step_to_later_line == t \
           && "$debug_line_num" -gt "$debug_prev_line" \
-          && $debug_function != none \
+          && $debug_current_function != none \
        ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_later_line${RESET}" >&$fd_original_err
     debug_step_to_later_line=f
@@ -246,14 +255,14 @@ debug_trap() {
     ok_to_debug=t
 
   elif [[ $debug_step_to_next_function == t \
-          && "$debug_function" != "$debug_prev_function" \
+          && "$debug_current_function" != "$debug_prev_function" \
        ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_function${RESET}" >&$fd_original_err
     debug_step_to_next_function=f
     ok_to_debug=t
 
   elif [[ $debug_step_to_next_file == t \
-          && "$debug_function" != "$debug_prev_function" \
+          && "$debug_current_function" != "$debug_prev_function" \
           && "$debug_source_file" != "$debug_prev_source_file" \
        ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_file${RESET}" >&$fd_original_err
@@ -284,14 +293,14 @@ debug_trap() {
   fi
 
   local backlog=
-  if [[ "$debug_prev_function" == "$debug_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
+  if [[ "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
     local start_line=$((debug_prev_line+1))
     local end_line=$((debug_line_num-1))
     backlog=$(sed -n "$start_line,${end_line}p;${end_line}q" "$debug_path_to_source_file")
   fi
 
   debug_prev_line="$debug_line_num"
-  debug_prev_function=$debug_function
+  debug_prev_function=$debug_current_function
   debug_prev_source_file=$debug_source_file
   debug_step_to_next_function=f
   debug_step_to_next_file=f
@@ -327,7 +336,7 @@ debug_trap() {
   local display_command=$debug_command
   local raw_display_command=$display_command
   if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] \
-     && [[ $debug_function != none ]]; then
+     && [[ $debug_current_function != none ]]; then
     display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
     raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
   fi
@@ -385,7 +394,7 @@ debug_trap() {
       prefix+="${CYAN}debug_id=$debug_id_current "
     fi
     echo -n "$prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
-    echo -n " $GREEN$debug_function $RESET:" >&$fd_original_err
+    echo -n " $GREEN$debug_current_function $RESET:" >&$fd_original_err
 
     if [[ $debug_follow_source == t ]]; then
       echo -n " $debug_command " >&$fd_original_err
@@ -513,9 +522,8 @@ debug_trap() {
         ;;
       g)
         echo >&$fd_original_err
-        echo "You may specify either {line number} or {file}:{line number} format" >&$fd_original_err
-        read -e -p "Go until line number: " debug_line <&$fd_original_in >&$fd_original_err
-        if [[ "${debug_line:-}" ]]; then
+        read -e -p "Go until function: " debug_function <&$fd_original_in >&$fd_original_err
+        if [[ "${debug_function:-}" ]]; then
           debug_r=0
           debug_long_command=t
           debug_subshell=t
@@ -523,9 +531,9 @@ debug_trap() {
         fi
         ;;
       G)
-        if [[ "${debug_line_old:-}" ]]; then
-          debug_line=$debug_line_old
-          echo "# Continuing until we reach line $debug_line" >&$fd_original_err
+        if [[ "${debug_function_old:-}" ]]; then
+          debug_function=$debug_function_old
+          echo "# Continuing until we reach function $debug_function" >&$fd_original_err
           debug_r=0
           debug_long_command=t
           debug_subshell=t
@@ -759,8 +767,8 @@ debug_trap() {
         debug_save_state
         ;;
       \\)
-        echo "# Adding $debug_function to function ignore list" >&$fd_original_err
-        debug_ignore+="$debug_function "
+        echo "# Adding $debug_current_function to function ignore list" >&$fd_original_err
+        debug_ignore+="$debug_current_function "
         debug_r=0
         debug_stepping=t
         debug_save_state
@@ -800,9 +808,8 @@ debug_trap() {
         echo "f  continue until a line contains the substring given" >&$fd_original_err
         echo "   put a ~ at the beginning of the search string to do a regex search" >&$fd_original_err
         echo "F  toggle expanded search mode, which enables searching on evaluated string expressions" >&$fd_original_err
-        echo "g  continue until the given line number is reached" >&$fd_original_err
-        echo "   It will usually be a better DX to use f or j instead of g" >&$fd_original_err
-        echo "G  continue until the previously given line number is reached" >&$fd_original_err
+        echo "g  continue until the given function is reached" >&$fd_original_err
+        echo "G  continue until the previously given function is reached" >&$fd_original_err
         echo "h  toggle syntax highlighting" >&$fd_original_err
         echo "i  next instruction, stepping into function calls" >&$fd_original_err
         echo "j  jump ahead: shallow substring find" >&$fd_original_err
@@ -867,6 +874,8 @@ debug_expanded_search='$debug_expanded_search'
 debug_expansion='$debug_expansion'
 debug_expression='$debug_expression'
 debug_follow_source='$debug_follow_source'
+debug_function='$debug_function'
+debug_function_old='$debug_function_old'
 debug_highlight='$debug_highlight'
 debug_id_current='$debug_id_current'
 debug_ignore='$debug_ignore'
@@ -952,6 +961,8 @@ debug_start() {
     export debug_expression=${debug_expression:-echo none}
     export debug_expanded_search=${debug_expanded_search:-f}
     export debug_follow_source=${debug_follow_source:-t}
+    export debug_function=${debug_function:-}
+    export debug_function_old=${debug_function_old:-}
     export debug_id=${debug_id:-t}
     export debug_ignore=${debug_ignore:- find1 echo_align trace out warn err write_to_log }
     export debug_immediate=${debug_immediate:-f}
@@ -1032,6 +1043,7 @@ if [[ "${debug:-f}" == t || \
    -n "${debug_search_deep:-}" || \
    -n "${debug_id:-}" || \
    -n "${debug_var:-}" || \
+   -n "${debug_function:-}" || \
    -n "${debug_line:-}" ]]; then
   if [[ "${debug_search:-}" == =* ]]; then
     debug_search=${debug_search#=}
@@ -1047,6 +1059,13 @@ if [[ "${debug:-f}" == t || \
       debug_search=${debug_search//[/\\[}
     fi
     echo "${CYAN}debug_search=$debug_search${RESET}" >&$fd_original_err
+    debug_search_deep=t
+    debug_long_command=t
+    debug_subshell=t
+    debug_stepping=f
+  fi
+  if [[ "${debug_function:-}" ]]; then
+    echo "${CYAN}Will debug starting at function: $debug_function${RESET}" >&$fd_original_err
     debug_search_deep=t
     debug_long_command=t
     debug_subshell=t
