@@ -21,6 +21,9 @@ begin_function_flat
   if [[ ! -d $node_status_path ]]; then
     needs_update=t
     log_message="Needs update because status path doesn't exist"
+  elif [[ -v leaf_dims ]]; then
+    needs_update=t
+    log_message="Needs update because this cell has dimensions, and so individual dimensions must be checked for update"
   elif [[ ! -e $node_status_path/subs-up-to-date ]]; then
     needs_update=t
     log_message="Needs update because a sub cell is outdated"
