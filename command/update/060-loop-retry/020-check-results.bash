@@ -29,3 +29,4 @@ fi
 write_to_log debug update_result "$log_message" || return 1
 
 }
+
