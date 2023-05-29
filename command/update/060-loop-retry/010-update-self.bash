@@ -3,18 +3,24 @@ begin_function
   update_successful=f 
   can_retry=f
 
+  local reuse_existing_out=${reuse_existing_out:-f}
+
   if [[ "$out_path" ]]; then
-    local original_out=$out_path
-    local out_path=$out_path.new
-    if [[ -d $out_path ]]; then
-      rm -rf $out_path || fail
+    if [[ $reuse_existing_out == f ]]; then
+      local original_out=$out_path
+      local out_path=$out_path.new
+      if [[ -d $out_path ]]; then
+        rm -rf $out_path || fail
+      fi
     fi
-    mkdir $out_path || fail
+    if [[ ! -d $out_path ]]; then
+      mkdir $out_path || fail
+    fi
   fi
 
   execute_op update || fail
 
-  if [[ "$out_path" ]]; then
+  if [[ "$out_path" && $reuse_existing_out == f ]]; then
     out_path=$original_out
     if [[ $update_successful == t ]]; then
       if [[ -e $out_path.old ]]; then
