@@ -64,9 +64,9 @@ begin_function_flat
   if [[ "${log_file:-}" ]]; then
     untee_output 
     if [[ "$new_log_file" ]]; then
-      log_function=${FUNCNAME[1]} vars=new_log_file write_to_log trace log_branch
+      function=${FUNCNAME[1]} vars=new_log_file write_to_log trace log_branch
     else
-      log_function=${FUNCNAME[1]} write_to_log trace log_close
+      function=${FUNCNAME[1]} write_to_log trace log_close
     fi
   fi
 
@@ -111,7 +111,7 @@ begin_no_tracing_zone
   if [[ $log_depth -le $((trace-5)) && $log_to_out == f ]]; then
     out "$@"
   fi
-  log_function=${FUNCNAME[1]} write_to_log debug '' "$*"
+  function=${FUNCNAME[1]} write_to_log debug '' "$*"
 end_no_tracing_zone
 return 0
 }
@@ -131,7 +131,7 @@ begin_no_tracing_zone
   if [[ $log_to_out == f ]]; then
     out "$@"
   fi
-  log_function=${FUNCNAME[1]} write_to_log info '' "$*"
+  function=${FUNCNAME[1]} write_to_log info '' "$*"
 end_no_tracing_zone
 return 0
 }
@@ -153,7 +153,7 @@ begin_no_tracing_zone
   if [[ $log_depth -le $((trace+importance)) && $log_to_out == f ]]; then
     out "$message"
   fi
-  log_function=${FUNCNAME[1]} write_to_log trace '' "$message"
+  function=${FUNCNAME[1]} write_to_log trace '' "$message"
 end_no_tracing_zone
 return 0
 }
@@ -175,7 +175,7 @@ begin_no_tracing_zone
     prefix="${CYAN:-}debug_id=$debug_id_current "
   fi
   out "$prefix${RED:-}$@${RESET:-}"
-  log_function=${FUNCNAME[1]} write_to_log error '' "$*"
+  function=${FUNCNAME[1]} write_to_log error '' "$*"
 end_no_tracing_zone
 return 0
 }
@@ -193,7 +193,7 @@ begin_no_tracing_zone
     shift || true
   done
   out "${YELLOW:-}$@${RESET:-}"
-  log_function=${FUNCNAME[1]} write_to_log warn '' "$*"
+  function=${FUNCNAME[1]} write_to_log warn '' "$*"
 end_no_tracing_zone
 return 0
 }
@@ -203,7 +203,7 @@ local prefix=
 if [[ $pretend == t ]]; then
   prefix="PRETEND: "
 fi
-log_function=${FUNCNAME[1]} write_to_log info command "$prefix$*"
+function=${FUNCNAME[1]} write_to_log info command "$prefix$*"
 if [[ $log_to_out == f ]]; then
   out "$prefix$*"
 fi
@@ -244,9 +244,9 @@ output+=" depth=$log_depth level=$level"
 if [[ "$action" ]]; then
   output+=" action=$action"
 fi
-local log_function=${log_function:-${FUNCNAME[1]}}
-if [[ "${log_function:-}" ]]; then
-  output+=" function=$log_function$var_log"
+local function=${function:-${FUNCNAME[1]}}
+if [[ "${function:-}" ]]; then
+  output+=" function=$function$var_log"
 fi
 if [[ "$message" ]]; then
   output+=" info=\"${message//\"/\\\"}\""
@@ -257,19 +257,30 @@ let log_id++ || true
 if [[ $log_to_file == t && "${log_file:-}" && $log_to_out == f ]]; then
   echo "$output" >>$log_file
 elif [[ $log_to_out == t ]]; then
-  if [[ ! "$log_action" || $action =~ "$log_action" ]]; then
+  local hide=f
+
+  if [[ "$log_action" && ! $action =~ "$log_action" ]]; then
+    hide=t
+  fi
+
+  if [[ "$log_function" && ! $function =~ "$log_function" ]]; then
+    hide=t
+  fi
+
+  if [[ $hide == f ]]; then
     case $log_out_width in
       mid)
-        echo "$action $log_function$var_log $message" >&$fd_trace
+        echo "$action $function$var_log $message" >&$fd_trace
       ;;
       tiny)
-        echo "$action $log_function $message" >&$fd_trace
+        echo "$action $function $message" >&$fd_trace
       ;;
       *)
         echo "$output" >&$fd_trace
       ;;
     esac
   fi
+
 fi
 
 end_no_tracing_zone
