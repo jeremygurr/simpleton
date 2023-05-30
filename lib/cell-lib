@@ -613,6 +613,7 @@ local vars=step; begin_function
   
   if [[ -d $step/.dna ]]; then
     # recursive
+    fork execute_command $step update || fail
     ( before_fork; execute_command $step update ) || { after_fork; fail1; }
     after_fork
     safe_link $step $source_path/$base || fail
@@ -767,7 +768,7 @@ setup_default_each_handler() {
     begin_for v in "${a[@]}"; doo
       eval "$ref=\$v" || fail
       if [[ $parallel == t ]]; then
-        execute_command_step_plain_folder &
+        { before_fork; execute_command_step_plain_folder; } &
         after_fork
         processes+=" $!"
       else
@@ -819,7 +820,7 @@ local vars=step; begin_function
     begin_for step in "${files[@]}"; doo
       if [[ $parallel == t ]]; then
         # recursive
-        execute_command_step $step &
+        { before_fork; execute_command_step $step; } &
         after_fork
         processes+=" $!"
       else
@@ -1573,78 +1574,6 @@ end_function_flat
 handle_return
 }
 
-# input: values (array)
-cell_pivot_values() {
-begin_function_flat
-
-  local parallel=f \
-        go_deeper=t 
-  if [[ "${#values[*]}" -gt 1 ]]; then
-    multi_cell=t
-    if [[ "$parallel_execution" == t ]]; then
-      parallel=t
-      wait_for_low_load || fail
-    fi
-  fi
-
-  local value sane_value processes=
-
-  cell_values+=( only )
-
-  begin_for value in "${values[@]}"; doo
-
-    eval "local d_$dim='$value'"
-    cell_values[-1]=$value
-
-    if [[ "$branch_function" ]]; then
-      $branch_function || fail
-    fi
-
-    if [[ $finished == t ]]; then
-      break
-    fi
-
-    if [[ ${#remaining_cell_dims[*]} -gt 1 
-       && $go_deeper == t
-       ]]; then
-
-      if [[ $parallel == t ]]; then
-        # recursive
-        cell_pivot "${remaining_cell_dims[@]:1}" &
-        after_fork
-        processes+=" $!"
-      else
-        # recursive
-        cell_pivot "${remaining_cell_dims[@]:1}" || fail
-      fi
-
-    else
-
-      if [[ "$leaf_function" ]]; then
-        if [[ $parallel == t ]]; then
-          { before_fork; $leaf_function; } &
-          after_fork
-          processes+=" $!"
-        else
-          if [[ $fork_leaves == t ]]; then
-            ( before_fork; $leaf_function ) || { after_fork; fail1; }
-            after_fork
-          else
-            $leaf_function || fail
-          fi
-        fi
-      fi
-
-    fi
-
-  end_for
-
-  wait_for_sub_processes || fail
-
-end_function_flat
-handle_return
-}
-
 get_sane_value() {
 local -r value=$1
 if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
@@ -1790,6 +1719,14 @@ local name=$name description=$description default=${default:-}
 parameter_names+=( "$name" ) 
 parameter_descriptions+=( "$description" ) 
 parameter_defaults+=( "$default" ) 
+}
+
+fork() {
+local reply_file=${reply_file:-} command=$* return_code=0
+before_fork
+eval "$command"; return_code=$?
+after_fork
+return $return_code
 }
 
 after_fork() {
