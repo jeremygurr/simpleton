@@ -16,7 +16,9 @@ parallel_default=t
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
 cell_context_load() {
-local vars=cell; begin_function
+
+local vars=cell
+begin_function
 
   if [[ ! -e $cell/.dna ]]; then
     err "$cell is not a cell"
@@ -279,7 +281,9 @@ done
 create_sub_cell() {
 # seed is allowed to be empty, meaning no seed exists at this location
 local seed=$1 sub_cell=$2
-local vars=sub_cell; begin_function
+
+local vars=sub_cell
+begin_function
 
   if [[ "$sub_cell" =~ .dna ]]; then
     err "Internal error: Invalid sub_cell $sub_cell."
@@ -537,39 +541,62 @@ trace_op=${trace_op:-}
 
 # Usage: execute_op {op name}
 execute_op() {
-local op_name=$1 op found_op=f ignore_missing=${ignore_missing:-f}
-local vars='cell_path op_name'; begin_function
-  begin_for op in $op_path/$op_name $op_path/$op_name.*; doo
-    if [[ -e $op ]]; then
-      found_op=t
-      if [[ $trace_op == $op_name ]]; then
-        trace_step_execution=t
+local op_name=$1 op ignore_missing=${ignore_missing:-f} \
+  found_op= found_op_function=
+
+local vars='cell_path op_name'
+begin_function
+
+  if type -t op_$op_name &>/dev/null; then
+    found_op_function=op_$op_name
+  else
+
+    begin_for op in $op_path/$op_name $op_path/$op_name.*; doo
+      if [[ -e $op ]]; then
+        found_op=$op
+        break
       fi
-      execute_command_step $op || fail
-      if [[ $trace_op == $op_name ]]; then
-        trace_step_execution=f
-      fi
-      break
+    end_for
+
+  fi
+
+  if [[ "$found_op" || "$found_op_function" ]]; then
+
+    if [[ $trace_op == $op_name ]]; then
+      trace_step_execution=t
     fi
-  end_for
-  if [[ $found_op == f && $ignore_missing == f ]]; then
+
+    if [[ "$found_op_function" ]]; then
+      $found_op_function || fail
+    else
+      execute_command_step $op || fail
+    fi
+
+    if [[ $trace_op == $op_name ]]; then
+      trace_step_execution=f
+    fi
+
+  else
     err "No $op_name operation found in $op_path"
     fail1
   fi
+
 end_function
 handle_return
 }
 
 execute_command() {
 local cell=$(realpath $1) command=$2
-local vars='cell command'; begin_function
+
+local vars='cell command'
+begin_function
   cell_context_load || {
     err "Context failed to load for $cell"
     fail1
     }
   eval "$localize_dim_vars" || fail
-  if type -t $command &>/dev/null; then
-    $command || fail
+  if type -t command_$command &>/dev/null; then
+    command_$command || fail
   else
     local command_path=$cell/.cyto/command/$command
     if [[ -e $command_path ]]; then
@@ -602,7 +629,9 @@ handle_return
 # should be run in a subshell to avoid messing up parent vars
 execute_command_step() {
 local step=$1
-local vars=step; begin_function
+
+local vars=step
+begin_function
   local step_name=${step##*/} prefix= base
 
   if [[ $step_name =~ [0-9]+-([^/]*)$ ]]; then
@@ -638,7 +667,9 @@ handle_return
 }
 
 execute_command_step_file() {
-local vars=step; begin_function
+
+local vars=step
+begin_function
   case $base in
     *.py)
       err "Python steps not implemented yet"
@@ -789,7 +820,9 @@ setup_default_each_handler() {
 # may be run in a subshell
 execute_command_step_plain_folder() {
 local step=$step
-local vars=step; begin_function
+
+local vars=step
+begin_function
 
   local contents=( $(find1 $step -not -name ".*" -not -name "*-before*" -not -name "after-block*" | sort -g) ) || fail 
   local files i=0 file_index
@@ -910,7 +943,9 @@ fi
 }
 
 handle_secure_edit() {
-local vars=; begin_function
+
+local vars=
+begin_function
 
   local unsafe_file=${file%.safe}
   local new_unsafe_file=$tmp_path/$unsafe_file.new
@@ -957,7 +992,9 @@ handle_return
 }
 
 handle_insecure_edit() {
-local vars=; begin_function
+
+local vars=
+begin_function
 
   if [[ -f $old_file ]]; then
     cp $old_file $new_file || fail 
@@ -1222,7 +1259,9 @@ local key_path=$key_path
 local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
 trace $log_trace "Decrypting $from to $to"
-local vars=; begin_function
+
+local vars=
+begin_function
 
   if [[ ! -f "$user_private_key" ]]; then
     err "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
@@ -1281,7 +1320,9 @@ local key_path=$key_path
 local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
 trace $log_trace "Encrypting $from to $to"
-local vars=; begin_function
+
+local vars=
+begin_function
 
   if [[ ! -f "$user_private_key" ]]; then
     err "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
@@ -1373,7 +1414,9 @@ local dim=$1 parallel=f multi_cell=f \
   function=$function finished=f \
   fork_function=${fork_function:-t}
 
-local vars=dim; begin_function
+
+local vars=dim
+begin_function
 
   expand_values || fail
 
