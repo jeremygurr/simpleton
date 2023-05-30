@@ -614,8 +614,6 @@ local vars=step; begin_function
   if [[ -d $step/.dna ]]; then
     # recursive
     fork execute_command $step update || fail
-    ( before_fork; execute_command $step update ) || { after_fork; fail1; }
-    after_fork
     safe_link $step $source_path/$base || fail
   elif [[ -d $step ]]; then
     if [[ $base =~ ^choose-.* ]]; then
@@ -768,7 +766,7 @@ setup_default_each_handler() {
     begin_for v in "${a[@]}"; doo
       eval "$ref=\$v" || fail
       if [[ $parallel == t ]]; then
-        { before_fork; execute_command_step_plain_folder; } &
+        { begin_fork; execute_command_step_plain_folder; } &
         after_fork
         processes+=" $!"
       else
@@ -820,7 +818,7 @@ local vars=step; begin_function
     begin_for step in "${files[@]}"; doo
       if [[ $parallel == t ]]; then
         # recursive
-        { before_fork; execute_command_step $step; } &
+        { begin_fork; execute_command_step $step; } &
         after_fork
         processes+=" $!"
       else
@@ -1392,13 +1390,12 @@ local vars=dim; begin_function
     eval "local d_$dim='$member'"
 
     if [[ $parallel == t ]]; then
-      { before_fork; $function; } &
+      { begin_fork; $function; } &
       after_fork
       processes+=" $!"
     else
       if [[ $fork_function == t ]]; then
-        ( before_fork; $function ) || { after_fork; fail1; }
-        after_fork
+        fork $function || fail
       else
         $function || fail
       fi
@@ -1435,8 +1432,7 @@ if [[ "${remaining_cell_dims:-}" ]]; then
 else
   if [[ "$leaf_function" ]]; then
     if [[ $fork_leaves == t ]]; then
-      ( before_fork; $leaf_function ) || { after_fork; return 1; }
-      after_fork
+      fork $leaf_function || fail
     else
       $leaf_function || return 1
     fi
@@ -1721,23 +1717,58 @@ parameter_descriptions+=( "$description" )
 parameter_defaults+=( "$default" ) 
 }
 
-fork() {
-local reply_file=${reply_file:-} command=$* return_code=0
-before_fork
+reply_file=
+
+fork_async() {
+local reply_file command=$* return_code=0
+reply_file=
+(
+begin_fork
 eval "$command"; return_code=$?
-after_fork
+end_fork
+) &
+after_fork || return 1
 return $return_code
 }
 
-after_fork() {
-let log_id+=100 || true
-if [[ "${debug_id:-}" && "$debug_id" != t ]]; then
-  let debug_id_current+=1000 || true
-fi
+fork() {
+local reply_file command=$* return_code=0
+reply_file=$(mktemp $tmp_folder/reply.$$.XXXXXX)
+defer "rm $reply_file"
+(
+begin_fork
+eval "$command"; return_code=$?
+end_fork
+exit $return_code
+); return_code=$?
+after_fork || (let $return_code++ || true)
+return $return_code
 }
 
-before_fork() {
-change_log_file || return 1
+# run within the subshell at the beginning
+begin_fork() {
+change_log_file
+}
+
+# run within the subshell at the beginning
+end_fork() {
+if [[ "$reply_file" ]]; then
+  echo "log_id=$log_id debug_id=$debug_id" >>$reply_file 
+fi
+return 0
+}
+
+# run outside of the subshell afterwards
+after_fork() {
+if [[ -f "$reply_file" ]]; then
+  source $reply_file || return 1
+  rm $reply_file
+else
+  let log_id+=100 || true
+  if [[ "${debug_id:-}" && "$debug_id" != t ]]; then
+    let debug_id_current+=1000 || true
+  fi
+fi
 return 0
 }
 
