@@ -102,6 +102,7 @@ alias end_function='
 #   change_log_file {log file base}   point to new log file
 #   change_log_file                   point to same base but new pid (forked)
 #   change_log_file -                 stop logging
+log_file=
 change_log_file() {
 begin_function_flat
 
@@ -129,7 +130,6 @@ begin_function_flat
   fi
 
   if [[ "${log_file:-}" ]]; then
-    untee_output 
     if [[ "$new_log_file" ]]; then
       function=${FUNCNAME[1]} vars=new_log_file write_to_log trace log_branch
     else
@@ -141,22 +141,13 @@ begin_function_flat
     old_log_file=${log_file:-}
     log_file=$new_log_file
 
-    # [[ -f $log_file ]] && rm $log_file
     if [[ -f $log_file ]]; then
       err "log file already exists: $log_file"
       fail1
     fi
 
     [[ "$old_log_file" ]] && vars=old_log_file write_to_log trace log_from
-    #BASH_XTRACEFD=2
-    if [[ "$log_to_file" ]]; then
-      tee_output_to $log_file 
-    fi
-    #start_tracing
-  else
-    #stop_tracing
-    #BASH_XTRACEFD=
-    :
+
   fi
 
 end_function_flat
@@ -274,38 +265,39 @@ if [[ $log_to_file == t && "${log_file:-}" ]]; then
   echo "$to_log" >>$log_file
 fi
 
-if [[ $log_to_out == t ]]; then
-  echo "$to_log" >&$fd_trace
-else
+if [[ $output_teed_to_file == f ]]; then
+  if [[ $log_to_out == t ]]; then
+    echo "$to_log" >&$fd_trace
+  else
 
-  local hide=f
+    local hide=f
 
-  if [[ "$log_action" && ! $action =~ "$log_action" ]]; then
-    hide=t
+    if [[ "$log_action" && ! $action =~ "$log_action" ]]; then
+      hide=t
+    fi
+
+    if [[ "$log_function" && ! $function =~ "$log_function" ]]; then
+      hide=t
+    fi
+
+    local level_num=${log_level_num_map[$level]}
+    local log_level_num=${log_level_num_map[$log_level]}
+    if [[ "$log_level" && $level_num -lt $log_level_num ]]; then
+      hide=t
+    fi
+
+    if [[ $hide == f ]]; then
+      local level_color=${log_level_color_map[$log_level]}
+      function=" $function"
+      action=" $action"
+      message=" $message"
+      local vars="$new_vars"
+      time=" $time"
+      pid=" pid=$pid"
+      eval "local to_terminal=\"$log_format\""
+      echo "$to_terminal" >&$fd_trace
+    fi
   fi
-
-  if [[ "$log_function" && ! $function =~ "$log_function" ]]; then
-    hide=t
-  fi
-
-  local level_num=${log_level_num_map[$level]}
-  local log_level_num=${log_level_num_map[$log_level]}
-  if [[ "$log_level" && $level_num -lt $log_level_num ]]; then
-    hide=t
-  fi
-
-  if [[ $hide == f ]]; then
-    local level_color=${log_level_color_map[$log_level]}
-    function=" $function"
-    action=" $action"
-    message=" $message"
-    local vars="$new_vars"
-    time=" $time"
-    pid=" pid=$pid"
-    eval "local to_terminal=\"$log_format\""
-    echo "$to_terminal" >&$fd_trace
-  fi
-
 fi
 
 end_no_tracing_zone

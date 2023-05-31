@@ -1820,3 +1820,36 @@ local content=( "$1"/* )
 [[ ! -e $content ]]
 }
 
+output_teed_to_file=f
+
+tee_output_to_log() {
+if [[ "$log_to_file" && "$log_file" ]]; then
+  if [[ $output_teed_to_file == t ]]; then
+    err "Internal error: tee attempted when a tee is already present"
+    fail1
+  fi
+  exec 1> >(tee -a "$log_file")
+  exec 2> >(tee -a "$log_file")
+  eval "exec $fd_trace> >(tee -a '$log_file')"
+  BASH_XTRACEFD=2
+  output_teed_to_file=t
+  start_tracing
+fi
+}
+
+untee_output() {
+if [[ "$log_to_file" && "$log_file" ]]; then
+  if [[ $output_teed_to_file == t ]]; then
+    stop_tracing
+    BASH_XTRACEFD=
+    exec 1>&$fd_original_out
+    exec 2>&$fd_original_err
+    eval "exec $fd_trace>&$fd_original_trace"
+    output_teed_to_file=f
+  else
+    warn "Output already teed to file"
+  fi
+fi
+return 0
+}
+

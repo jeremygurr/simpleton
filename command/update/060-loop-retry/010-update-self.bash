@@ -20,7 +20,9 @@ begin_function
       fi
     fi
 
+    tee_output_to_log || fail
     execute_op update || fail
+    untee_output || fail
 
     if [[ "$out_path" && $reuse_existing_out == f ]]; then
       out_path=$original_out
