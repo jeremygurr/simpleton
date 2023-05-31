@@ -1,4 +1,5 @@
-lock_cell() {
+pre_update() {
+update_successful=f
 current_job_path=
 if [[ "$job_path" ]]; then
   current_job_path=$job_path/current
@@ -6,13 +7,11 @@ if [[ "$job_path" ]]; then
 fi
 if [[ "$log_path" ]]; then
   if [[ ! -d $log_path ]]; then
-    mkdir -p $log_path || fail
+    mkdir -p $log_path || return 1
   fi
   if [[ ! "$job_path" ]]; then
-    local contents=( $log_path/* )
-    if [[ "$contents" != $log_path/'*' ]]; then
-      rm $log_path/* 
-    fi
+    rm -rf $log_path || return 1
+    mkdir $log_path || return 1
   fi
   change_log_file $log_path/update || return 1
 fi
@@ -21,4 +20,3 @@ if [[ "$status_path" ]]; then
 fi
 return 0
 }
-
