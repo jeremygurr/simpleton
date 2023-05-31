@@ -20,16 +20,20 @@ log_id=0
 trace_var=${trace_var:-}
 
 export log=${log:-file}
-export log_to_file=f
+export log_to_file=t
 export log_to_out=f
 export log_action=${log_action:-}
 export log_function=${log_function:-}
 export log_level=${log_level:-info}
-export log_format='$level_color$action $message$RESET'
+export log_format='$level_color$action$function$vars$message$RESET'
 
 case $log in
+  none|error|warn|info|trace|debug)
+    log_level=$log
+    log=file
+    ;;
   file)
-    log_to_file=t
+    # default behavior
     ;;
   out)
     log_to_out=t
@@ -46,10 +50,10 @@ case $log in
 esac
 
 case $log_level in
-  error|warn|info|trace|debug)
+  none|error|warn|info|trace|debug)
   ;;
   *)
-    err "Invalid log_level value. Must be one of: error, warn, info, trace, debug"
+    err "Invalid log_level value. Must be one of: none, error, warn, info, trace, debug"
     exit 1
   ;;
 esac
@@ -143,7 +147,7 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  function=${FUNCNAME[1]} write_to_log debug '' "$*"
+  function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
@@ -160,7 +164,7 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  function=${FUNCNAME[1]} write_to_log info '' "$*"
+  function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
@@ -177,9 +181,8 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  local importance=$1; shift || true
   local message="$*"
-  function=${FUNCNAME[1]} write_to_log trace '' "$message"
+  function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
 end_no_tracing_zone
 return 0
 }
@@ -196,7 +199,7 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  function=${FUNCNAME[1]} write_to_log error '' "$*"
+  function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
@@ -213,7 +216,7 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  function=${FUNCNAME[1]} write_to_log warn '' "$*"
+  function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
@@ -235,6 +238,7 @@ declare -A log_level_num_map=(
   [info]=2 
   [warn]=3 
   [error]=4 
+  [none]=9
   )
 
 declare -A log_level_color_map=( 
@@ -243,13 +247,14 @@ declare -A log_level_color_map=(
   [info]= 
   [warn]=$YELLOW 
   [error]=$RED 
+  [none]=
   )
 
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
-begin_no_tracing_zone
+#begin_no_tracing_zone
 
-local level=$1 action=$2 message=${3:-} var value vars=
+local level=$1 action=$2 message=${3:-} var value new_vars=
 
 for var in $trace_var ${vars:-}; do
   eval "value=\${$var:-}"
@@ -261,7 +266,7 @@ for var in $trace_var ${vars:-}; do
     # value=${value//\\/\\\\}
     # value=${value// /\\ }
   fi
-  vars+=" $var=$value"
+  new_vars+=" $var=$value"
 done
 
 local to_log="= $EPOCHREALTIME pid=$BASHPID"
@@ -277,7 +282,7 @@ if [[ "$action" ]]; then
 fi
 local function=${function:-${FUNCNAME[1]}}
 if [[ "${function:-}" ]]; then
-  to_log+=" function=$function$vars"
+  to_log+=" function=$function$new_vars"
 fi
 if [[ "$message" ]]; then
   to_log+=" info=\"${message//\"/\\\"}\""
@@ -285,9 +290,14 @@ fi
 
 let log_id++ || true
 
-if [[ $log_to_file == t && "${log_file:-}" && $log_to_out == f ]]; then
+if [[ $log_to_file == t && "${log_file:-}" ]]; then
   echo "$to_log" >>$log_file
-elif [[ $log_to_out == t ]]; then
+fi
+
+if [[ $log_to_out == t ]]; then
+  echo "$to_log" >&$fd_trace
+else
+
   local hide=f
 
   if [[ "$log_action" && ! $action =~ "$log_action" ]]; then
@@ -306,13 +316,17 @@ elif [[ $log_to_out == t ]]; then
 
   if [[ $hide == f ]]; then
     local level_color=${log_level_color_map[$log_level]}
+    function=" $function"
+    action=" $action"
+    message=" $message"
+    local vars="$new_vars"
     eval "local to_terminal=\"$log_format\""
     echo "$to_terminal" >&$fd_trace
   fi
 
 fi
 
-end_no_tracing_zone
+#end_no_tracing_zone
 }
 
 out() {
