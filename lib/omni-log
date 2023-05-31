@@ -19,6 +19,41 @@ log_depth=0
 log_id=0
 trace_var=${trace_var:-}
 
+export log=${log:-file}
+export log_to_file=f
+export log_to_out=f
+export log_action=${log_action:-}
+export log_function=${log_function:-}
+export log_level=${log_level:-info}
+export log_format='$level_color$action $message$RESET'
+
+case $log in
+  file)
+    log_to_file=t
+    ;;
+  out)
+    log_to_out=t
+    ;;
+  both)
+    log_to_file=t
+    log_to_out=t
+    ;;
+  *)
+    log_to_file=t
+    log_to_out=t
+    log_action=$log
+    ;;
+esac
+
+case $log_level in
+  error|warn|info|trace|debug)
+  ;;
+  *)
+    err "Invalid log_level value. Must be one of: error, warn, info, trace, debug"
+    exit 1
+  ;;
+esac
+
 alias begin_function='
   local return_value=0 break_out=f
   write_to_log trace call
@@ -108,9 +143,6 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  if [[ $log_depth -le $((trace-5)) && $log_to_out == f ]]; then
-    out "$@"
-  fi
   function=${FUNCNAME[1]} write_to_log debug '' "$*"
 end_no_tracing_zone
 return 0
@@ -128,9 +160,6 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  if [[ $log_to_out == f ]]; then
-    out "$@"
-  fi
   function=${FUNCNAME[1]} write_to_log info '' "$*"
 end_no_tracing_zone
 return 0
@@ -150,9 +179,6 @@ begin_no_tracing_zone
   done
   local importance=$1; shift || true
   local message="$*"
-  if [[ $log_depth -le $((trace+importance)) && $log_to_out == f ]]; then
-    out "$message"
-  fi
   function=${FUNCNAME[1]} write_to_log trace '' "$message"
 end_no_tracing_zone
 return 0
@@ -170,11 +196,6 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  local prefix=
-  if [[ "${debug_id:-}" ]]; then
-    prefix="${CYAN:-}debug_id=$debug_id_current "
-  fi
-  out "$prefix${RED:-}$@${RESET:-}"
   function=${FUNCNAME[1]} write_to_log error '' "$*"
 end_no_tracing_zone
 return 0
@@ -192,31 +213,43 @@ begin_no_tracing_zone
     esac
     shift || true
   done
-  out "${YELLOW:-}$@${RESET:-}"
   function=${FUNCNAME[1]} write_to_log warn '' "$*"
 end_no_tracing_zone
 return 0
 }
 
 log_and_run() {
-local prefix=
+local prefix= command=$*
 if [[ $pretend == t ]]; then
   prefix="PRETEND: "
 fi
-function=${FUNCNAME[1]} write_to_log info command "$prefix$*"
-if [[ $log_to_out == f ]]; then
-  out "$prefix$*"
-fi
+function=${FUNCNAME[1]} write_to_log info command "$prefix$command"
 if [[ $pretend == f ]]; then
-  eval "$*"
+  eval "$command"
 fi
 }
+
+declare -A log_level_num_map=( 
+  [debug]=0 
+  [trace]=1 
+  [info]=2 
+  [warn]=3 
+  [error]=4 
+  )
+
+declare -A log_level_color_map=( 
+  [debug]= 
+  [trace]= 
+  [info]= 
+  [warn]=$YELLOW 
+  [error]=$RED 
+  )
 
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
 begin_no_tracing_zone
 
-local level=$1 action=$2 message=${3:-} var value var_log=
+local level=$1 action=$2 message=${3:-} var value vars=
 
 for var in $trace_var ${vars:-}; do
   eval "value=\${$var:-}"
@@ -228,34 +261,32 @@ for var in $trace_var ${vars:-}; do
     # value=${value//\\/\\\\}
     # value=${value// /\\ }
   fi
-  var_log+=" $var=$value"
+  vars+=" $var=$value"
 done
 
-local output="= $EPOCHREALTIME pid=$BASHPID"
+local to_log="= $EPOCHREALTIME pid=$BASHPID"
 
 if [[ "${debug_id:-}" ]]; then
-  output+=" debug_id=$debug_id_current"
-else
-  output+=" log_id=$log_id"
+  to_log+=" debug_id=$debug_id_current"
 fi
 
-output+=" depth=$log_depth level=$level"
+to_log+=" log_id=$log_id depth=$log_depth level=$level"
 
 if [[ "$action" ]]; then
-  output+=" action=$action"
+  to_log+=" action=$action"
 fi
 local function=${function:-${FUNCNAME[1]}}
 if [[ "${function:-}" ]]; then
-  output+=" function=$function$var_log"
+  to_log+=" function=$function$vars"
 fi
 if [[ "$message" ]]; then
-  output+=" info=\"${message//\"/\\\"}\""
+  to_log+=" info=\"${message//\"/\\\"}\""
 fi
 
 let log_id++ || true
 
 if [[ $log_to_file == t && "${log_file:-}" && $log_to_out == f ]]; then
-  echo "$output" >>$log_file
+  echo "$to_log" >>$log_file
 elif [[ $log_to_out == t ]]; then
   local hide=f
 
@@ -267,18 +298,16 @@ elif [[ $log_to_out == t ]]; then
     hide=t
   fi
 
+  local level_num=${log_level_num_map[$level]}
+  local log_level_num=${log_level_num_map[$log_level]}
+  if [[ "$log_level" && $level_num -lt $log_level_num ]]; then
+    hide=t
+  fi
+
   if [[ $hide == f ]]; then
-    case $log_out_width in
-      mid)
-        echo "$action $function$var_log $message" >&$fd_trace
-      ;;
-      tiny)
-        echo "$action $function $message" >&$fd_trace
-      ;;
-      *)
-        echo "$output" >&$fd_trace
-      ;;
-    esac
+    local level_color=${log_level_color_map[$log_level]}
+    eval "local to_terminal=\"$log_format\""
+    echo "$to_terminal" >&$fd_trace
   fi
 
 fi
