@@ -25,7 +25,7 @@ export log_to_out=f
 export log_action=${log_action:-}
 export log_function=${log_function:-}
 export log_level=${log_level:-info}
-export log_format='$level_color$action$function$vars$message$RESET'
+export log_format=${log_format:-default}
 
 case $log in
   none|error|warn|info|trace|debug)
@@ -37,6 +37,10 @@ case $log in
     ;;
   out)
     log_to_out=t
+    log_level=warn
+    if [[ "$log_format" == default ]]; then
+      log_format='$level_color$message$RESET'
+    fi
     ;;
   both)
     log_to_file=t
@@ -50,13 +54,36 @@ case $log in
 esac
 
 case $log_level in
-  none|error|warn|info|trace|debug)
+  none)
+    log_format=
+  ;;
+  error|warn|info)
+    if [[ "$log_format" == default ]]; then
+      log_format='$level_color$message$RESET'
+    fi
+  ;;
+  trace|debug)
+    if [[ "$log_format" == default ]]; then
+      log_format='$time$pid$COL30$level_color$action$COL45$function$COL75$vars$message$RESET'
+    fi
   ;;
   *)
     err "Invalid log_level value. Must be one of: none, error, warn, info, trace, debug"
     exit 1
   ;;
 esac
+
+case $log_format in
+  tiny)
+    log_format='$level_color$message$RESET'
+  ;;
+  short)
+    log_format='$level_color$action$COL15$function$COL40$vars$message$RESET'
+  ;;
+  compact)
+  ;;
+esac
+
 
 alias begin_function='
   local return_value=0 break_out=f
@@ -137,86 +164,36 @@ handle_return
 
 debug() {
 begin_no_tracing_zone
-  while true; do
-    case "$1" in
-      -*)
-        ;;
-      *)
-        break
-        ;;
-    esac
-    shift || true
-  done
-  function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
+function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
 info() {
 begin_no_tracing_zone
-  while true; do
-    case "$1" in
-      -*)
-        ;;
-      *)
-        break
-        ;;
-    esac
-    shift || true
-  done
-  function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
+function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
 trace() {
 begin_no_tracing_zone
-  while true; do
-    case "$1" in
-      -a|-n|-e)
-        ;;
-      *)
-        break
-        ;;
-    esac
-    shift || true
-  done
-  local message="$*"
-  function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
+local message="$*"
+function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
 end_no_tracing_zone
 return 0
 }
 
 err() {
 begin_no_tracing_zone
-  while true; do
-    case "$1" in
-      -*)
-        ;;
-      *)
-        break
-        ;;
-    esac
-    shift || true
-  done
-  function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
+function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
 warn() {
 begin_no_tracing_zone
-  while true; do
-    case "$1" in
-      -*)
-        ;;
-      *)
-        break
-        ;;
-    esac
-    shift || true
-  done
-  function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
+function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
@@ -252,7 +229,7 @@ declare -A log_level_color_map=(
 
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
-#begin_no_tracing_zone
+begin_no_tracing_zone
 
 local level=$1 action=$2 message=${3:-} var value new_vars=
 
@@ -269,7 +246,9 @@ for var in $trace_var ${vars:-}; do
   new_vars+=" $var=$value"
 done
 
-local to_log="= $EPOCHREALTIME pid=$BASHPID"
+local time="$EPOCHREALTIME"
+local pid="$BASHPID"
+local to_log="= $time pid=$pid"
 
 if [[ "${debug_id:-}" ]]; then
   to_log+=" debug_id=$debug_id_current"
@@ -320,13 +299,15 @@ else
     action=" $action"
     message=" $message"
     local vars="$new_vars"
+    time=" $time"
+    pid=" pid=$pid"
     eval "local to_terminal=\"$log_format\""
     echo "$to_terminal" >&$fd_trace
   fi
 
 fi
 
-#end_no_tracing_zone
+end_no_tracing_zone
 }
 
 out() {
