@@ -52,7 +52,7 @@ begin_function_flat
     fi
   fi
 
-  write_to_log debug update_check "$log_message"
+  action=update_check info "$log_message"
 
 end_function_flat
 handle_return
