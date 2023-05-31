@@ -28,7 +28,7 @@ export log_level=${log_level:-info}
 export log_format=${log_format:-default}
 
 case $log in
-  none|error|warn|info|trace|debug)
+  off|fatal|error|warn|info|debug|trace|all)
     log_level=$log
     log=file
     ;;
@@ -57,12 +57,12 @@ case $log_level in
   none)
     log_format=
   ;;
-  error|warn|info)
+  fatal|error|warn|info)
     if [[ "$log_format" == default ]]; then
       log_format='$level_color$message$RESET'
     fi
   ;;
-  trace|debug)
+  trace|debug|all)
     if [[ "$log_format" == default ]]; then
       log_format='$time$pid$COL30$level_color$action$COL45$function$COL75$vars$message$RESET'
     fi
@@ -154,6 +154,14 @@ end_function_flat
 handle_return
 }
 
+trace() {
+begin_no_tracing_zone
+local message="$*"
+function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
+end_no_tracing_zone
+return 0
+}
+
 debug() {
 begin_no_tracing_zone
 function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
@@ -168,26 +176,41 @@ end_no_tracing_zone
 return 0
 }
 
-trace() {
+warn() {
 begin_no_tracing_zone
-local message="$*"
-function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
+function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
-err() {
+error() {
 begin_no_tracing_zone
 function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
-warn() {
+fatal() {
 begin_no_tracing_zone
-function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
+function=${FUNCNAME[1]} write_to_log fatal "${action:-}" "$*"
 end_no_tracing_zone
 return 0
+}
+
+incomplete() {
+  begin_no_tracing_zone
+  if [ ${tracing_midline:-f} == t ]; then
+    tracing_midline=f
+    echo >&$fd_trace
+  fi
+  if [ "${1:-}" ]; then
+    echo "Not implemented yet: ${1:-}" >&2
+  else
+    echo "Not implemented yet." >&2
+  fi
+  start_frame=2 stack_trace
+  end_no_tracing_zone
+  exit 1
 }
 
 log_and_run() {
@@ -202,21 +225,25 @@ fi
 }
 
 declare -A log_level_num_map=( 
-  [debug]=0 
+  [all]=0 
   [trace]=1 
-  [info]=2 
-  [warn]=3 
-  [error]=4 
-  [none]=9
+  [debug]=2 
+  [info]=3 
+  [warn]=4 
+  [error]=5 
+  [fatal]=6 
+  [off]=9
   )
 
 declare -A log_level_color_map=( 
-  [debug]= 
+  [all]= 
   [trace]= 
+  [debug]= 
   [info]= 
-  [warn]=$YELLOW 
+  [warn]=$YELLOW
   [error]=$RED 
-  [none]=
+  [fatal]=$RED 
+  [off]=
   )
 
 # Can be called safely whether or not a log file has been set up

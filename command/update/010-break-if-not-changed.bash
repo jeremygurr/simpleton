@@ -52,7 +52,11 @@ begin_function_flat
     fi
   fi
 
-  action=update_check info "$log_message"
+  if [[ $needs_update == t ]]; then
+    action=update_check debug "$log_message"
+  else
+    action=update_check info "$log_message"
+  fi
 
 end_function_flat
 handle_return
