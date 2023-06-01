@@ -1768,17 +1768,18 @@ parameter_defaults+=( "$default" )
 
 reply_file=
 
-fork_async() {
-local reply_file command=$* return_code=0
-reply_file=
-(
-begin_fork
-eval "$command"; return_code=$?
-end_fork
-) &
-after_fork || return 1
-return $return_code
-}
+# not functional yet
+# fork_async() {
+# local reply_file command=$* return_code=0
+# reply_file=
+# (
+# begin_fork
+# eval "$command"; return_code=$?
+# end_fork
+# ) &
+# after_fork || return 1
+# return $return_code
+# }
 
 fork() {
 local reply_file command=$* return_code=0
@@ -1802,7 +1803,7 @@ change_log_file
 # run within the subshell at the beginning
 end_fork() {
 if [[ "$reply_file" ]]; then
-  echo "log_id=$log_id debug_id=$debug_id" >>$reply_file 
+  echo "log_id=${log_id:-} debug_id=${debug_id:-}" >>$reply_file || return 1
 fi
 return 0
 }
@@ -1834,13 +1835,14 @@ if [[ "$log_to_file" && "$log_file" ]]; then
     fatal "Internal error: tee attempted when a tee is already present"
     fail1
   fi
-  exec 1> >(tee -a "$log_file")
-  exec 2> >(tee -a "$log_file")
-  eval "exec $fd_trace> >(tee -a '$log_file')"
-  BASH_XTRACEFD=2
+  exec 1> >(tee -a "$log_file") || return 1
+  exec 2> >(tee -a "$log_file") || return 1
+  eval "exec $fd_trace>$log_file" || return 1
+  BASH_XTRACEFD=$fd_trace
   output_teed_to_file=t
   start_tracing
 fi
+return 0
 }
 
 untee_output() {
@@ -1848,9 +1850,9 @@ if [[ "$log_to_file" && "$log_file" ]]; then
   if [[ $output_teed_to_file == t ]]; then
     stop_tracing
     BASH_XTRACEFD=
-    exec 1>&$fd_original_out
-    exec 2>&$fd_original_err
-    eval "exec $fd_trace>&$fd_original_trace"
+    exec 1>&$fd_original_out || return 1
+    exec 2>&$fd_original_err || return 1
+    eval "exec $fd_trace>&-" || return 1
     output_teed_to_file=f
   else
     warn "Output already teed to file"
