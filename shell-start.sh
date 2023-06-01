@@ -162,6 +162,47 @@ export SHELL="/bin/bash"
 export LS_OPTIONS='--color=auto'
 export EDITOR=vim
 
+leaf() {
+while true; do
+  local last_part=${PWD##*/}
+  if [[ -d .dim ]]; then
+    cd .dim || return 1
+  elif [[ "$last_part" == .dim ]]; then
+    if [[ "${1:-}" && -d "$1" ]]; then
+      cd "$1" || return 1
+      shift || true
+    else
+      local files=( $(find -mindepth 1 -maxdepth 1 -type d -not -name ".*") )
+      if [[ -d "$files/.dim" ]]; then
+        cd $files/.dim || return 1
+      elif [[ -d "$files/.dna" ]]; then
+        cd $files || return 1
+        break
+      else
+        break
+      fi
+    fi
+  fi
+done
+return 0
+}
+
+trunk() {
+while true; do
+  local last=${PWD##*/}
+  local parent=${PWD%/*}
+  parent=${parent##*/}
+  if [[ ${#PWD} -lt 2 ]]; then
+    break
+  fi
+  if [[ "$parent" == .dim || "$last" == .dim || "$last" == .dna ]]; then
+    cd ..
+  else
+    break
+  fi
+done
+}
+
 unset parse_git_branch
 parse_git_branch() {
   local p=$PWD
