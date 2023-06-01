@@ -1,4 +1,4 @@
-update_member() {
+get_member() {
 local sane_value member_path
 vars=member; begin_function
   get_sane_value "$member" || fail

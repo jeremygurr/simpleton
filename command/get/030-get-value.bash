@@ -10,10 +10,14 @@ else
         out "$(<$out_path/value)"
       fi
     else
-      warn "$short_cell: No cached value."
+      if [[ $cell_is_leaf == t || $show_branches == t ]]; then
+        warn "$short_cell: No cached value."
+      fi
     fi
   else
-    debug "$short_cell: No out_path defined."
+    if [[ $cell_is_leaf == t || $show_branches == t ]]; then
+      debug "$short_cell: No out_path defined."
+    fi
   fi
 fi
 return 0
