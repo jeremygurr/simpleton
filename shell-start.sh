@@ -243,13 +243,22 @@ local rc=$?
 [[ $rc > 0 ]] && echo -n "err $rc "
 }
 
+short_path() {
+local p=$PWD
+if [[ "$p" == /*/*/*/* ]]; then
+  p=${PWD%/*/*/*}
+  p=${PWD#$p/}
+fi
+echo -n "$p"
+}
+
 big_prompt() {
 if [ ! "$BASH" ]; then
   return 0
 fi
 
 export PS1="| ${RED}\$(prompt_error_string)${LIGHT_GREEN}\$prompt_name$PURPLE\u $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
-| $LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+| $LIGHT_RED\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
 export PS2='> '
 export PS4='+ '
 }
