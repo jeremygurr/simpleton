@@ -18,49 +18,43 @@ export SIMPLETON_WORKSPACE=/path/to/workspace
 ./launch
 ```
 
-## Running
+## Running Cell Commands
 
 Once you are inside of the simpleton container, you can execute cell
 commands targettings cells in the workspace.
 
 ```
 cell help         # will list commands that can be executed
-cell status help  # get details about how to use a command
+cell help status  # get details about how to use a command
 ```
 
-## Update Phases
+## Shortcuts
 
-Cell updates have three phases: context, dependency, and execution. 
+### Navigation
+```
+trunk                 # will change the directory to the trunk cell of the current path
+leaf {dim member}...  # will go to the specified leaf cell
+leaf                  # will go to the first leaf cell
+```
 
-### Context phase
-
-### Dependency Phase
-
-### Execution Phase
-
-## Caching Information
+### Changing Prompts
+```
+big_prompt            # changes the prompt to the one which gives the most info (default)
+medium_prompt         # smaller prompt
+small_prompt          # smallest prompt
+```
 
 ## Viewing Logs
 
-## Handlers
+### While executing a cell command
 
-## Archetypes
-
-## Extensions
+### After cell command has completed
 
 ## Managing Secret Files
 
 ## How Parallel Processing Works
 
-## Managing Locks
-
 ## Using the Debugger
 
-## Vector vs Scalar Cells
-
-### Dimensions and Measures
-
 ## Multiple Choice
-
-## Multi Level Aggregation
 

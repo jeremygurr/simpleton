@@ -195,8 +195,12 @@ while true; do
   if [[ ${#PWD} -lt 2 ]]; then
     break
   fi
-  if [[ "$parent" == .dim || "$last" == .dim || "$last" == .dna ]]; then
-    cd ..
+  if [[ "$last" == .dim || "$last" == .dna ]]; then
+    cd .. || return 1
+  elif [[ "$PWD" == */.dim/* ]]; then
+    cd ${PWD%%/.dim/*} || return 1
+  elif [[ "$PWD" == */.dna/* ]]; then
+    cd ${PWD%%/.dna/*} || return 1
   else
     break
   fi
