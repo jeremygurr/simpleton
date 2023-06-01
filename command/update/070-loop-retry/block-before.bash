@@ -20,7 +20,7 @@ for ((retry=0; retry < retry_max; retry++)); do
     let 'delay *= retry_scale' || true
   fi
 
-  info "Executing local update of $cell_path"
+  info "Executing local update of $short_cell"
   debug "Attempt $((retry+1)) of $retry_max" 
 
   execute_command_step_folder || return 1

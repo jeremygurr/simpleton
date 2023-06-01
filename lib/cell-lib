@@ -227,13 +227,26 @@ begin_function_flat
 
   local feature
   if [[ "${cell_features:-}" ]]; then
+    local make_req=f \
+      make_log=f \
+      make_job=f \
+      make_status=f
     begin_for feature in "${cell_features[@]}"; doo
       case $feature in
         req)
-          mkdir -p $new_cyto/$feature/new || fail
+          make_req=t
         ;;
-        log|job|status)
-          mkdir -p $new_cyto/$feature || fail
+        log)
+          if [[ $make_job == f ]]; then
+            make_log=t
+          fi
+        ;;
+        job)
+          make_job=t
+          make_log=f
+        ;;
+        status)
+          make_status=t
         ;;
         *)
           fatal "Unknown feature $feature"
@@ -241,6 +254,18 @@ begin_function_flat
         ;;
       esac
     end_for
+    if [[ $make_req == t ]]; then
+      mkdir -p $new_cyto/req || fail
+    fi
+    if [[ $make_log == t ]]; then
+      mkdir -p $new_cyto/log || fail
+    fi
+    if [[ $make_job == t ]]; then
+      mkdir -p $new_cyto/job || fail
+    fi
+    if [[ $make_status == t ]]; then
+      mkdir -p $new_cyto/status || fail
+    fi
   fi
 
 end_function_flat
@@ -595,7 +620,8 @@ local cell=$(realpath $1) command=$2
 
 local vars='cell command'
 begin_function
-  info "$command $cell"
+  local short_cell; get_short_cell $cell
+  info "$command $short_cell"
   cell_context_load || {
     fatal "Context failed to load for $cell"
     fail1
@@ -1114,8 +1140,10 @@ begin_function_flat
 
   dna_path=$cell_path/.dna \
     cyto_path=$cell_path/.cyto \
-    short_cell=${cell_path#$top_cell/} \
+    short_cell=$cell_path \
     command_path=$cyto_path/command
+
+  get_short_cell $cell_path
 
   if [[ -d $dna_path/key ]]; then
     key_path=$dna_path/key
@@ -1861,3 +1889,17 @@ fi
 return 0
 }
 
+get_short_cell() {
+local x top_cell=${top_cell:-}
+short_cell=$1
+if x=${short_cell#$PWD}
+   [[ $x != $short_cell && ${#x} -gt 0 ]]; then
+  short_cell=$x
+elif x=${short_cell#$top_cell/} 
+     [[ $x != $short_cell && ${#x} -gt 0 ]]; then
+  short_cell=$x
+elif x=${short_cell##*/} 
+     [[ $x != $short_cell && ${#x} -gt 0 ]]; then
+  short_cell=$x
+fi
+}
