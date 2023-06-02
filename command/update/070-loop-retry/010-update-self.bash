@@ -40,5 +40,6 @@ begin_function
   fi
 
 end_function
+untee_output  # in case update failed and block was exited early
 handle_return
 }

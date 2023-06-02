@@ -42,13 +42,19 @@ tmp_folder=${tmp_folder:-/tmp}
 debug_state_file=$tmp_folder/debug-state-$$
 debug_id_current=0
 
+rm $tmp_folder/debug-* $tmp_folder/side-bug-* &>/dev/null || true
+
+# used to debug complex debugger internal issues
+side_bug_file=$tmp_folder/side-bug-$$
+side_bug() {
+echo "$*" >>$side_bug_file
+}
+
 # debug_cleanup='
 #   if [[ $BASH_SUBSHELL -eq 0 ]]; then
 #     rm "$debug_state_file" &>/dev/null || true
 #   fi
 #   '
-
-rm $tmp_folder/debug-* &>/dev/null || true
 
 # if type defer &>/dev/null; then
 #   defer "$debug_cleanup"
@@ -98,6 +104,10 @@ debug_trap() {
     debug_command=$4 \
     debug_current_depth=${#FUNCNAME[*]}
 
+  if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
+    return 0
+  fi
+
   if [[ -f "$debug_state_file" ]]; then
     local state_timestamp=$(date -r "$debug_state_file" +%s)
     if [[ $state_timestamp -gt $debug_last_state_load ]]; then
@@ -109,12 +119,10 @@ debug_trap() {
 
   [[ $debug_exit == t ]] && exit 1
 
-  if [[ "$debug_ignore" == *\ "$debug_current_function"\ * ]]; then
-    return 0
-  fi
-
   if [[ "$debug_var" ]]; then
-    set +u; echo "${CYAN}inside debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
+    set +u
+    echo "${CYAN}inside debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err
+    set -u
   fi
 
   let debug_id_current++ || true
@@ -311,6 +319,7 @@ debug_trap() {
       cat "$debug_out_path" >&$fd_original_err
       [[ "${debug_expansion_pid:-}" ]] && kill $debug_expansion_pid &>/dev/null
       debug_expansion_pid=
+      side_bug "turning off bash tracing. BASH_XTRACEFD=${BASH_XTRACEFD:-} -> ${debug_original_tracefd:-}"
       BASH_XTRACEFD=$debug_original_tracefd
     fi
   elif [[ -f "$debug_out_path" ]]; then
@@ -427,7 +436,7 @@ debug_trap() {
         eval "show_array \"\${$debug_array[@]}\""
         no_follow_once=t
         ;;
-      c)
+      C)
         echo "# Continuing..." >&$fd_original_err
         trap - DEBUG
         [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
@@ -435,7 +444,7 @@ debug_trap() {
         debug_long_command=t
         debug_save_state
         ;;
-      C)
+      c)
         echo >&$fd_original_err
         echo >&$fd_original_err
         let debug_list_offset=$((-debug_list_window/2+1))
@@ -797,8 +806,8 @@ debug_trap() {
         echo >&$fd_original_err
         echo >&$fd_original_err
         echo "a  display array" >&$fd_original_err
-        echo "c  continue execution without stopping" >&$fd_original_err
-        echo "C  list debug_list_window/2 lines of source code before and after current line" >&$fd_original_err
+        echo "c  list debug_list_window/2 lines of source code before and after current line" >&$fd_original_err
+        echo "C  continue execution without stopping" >&$fd_original_err
         echo "d  display an expression with variables substituted" >&$fd_original_err
         echo "D  repeat last display command" >&$fd_original_err
         echo "e  evaluate an expression" >&$fd_original_err
@@ -854,6 +863,7 @@ debug_trap() {
     debug_expansion_clean "$debug_fifo_path" >"$debug_out_path" &
     debug_expansion_pid=$!
     exec {fd_bash_trace}>"$debug_fifo_path"
+    side_bug "turning on bash tracing. BASH_XTRACEFD=${BASH_XTRACEFD:-} -> ${fd_bash_trace:-}"
     debug_original_tracefd=${BASH_XTRACEFD:-}
     BASH_XTRACEFD=$fd_bash_trace
   fi
@@ -947,95 +957,101 @@ end_no_tracing_zone
 
 debugging=f
 debug_start() {
-  if [[ $debugging == f ]]; then
-    export debugging=t
-    export debug=t
-    export debug_debug=${debug_debug:-f}
-    export debug_dir=$PWD
-    export debug_display=${debug_display:-none}
-    export debug_exit=${debug_exit:-f}
-    export debug_expanded_search=${debug_expanded_search:-f}
-    export debug_expansion=${debug_expansion:-1}
-    export debug_expression=${debug_expression:-echo none}
-    export debug_expanded_search=${debug_expanded_search:-f}
-    export debug_follow_source=${debug_follow_source:-t}
-    export debug_function=${debug_function:-}
-    export debug_function_old=${debug_function_old:-}
-    export debug_id=${debug_id:-t}
-    export debug_immediate=${debug_immediate:-f}
-    export debug_last_location=${debug_last_location:-}
-    export debug_line=${debug_line:-}
-    export debug_line_old=${debug_line_old:-}
-    export debug_list_dir=${debug_list_dir:-none}
-    export debug_list_offset=${debug_list_offset:-0}
-    export debug_list_window=${debug_list_window:-20}
-    export debug_long_command=${debug_long_command:-f}
-    export debug_max_depth=${debug_max_depth:-99}
-    export debug_original_tracefd=${debug_original_tracefd:-${BASH_XTRACEFD:-}}
-    export debug_prev_command=${debug_prev_command:-none}
-    export debug_prev_function=${debug_prev_function:-none}
-    export debug_prev_line=${debug_prev_line:-0}
-    export debug_prev_search=${debug_prev_search:-}
-    export debug_prev_source_file=${debug_prev_source_file:-none}
-    export debug_rewind=${debug_rewind:-f}
-    export debug_search=${debug_search:-}
-    export debug_search_deep=${debug_search_deep:-t}
-    export debug_step_to_later_line=${debug_step_to_later_line:-f}
-    export debug_step_to_next_file=${debug_step_to_next_file:-f}
-    export debug_step_to_next_function=${debug_step_to_next_function:-f}
-    export debug_step_to_next_line=${debug_step_to_next_line:-f}
-    export debug_stepping=${debug_stepping:-t}
-    export debug_stop_at=${debug_stop_at:-}
-    export debug_subshell=${debug_subshell:-f}
-    export debug_var=${debug_var:-}
-    export debug_watch=${debug_watch:-}
-    export debug_watch_once=${debug_watch_once:-}
-    export debug_watch_style=${debug_watch_style:-wide}
-    export debug_last_state_load=$EPOCHSECONDS
+if [[ $debugging == f ]]; then
+  export debugging=t
+  export debug=t
+  export debug_debug=${debug_debug:-f}
+  export debug_dir=$PWD
+  export debug_display=${debug_display:-none}
+  export debug_exit=${debug_exit:-f}
+  export debug_expanded_search=${debug_expanded_search:-f}
+  export debug_expansion=${debug_expansion:-1}
+  export debug_expression=${debug_expression:-echo none}
+  export debug_expanded_search=${debug_expanded_search:-f}
+  export debug_follow_source=${debug_follow_source:-t}
+  export debug_function=${debug_function:-}
+  export debug_function_old=${debug_function_old:-}
+  export debug_id=${debug_id:-t}
+  export debug_immediate=${debug_immediate:-f}
+  export debug_last_location=${debug_last_location:-}
+  export debug_line=${debug_line:-}
+  export debug_line_old=${debug_line_old:-}
+  export debug_list_dir=${debug_list_dir:-none}
+  export debug_list_offset=${debug_list_offset:-0}
+  export debug_list_window=${debug_list_window:-20}
+  export debug_long_command=${debug_long_command:-f}
+  export debug_max_depth=${debug_max_depth:-99}
+  export debug_original_tracefd=${debug_original_tracefd:-${BASH_XTRACEFD:-}}
+  export debug_prev_command=${debug_prev_command:-none}
+  export debug_prev_function=${debug_prev_function:-none}
+  export debug_prev_line=${debug_prev_line:-0}
+  export debug_prev_search=${debug_prev_search:-}
+  export debug_prev_source_file=${debug_prev_source_file:-none}
+  export debug_rewind=${debug_rewind:-f}
+  export debug_search=${debug_search:-}
+  export debug_search_deep=${debug_search_deep:-t}
+  export debug_step_to_later_line=${debug_step_to_later_line:-f}
+  export debug_step_to_next_file=${debug_step_to_next_file:-f}
+  export debug_step_to_next_function=${debug_step_to_next_function:-f}
+  export debug_step_to_next_line=${debug_step_to_next_line:-f}
+  export debug_stepping=${debug_stepping:-t}
+  export debug_stop_at=${debug_stop_at:-}
+  export debug_subshell=${debug_subshell:-f}
+  export debug_var=${debug_var:-}
+  export debug_watch=${debug_watch:-}
+  export debug_watch_once=${debug_watch_once:-}
+  export debug_watch_style=${debug_watch_style:-wide}
+  export debug_last_state_load=$EPOCHSECONDS
 
-    reserve_tmp_file debug_fifo_path debug-fifo || exit 1
-    reserve_tmp_file debug_out_path debug-out || exit 1
+  reserve_tmp_file debug_fifo_path debug-fifo || exit 1
+  reserve_tmp_file debug_out_path debug-out || exit 1
 
-    shopt -s extdebug
-    # If you add or remove lines from this trap code, you will need to update the line offset as well
-    # so that debug execution and current line to execute will be correct.
-    # Look for code starting with something like: let debug_line_num-4
-    # and adjust the -4 part based on how many lines were added or removed. If you get it right,
-    # debugging will show the right line compared to what is being executed. 
-    trap '
-      set +x
-      set +T
-      debug_rematch=( "${BASH_REMATCH[@]}" )
-      if [[ "${FUNCNAME:-}" ]]; then 
-        debug_depth=${#FUNCNAME[*]}
+  shopt -s extdebug
+  # If you add or remove lines from this trap code, you will need to update the line offset as well
+  # so that debug execution and current line to execute will be correct.
+  # Look for code starting with something like: let debug_line_num-4
+  # and adjust the -4 part based on how many lines were added or removed. If you get it right,
+  # debugging will show the right line compared to what is being executed. 
+  trap '
+    set +x
+    set +T
+    debug_rematch=( "${BASH_REMATCH[@]}" )
+    if [[ "${FUNCNAME:-}" ]]; then 
+      debug_depth=${#FUNCNAME[*]}
+    else
+      debug_depth=0
+    fi
+    if [[ "$debug_var" ]]; then
+      set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
+    fi
+    # [[ $debug_debug == t ]] && echo "debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell" >&$fd_original_err
+    debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
+    if [[ "$debug_var" ]]; then
+      set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
+    fi
+    [[ $debug_rewind == t ]] && continue
+    [[ $debug_exit == t ]] && exit 1
+    if [[ $debug_expansion -gt 0 
+          && -n "${debug_expansion_pid:-}" \
+          && ${no_trace_depth:-0} -le 0 \
+       ]]; then
+      if [[ $debug_expansion == 1 \
+            && " $debug_ignore " != *" $debug_prev_command "* \
+            || $debug_expansion -gt 1 ]]; then
+        side_bug "Enabled tracing"
+        set -x
       else
-        debug_depth=0
+        side_bug "Did not enable tracing: no_trace_depth=$no_trace_depth"
       fi
-      if [[ "$debug_var" ]]; then
-        set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
-      fi
-      # [[ $debug_debug == t ]] && echo "debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell" >&$fd_original_err
-      debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
-      if [[ "$debug_var" ]]; then
-        set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
-      fi
-      [[ $debug_rewind == t ]] && continue
-      [[ $debug_exit == t ]] && exit 1
-      if [[ $debug_expansion -gt 0 
-            && -n "${debug_expansion_pid:-}" \
-            && ${no_trace_depth:-0} -le 0 \
-         ]]; then
-        [[ $debug_expansion == 1 ]] && [[ ! " $debug_prev_command " =~ \ $debug_ignore\  ]] && set -x
-        [[ $debug_expansion -gt 1 ]] && set -x
-      fi
-      [[ $debug_subshell == t ]] && set -T
-      BASH_REMATCH=( "${debug_rematch[@]}" )
-      set +e # so returning 1 does not cause failure
-      set_return_code $debug_rc
-      ' DEBUG
-  else
-    debug_immediate=t
-  fi
+    fi
+    [[ $debug_subshell == t ]] && set -T
+    BASH_REMATCH=( "${debug_rematch[@]}" )
+    set +e # so returning 1 does not cause failure
+    set_return_code $debug_rc
+    ' DEBUG
+else
+  debug_immediate=t
+fi
 }
 
 debug_setup() {
@@ -1087,7 +1103,7 @@ if [[ -n "${debug:-}" && $debug != f || \
     debug_long_command=t
     debug_subshell=t
     debug_stepping=f
-    if [[ "$debug_ignore" == *\ "$debug_function"\ * ]]; then
+    if [[ "$debug_ignore" == *" $debug_function "* ]]; then
       local left_side=${debug_ignore% $debug_function *}
       local right_side=${debug_ignore#* $debug_function }
       debug_ignore="$left_side $right_side"

@@ -4,47 +4,23 @@ fd_trace=${fd_trace:-3}
 
 # some required defaults
 export tmp_folder="${tmp_folder:-/tmp}"
-export trace=${trace:-1}
-let trace-- || true # to make calls to commands within a command be lower trace level
-export trace_indent=${trace_indent:-f}
-export trace_max=${trace_max:-$trace}
-export trace_force=${trace_force:-f}
-export trace_pid=${trace_pid:-f}
-export trace_debug=${trace_debug:-f}
-export debug=${debug:-}
 export EDITOR=${EDITOR:-vim}
+
+export tracing_depth=${tracing_depth:-0}
+export no_trace_depth=${no_trace_depth:-0}
 
 alias start_tracing='[[ $tracing_depth == 0 ]] && set -x; let tracing_depth++ || true'
 alias stop_tracing='let tracing_depth-- || true; [[ $tracing_depth == 0 ]] && set +x'
 
-alias outdent='trace=$((trace+1))'
-alias outdent5='trace=$((trace+5))'
-alias indent='trace=$((trace-1))'
-alias indent5='trace=$((trace-5))'
-
 alias begin_no_tracing_zone='[[ $no_trace_depth == 0 && $tracing_depth -gt 0 ]] && set +x || true; let no_trace_depth++ || true'
 alias end_no_tracing_zone='let no_trace_depth-- || true; [[ $no_trace_depth -le 0 && $tracing_depth -gt 0 ]] && set -x || true'
 
-# usage example:
-#   do_stuff() {
-#     begin_function
-#       open_connection || fail
-#       begin_for ((i = 0; i < 10; i++)); doo
-#         stuff || fail
-#       end_for
-#      
-#       more_stuff
-#     end_function
-#     close_connection
-#     handle_return
-#   }
-
-alias       begin_function='let trace-- || true; local return_value=0 break_out=f; while true; do'
+alias       begin_function='local return_value=0 break_out=f; while true; do'
 alias  begin_function_flat='local return_value=0 break_out=f; while true; do'
 alias          begin_while='break_out=f; while'
 alias            begin_for='break_out=f; for'
 alias           begin_loop='break_out=f; while true; do'
-alias         end_function='break; done; let trace++ || true'
+alias         end_function='break; done'
 alias    end_function_flat='break; done'
 alias            end_while='done; [[ $break_out == t ]] && break; true'
 alias              end_for='done; [[ $break_out == t ]] && break; true'
@@ -76,17 +52,6 @@ alias handle_exit='exit $return_value'
 alias files_are_different='! diff'
 alias files_are_same='diff'
 
-export tracing_depth=${tracing_depth:-0}
-export no_trace_depth=${no_trace_depth:-0}
-
-export log_warn3=${log_warn3:-30}
-export log_warn2=${log_warn2:-20}
-export log_warn=${log_warn:-10}
-export log_info=${log_info:-0}
-export log_trace=${log_trace:--10}
-export log_trace2=${log_trace2:--20}
-export log_trace3=${log_trace3:--30}
-
 plural() {
 local count=$1 word=$2
 if [[ $count -eq 1 ]]; then
@@ -109,7 +74,7 @@ find -L "$path" -mindepth 1 -maxdepth 1 "$@"
 # make sure we clean up after ourselves whether we've launched a background job or allocated resources
 # this needs to be run again whenever forking to a subprocess
 setup_exit_trap() {
-trap 'trace_indent=f action=cleanup trace "Cleaning up";
+trap 'action=cleanup trace "Cleaning up";
   eval "${cleanup_on_exit:-}" &>/dev/null || true;
   { kill $(jobs -p); } 2>/dev/null || true; 
   ' EXIT
@@ -756,7 +721,7 @@ case $pretend in
 esac
 
 if [[ $execute == t ]]; then
-  trace $log_info "Executing: $command_to_execute"
+  info "Executing: $command_to_execute"
   eval "$command_to_execute" || return $?
 fi
 
