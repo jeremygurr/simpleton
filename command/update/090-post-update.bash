@@ -11,6 +11,11 @@ if [[ $pretend == f ]]; then
   if [[ "$status_path" ]]; then
     if [[ $update_successful == t ]]; then
       touch $status_path/last-good-update || return 1
+      propogate_success_to_parents $cell_path || return 1
+      propogate_success_to_downstream $cell_path || return 1
+      if [[ $something_changed == t ]]; then
+        propogate_change_to_downstream $cell_path || return 1
+      fi
     else
       touch $status_path/last-bad-update || return 1
     fi

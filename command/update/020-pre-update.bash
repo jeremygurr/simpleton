@@ -1,8 +1,7 @@
 pre_update() {
 update_successful=f
-current_job_path=
-if [[ "$job_path" ]]; then
-  current_job_path=$job_path/current
+something_changed=f
+if [[ "$current_job_path" ]]; then
   folder_to_lock=$current_job_path folder_lock || return 1
 fi
 if [[ "$log_path" ]]; then
