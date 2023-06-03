@@ -107,6 +107,26 @@ fi
 return 0
 }
 
+propogate_success_to_downstream() {
+local from_cell=$from_cell \
+  start_folder=${start_folder:-$from_cell} \
+  completion_time=$completion_time \
+  changed=$changed \
+  down_path=$from_cell/.cyto/down down_folder folders
+if [[ -d $down_path ]]; then
+  folders=$(find1 $down_path -not -name '.*' -type d) || fail
+  # parallel here
+  for down_folder in $folders; do
+    if [[ $down_folder/.dna ]]; then
+    else
+      # recursive
+      propogate_success_to_downstream 
+    fi
+  done
+fi
+return 0
+}
+
 # This is run if cell hasn't been initialized = missing .cyto folder
 make_cyto() {
 local cell=$1 new_cyto=$cell/.cyto.new
@@ -849,7 +869,7 @@ setup_default_each_handler() {
       succeed
     fi
 
-    local v a
+    local a
     eval "a=( \"\${$ref_group[@]:-}\" )"
 
     if [[ ! "$a" ]]; then
@@ -857,31 +877,24 @@ setup_default_each_handler() {
       succeed
     fi
 
-    local parallel=f
-    if [[ "${#a[*]}" -gt 1 ]]; then
-      if [[ "$parallel_execution" == t && $serial == f ]]; then
-        parallel=t
-        wait_for_low_load || fail
-      fi
+    local leave_loop p
+    if [[ $serial == f ]]; then
+      p=t
+    else
+      p=f
     fi
 
-    local processes= leave_loop=0
-    begin_for v in "${a[@]}"; doo
-      eval "$ref=\$v" || fail
-      if [[ $parallel == t ]]; then
-        { begin_fork; execute_command_step_folder; } &
-        after_fork
-        processes+=" $!"
-      else
-        execute_command_step_folder || fail
+    loop_over_var=a \
+      par=$p \
+      head='eval "$ref=\$value" || fail' \
+      body=execute_command_step_folder \
+      tail='
         if [[ $leave_loop -gt 0 ]]; then
           let leave_loop-- || true
           break
         fi
-      fi
-    end_for
-
-    wait_for_sub_processes || fail
+        ' \
+      parallel_loop || fail
 
   end_function_flat 
   handle_return
@@ -911,31 +924,16 @@ begin_function
 
     gather_files_with_same_index || fail
 
-    local parallel=f
-    if [[ "${#files[*]}" -gt 1 ]]; then
-      if [[ "$parallel_execution" == t ]]; then
-        parallel=t
-        wait_for_low_load || fail
-      fi
-    fi
-
-    local processes= leave_loop=0
-    begin_for step in "${files[@]}"; doo
-      if [[ $parallel == t ]]; then
-        # recursive
-        { begin_fork; execute_command_step $step; } &
-        after_fork
-        processes+=" $!"
-      else
-        # recursive
-        execute_command_step $step || fail
+    local leave_loop=0
+    loop_over_var=files \
+      body='execute_command_step $value' \
+      tail='
         if [[ $leave_loop -gt 0 ]]; then
+          let leave_loop-- || true
           break
         fi
-      fi
-    end_for
-
-    wait_for_sub_processes || fail
+        ' \
+      parallel_loop || fail
 
     let i++ || true
     [[ $i -ge ${#contents[*]} ]] && break
@@ -1501,7 +1499,6 @@ local dim=$1 parallel=f multi_cell=f \
   function=$function finished=f \
   fork_function=${fork_function:-t}
 
-
 local vars=dim
 begin_function
 
@@ -1709,6 +1706,53 @@ else
   sane_value=${hash:0:8}
 fi
 return 0
+}
+
+# 'value' is the loop var
+parallel_loop() {
+local loop_over_var=$loop_over_var head=${head:-} \
+  body=$body $tail=${tail:-} array par=${par:-t}
+
+begin_function_flat
+
+  if [[ ! -v $loop_over_var ]]; then
+    fatal "Internal error: Variable doesn't exist: $loop_over_var"
+    stack_trace
+    fail
+  fi
+
+  eval "array=( \"\${$loop_over_var[@]}\" )"
+  local parallel=f
+  if [[ ${#array[*]} -gt 1 && $parallel_execution == t && $par == t ]]; then
+    parallel=t
+    wait_for_low_load || fail
+  fi
+
+  local processes= leave_loop=0 value
+  begin_for value in "${array[@]}"; doo
+
+    if [[ "$head" ]]; then
+      eval "$head" || fail
+    fi
+
+    if [[ $parallel == t ]]; then
+      { begin_fork; eval "$body"; } &
+      after_fork
+      processes+=" $!"
+    else
+      eval "$body" || fail
+    fi
+
+    if [[ "$tail" ]]; then
+      eval "$tail" || fail
+    fi
+
+  end_for
+
+  wait_for_sub_processes || fail
+
+end_function_flat
+handle_return
 }
 
 # input: parallel processes
