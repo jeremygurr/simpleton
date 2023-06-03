@@ -22,6 +22,7 @@ begin_function
 
     tee_output_to_log || fail
     execute_op update || fail
+    completion_time=$EPOCHSECONDS
     untee_output || fail
 
     if [[ "$out_path" && $reuse_existing_out == f ]]; then

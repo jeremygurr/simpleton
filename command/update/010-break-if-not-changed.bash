@@ -25,7 +25,7 @@ begin_function_flat
   elif [[ ! -e $status_path/deps-up-to-date ]]; then
     needs_update=t
     log_message="Needs update because a dependency is outdated"
-  elif [[ ! -e $status_path/last-good-update ]]; then
+  elif [[ ! -e $status_path/last-good-update-start ]]; then
     needs_update=t
     log_message="Needs update because cell has never been updated successfully"
   else
@@ -68,7 +68,7 @@ begin_function_flat
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds)) \
       out_timestamp= freshness_file
     is_stale=f
-    begin_for freshness_file in sub-freshness dep-freshness last-good-update; doo
+    begin_for freshness_file in sub-freshness dep-freshness last-good-update-end; doo
       if [[ -f $status_path/$freshness_file ]]; then
         out_timestamp=$(date -r $status_path/freshness_file +%s)
       fi

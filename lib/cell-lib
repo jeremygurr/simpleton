@@ -80,6 +80,33 @@ end_function_flat
 handle_return
 }
 
+propogate_success_to_parents() {
+local from_cell=$from_cell dim_path=${1:-} completion_time=$completion_time
+local parent=${from_cell%/*} from_cell_part=${from_cell##*/}
+local parent_part=${parent##*/}
+if [[ $parent != $from_cell && ${#parent} -gt 1 ]]; then
+  if [[ $parent == .dim ]]; then
+    if [[ "$dim_path" ]]; then
+      dim_path="${from_cell_part}_$dim_path"
+    else
+      dim_path=${from_cell_part}
+    fi
+    # recursive
+    from_cell=$parent propogate_success_to_parents $dim_path || return 1
+  elif [[ -d $parent/.dna ]]; then
+    local cyto=$parent/.cyto
+    if [[ ! -e $cyto ]]; then
+      fork make_cyto $cell || fail
+    fi
+    local sub_status=$cyto/status/sub
+    if [[ -d $sub_status ]]; then
+      touch -d @$completion_time $sub_status/$dim_path || return 1
+    fi
+  fi
+fi
+return 0
+}
+
 # This is run if cell hasn't been initialized = missing .cyto folder
 make_cyto() {
 local cell=$1 new_cyto=$cell/.cyto.new
@@ -1892,7 +1919,6 @@ if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
   exec 1> >(tee -a "$log_file") || return 1
   exec 2> >(tee -a "$log_file") || return 1
   eval "exec $fd_trace>>$log_file" || return 1
-  side_bug "teed output to $log_file. BASH_XTRACEFD=$fd_trace"
   BASH_XTRACEFD=$fd_trace
   output_teed_to_file=t
   start_tracing
@@ -1903,7 +1929,6 @@ return 0
 untee_output() {
 if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
   if [[ $output_teed_to_file == t ]]; then
-    side_bug "unteed output. BASH_XTRACEFD="
     stop_tracing
     BASH_XTRACEFD=
     exec 1>&$fd_original_out || return 1
@@ -1936,3 +1961,4 @@ elif x=${short_cell##*/}
   short_cell=$x
 fi
 }
+

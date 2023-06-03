@@ -10,14 +10,20 @@ fi
 if [[ $pretend == f ]]; then
   if [[ "$status_path" ]]; then
     if [[ $update_successful == t ]]; then
-      touch $status_path/last-good-update || return 1
-      propogate_success_to_parents $cell_path || return 1
-      propogate_success_to_downstream $cell_path || return 1
-      if [[ $something_changed == t ]]; then
-        propogate_change_to_downstream $cell_path || return 1
-      fi
+      touch -d @$completion_time $status_path/last-good-update-end || return 1
+      cp -a $status_path/last-update-start \
+            $status_path/last-good-update-start || return 1
+      completion_time=$completion_time \
+        from_cell=$cell_path \
+        propogate_success_to_parents || return 1
+      changed=$something_changed \
+        completion_time=$completion_time \
+        from_cell=$cell_path \
+        propogate_success_to_downstream || return 1
     else
-      touch $status_path/last-bad-update || return 1
+      touch $status_path/last-bad-update-end || return 1
+      cp -a $status_path/last-update-start \
+            $status_path/last-bad-update-start || return 1
     fi
   fi
   info "Update $result_string."
