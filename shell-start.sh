@@ -1,9 +1,13 @@
 echo "Executing shell-start.sh"
-export PATH=$SIMPLETON_REPO/bin:$PATH
 
-prompt_name=${prompt_name:-simpleton }
+if [[ "${ADD_PATH:-}" ]]; then
+  export PATH=$ADD_PATH:$PATH
+fi
+
+prompt_name=${prompt_name:-}
 NL=$'\n'
 
+alias sp='source /etc/profile'
 alias ls='ls --color=auto'
 alias l='ls --color=auto -l'
 alias ll='ls --color=auto -la'
@@ -33,6 +37,61 @@ alias gbs='git bisect start'
 alias gbg='git bisect good'
 alias gbb='git bisect bad'
 alias gr='git remote'
+
+# usage: cat file | hydrate >output
+#   will replace bash variables and expressions
+hydrate() {
+local to_execute= OIFS=$IFS IFS=$NL
+while read -r line || [ "${line:-}" ]; do
+  IFS=$OIFS
+  if [[ "$line" =~ ^\$\  ]]; then
+    hydrate_execute || return 1
+    to_execute="${line#\$ }" 
+  elif [[ "$line" =~ ^\>\  ]]; then
+    to_execute+="${line#> }" 
+  elif [[ "$line" =~ ^\\\  ]]; then
+    to_execute+="$NL${line#\\ }" 
+  elif [[ "$line" =~ \$ ]]; then
+    hydrate_execute || return 1
+    line="${line//\"/\\\"}"
+    eval "echo \"$line\"" || return 1
+  else
+    hydrate_execute || return 1
+    echo "$line"
+  fi
+  IFS=$NL
+done
+hydrate_execute || return 1
+}
+
+# internal function used by hydrate function
+hydrate_execute() {
+if [[ "$to_execute" ]]; then
+  eval "$to_execute" || return 1
+  to_execute=
+fi
+return 0
+}
+
+# usage: echo -e "\n\n blah  \n\n" | trim_newlines
+# will trim empty lines from beginning and end of given string
+# will leave exactly one trailing newline at the end
+trim_nl() {
+  local block
+  read -r -d '' block
+  block=${block##*($NL)}
+  block=${block%%*($NL)}
+  echo "$block"
+}
+
+# returns byte_count which is the count of the bytes in the input string
+# not the character count
+get_byte_count() {
+local old=$LANG s=$1
+LANG=C
+byte_count=${#s}
+LANG=$old
+}
 
 real() {
 cd $(realpath .)

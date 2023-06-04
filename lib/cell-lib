@@ -109,20 +109,25 @@ return 0
 
 propogate_success_to_downstream() {
 local from_cell=$from_cell \
-  start_folder=${start_folder:-$from_cell} \
   completion_time=$completion_time \
   changed=$changed \
   down_path=$from_cell/.cyto/down down_folder folders
-if [[ -d $down_path ]]; then
-  folders=$(find1 $down_path -not -name '.*' -type d) || fail
-  # parallel here
-  for down_folder in $folders; do
-    if [[ $down_folder/.dna ]]; then
-    else
-      # recursive
-      propogate_success_to_downstream 
-    fi
-  done
+local start_folder=${start_folder:-$down_path}
+
+if [[ -d $start_folder ]]; then
+  folders=$(find1 $start_folder -not -name '.*' -type d) || fail
+  loop_over_var=folders \
+    body='
+      local status_up=$value/.cyto/status/up
+      if [[ -d $status_up ]]; then
+        touch $status_up/.....
+      else
+        # recursive
+        propogate_success_to_downstream 
+      fi
+    ' \
+    parallel_loop || fail
+
 fi
 return 0
 }
