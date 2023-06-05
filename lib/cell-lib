@@ -1499,8 +1499,7 @@ handle_return
 #   fork_function=whether the process should be forked before executing 
 #     the function. (optional)
 for_each_member() {
-local dim=$1 parallel=f multi_cell=f \
-  member sane_value processes= \
+local dim=$1 multi_cell=f \
   function=$function finished=f \
   fork_function=${fork_function:-t}
 
@@ -1511,35 +1510,18 @@ begin_function
 
   if [[ "${#values[*]}" -gt 1 ]]; then
     multi_cell=t
-    if [[ "$parallel_execution" == t ]]; then
-      parallel=t
-      wait_for_low_load || fail
-    fi
   fi
 
-  begin_for member in "${values[@]}"; doo
-
-    eval "local d_$dim='$member'"
-
-    if [[ $parallel == t ]]; then
-      { begin_fork; $function; } &
-      after_fork
-      processes+=" $!"
-    else
-      if [[ $fork_function == t ]]; then
-        fork $function || fail
-      else
-        $function || fail
+  loop_over_var=values \
+    fork=$fork_function \
+    head='eval "local d_$dim=\$member"' \
+    body=execute_command_step_folder \
+    tail='
+      if [[ $finished == t ]]; then
+        break
       fi
-    fi
-
-    if [[ $finished == t ]]; then
-      break
-    fi
-
-  end_for
-
-  wait_for_sub_processes || fail
+      ' \
+    parallel_loop || fail
 
 end_function
 handle_return
@@ -1716,7 +1698,7 @@ return 0
 # 'value' is the loop var
 parallel_loop() {
 local loop_over_var=$loop_over_var head=${head:-} \
-  body=$body $tail=${tail:-} array par=${par:-t}
+  body=$body $tail=${tail:-} array par=${par:-t} fork=${fork:-f}
 
 begin_function_flat
 
@@ -1745,7 +1727,11 @@ begin_function_flat
       after_fork
       processes+=" $!"
     else
-      eval "$body" || fail
+      if [[ $fork == t ]]; then
+        fork "$body" || fail
+      else
+        eval "$body" || fail
+      fi
     fi
 
     if [[ "$tail" ]]; then
@@ -1915,13 +1901,16 @@ fork() {
 local reply_file command=$* return_code=0
 reply_file=$(mktemp $tmp_folder/reply.$$.XXXXXX)
 defer "rm $reply_file"
+
 (
 begin_fork
 eval "$command"; return_code=$?
 end_fork
 exit $return_code
-); return_code=$?
-after_fork || (let $return_code++ || true)
+)
+
+return_code=$?
+after_fork || { let return_code++ || true; }
 return $return_code
 }
 
@@ -1943,6 +1932,7 @@ after_fork() {
 if [[ -f "$reply_file" ]]; then
   source $reply_file || return 1
   rm $reply_file
+  reply_file=
 else
   let log_id+=100 || true
   if [[ "${debug_id:-}" && "$debug_id" != t ]]; then
