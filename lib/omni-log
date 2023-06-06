@@ -14,6 +14,11 @@
 #   handle_return
 # }
 
+debug_at_log_id=
+if [[ "${log_id:-}" ]]; then
+  debug_at_log_id=$log_id
+fi
+
 export first_log=t
 export log_depth_current=0
 export log_id=0
@@ -130,9 +135,9 @@ begin_function_flat
 
   if [[ "${log_file:-}" ]]; then
     if [[ "$new_log_file" ]]; then
-      function=${FUNCNAME[1]} vars=new_log_file write_to_log trace log_branch
+      log_function=${FUNCNAME[1]} vars=new_log_file write_to_log trace log_branch
     else
-      function=${FUNCNAME[1]} write_to_log trace log_close
+      log_function=${FUNCNAME[1]} write_to_log trace log_close
     fi
   fi
 
@@ -158,42 +163,42 @@ handle_return
 trace() {
 begin_no_tracing_zone
 local message="$*"
-function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
+log_function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
 end_no_tracing_zone
 return 0
 }
 
 debug() {
 begin_no_tracing_zone
-function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
+log_function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
 info() {
 begin_no_tracing_zone
-function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
+log_function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
 warn() {
 begin_no_tracing_zone
-function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
+log_function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
 error() {
 begin_no_tracing_zone
-function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
+log_function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
 fatal() {
 begin_no_tracing_zone
-function=${FUNCNAME[1]} write_to_log fatal "${action:-}" "$*"
+log_function=${FUNCNAME[1]} write_to_log fatal "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
@@ -219,7 +224,7 @@ local prefix= command=$*
 if [[ $pretend == t ]]; then
   prefix="PRETEND: "
 fi
-function=${FUNCNAME[1]} write_to_log info command "$prefix$command"
+log_function=${FUNCNAME[1]} write_to_log info command "$prefix$command"
 if [[ $pretend == f ]]; then
   eval "$command"
 fi
@@ -279,15 +284,13 @@ to_log+=" log_id=$log_id depth=$log_depth_current level=$level"
 if [[ "$action" ]]; then
   to_log+=" action=$action"
 fi
-local function=${function:-${FUNCNAME[1]}}
+local function=${log_function:-${FUNCNAME[1]}}
 if [[ "${function:-}" ]]; then
   to_log+=" function=$function$new_vars"
 fi
 if [[ "$message" ]]; then
   to_log+=" info=\"${message//\"/\\\"}\""
 fi
-
-let log_id++ || true
 
 if [[ $log_to_file == t && "${log_file:-}" ]]; then
   echo "$to_log" >>$log_file
@@ -331,6 +334,11 @@ if [[ ${output_teed_to_file:-f} == f ]]; then
     fi
   fi
 fi
+
+if [[ "$debug_at_log_id" == $log_id ]]; then
+  debug_start
+fi
+let log_id++ || true
 
 end_no_tracing_zone
 }
