@@ -41,6 +41,7 @@ CLEAR_SCREEN=$'\033[2J\r\033[H'
 tmp_folder=${tmp_folder:-/tmp}
 debug_state_file=$tmp_folder/debug-state-$$
 debug_id_current=0
+debug=${debug:-}
 
 rm $tmp_folder/debug-* $tmp_folder/side-bug-* &>/dev/null || true
 
@@ -65,8 +66,8 @@ echo "$*" >>$side_bug_file
 COLUMNS=${COLUMNS:-120}
 
 debug_expansion_clean() {
-  local line shortest= plusses code plus_length
-  while read -r line || "${line:-}" ]]; do
+  local line shortest= plusses code plus_length from=$1
+  while read -r line || true; do
     if [[ "$line" =~ ^(\++)\ (.*) ]]; then
       plusses=${BASH_REMATCH[1]}
       code=${BASH_REMATCH[2]}
@@ -76,10 +77,12 @@ debug_expansion_clean() {
       elif [[ $plus_length == $shortest ]]; then
         echo "+ $code"
       fi
-    else
+    elif [[ "$line" ]]; then
       echo "$line"
+    else
+      break
     fi
-  done < <(cat "$1")
+  done < <(cat "$from")
 }
 
 debug_output_reversed_line() {
@@ -257,8 +260,8 @@ debug_trap() {
   elif [[ $debug_step_to_next_line == t \
           && "$raw_debug_path_to_source_file $debug_line_num" != "$debug_last_location" \
           && $debug_current_depth -le $debug_max_depth \
-          && $debug_current_function != none \
        ]]; then
+#          && $debug_current_function != none \
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_line${RESET}" >&$fd_original_err
     debug_step_to_next_line=f
     ok_to_debug=t
