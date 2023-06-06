@@ -81,7 +81,9 @@ handle_return
 }
 
 propogate_success_to_parents() {
-local from_cell=$from_cell dim_path=${1:-} completion_time=$completion_time
+local from_cell=$from_cell dim_path=${1:-} \
+  completion_time=${completion_time:-} \
+  changed=$changed
 local parent=${from_cell%/*} from_cell_part=${from_cell##*/}
 local parent_part=${parent##*/}
 if [[ $parent != $from_cell && ${#parent} -gt 1 ]]; then
@@ -100,7 +102,10 @@ if [[ $parent != $from_cell && ${#parent} -gt 1 ]]; then
     fi
     local sub_status=$cyto/status/sub
     if [[ -d $sub_status ]]; then
-      touch -d @$completion_time $sub_status/$dim_path || return 1
+      if [[ "$completion_time" ]]; then
+        touch -d @$completion_time $sub_status/$dim_path/last-good-update-end || return 1
+      fi
+      touch $sub_status/$dim_path/unchanged || return 1
     fi
   fi
 fi
@@ -109,7 +114,7 @@ return 0
 
 propogate_success_to_downstream() {
 local from_cell=$from_cell \
-  completion_time=$completion_time \
+  completion_time=${completion_time:-} \
   changed=$changed \
   down_path=$from_cell/.cyto/down down_folder folders
 local start_folder=${start_folder:-$down_path}
@@ -118,16 +123,27 @@ if [[ -d $start_folder ]]; then
   folders=$(find1 $start_folder -not -name '.*' -type d) || fail
   loop_over_var=folders \
     body='
-      local status_up=$value/.cyto/status/up
-      if [[ -d $status_up ]]; then
-        touch $status_up/.....
-      else
-        # recursive
-        propogate_success_to_downstream 
+      local up_cell_path=$(realpath $value)
+      local up_cell_name=${up_cell_path##*/} \
+        cell=${up_cell_path%/*/*/*}
+      local status_up=$cell/.cyto/status/up
+      if [[ -d $cell && $cell != $up_cell_path ]]; then
+        if [[ -d $status_up ]]; then
+          if [[ "$completion_time" ]]; then
+            touch @$completion_time \
+              $status_up/$up_cell_name/last-good-update-end || fail
+          fi
+          if [[ $changed == t && -f $status_up/$up_cell_name/unchanged ]]; then
+            rm $status_up/$up_cell_name/unchanged || fail
+          fi
+        else
+          # recursive
+          from_cell=$cell \
+            propogate_success_to_downstream || fail
+        fi
       fi
     ' \
     parallel_loop || fail
-
 fi
 return 0
 }
@@ -285,8 +301,7 @@ begin_function_flat
     local make_req=f \
       make_log=f \
       make_job=f \
-      make_status=f \
-      make_sub_status=f
+      make_status=f 
     begin_for feature in "${cell_features[@]}"; doo
       case $feature in
         req)
@@ -302,10 +317,6 @@ begin_function_flat
           make_log=f
         ;;
         status)
-          make_status=t
-        ;;
-        status/sub)
-          make_sub_status=t
           make_status=t
         ;;
         *)
@@ -325,9 +336,8 @@ begin_function_flat
     fi
     if [[ $make_status == t ]]; then
       mkdir -p $new_cyto/status || fail
-    fi
-    if [[ $make_sub_status == t ]]; then
       mkdir -p $new_cyto/status/sub || fail
+      mkdir -p $new_cyto/status/up || fail
     fi
   fi
 
@@ -691,6 +701,8 @@ begin_function
   eval "$localize_dim_vars" || fail
   if [[ $cell_is_leaf == t || $show_branches == t ]]; then
     info "$command $short_cell"
+  else
+    debug "$command $short_cell"
   fi
   if type -t command_$command &>/dev/null; then
     command_$command || fail
@@ -1159,6 +1171,7 @@ setup_context_defaults() {
   retry_scale=${retry_scale:-2} \
   cell_expiration=${cell_expiration:-} \
   cell_is_persistent=${cell_is_persistent:-f} \
+  cell_is_external=${cell_is_external:-f} \
   default_strategies=${default_strategies:-crl} \
   shuffle_chance=${shuffle_chance:-100} \
   lock_timeout=${lock_timeout:-30} \

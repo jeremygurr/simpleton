@@ -13,15 +13,20 @@ if [[ $pretend == f ]]; then
       touch -d @$completion_time $status_path/last-good-update-end || return 1
       cp -a $status_path/last-update-start \
             $status_path/last-good-update-start || return 1
-      completion_time=$completion_time \
+      local freshness=$completion_time
+      if [[ $cell_is_external == t ]]; then
+        freshness=
+      fi
+      changed=$freshness \
+        completion_time=$completion_time \
         from_cell=$cell_path \
         propogate_success_to_parents || return 1
-      changed=$something_changed \
+      changed=$freshness \
         completion_time=$completion_time \
         from_cell=$cell_path \
         propogate_success_to_downstream || return 1
     else
-      touch $status_path/last-bad-update-end || return 1
+      touch -d @$completion_time $status_path/last-bad-update-end || return 1
       cp -a $status_path/last-update-start \
             $status_path/last-bad-update-start || return 1
     fi
