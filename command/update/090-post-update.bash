@@ -1,6 +1,7 @@
 post_update() {
 local result_string
 
+completion_time=${completion_time:-$EPOCHSECONDS}
 if [[ $update_successful == t ]]; then
   result_string="successful"
 else
