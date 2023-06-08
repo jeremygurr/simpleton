@@ -123,46 +123,58 @@ begin_function_flat
     out "No description for this cell. Set cell_description variable in context file."
   fi
 
-  if [[ "${leaf_dims[*]:-}" ]]; then
-    local dim description values is_required required=()
-    out "Dimensions:"
-    begin_for dim in ${leaf_dims[*]}; doo
-      eval "description=\$${dim}_description" || fail
-      out "  $dim: $description"
-      if type -t ${dim}_member_expand >/dev/null; then
-        values=
-        is_required=f
-        eval "value='' ${dim}_member_expand" &>/dev/null || is_required=t
-        if [[ "$values" ]]; then
-          if [[ "$values" == $empty_member ]]; then
-            out "    default: (empty)"
-          else
-            out "    default: ${values[*]}"
-          fi
-        elif [[ $is_required == f ]]; then
-          out "    optional"
-        else
-          required+=( $dim )
-        fi
-        if [[ -v ${dim}_examples ]]; then
-          eval "local examples=( \"\${${dim}_examples[@]}\" )"
-          local example_count=${#examples[*]} i index_string=
-          for ((i=0; i<example_count; i++)); do
-            if [[ example_count -gt 1 ]]; then
-              index_string=" #$((i+1))"
-            fi
-            out "    example$index_string: ${examples[$i]}"
-          done
-        fi
-      fi
-    end_for
-    if [[ "$required" ]]; then
-      out "Required parameters: ${required[*]}"
-    fi
+  local required=()
+
+  if [[ "${leaf_dims:-}" ]]; then
+    out "Dimension parameters:"
+    show_dimensions ${leaf_dims[*]} || fail
+  fi
+
+  if [[ "${sub_dims:-}" ]]; then
+    out "Other parameters:"
+    show_dimensions ${sub_dims[*]} || fail
+  fi
+
+  if [[ "${required:-}" ]]; then
+    out "Required parameters: ${required[*]}"
   fi
 
 end_function_flat
 handle_return
+}
+
+show_dimensions() {
+local dims=( $* ) dim description values is_required
+begin_for dim in ${dims[*]}; doo
+  eval "description=\$${dim}_description" || fail
+  out "  $dim: $description"
+  if type -t ${dim}_member_expand >/dev/null; then
+    values=
+    is_required=f
+    eval "value='' ${dim}_member_expand" &>/dev/null || is_required=t
+    if [[ "$values" ]]; then
+      if [[ "$values" == $empty_member ]]; then
+        out "    default: (empty)"
+      else
+        out "    default: ${values[*]}"
+      fi
+    elif [[ $is_required == f ]]; then
+      out "    optional"
+    else
+      required+=( $dim )
+    fi
+    if [[ -v ${dim}_examples ]]; then
+      eval "local examples=( \"\${${dim}_examples[@]}\" )"
+      local example_count=${#examples[*]} i index_string=
+      for ((i=0; i<example_count; i++)); do
+        if [[ example_count -gt 1 ]]; then
+          index_string=" #$((i+1))"
+        fi
+        out "    example$index_string: ${examples[$i]}"
+      done
+    fi
+  fi
+end_for
 }
 
 show_help_for_command() {
