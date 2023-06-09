@@ -17,22 +17,44 @@ local log_message="No update needed"
 begin_function_flat
 
   if [[ -v leaf_dims ]]; then
-    needs_update=t
-    log_message="Needs update because this cell has dimensions, and so individual dimensions must be checked for update"
-  elif [[ ! -e $status_path/subs-up-to-date ]]; then
-    needs_update=t
-    log_message="Needs update because a sub cell is outdated"
-  elif [[ ! -e $status_path/deps-up-to-date ]]; then
-    needs_update=t
-    log_message="Needs update because a dependency is outdated"
-  elif [[ ! -e $status_path/last-good-update-start ]]; then
-    needs_update=t
-    log_message="Needs update because cell has never been updated successfully"
+    fork=f par=f function=get_leaf_needs_update for_each_leaf ${leaf_dims[*]} || fail
+    if [[ $needs_update == t ]]; then
+      log_message="Needs update because at least one leaf cell is out of date"
+    fi
+  fi
+
+  get_node_needs_update $cell_path || fail
+
+  if [[ $needs_update == t ]]; then
+    action=update_check debug "$log_message"
   else
-    get_is_stale $status_path || fail
-    if [[ $is_stale == t ]]; then
+    action=update_check info "$log_message"
+  fi
+
+end_function_flat
+handle_return
+}
+
+get_node_needs_update() {
+local cell_path=$1
+begin_function_flat
+  
+  if [[ $needs_update == f ]]; then
+    if [[ ! -e $status_path/subs-up-to-date ]]; then
       needs_update=t
-      log_message="Needs update because cell is stale"
+      log_message="Needs update because a sub cell is outdated"
+    elif [[ ! -e $status_path/deps-up-to-date ]]; then
+      needs_update=t
+      log_message="Needs update because a dependency is outdated"
+    elif [[ ! -e $status_path/last-good-update-start ]]; then
+      needs_update=t
+      log_message="Needs update because cell has never been updated successfully"
+    else
+      get_is_stale $status_path || fail
+      if [[ $is_stale == t ]]; then
+        needs_update=t
+        log_message="Needs update because cell is stale"
+      fi
     fi
   fi
 
@@ -47,14 +69,14 @@ begin_function_flat
     fi
   fi
 
-  if [[ $needs_update == t ]]; then
-    action=update_check debug "$log_message"
-  else
-    action=update_check info "$log_message"
-  fi
-
 end_function_flat
 handle_return
+}
+
+get_leaf_needs_update() {
+local cell_path=$cell_path
+local leaf_path=$leaf_path
+get_node_needs_update $cell_path$leaf_path
 }
 
 get_is_stale() {

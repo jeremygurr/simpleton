@@ -122,6 +122,7 @@ local start_folder=${start_folder:-$down_path}
 if [[ -d $start_folder ]]; then
   folders=$(find1 $start_folder -not -name '.*' -type d) || fail
   loop_over_var=folders \
+    par=t fork=f \
     body='
       local up_cell_path=$(realpath $value)
       local up_cell_name=${up_cell_path##*/} \
@@ -902,6 +903,7 @@ setup_default_each_handler() {
     fi
 
     loop_over_var=a \
+      fork=f \
       par=$p \
       head='eval "$ref=\$value" || fail' \
       body=execute_command_step_folder \
@@ -943,6 +945,8 @@ begin_function
 
     local leave_loop=0
     loop_over_var=files \
+      fork=f
+      par=t
       body='execute_command_step $value' \
       tail='
         if [[ $leave_loop -gt 0 ]]; then
@@ -1513,10 +1517,11 @@ handle_return
 #     the function. (optional)
 for_each_member() {
 local dim=$1 multi_cell=f \
-  function=$function finished=f \
-  fork_function=${fork:-f}
+  function=$function leave_loop=${leave_loop:-0} \
+  fork=${fork:-t} \
+  par=${par:-t}
 
-local vars='dim fork_function'
+local vars='dim fork par function'
 begin_function
 
   expand_values || fail
@@ -1526,12 +1531,12 @@ begin_function
   fi
 
   loop_over_var=values \
-    fork=$fork_function \
     head="local member=\$value
       eval \"local d_$dim=\$member\"" \
-    body=execute_command_step_folder \
+    body=$function \
     tail='
-      if [[ $finished == t ]]; then
+      if [[ $leave_loop -gt 0 ]]; then
+        let leave_loop-- || true
         break
       fi
       ' \
@@ -1541,55 +1546,55 @@ end_function
 handle_return
 }
 
-# dim vars and functions should be set before this is called
 # will construct cell_values array with current set of values of the
 #   cell dims, which can be used in branch or leaf functions
-for_each_cell() {
+for_each_leaf() {
 
-local leaf_function=${leaf_function:-} \
-  branch_function=${branch_function:-} \
-  fork_leaves=${fork_leaves:-t} \
-  cell_values=( ) \
-  multi_cell=${multi_cell:-f} \
-  multi_cell=${multi_cell:-f} \
-  remaining_cell_dims=( "$@" ) 
+local dim_array=( $* ) multi_cell=f \
+  leaf_function=$function leave_loop=${leave_loop:-0} \
+  fork=${fork:-t} \
+  par=${par:-t}
 
-if [[ "${remaining_cell_dims:-}" ]]; then
-  local finished=f
-  cell_pivot "${remaining_cell_dims[@]}" || return 1
-else
-  if [[ "$leaf_function" ]]; then
-    if [[ $fork_leaves == t ]]; then
-      fork $leaf_function || fail
-    else
-      $leaf_function || return 1
-    fi
-  fi
-  if [[ "$branch_function" ]]; then
-    $branch_function || return 1
-  fi
-fi
-}
+local dim=${dim_array[0]} \
+  remaining_dims=${dim_array[*]:1} \
+  function= \
+  branch_values=${branch_values[*]:-()} \
+  leaf_path=${leaf_path:-}
 
-# check if the dim exists before calling this
-# other inputs: function
-# *sometimes* runs as a subshell
-cell_pivot() {
-
-local -r remaining_cell_dims=( "$@" ) 
-local -r dim=$remaining_cell_dims
-local values=() \
-  cell_values=( "${cell_values[@]}" ) \
-  processes= 
-
-begin_function_flat
+local vars='dim fork par function'
+begin_function
 
   expand_values || fail
-  cell_pivot_values || fail
 
-end_function_flat
+  if [[ "${#values[*]}" -gt 1 ]]; then
+    multi_cell=t
+  fi
+
+  local loop_function=$leaf_function
+  if [[ "${remaining_dims:-}" ]]; then
+    loop_function="function=$leaf_function for_each_leaf ${remaining_dims[*]}"
+  fi
+
+  branch_values+=()
+  local parent_leaf_path=$leaf_path
+  loop_over_var=values \
+    head="local member=\$value
+      branch_values[-1]=\$value
+      get_sane_value \"\$value\"
+      leaf_path=$parent_leaf_path/.dim/\$sane_value
+      eval \"local d_$dim=\$member\"
+      " \
+    body=$loop_function \
+    tail='
+      if [[ $leave_loop -gt 0 ]]; then
+        let leave_loop-- || true
+        break
+      fi
+      ' \
+    parallel_loop || fail
+
+end_function
 handle_return
-
 }
 
 # input: dim
@@ -1713,7 +1718,7 @@ return 0
 parallel_loop() {
 local loop_over_var2=$loop_over_var head2=${head:-} \
   body2=$body tail2=${tail:-} \
-  par2=${par:-t} fork2=${fork:-f} \
+  par2=$par fork2=$fork \
   array 
 
 # Make sure these variables don't get passed into inner loops

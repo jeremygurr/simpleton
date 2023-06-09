@@ -83,6 +83,7 @@ debug_expansion_clean() {
       break
     fi
   done < <(cat "$from")
+  return 0
 }
 
 debug_output_reversed_line() {
@@ -125,7 +126,10 @@ debug_trap() {
     debug_current_depth=${#FUNCNAME[*]}
 
   if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
+    # [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
     return 0
+  # else
+  #   [[ $debug_debug == t ]] && echo "${CYAN}Not ignoring $debug_current_function${RESET}" >&$fd_original_err
   fi
 
   if [[ -f "$debug_state_file" ]]; then
@@ -912,7 +916,11 @@ debug_line='$debug_line'
 debug_line_old='$debug_line_old'
 debug_max_depth='$debug_max_depth'
 debug_original_tracefd='$debug_original_tracefd'
+debug_prev_command='$debug_prev_command'
+debug_prev_function='$debug_prev_function'
+debug_prev_line='$debug_prev_line'
 debug_prev_search='$debug_prev_search'
+debug_prev_source_file='$debug_prev_source_file'
 debug_search='$debug_search'
 debug_search_deep='$debug_search_deep'
 debug_step_to_later_line='$debug_step_to_later_line'
@@ -921,6 +929,7 @@ debug_step_to_next_file='$debug_step_to_next_file'
 debug_step_to_next_function='$debug_step_to_next_function'
 debug_stepping='$debug_stepping'
 debug_stop_at='$debug_stop_at'
+debug_subshell='$debug_subshell'
 debug_watch='$debug_watch'
 debug_watch_style='$debug_watch_style'
 PS4='$PS4'
@@ -1046,7 +1055,7 @@ if [[ $debugging == f ]]; then
     if [[ "$debug_var" ]]; then
       set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
     fi
-    # [[ $debug_debug == t ]] && echo "debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell" >&$fd_original_err
+    # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
     debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
     if [[ "$debug_var" ]]; then
       set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
@@ -1075,7 +1084,7 @@ fi
 }
 
 debug_setup() {
-export debug_ignore=${debug_ignore:- debug echo_align error fatal find1 fork info out safe_link trace warn write_to_log }
+export debug_ignore=${debug_ignore:- debug echo_align error fatal find1 fork info out safe_link trace unrealpath warn write_to_log }
 if [[ "${debug_unignore:-}" ]]; then
   local x
   for x in ${debug_unignore}; do
@@ -1092,7 +1101,11 @@ if [[ -n "${debug:-}" && $debug != f || \
    -n "${debug_line:-}" ]]; then
 
   if [[ "$debug" && $debug != t ]]; then
-    debug_function=$debug
+    if [[ "$debug" =~ ^[0-9]+$ ]]; then
+      debug_id=$debug
+    else
+      debug_function=$debug
+    fi
     debug=t
   fi
 
