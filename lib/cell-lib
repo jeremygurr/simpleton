@@ -639,6 +639,7 @@ trace_step_execution=${trace_step_execution:-f}
 trace_op=${trace_op:-}
 
 # Usage: execute_op {op name}
+# returns 1 if no op found
 execute_op() {
 local op_name=$1 op ignore_missing=${ignore_missing:-f} \
   found_op= found_op_function=
@@ -665,8 +666,14 @@ begin_function
     fi
 
   else
-    fatal "No $op_name operation found in $op_path"
-    fail1
+
+    if [[ $ignore_missing == t ]]; then
+      debug "No $op_name operation found in $op_path, ignoring"
+    else
+      fatal "No $op_name operation found in $op_path"
+      fail1
+    fi
+
   fi
 
 end_function
@@ -1187,6 +1194,9 @@ setup_context_defaults() {
   in_path=${in_path:-} \
   out_path=${out_path:-} 
 
+  # Make this go back to default for any further contexts loaded
+  # fresh passed in by user should only apply to top level cell, not to deps or subs
+  fresh=
 }
 
 # input must be a folder
@@ -1556,7 +1566,7 @@ local dim_array=( $* ) multi_cell=f \
   par=${par:-t}
 
 local dim=${dim_array[0]} \
-  remaining_dims=${dim_array[*]:1} \
+  remaining_dims=( ${dim_array[*]:1} ) \
   function= \
   branch_values=${branch_values[*]:-()} \
   leaf_path=${leaf_path:-}
@@ -1583,6 +1593,7 @@ begin_function
       get_sane_value \"\$value\"
       leaf_path=$parent_leaf_path/.dim/\$sane_value
       eval \"local d_$dim=\$member\"
+      par=\$par2 fork=\$fork2
       " \
     body=$loop_function \
     tail='

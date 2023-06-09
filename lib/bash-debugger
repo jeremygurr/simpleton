@@ -351,6 +351,18 @@ debug_trap() {
     rm "$debug_out_path"
   fi
 
+  local display_command=$debug_command
+  local raw_display_command=$display_command
+  if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] \
+     && [[ $debug_current_function != none ]]; then
+    display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
+    raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
+  fi
+
+  if [[ $raw_display_command =~ for\ (.*)\ in ]]; then
+    debug_watch_once=${BASH_REMATCH[1]}
+  fi
+
   if [[ "$debug_watch_once" ]]; then
     set +u
     local w wn
@@ -365,14 +377,6 @@ debug_trap() {
     echo >&$fd_original_err
     debug_watch_once=
     set -u
-  fi
-
-  local display_command=$debug_command
-  local raw_display_command=$display_command
-  if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] \
-     && [[ $debug_current_function != none ]]; then
-    display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
-    raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
   fi
 
   debug_step_to_next_line=f
@@ -438,10 +442,6 @@ debug_trap() {
       else
         echo -n " $raw_display_command " >&$fd_original_err
       fi
-    fi
-
-    if [[ $raw_display_command =~ for\ (.*)\ in ]]; then
-      debug_watch_once=${BASH_REMATCH[1]}
     fi
 
     debug_long_command=f

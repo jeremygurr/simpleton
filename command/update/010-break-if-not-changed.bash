@@ -37,6 +37,7 @@ handle_return
 
 get_node_needs_update() {
 local cell_path=$1
+local status_path=$cell_path/.cyto/status
 begin_function_flat
   
   if [[ $needs_update == f ]]; then
@@ -58,15 +59,18 @@ begin_function_flat
     fi
   fi
 
-  if [[ $needs_update=t && ${prevalidate:-f} == t ]] && type check &>/dev/null; then
-    check || fail
-    if [[ "${status:-}" && "${status:-}" == good ]]; then
-      needs_update=f
-      log_message="No update needed because remote value already matches intended value"
-    elif [[ "${value:-}" && "${result:-}" == "${value:-}" ]]; then
-      needs_update=f
-      log_message="No update needed because remote value already matches intended value"
+  if [[ $needs_update=t && ${prevalidate:-f} == t ]]; then
+
+    if execute_op check; then
+      if [[ "${status:-}" && "${status:-}" == good ]]; then
+        needs_update=f
+        log_message="No update needed because remote value already matches intended value"
+      elif [[ "${value:-}" && "${result:-}" == "${value:-}" ]]; then
+        needs_update=f
+        log_message="No update needed because remote value already matches intended value"
+      fi
     fi
+
   fi
 
 end_function_flat
