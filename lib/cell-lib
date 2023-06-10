@@ -491,11 +491,13 @@ begin_function
 
   if [[ ! -d $sub_cell ]]; then
 
+    local parent=${sub_cell%/*}
+    info "Creating sub cell ${parent##*/}/${sub_cell##*/}"
+
     if [[ -d $sub_cell.new ]]; then
       rm -rf $sub_cell.new || fail
     fi
 
-    local parent=${sub_cell%/*}
     if [[ "$parent" == "$sub_cell" ]]; then
       fatal "Can't create sub cells in a cell without parents: $sub_cell"
       stack_trace
@@ -808,9 +810,9 @@ begin_function
     }
   eval "$localize_dim_vars" || fail
   if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-    info "$command $short_cell"
+    info "Executing command: $command $short_cell"
   else
-    debug "$command $short_cell"
+    debug "Executing command: $command $short_cell"
   fi
   if type -t command_$command &>/dev/null; then
     command_$command || fail
@@ -1721,15 +1723,23 @@ begin_function_flat
   values=( ${!ddim:-} )
   type -t ${dim}_member_expand >/dev/null && has_member_expand_function=t
 
-  local problem=
+  local problem= failed=f
   if [[ ! "${values:-}" ]]; then
-    expand_values_plural || true
+    expand_values_plural || failed=t
   else
-    expand_values_single || true
+    expand_values_single || failed=t
   fi
   if [[ "$problem" ]]; then
     fatal "$problem"
     fail1
+  elif [[ $failed == t ]]; then
+    if [[ ! "$values" ]]; then
+      fatal "Missing required dimension: $dim"
+      fail1
+    else
+      fatal "Error expanding values for dimension: $dim"
+      fail1
+    fi
   fi
 
   values=( $new_value_list )
@@ -2109,8 +2119,6 @@ if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
     exec 2>&$fd_original_err || return 1
     eval "exec $fd_trace>&-" || return 1
     output_teed_to_file=f
-  else
-    warn "Output already teed to file"
   fi
 fi
 return 0
