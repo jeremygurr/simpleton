@@ -240,10 +240,18 @@ debug_trap() {
 
   elif [[ "$debug_function" \
           && $debug_function == $debug_current_function \
+          || "$debug_search" \
+          && $debug_search == $debug_current_function \
        ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_function${RESET}" >&$fd_original_err
-    debug_function_old=$debug_function
-    debug_function=
+    if [[ "$debug_function" ]]; then
+      debug_function_old=$debug_function
+      debug_search_old=$debug_function
+      debug_function=
+    else
+      debug_search_old=$debug_search
+      debug_search=
+    fi
     debug_max_depth=$debug_current_depth
     ok_to_debug=t
 
@@ -524,7 +532,7 @@ debug_trap() {
             debug_search=${debug_search//\$/\\\$}
             debug_search=${debug_search//[/\\[}
           fi
-          debug_prev_search=$debug_search
+          debug_search_old=$debug_search
           debug_search_deep=t
           debug_r=0
           debug_long_command=t
@@ -594,7 +602,7 @@ debug_trap() {
             debug_search=${debug_search//\$/\\\$}
             debug_search=${debug_search//[/\\[}
           fi
-          debug_prev_search=$debug_search
+          debug_search_old=$debug_search
           debug_search_deep=f
           debug_r=0
           debug_long_command=t
@@ -806,9 +814,9 @@ debug_trap() {
         debug_save_state
         ;;
       .)
-        if [[ "${debug_prev_search:-}" ]]; then
-          echo "# Repeating search for $debug_prev_search" >&$fd_original_err
-          debug_search=${debug_prev_search:-}
+        if [[ "${debug_search_old:-}" ]]; then
+          echo "# Repeating search for $debug_search_old" >&$fd_original_err
+          debug_search=${debug_search_old:-}
           debug_r=0
           debug_long_command=t
           debug_subshell=t
@@ -919,7 +927,7 @@ debug_original_tracefd='$debug_original_tracefd'
 debug_prev_command='$debug_prev_command'
 debug_prev_function='$debug_prev_function'
 debug_prev_line='$debug_prev_line'
-debug_prev_search='$debug_prev_search'
+debug_search_old='$debug_search_old'
 debug_prev_source_file='$debug_prev_source_file'
 debug_search='$debug_search'
 debug_search_deep='$debug_search_deep'
@@ -1016,7 +1024,7 @@ if [[ $debugging == f ]]; then
   export debug_prev_command=${debug_prev_command:-none}
   export debug_prev_function=${debug_prev_function:-none}
   export debug_prev_line=${debug_prev_line:-0}
-  export debug_prev_search=${debug_prev_search:-}
+  export debug_search_old=${debug_search_old:-}
   export debug_prev_source_file=${debug_prev_source_file:-none}
   export debug_rewind=${debug_rewind:-f}
   export debug_search=${debug_search:-}
@@ -1164,7 +1172,7 @@ if [[ -n "${debug:-}" && $debug != f || \
     debug_stepping=f
   fi
 
-  debug_prev_search=${debug_prev_search:-${debug_search:-}}
+  debug_search_old=${debug_search_old:-${debug_search:-}}
   debug_start
 fi
 }

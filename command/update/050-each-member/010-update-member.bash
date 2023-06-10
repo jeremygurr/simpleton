@@ -11,7 +11,10 @@ vars=member; begin_function
     # supports empty seed string, meaning no seed was found.
     create_sub_cell "$seed" $member_path || fail
   fi
-  execute_command $member_path update || fail
+  get_node_needs_update $member_path || return 1
+  if [[ $needs_update == t ]]; then
+    fork execute_command $member_path update || fail
+  fi
 end_function
 handle_return
 }

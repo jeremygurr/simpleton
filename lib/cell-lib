@@ -80,6 +80,104 @@ end_function_flat
 handle_return
 }
 
+# returns needs_update
+get_needs_update() {
+needs_update=f
+local log_message="No update needed"
+begin_function_flat
+
+  if [[ -v leaf_dims ]]; then
+    fork=f par=f function=get_leaf_needs_update for_each_leaf ${leaf_dims[*]} || fail
+    if [[ $needs_update == t ]]; then
+      log_message="Needs update because at least one leaf cell is out of date"
+    fi
+  fi
+
+  get_node_needs_update $cell_path || fail
+
+  if [[ $needs_update == t ]]; then
+    action=update_check debug "$log_message"
+  else
+    action=update_check info "$log_message"
+  fi
+
+end_function_flat
+handle_return
+}
+
+get_node_needs_update() {
+local cell_path=$1
+local status_path=$cell_path/.cyto/status
+begin_function_flat
+  
+  if [[ $needs_update == f ]]; then
+    if [[ ! -e $status_path/subs-up-to-date ]]; then
+      needs_update=t
+      log_message="Needs update because a sub cell is outdated"
+    elif [[ ! -e $status_path/deps-up-to-date ]]; then
+      needs_update=t
+      log_message="Needs update because a dependency is outdated"
+    elif [[ ! -e $status_path/last-good-update-end ]]; then
+      needs_update=t
+      log_message="Needs update because cell has never been updated successfully"
+    else
+      get_is_stale $status_path || fail
+      if [[ $is_stale == t ]]; then
+        needs_update=t
+        log_message="Needs update because cell is stale"
+      fi
+    fi
+  fi
+
+  if [[ $needs_update=t && ${prevalidate:-f} == t ]]; then
+
+    if execute_op check; then
+      if [[ "${status:-}" && "${status:-}" == good ]]; then
+        needs_update=f
+        log_message="No update needed because remote value already matches intended value"
+      elif [[ "${value:-}" && "${result:-}" == "${value:-}" ]]; then
+        needs_update=f
+        log_message="No update needed because remote value already matches intended value"
+      fi
+    fi
+
+  fi
+
+end_function_flat
+handle_return
+}
+
+get_leaf_needs_update() {
+local cell_path=$cell_path
+local leaf_path=$leaf_path
+get_node_needs_update $cell_path$leaf_path
+}
+
+get_is_stale() {
+begin_function_flat
+  is_stale=t
+  if [[ ! "$required_freshness" || "$required_freshness" == inf ]]; then
+    is_stale=f
+  elif [[ $required_freshness != 0 ]]; then
+    local fresh_seconds
+    convert_to_seconds $required_freshness fresh_seconds || fail
+    local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds)) \
+      out_timestamp= freshness_file
+    is_stale=f
+    begin_for freshness_file in sub-freshness dep-freshness last-good-update-end; doo
+      if [[ -f $status_path/$freshness_file ]]; then
+        out_timestamp=$(date -r $status_path/freshness_file +%s)
+      fi
+      if [[ "$out_timestamp" && $out_timestamp -lt $fresh_cutoff ]]; then
+        is_stale=t
+      fi
+    end_for
+  fi
+end_function_flat
+handle_return
+}
+
+# Not sure we need this
 propogate_success_to_parents() {
 local from_cell=$from_cell dim_path=${1:-} \
   completion_time=${completion_time:-} \
@@ -112,6 +210,7 @@ fi
 return 0
 }
 
+# Not sure we need this
 propogate_success_to_downstream() {
 local from_cell=$from_cell \
   completion_time=${completion_time:-} \
@@ -696,6 +795,7 @@ else
 fi
 }
 
+# should be run in a subshell since it loads the context
 execute_command() {
 local cell=$(realpath $1) command=$2
 
@@ -743,7 +843,6 @@ handle_return
 #   {file}.java           execute java code
 #   {file}.bash           execute bash code
 #   {folder}              go through each item in folder and execute according to folder language
-# should be run in a subshell to avoid messing up parent vars
 execute_command_step() {
 local step=$1
 
@@ -1736,7 +1835,7 @@ local loop_over_var2=$loop_over_var head2=${head:-} \
 local loop_over_var= head= body= tail= par= fork=
 
 local vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
-begin_function
+begin_function_flat
 
   if [[ ! -v $loop_over_var2 ]]; then
     fatal "Internal error: Variable doesn't exist: $loop_over_var2"
@@ -1778,7 +1877,7 @@ begin_function
 
   wait_for_sub_processes || fail
 
-end_function
+end_function_flat
 handle_return
 }
 
@@ -2018,22 +2117,27 @@ return 0
 }
 
 get_short_cell() {
-local x y top_cell=${top_cell:-}
-short_cell=$1
-if x=${short_cell#$PWD/}
-   [[ $x != $short_cell && ${#x} -gt 0 ]]; then
-  short_cell=$x
-elif y=${short_cell%/*/*/*} 
-     x=${short_cell#$y/}
-     [[ $x != $short_cell && ${#x} -gt 0 ]]; then
-  short_cell=$x
-elif y=${short_cell%/*/*} 
-     x=${short_cell#$y/}
-     [[ $x != $short_cell && ${#x} -gt 0 ]]; then
-  short_cell=$x
-elif x=${short_cell##*/} 
-     [[ $x != $short_cell && ${#x} -gt 0 ]]; then
-  short_cell=$x
+local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string=
+if [[ "$trunk_cell" =~ .dim ]]; then
+  x=${trunk_cell//\/.dim\// }
+  dim_string=" ${x#* }"
+  trunk_cell=${x%% *}
 fi
+if x=${trunk_cell#$PWD/}
+   [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+  trunk_cell=$x
+elif y=${trunk_cell%/*/*/*} 
+     x=${trunk_cell#$y/}
+     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+  trunk_cell=$x
+elif y=${trunk_cell%/*/*} 
+     x=${trunk_cell#$y/}
+     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+  trunk_cell=$x
+elif x=${trunk_cell##*/} 
+     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+  trunk_cell=$x
+fi
+short_cell="$trunk_cell$dim_string"
 }
 
