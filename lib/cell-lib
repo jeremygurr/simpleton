@@ -803,6 +803,11 @@ local cell=$(realpath $1) command=$2
 
 local vars='cell command'
 begin_function
+  if [[ "$cell" == */.dna/sub/* ]]; then
+    fatal "Can't execute a command within a cell template. Only real cells are valid."
+    fatal "Likely a link was made to a template inside of the .dna/sub folder instead of the real cell."
+    fail1
+  fi
   local short_cell; get_short_cell $cell
   cell_context_load || {
     fatal "Context failed to load for $cell"
@@ -1908,24 +1913,24 @@ handle_return
 # input: parallel processes
 wait_for_sub_processes() {
 if [[ "$processes" ]]; then
-  trace $log_info "Waiting for sub processes to complete"
+  info "Waiting for sub processes to complete"
   local process last_err_code= last_failed_process= rc
   for process in $processes; do
-    trace $log_trace "Waiting for process $process"
+    trace "Waiting for process $process"
     wait $process &>/dev/null; rc=$?
     if [[ $rc -gt 0 && $rc -lt 127 ]]; then
       if [[ ! "$last_err_code" ]]; then
         last_err_code=$rc
         last_failed_process=$process
       else
-        trace $log_warn "Subprocess $process failed to terminate successfully"
+        warn "Subprocess $process failed to terminate successfully"
         return 1
       fi
     fi
   done
   if [[ "$last_err_code" ]]; then
     if [[ "$last_err_code" == 1 ]]; then
-      trace $log_warn "Subprocess $last_failed_process failed to terminate successfully"
+      warn "Subprocess $last_failed_process failed to terminate successfully"
       return 1
     fi
     return $last_err_code
@@ -1940,7 +1945,7 @@ local cell_max_load=${cell_max_load:-10}
 local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
 local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
 if [[ $current_load -gt $cell_max_load ]]; then
-  trace $log_warn "Load average is too high ($current_load > $cell_max_load)," \
+  warn "Load average is too high ($current_load > $cell_max_load)," \
     "waiting until things cool down first."
   local time_waited=0
   while [[ $current_load -gt $cell_max_load ]]; do
@@ -2139,20 +2144,16 @@ local content=( "$1"/* )
 [[ ! -e $content ]]
 }
 
-output_teed_to_file=
+tee_files=( )
 paused_tee_file=
 
 tee_output_to_log() {
 if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
-  if [[ "$output_teed_to_file" ]]; then
-    fatal "Internal error: tee attempted when a tee is already present"
-    return 1
-  fi
   exec 1> >(tee -a "$log_file") || return 1
   exec 2> >(tee -a "$log_file") || return 1
   eval "exec $fd_trace>>$log_file" || return 1
   BASH_XTRACEFD=$fd_trace
-  output_teed_to_file=$log_file
+  tee_files+=( $log_file )
   start_tracing
 fi
 return 0
@@ -2160,21 +2161,24 @@ return 0
 
 untee_output() {
 if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
-  if [[ "$output_teed_to_file" ]]; then
+  if [[ "$tee_files" ]]; then
     stop_tracing
     BASH_XTRACEFD=
     exec 1>&$fd_original_out || return 1
     exec 2>&$fd_original_err || return 1
     eval "exec $fd_trace>&-" || return 1
-    output_teed_to_file=
+    local tee_size=${#tee_files[*]}
+    tee_files=( ${tee_files[*]:0:$((tee_size-1))} )
+  else
+    warn "untee was called when nothing was teed"
   fi
 fi
 return 0
 }
 
 pause_tee() {
-if [[ "$output_teed_to_file" ]]; then
-  paused_tee_file=$output_teed_to_file
+if [[ "$tee_files" ]]; then
+  paused_tee_file=${tee_files[-1]}
   untee_output || return 1
 fi
 return 0
