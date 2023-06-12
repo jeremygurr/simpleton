@@ -808,6 +808,7 @@ begin_function
     fatal "Context failed to load for $cell"
     fail1
     }
+  validate_dims || fail
   eval "$localize_dim_vars" || fail
   if [[ $cell_is_leaf == t || $show_branches == t ]]; then
     info "Executing command: $command $short_cell"
@@ -1139,6 +1140,19 @@ else
     get_cell_path $subject
   fi
 fi
+}
+
+validate_dims() {
+local dim
+for dim in ${leaf_dims[*]} ${sub_dims[*]}; do
+  if dim_is_required $dim; then
+    if [[ ! -v $dim && ! -v ${dim}s ]]; then
+      fatal "Missing require parameter: $dim"
+      return 1
+    fi
+  fi
+done
+return 0
 }
 
 handle_secure_edit() {
@@ -1999,6 +2013,12 @@ if [[ -d $cell/.dna/sub-dim ]]; then
 fi
 }
 
+dim_is_required() {
+local dim=$1 values= problem=
+value= ${dim}_member_expand || return 0
+return 1
+}
+
 load_parent_context() { 
 local cell=$1
 local parent=${cell%/*}
@@ -2092,11 +2112,12 @@ local content=( "$1"/* )
 [[ ! -e $content ]]
 }
 
-output_teed_to_file=f
+output_teed_to_file=
+paused_tee_file=
 
 tee_output_to_log() {
 if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
-  if [[ $output_teed_to_file == t ]]; then
+  if [[ "$output_teed_to_file" ]]; then
     fatal "Internal error: tee attempted when a tee is already present"
     return 1
   fi
@@ -2104,7 +2125,7 @@ if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
   exec 2> >(tee -a "$log_file") || return 1
   eval "exec $fd_trace>>$log_file" || return 1
   BASH_XTRACEFD=$fd_trace
-  output_teed_to_file=t
+  output_teed_to_file=$log_file
   start_tracing
 fi
 return 0
@@ -2112,17 +2133,34 @@ return 0
 
 untee_output() {
 if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
-  if [[ $output_teed_to_file == t ]]; then
+  if [[ "$output_teed_to_file" ]]; then
     stop_tracing
     BASH_XTRACEFD=
     exec 1>&$fd_original_out || return 1
     exec 2>&$fd_original_err || return 1
     eval "exec $fd_trace>&-" || return 1
-    output_teed_to_file=f
+    output_teed_to_file=
   fi
 fi
 return 0
 }
+
+pause_tee() {
+if [[ "$output_teed_to_file" ]]; then
+  paused_tee_file=$output_teed_to_file
+  untee_output || return 1
+fi
+return 0
+}
+
+unpause_tee() {
+if [[ "$paused_tee_file" ]]; then
+  tee_output_to_log $paused_tee_file || return 1
+  paused_tee_file=
+fi
+return 0
+}
+
 
 get_short_cell() {
 local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string=
