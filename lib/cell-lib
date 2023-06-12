@@ -446,6 +446,9 @@ handle_return
 }
 
 create_sub_cells() {
+if [[ -f "$status_path/subs-up-to-date" ]]; then
+  return 0
+fi
 if [[ "$sub_path" ]]; then
   create_sub_cells2 $cell_path '' || return 1
 fi
@@ -465,11 +468,15 @@ for sub_full in $subs; do
   sub=${sub_full##*/}
   if [[ -f $sub_full ]]; then
     safe_link $(realpath $sub_full) $seed$relative_path/$sub || return 1
+  elif [[ -L $sub_full ]]; then
+    cp $(realpath $sub_full) $seed$relative_path/$sub || return 1
   elif [[ -d $sub_full ]]; then
     create_sub_cell $seed $seed$relative_path/$sub || return 1
     if [[ "$relative_path" ]]; then
+      # recursive
       create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
     else
+      # recursive
       create_sub_cells2 $seed $sub || return 1
     fi
   fi
@@ -2161,7 +2168,7 @@ return 0
 
 untee_output() {
 if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
-  if [[ "$tee_files" ]]; then
+  if [[ "${tee_files:-}" ]]; then
     stop_tracing
     BASH_XTRACEFD=
     exec 1>&$fd_original_out || return 1
@@ -2177,7 +2184,7 @@ return 0
 }
 
 pause_tee() {
-if [[ "$tee_files" ]]; then
+if [[ "${tee_files:-}" ]]; then
   paused_tee_file=${tee_files[-1]}
   untee_output || return 1
 fi
