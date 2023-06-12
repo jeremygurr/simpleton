@@ -1144,7 +1144,7 @@ fi
 
 validate_dims() {
 local dim
-for dim in ${leaf_dims[*]} ${sub_dims[*]}; do
+for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
   if dim_is_required $dim; then
     if [[ ! -v $dim && ! -v ${dim}s ]]; then
       fatal "Missing require parameter: $dim"
@@ -2009,6 +2009,33 @@ if [[ -d $cell/.dna/sub-dim ]]; then
     dim_var_plural=${dim_var}s
     sub_dims+=( $dim_var )
     localize_dim_vars+="local d_$dim_var=\${d_$dim_var:-\${$dim_var:-}} d_$dim_var_plural=\${d_$dim_var_plural:-\${$dim_var_plural:-}}; "
+  done
+fi
+
+props=( )
+if [[ -d $cell/.dna/prop ]]; then
+  local contents=$(find1 $cell/.dna/prop -not -name ".*" | sort -g) || return 1
+  for dim in $contents; do
+    source $dim || return 1
+    dim_var=${dim##*/}
+    if [[ $dim_var =~ [0-9]+-(.*) ]]; then
+      dim_var=${BASH_REMATCH[1]}
+    fi
+    props+=( $dim_var )
+
+    local value= values=
+    if [[ -v $dim_var ]]; then
+      value=${!dim_var}
+    fi
+    local f=${dim_var}_member_expand 
+    if type -t $f &>/dev/null; then
+      $f || true
+    fi
+    if [[ "$values" ]]; then
+      value=$values
+    fi
+
+    localize_dim_vars+="local d_$dim_var=$value"
   done
 fi
 }
