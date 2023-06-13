@@ -32,7 +32,13 @@ if [[ $pretend == f ]]; then
             $status_path/last-bad-update-start || return 1
     fi
   fi
-  info "Update $result_string."
+
+  if [[ $cell_is_leaf == t || $show_branches == t ]]; then
+    info "Update $result_string."
+  else
+    debug "Update $result_string."
+  fi
+
 else
   info "Pretend update $result_string."
 fi
