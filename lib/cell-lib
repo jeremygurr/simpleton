@@ -1989,11 +1989,27 @@ return 1
 }
 
 setup_dims() {
-local dim dim_var dim_var_plural cell=$1
-leaf_dims=( )
+
+local cell=$1
 localize_dim_vars=
-if [[ -d $cell/.dna/dim ]]; then
-  local contents=$(find1 $cell/.dna/dim -not -name ".*" | sort -g) || return 1
+
+load_dims $cell/.dna/dim || return 1
+leaf_dims=( ${dims[*]:-} )
+
+load_dims $cell/.dna/sub-dim || return 1
+sub_dims=( ${dims[*]:-} )
+
+props=()
+load_props $cell/.dna/prop || return 1
+load_props $cell/.dna/leaf/prop || return 1
+
+}
+
+load_dims() {
+local dim_path=$1 dim dim_var dim_var_plural 
+dims=()
+if [[ -d $dim_path ]]; then
+  local contents=$(find1 $dim_path -not -name ".*" | sort -g) || return 1
   for dim in $contents; do
     source $dim || return 1
     dim_var=${dim##*/}
@@ -2001,29 +2017,16 @@ if [[ -d $cell/.dna/dim ]]; then
       dim_var=${BASH_REMATCH[1]}
     fi
     dim_var_plural=${dim_var}s
-    leaf_dims+=( $dim_var )
+    dims+=( $dim_var )
     localize_dim_vars+="local d_$dim_var=\${d_$dim_var:-\${$dim_var:-}} d_$dim_var_plural=\${d_$dim_var_plural:-\${$dim_var_plural:-}}; "
   done
 fi
+}
 
-sub_dims=( )
-if [[ -d $cell/.dna/sub-dim ]]; then
-  local contents=$(find1 $cell/.dna/sub-dim -not -name ".*" | sort -g) || return 1
-  for dim in $contents; do
-    source $dim || return 1
-    dim_var=${dim##*/}
-    if [[ $dim_var =~ [0-9]+-(.*) ]]; then
-      dim_var=${BASH_REMATCH[1]}
-    fi
-    dim_var_plural=${dim_var}s
-    sub_dims+=( $dim_var )
-    localize_dim_vars+="local d_$dim_var=\${d_$dim_var:-\${$dim_var:-}} d_$dim_var_plural=\${d_$dim_var_plural:-\${$dim_var_plural:-}}; "
-  done
-fi
-
-props=( )
-if [[ -d $cell/.dna/prop ]]; then
-  local contents=$(find1 $cell/.dna/prop -not -name ".*" | sort -g) || return 1
+load_props() {
+local prop_path=$1 dim dim_var
+if [[ -d $prop_path ]]; then
+  local contents=$(find1 $prop_path -not -name ".*" | sort -g) || return 1
   for dim in $contents; do
     source $dim || return 1
     dim_var=${dim##*/}
