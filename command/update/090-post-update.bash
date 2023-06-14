@@ -21,11 +21,11 @@ if [[ $pretend == f ]]; then
       changed=$freshness \
         completion_time=$completion_time \
         from_cell=$cell_path \
-        propogate_success_to_parents || return 1
+        propagate_success_to_parents || return 1
       changed=$freshness \
         completion_time=$completion_time \
         from_cell=$cell_path \
-        propogate_success_to_downstream || return 1
+        propagate_success_to_downstream || return 1
     else
       touch -d @$completion_time $status_path/last-bad-update-end || return 1
       cp -a $status_path/last-update-start \
