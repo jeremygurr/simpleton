@@ -4,9 +4,9 @@ begin_function_flat
 
 if [[ $can_update == t ]]; then
   if [[ $update_successful == t && $post_validate == t ]]; then
-    local status=good
+    local check_successful
     execute_op check || return 1
-    if [[ $status == bad ]]; then
+    if [[ $check_successful == f ]]; then
       update_successful=f
       can_retry=f
     fi

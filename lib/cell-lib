@@ -129,16 +129,16 @@ begin_function_flat
     fi
   fi
 
-  if [[ $needs_update=t && ${prevalidate:-f} == t ]]; then
+  if [[ $needs_update=t && ${pre_validate:-f} == t ]]; then
 
     if execute_op check; then
-      if [[ "${status:-}" && "${status:-}" == good ]]; then
-        needs_update=f
-        log_message="No update needed because remote value already matches intended value"
-      elif [[ "${value:-}" && "${result:-}" == "${value:-}" ]]; then
+      if [[ $check_successful == t ]]; then
         needs_update=f
         log_message="No update needed because remote value already matches intended value"
       fi
+    else
+      fatal "Failed to pre-validate. Something is wrong with the check operator."
+      fail1
     fi
 
   fi
@@ -418,6 +418,7 @@ begin_function_flat
     local make_req=f \
       make_log=f \
       make_job=f \
+      make_key=f \
       make_status=f 
     begin_for feature in "${cell_features[@]}"; doo
       case $feature in
@@ -436,6 +437,11 @@ begin_function_flat
         status)
           make_status=t
         ;;
+        local-key) 
+          # Use this if you don't want the keys of this cell to be saved to repo
+          # They will only be stored locally instead
+          make_key=t
+        ;;
         *)
           fatal "Unknown feature $feature"
           fail1
@@ -450,6 +456,9 @@ begin_function_flat
     fi
     if [[ $make_job == t ]]; then
       mkdir -p $new_cyto/job || fail
+    fi
+    if [[ $make_key == t ]]; then
+      mkdir -p $new_cyto/key || fail
     fi
     if [[ $make_status == t ]]; then
       mkdir -p $new_cyto/status || fail
@@ -599,7 +608,6 @@ handle_return
 create_sub_leaf() {
 begin_function_flat
 
-  debug_start
   if [[ -d $dna_path/leaf ]]; then
     local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
     local part
@@ -753,18 +761,6 @@ begin_function_flat
 
   leaf_cells=( )
   fork=f par=f function=gather_leaf_cells for_each_leaf ${leaf_dims[*]} || fail
-
-  #local dim member
-  # leaf_cell=$upstream_trunk_cell
-  # begin_for dim in ${leaf_dims[*]}; doo
-  #   member=${!dim} || fail
-  #   if [[ ! "$member" ]]; then
-  #     fatal "Missing member for $dim"
-  #     fail1
-  #   fi
-  #   get_sane_value "$member" || fail
-  #   leaf_cell+=/.dim/$sane_value
-  # end_for
 
   local leaf_cell i=1
   local -r dep_name=${upstream_trunk_cell##*/} \
@@ -1187,6 +1183,14 @@ else
 fi
 }
 
+get_cell_name() {
+local cell_path=$1
+local short_cell
+get_short_cell $cell_path || return 1
+cell_name=${short_cell//\//_}
+return 0
+}
+
 validate_dims() {
 local dim
 for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
@@ -1268,7 +1272,7 @@ begin_function
     if files_are_different $old_file $new_file >/dev/null; then
       changed=t
     else
-      trace 0 "No change"
+      debu "No change"
       rm $new_file || fail
     fi
   else
@@ -1394,10 +1398,10 @@ begin_function_flat
 
   get_short_cell $cell_path
 
-  if [[ -d $dna_path/key ]]; then
+  key_path=$cyto_path/key
+  if [[ ! -d $key_path ]]; then
+    # create this as needed
     key_path=$dna_path/key
-  else
-    key_path=
   fi
 
   op_path=$dna_path/op
@@ -1405,6 +1409,11 @@ begin_function_flat
   up_path=$dna_path/up
   if [[ ! -d $up_path ]]; then
     up_path=
+  fi
+
+  dna_down_path=$dna_path/down
+  if [[ ! -d $dna_down_path ]]; then
+    dna_down_path=
   fi
 
   down_path=$cyto_path/down
@@ -1468,10 +1477,8 @@ begin_function_flat
     mkdir $source_path || fail
   fi
 
-  cell_tmp_path=$cyto_path/tmp
-  if [[ ! -d $cell_tmp_path ]]; then
-    cell_tmp_path=
-  fi
+  # create this when needed
+  tmp_path=$cyto_path/tmp
 
 end_function_flat
 handle_return
@@ -1502,8 +1509,13 @@ return 0
 
 setup_tmp_path() {
 if [[ ! "$tmp_path" ]]; then
-  fatal "Missing tmp_path. Maybe you needed to run setup_cell_path_vars first"
-  return 1
+  if [[ -d $cell_path/.cyto/tmp ]]; then
+    tmp_path=$cell_path/.cyto/tmp
+  elif [[ -d ~/tmp ]]; then
+    tmp_path=~/tmp
+  else
+    tmp_path=/tmp
+  fi
 fi
 if [[ ! -d $tmp_path ]]; then
   mkdir -p $tmp_path || return 1
@@ -1526,21 +1538,11 @@ done
 [[ "$workspace" ]]
 }
 
-get_tmp_path() {
-local current_cell=$1
-if [[ -d $current_cell/tmp ]]; then
-  tmp_path=$current_cell/tmp
-elif [[ -d ~/tmp ]]; then
-  tmp_path=~/tmp
-else
-  tmp_path=/tmp
-fi
-return 0
-}
-
 # inputs: from to tmp_path current_cell
 # will write output to file at $to
 decrypt_file() {
+
+setup_tmp_path || return 1
 
 local from=$from
 local to=$to
@@ -1548,10 +1550,20 @@ local tmp_path=$tmp_path
 local key_path=$key_path
 local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
-trace $log_trace "Decrypting $from to $to"
+debug "Decrypting $from to $to"
 
-local vars=
+local vars='from to'
 begin_function
+
+  if [[ ! -f "$from" ]]; then
+    fatal "Attempting to decrypt non-existent file: $from"
+    fail1
+  fi
+
+  if [[ -f "$to" ]]; then
+    fatal "Decrypt: target file already exists: $to"
+    fail1
+  fi
 
   if [[ ! -f "$user_private_key" ]]; then
     fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
@@ -1566,11 +1578,6 @@ begin_function
 
   if [[ ! -d $tmp_path ]]; then
     mkdir -p $tmp_path || fail
-  fi
-
-  if [[ ! -d "$key_path" ]]; then
-    fatal "key_path must be set before calling decrypt_file"
-    fail1
   fi
 
   if [[ ! -d $key_path ]]; then
@@ -1603,16 +1610,28 @@ handle_return
 
 encrypt_file() {
 
+setup_tmp_path || return 1
+
 local from=$from
 local to=$to
 local tmp_path=$tmp_path
 local key_path=$key_path
 local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
-trace $log_trace "Encrypting $from to $to"
+debug "Encrypting $from to $to"
 
-local vars=
+local vars='from to'
 begin_function
+
+  if [[ ! -f "$from" ]]; then
+    fatal "Attempting to encrypt non-existent file: $from"
+    fail1
+  fi
+
+  if [[ -f "$to" ]]; then
+    fatal "Encrypt: target file already exists: $to"
+    fail1
+  fi
 
   if [[ ! -f "$user_private_key" ]]; then
     fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
@@ -1627,11 +1646,6 @@ begin_function
 
   if [[ ! -d $tmp_path ]]; then
     mkdir -p $tmp_path || fail
-  fi
-
-  if [[ ! -d "$key_path" ]]; then
-    fatal "key_path must be set before calling decrypt_file"
-    fail1
   fi
 
   if [[ ! -d $key_path ]]; then
@@ -1650,7 +1664,7 @@ begin_function
 
     else
 
-      trace $log_info "There are no keys for this cell yet. Will create a new key."
+      debug "There are no keys for this cell yet. Will create a new key."
 
       # create a new main key
       if ! openssl rand -base64 40 >$tmp_path/main; then
@@ -1968,7 +1982,7 @@ if [[ "$processes" ]]; then
   info "Waiting for sub processes to complete"
   local process last_err_code= last_failed_process= rc
   for process in $processes; do
-    trace "Waiting for process $process"
+    debug "Waiting for process $process"
     wait $process &>/dev/null; rc=$?
     if [[ $rc -gt 0 && $rc -lt 127 ]]; then
       if [[ ! "$last_err_code" ]]; then
