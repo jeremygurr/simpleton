@@ -3,7 +3,7 @@ if [[ -f $upstream.prep ]]; then
   source $upstream.prep || return 1
   local f=${upstream##*/}
   f=${f//-/_}_prep
-  if ! type -t $f; then
+  if ! type -t $f >/dev/null; then
     fatal "Because $upstream.prep exists, a function called $f must be defined within that file"
     return 1
   fi

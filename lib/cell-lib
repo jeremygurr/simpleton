@@ -94,7 +94,9 @@ begin_function_flat
     fi
   fi
 
-  get_node_needs_update $cell_path || fail
+  if [[ $needs_update == f ]]; then
+    get_node_needs_update $cell_path || fail
+  fi
 
   if [[ $needs_update == t ]]; then
     action=update_check debug "$log_message"
@@ -111,22 +113,22 @@ local cell_path=$1
 local status_path=$cell_path/.cyto/status
 begin_function_flat
   
-  if [[ $needs_update == f ]]; then
-    if [[ ! -e $status_path/subs-up-to-date ]]; then
+  needs_update=f
+
+  if [[ ! -e $status_path/subs-up-to-date ]]; then
+    needs_update=t
+    log_message="Needs update because a sub cell is outdated"
+  elif [[ ! -e $status_path/deps-up-to-date ]]; then
+    needs_update=t
+    log_message="Needs update because a dependency is outdated"
+  elif [[ ! -e $status_path/last-good-update-end ]]; then
+    needs_update=t
+    log_message="Needs update because cell has never been updated successfully"
+  else
+    get_is_stale $status_path || fail
+    if [[ $is_stale == t ]]; then
       needs_update=t
-      log_message="Needs update because a sub cell is outdated"
-    elif [[ ! -e $status_path/deps-up-to-date ]]; then
-      needs_update=t
-      log_message="Needs update because a dependency is outdated"
-    elif [[ ! -e $status_path/last-good-update-end ]]; then
-      needs_update=t
-      log_message="Needs update because cell has never been updated successfully"
-    else
-      get_is_stale $status_path || fail
-      if [[ $is_stale == t ]]; then
-        needs_update=t
-        log_message="Needs update because cell is stale"
-      fi
+      log_message="Needs update because cell is stale"
     fi
   fi
 
@@ -225,6 +227,7 @@ local from_cell=$from_cell \
   completion_time=${completion_time:-} \
   changed=$changed \
   down_path=$from_cell/.cyto/down down_folder folders
+debug_start
 local start_folder=${start_folder:-$down_path}
 
 if [[ -d $start_folder ]]; then
