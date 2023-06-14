@@ -6,7 +6,9 @@ if [[ -f $upstream.prep ]]; then
     fatal "Because $upstream.prep exists, a function called $f must be defined within that file"
     return 1
   fi
+  required_freshness=
   $f || return 1
+  setup_dep_defaults || return 1
 fi
 get_node_needs_update $upstream || return 1
 if [[ $needs_update == t ]]; then
@@ -14,3 +16,4 @@ if [[ $needs_update == t ]]; then
 fi
 return 0
 }
+

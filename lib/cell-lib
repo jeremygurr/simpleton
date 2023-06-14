@@ -177,15 +177,15 @@ end_function_flat
 handle_return
 }
 
-# Not sure we need this
 propogate_success_to_parents() {
+debug_start
 local from_cell=$from_cell dim_path=${1:-} \
   completion_time=${completion_time:-} \
   changed=$changed
 local parent=${from_cell%/*} from_cell_part=${from_cell##*/}
 local parent_part=${parent##*/}
 if [[ $parent != $from_cell && ${#parent} -gt 1 ]]; then
-  if [[ $parent == .dim ]]; then
+  if [[ $parent_part == .dim ]]; then
     if [[ "$dim_path" ]]; then
       dim_path="${from_cell_part}_$dim_path"
     else
@@ -198,20 +198,30 @@ if [[ $parent != $from_cell && ${#parent} -gt 1 ]]; then
     if [[ ! -e $cyto ]]; then
       fork make_cyto $cell || fail
     fi
+
     local sub_status=$cyto/status/sub
     if [[ -d $sub_status ]]; then
       if [[ "$completion_time" ]]; then
         touch -d @$completion_time $sub_status/$dim_path/last-good-update-end || return 1
       fi
-      touch $sub_status/$dim_path/unchanged || return 1
+      if [[ ! -f $sub_status/$dim_path/subs-up-to-date ]]; then
+        touch $sub_status/$dim_path/subs-up-to-date || return 1
+      fi
     fi
+
+    local parent_status=$cyto/status
+    if [[ $changed == t && -f $parent_status/subs-up-to-date ]]; then
+      rm $parent_status/subs-up-to-date || return 1
+      from_cell=$parent propogate_success_to_parents $dim_path || return 1
+    fi
+
   fi
 fi
 return 0
 }
 
-# Not sure we need this
 propogate_success_to_downstream() {
+debug_start
 local from_cell=$from_cell \
   completion_time=${completion_time:-} \
   changed=$changed \
@@ -222,30 +232,33 @@ if [[ -d $start_folder ]]; then
   folders=$(find1 $start_folder -not -name '.*' -type d) || fail
   loop_over_var=folders \
     par=t fork=f \
-    body='
-      local up_cell_path=$(realpath $value)
-      local up_cell_name=${up_cell_path##*/} \
-        cell=${up_cell_path%/*/*/*}
-      local status_up=$cell/.cyto/status/up
-      if [[ -d $cell && $cell != $up_cell_path ]]; then
-        if [[ -d $status_up ]]; then
-          if [[ "$completion_time" ]]; then
-            touch @$completion_time \
-              $status_up/$up_cell_name/last-good-update-end || fail
-          fi
-          if [[ $changed == t && -f $status_up/$up_cell_name/unchanged ]]; then
-            rm $status_up/$up_cell_name/unchanged || fail
-          fi
-        else
-          # recursive
-          from_cell=$cell \
-            propogate_success_to_downstream || fail
-        fi
-      fi
-    ' \
+    body=propogate_success_to_downstream2 \
     parallel_loop || fail
 fi
+
 return 0
+}
+
+propogate_success_to_downstream2() {
+local down_cell_path=$(realpath $value)
+local down_cell_name=${down_cell_path##*/} \
+  cell=${down_cell_path%/*/*/*}
+local status_up=$cell/.cyto/status/up
+if [[ -d $cell && $cell != $down_cell_path ]]; then
+  if [[ -d $status_up ]]; then
+    if [[ "$completion_time" ]]; then
+      touch @$completion_time \
+        $status_up/$down_cell_name/last-good-update-end || fail
+    fi
+    if [[ $changed == t && -f $status_up/$down_cell_name/deps-up-to-date ]]; then
+      rm $status_up/$down_cell_name/deps-up-to-date || fail
+    fi
+  else
+    # recursive
+    from_cell=$cell \
+      propogate_success_to_downstream || fail
+  fi
+fi
 }
 
 # This is run if cell hasn't been initialized = missing .cyto folder
@@ -287,6 +300,10 @@ begin_function_flat
     source $context_path || fail
   fi
   setup_features || fail
+
+  if [[ -d $cell/.dna/down ]]; then
+    rsync -a $cell/.dna/down/ $new_cyto/down/ || fail
+  fi
 
   mv $new_cyto $cell/.cyto || fail
 
@@ -581,6 +598,8 @@ handle_return
 
 create_sub_leaf() {
 begin_function_flat
+
+  debug_start
   if [[ -d $dna_path/leaf ]]; then
     local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
     local part
@@ -588,20 +607,33 @@ begin_function_flat
       safe_link $(realpath $part) $sub_dna_path/ || fail
     end_for 
   fi
+
   if [[ -d $dna_path/.dna/up && ! -d $sub_dna_path/up ]]; then
     mkdir $sub_dna_path/up || fail
-    local uptream_cell leaf_cell upstream_name
+    local upstream_cell leaf_cell
     local upstream_cells=$(find1 $dna_path/up \
       -not -name '.*' \
-      -not -name '*-before*' \
+      -not -name '*.prep' \
       | sort -g) || fail
     begin_for upstream_cell in $upstream_cells; doo
-      upstream_name=${upstream_cell##*/}
-      get_upstream_leaf_cell $cell_path $upstream_cell || fail
-      safe_link $(realpath $leaf_cell) $sub_dna_path/up/$upstream_name || fail
+      fork link_leaf_cell_deps up $cell_path $upstream_cell || fail
     end_for
   fi
+
+  if [[ -d $dna_path/.dna/down && ! -d $sub_dna_path/down ]]; then
+    mkdir $sub_dna_path/down || fail
+    local downstream_cell leaf_cell
+    local downstream_cells=$(find1 $dna_path/down \
+      -not -name '.*' \
+      -not -name '*.prep' \
+      | sort -g) || fail
+    begin_for downstream_cell in $downstream_cells; doo
+      fork link_leaf_cell_deps down $cell_path $downstream_cell || fail
+    end_for
+  fi
+
   append_dim_var_to_context ${super_dims[0]} || fail
+
 end_function_flat
 handle_return
 }
@@ -702,45 +734,54 @@ fi
 return 0
 }
 
-# usage: get_upstream_leaf_cell {trunk cell} {upstream cell}
-# returns leaf_cell
-get_upstream_leaf_cell() {
-local cell_path=$1 upstream_cell=$2
+# usage: link_leaf_cell_deps {direction} {base trunk cell} {upstream trunk cell}
+# links leaf cells to their corrosponding dependency leaf cells
+link_leaf_cell_deps() {
+local direction=$1 base_trunk_cell=$2 upstream_trunk_cell=$3
 begin_function_flat
 
+  local -r prep_file=$upstream_trunk_cell.prep
+  if [[ -f $prep_file ]]; then
+    source $prep_file || fail
+  fi
+
+  setup_dims $upstream_trunk_cell || fail
+
   if [[ "$localize_dim_vars" ]]; then
     eval "$localize_dim_vars" || fail
   fi
 
-  local extension=${upstream_cell#*.}
-  if [[ "$extension" != $upstream_cell ]]; then
-    extension=.$extension
-  else
-    extension=
-  fi
-  local before_step=${upstream_cell%.*}-before$extension
-  if [[ -f $before_step ]]; then
-    execute_command_step $before_step || fail
-  fi
+  leaf_cells=( )
+  fork=f par=f function=gather_leaf_cells for_each_leaf ${leaf_dims[*]} || fail
 
-  setup_dims $upstream_cell || fail
-  # do this again for the upstream cell, in case it has different dims
-  if [[ "$localize_dim_vars" ]]; then
-    eval "$localize_dim_vars" || fail
-  fi
-  local dim member
-  leaf_cell=$upstream_cell
-  begin_for dim in ${leaf_dims[*]}; doo
-    member=${!dim} || fail
-    if [[ ! "$member" ]]; then
-      fatal "Missing member for $dim"
-      fail1
-    fi
-    get_sane_value "$member" || fail
-    leaf_cell+=/.dim/$sane_value
+  #local dim member
+  # leaf_cell=$upstream_trunk_cell
+  # begin_for dim in ${leaf_dims[*]}; doo
+  #   member=${!dim} || fail
+  #   if [[ ! "$member" ]]; then
+  #     fatal "Missing member for $dim"
+  #     fail1
+  #   fi
+  #   get_sane_value "$member" || fail
+  #   leaf_cell+=/.dim/$sane_value
+  # end_for
+
+  local leaf_cell i=1
+  local -r dep_name=${upstream_trunk_cell##*/} \
+    target=$sub_dna_path/up/$dep_name
+  begin_for leaf_cell in ${leaf_cells[*]}; doo
+    while [[ -f $target-$i ]]; do
+      let i++ || true
+    done
+    safe_link $(realpath $leaf_cell) $target-$i || fail
   end_for
+
 end_function_flat
 handle_return
+}
+
+gather_leaf_cells() {
+leaf_cells+=( $leaf_path )
 }
 
 trace_step_execution=${trace_step_execution:-f}
@@ -1286,36 +1327,49 @@ return 0
 
 setup_context_defaults() {
 
-  # required_freshness:
-  #   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
-  #   1w means refresh if it's older than a week.
-  # shuffle_chance:
-  #   chance out of 1000 of not following the computed strategy order
-  # min_pause:
-  #   number of ms to wait between cycles
-  #   this number doubles each time there is nothing to do, until it reaches max_pause
+# required_freshness:
+#   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
+#   1w means refresh if it's older than a week.
+# shuffle_chance:
+#   chance out of 1000 of not following the computed strategy order
+# min_pause:
+#   number of ms to wait between cycles
+#   this number doubles each time there is nothing to do, until it reaches max_pause
+# reuse_existing_out:
+#   if set to t: 
+#   new output folder won't be created when updating, but the existing one will be used
+#   should set to true when creating a new output folder would be expensive
+#   these cells must detect for themselves whether a change has happened in an
+#     update and set something_changed=t accordingly. 
 
-  required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
-  retry_max=${retry_max:-1} \
-  retry_delay=${retry_delay:-1} \
-  retry_scale=${retry_scale:-2} \
-  cell_expiration=${cell_expiration:-} \
-  cell_is_persistent=${cell_is_persistent:-f} \
-  cell_is_external=${cell_is_external:-f} \
-  default_strategies=${default_strategies:-crl} \
-  shuffle_chance=${shuffle_chance:-100} \
-  lock_timeout=${lock_timeout:-30} \
-  pre_validate=${pre_validate:-f} \
-  post_validate=${post_validate:-f} \
-  min_pause=${min_pause:-250} \
-  current_pause=${current_pause:-250} \
-  max_pause=${max_pause:-60000} \
-  in_path=${in_path:-} \
-  out_path=${out_path:-} 
+setup_dep_defaults || return 1
+retry_max=${retry_max:-1} \
+retry_delay=${retry_delay:-1} \
+retry_scale=${retry_scale:-2} \
+cell_expiration=${cell_expiration:-} \
+cell_is_persistent=${cell_is_persistent:-f} \
+cell_is_external=${cell_is_external:-f} \
+default_strategies=${default_strategies:-crl} \
+shuffle_chance=${shuffle_chance:-100} \
+lock_timeout=${lock_timeout:-30} \
+pre_validate=${pre_validate:-f} \
+post_validate=${post_validate:-f} \
+min_pause=${min_pause:-250} \
+current_pause=${current_pause:-250} \
+max_pause=${max_pause:-60000} \
+reuse_existing_out=${reuse_existing_out:-f} \
+in_path=${in_path:-} \
+out_path=${out_path:-} 
 
-  # Make this go back to default for any further contexts loaded
-  # fresh passed in by user should only apply to top level cell, not to deps or subs
-  fresh=
+return 0
+}
+
+setup_dep_defaults() {
+required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
+# Make this go back to default for any further contexts loaded
+# fresh passed in by user should only apply to top level cell, not to deps or subs
+fresh=
+return 0
 }
 
 # input must be a folder

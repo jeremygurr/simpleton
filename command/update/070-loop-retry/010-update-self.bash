@@ -14,6 +14,9 @@ begin_function
         if [[ -d $out_path ]]; then
           rm -rf $out_path || fail
         fi
+      else
+        # allow update code to set this, since we can't compare when changes are made in place
+        something_changed=
       fi
       if [[ ! -d $out_path ]]; then
         mkdir $out_path || fail
@@ -25,16 +28,28 @@ begin_function
     completion_time=$EPOCHSECONDS
     untee_output || fail
 
-    if [[ "$out_path" && $reuse_existing_out == f ]]; then
-      out_path=$original_out
-      if [[ $update_successful == t ]]; then
-        if [[ -e $out_path.old ]]; then
-          rm -rf $out_path.old || fail
+    if [[ "$out_path" ]]; then
+      if [[ $reuse_existing_out == f ]]; then
+        out_path=$original_out
+        if [[ $update_successful == t ]]; then
+          if files_are_same -r $out_path $out_path.new &>/dev/null; then
+            rm -rf $out_path.new || fail
+          else
+            if [[ -e $out_path.old ]]; then
+              rm -rf $out_path.old || fail
+            fi
+            if [[ -d $out_path ]]; then
+              mv $out_path $out_path.old || fail
+            fi
+            mv $out_path.new $out_path || fail
+            something_changed=t
+          fi
         fi
-        if [[ -d $out_path ]]; then
-          mv $out_path $out_path.old || fail
+      else # $reuse_existing_out == t
+        # if update code didn't set this, we must assume the worst
+        if [[ ! "$something_changed" ]]; then
+          something_changed=t
         fi
-        mv $out_path.new $out_path || fail
       fi
     fi
 
