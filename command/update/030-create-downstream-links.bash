@@ -6,6 +6,8 @@ if [[ "${downstream_ref_path:-}" ]]; then
 
   get_cell_path ${downstream_ref_path%/*} || fail
   down_cell_path=$cell_path
+  # unset this so it doesn't affect any more cell updates from here
+  downstream_ref_path=
 
   get_cell_name $down_cell_path || fail
   down_cell_name=${cell_name%% *}
