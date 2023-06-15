@@ -1,4 +1,5 @@
 update_upstream() {
+local required_freshness= fresh= default_freshness=
 if [[ -f $upstream.prep ]]; then
   source $upstream.prep || return 1
   local f=${upstream##*/}
@@ -7,7 +8,6 @@ if [[ -f $upstream.prep ]]; then
     fatal "Because $upstream.prep exists, a function called $f must be defined within that file"
     return 1
   fi
-  required_freshness=
   $f || return 1
   setup_dep_defaults || return 1
 fi

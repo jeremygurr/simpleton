@@ -203,6 +203,9 @@ if [[ $parent != $from_cell && ${#parent} -gt 1 ]]; then
 
     local sub_status=$cyto/status/sub
     if [[ -d $sub_status ]]; then
+      if [[ ! -d $sub_status/$dim_path ]]; then
+        mkdir -p $sub_status/$dim_path || return 1
+      fi
       if [[ "$completion_time" ]]; then
         touch -d @$completion_time $sub_status/$dim_path/last-good-update-end || return 1
       fi
@@ -223,13 +226,16 @@ return 0
 }
 
 propagate_success_to_downstream() {
+begin_function_flat
+
 local from_cell=$from_cell \
   completion_time=${completion_time:-} \
   changed=$changed \
   down_path=$from_cell/.cyto/down down_folder folders
-debug_start
-local start_folder=${start_folder:-$down_path}
 
+debug_start
+
+local start_folder=${start_folder:-$down_path}
 if [[ -d $start_folder ]]; then
   folders=$(find1 $start_folder -not -name '.*' -type d) || fail
   loop_over_var=folders \
@@ -238,14 +244,18 @@ if [[ -d $start_folder ]]; then
     parallel_loop || fail
 fi
 
-return 0
+end_function_flat
+handle_return
 }
 
 propagate_success_to_downstream2() {
+begin_function_flat
+
 local down_cell_path=$(realpath $value)
 local down_cell_name=${down_cell_path##*/} \
   cell=${down_cell_path%/*/*/*}
 local status_up=$cell/.cyto/status/up
+
 if [[ -d $cell && $cell != $down_cell_path ]]; then
   if [[ -d $status_up ]]; then
     if [[ "$completion_time" ]]; then
@@ -261,6 +271,9 @@ if [[ -d $cell && $cell != $down_cell_path ]]; then
       propagate_success_to_downstream || fail
   fi
 fi
+
+end_function_flat
+handle_return
 }
 
 # This is run if cell hasn't been initialized = missing .cyto folder

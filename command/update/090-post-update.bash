@@ -14,6 +14,7 @@ if [[ $pretend == f ]]; then
       touch -d @$completion_time $status_path/last-good-update-end || return 1
       cp -a $status_path/last-update-start \
             $status_path/last-good-update-start || return 1
+      debug_start
       local freshness=$completion_time
       if [[ $cell_is_external == t ]]; then
         freshness=
