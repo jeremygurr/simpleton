@@ -209,15 +209,14 @@ if [[ $parent != $from_cell && ${#parent} -gt 1 ]]; then
       if [[ "$completion_time" ]]; then
         touch -d @$completion_time $sub_status/$dim_path/last-good-update-end || return 1
       fi
-      if [[ ! -f $sub_status/$dim_path/subs-up-to-date ]]; then
-        touch $sub_status/$dim_path/subs-up-to-date || return 1
-      fi
     fi
 
     local parent_status=$cyto/status
-    if [[ $changed == t && -f $parent_status/subs-up-to-date ]]; then
-      rm $parent_status/subs-up-to-date || return 1
-      from_cell=$parent propagate_success_to_parents $dim_path || return 1
+    if [[ $changed == t && -f $parent_status/self-up-to-date ]]; then
+      rm $parent_status/self-up-to-date || return 1
+      if [[ "$parent" == */.dim/* ]]; then
+        from_cell=$parent propagate_success_to_parents $dim_path || return 1
+      fi
     fi
 
   fi
@@ -232,8 +231,6 @@ local from_cell=$from_cell \
   completion_time=${completion_time:-} \
   changed=$changed \
   down_path=$from_cell/.cyto/down down_folder folders
-
-debug_start
 
 local start_folder=${start_folder:-$down_path}
 if [[ -d $start_folder ]]; then
@@ -259,7 +256,7 @@ local status_up=$cell/.cyto/status/up
 if [[ -d $cell && $cell != $down_cell_path ]]; then
   if [[ -d $status_up ]]; then
     if [[ "$completion_time" ]]; then
-      touch @$completion_time \
+      touch -d @$completion_time \
         $status_up/$down_cell_name/last-good-update-end || fail
     fi
     if [[ $changed == t && -f $status_up/$down_cell_name/deps-up-to-date ]]; then
@@ -594,6 +591,8 @@ begin_function_flat
       else
         create_sub_leaf || fail
       fi
+      migrate_deps || fail
+      append_dim_var_to_context ${super_dims[0]} || fail
     fi
   fi
 end_function_flat
@@ -602,12 +601,16 @@ handle_return
 
 create_sub_branch() {
 begin_function_flat
+  debug_start
+
   mkdir $sub_dna_path/dim || fail
+
   begin_for ((i=1; i<super_dim_count; i++)); doo
     local from_dim=${super_dims[$i]}
     local to_dim=$sub_dna_path/dim/${from_dim##*/}
     safe_link $(realpath $from_dim) $to_dim || fail
   end_for
+
   local contents=$(find1 $dna_path -not -name '.*') || fail
   begin_for part in $contents; doo
     if [[ "$part" == */dim || "$part" == */context* ]]; then
@@ -615,7 +618,7 @@ begin_function_flat
     fi
     safe_link $(realpath $part) $sub_dna_path/ || fail
   end_for 
-  append_dim_var_to_context ${super_dims[0]} || fail
+
 end_function_flat
 handle_return
 }
@@ -631,34 +634,76 @@ begin_function_flat
     end_for 
   fi
 
-  if [[ -d $dna_path/.dna/up && ! -d $sub_dna_path/up ]]; then
-    mkdir $sub_dna_path/up || fail
-    local upstream_cell leaf_cell
-    local upstream_cells=$(find1 $dna_path/up \
-      -not -name '.*' \
-      -not -name '*.prep' \
-      | sort -g) || fail
-    begin_for upstream_cell in $upstream_cells; doo
-      fork link_leaf_cell_deps up $cell_path $upstream_cell || fail
-    end_for
-  fi
+end_function_flat
+handle_return
+}
 
-  if [[ -d $dna_path/.dna/down && ! -d $sub_dna_path/down ]]; then
-    mkdir $sub_dna_path/down || fail
-    local downstream_cell leaf_cell
-    local downstream_cells=$(find1 $dna_path/down \
-      -not -name '.*' \
-      -not -name '*.prep' \
-      | sort -g) || fail
-    begin_for downstream_cell in $downstream_cells; doo
-      fork link_leaf_cell_deps down $cell_path $downstream_cell || fail
-    end_for
-  fi
+migrate_deps() {
+begin_function_flat
 
-  append_dim_var_to_context ${super_dims[0]} || fail
+  debug_start
+  migrate_dep $dna_path/up $sub_dna_path/up || fail
+  migrate_dep $dna_path/down $sub_dna_path/down || fail
 
 end_function_flat
 handle_return
+}
+
+migrate_dep() {
+local -r from=$1 to=$2
+begin_function_flat
+  if [[ -e $from && ! -e $to ]]; then
+
+    if [[ -f $from ]]; then
+      safe_link $(realpath $from) $to || fail
+    elif [[ -d $from/.dna ]]; then
+      fork to_dims=${leaf_dims[*]} migrate_cell $from $to || fail
+    elif [[ -d $from ]]; then
+      mkdir $to || fail
+      local item item_name \
+        items=$(find1 $from \
+        -not -name '.*' \
+        | sort -g) || fail
+      begin_for item in $items; doo
+        item_name=${item##*/}
+        migrate_dep $item $to/$item_name || fail
+      end_for
+    fi
+
+  fi
+end_function_flat
+handle_return
+}
+
+# should be forked because dims will be altered
+migrate_cell() {
+local -r from=$1 to=$2 to_dims=$to_dims
+begin_function_flat
+
+  local -r prep_file=$from.prep
+  if [[ -f $prep_file ]]; then
+    source $prep_file || fail
+  fi
+
+  local -r dep_cell=$(realpath $from)
+  dep_dim=
+  dep_value=
+
+end_function_flat
+handle_return
+}
+
+# ??
+migrate_member() {
+local -r from_cell=$from to_cell=$to member=$member
+local -r dep_name=${upstream_branch_cell##*/} \
+  target=$sub_dna_path/up/$dep_name
+begin_for leaf_cell in ${leaf_cells[*]}; doo
+  while [[ -f $target-$i ]]; do
+    let i++ || true
+  done
+  safe_link $(realpath $leaf_cell) $target-$i || fail
+end_for
 }
 
 append_dim_var_to_context() {
@@ -755,40 +800,6 @@ else
   trunk_cell=$cell
 fi
 return 0
-}
-
-# usage: link_leaf_cell_deps {direction} {base trunk cell} {upstream trunk cell}
-# links leaf cells to their corrosponding dependency leaf cells
-link_leaf_cell_deps() {
-local direction=$1 base_trunk_cell=$2 upstream_trunk_cell=$3
-begin_function_flat
-
-  local -r prep_file=$upstream_trunk_cell.prep
-  if [[ -f $prep_file ]]; then
-    source $prep_file || fail
-  fi
-
-  setup_dims $upstream_trunk_cell || fail
-
-  if [[ "$localize_dim_vars" ]]; then
-    eval "$localize_dim_vars" || fail
-  fi
-
-  leaf_cells=( )
-  fork=f par=f function=gather_leaf_cells for_each_leaf ${leaf_dims[*]} || fail
-
-  local leaf_cell i=1
-  local -r dep_name=${upstream_trunk_cell##*/} \
-    target=$sub_dna_path/up/$dep_name
-  begin_for leaf_cell in ${leaf_cells[*]}; doo
-    while [[ -f $target-$i ]]; do
-      let i++ || true
-    done
-    safe_link $(realpath $leaf_cell) $target-$i || fail
-  end_for
-
-end_function_flat
-handle_return
 }
 
 gather_leaf_cells() {

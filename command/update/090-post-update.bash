@@ -12,18 +12,14 @@ if [[ $pretend == f ]]; then
   if [[ "$status_path" ]]; then
     if [[ $update_successful == t ]]; then
       touch -d @$completion_time $status_path/last-good-update-end || return 1
+      touch $status_path/self-up-to-date || return 1
       cp -a $status_path/last-update-start \
             $status_path/last-good-update-start || return 1
-      local freshness=$completion_time
-      if [[ $cell_is_external == t ]]; then
-        freshness=
-      fi
-      debug_start
-      changed=$freshness \
+      changed=$something_changed \
         completion_time=$completion_time \
         from_cell=$cell_path \
         propagate_success_to_parents || return 1
-      changed=$freshness \
+      changed=$something_changed \
         completion_time=$completion_time \
         from_cell=$cell_path \
         propagate_success_to_downstream || return 1
