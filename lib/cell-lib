@@ -509,7 +509,7 @@ for sub_full in $subs; do
   elif [[ -L $sub_full ]]; then
     cp $sub_full $seed$relative_path/$sub || return 1
   elif [[ -d $sub_full ]]; then
-    create_sub_cell $seed $seed$relative_path/$sub || return 1
+    create_sub_cell_with_seed $seed $seed$relative_path/$sub || return 1
     if [[ "$relative_path" ]]; then
       # recursive
       create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
@@ -522,6 +522,13 @@ done
 }
 
 create_sub_cell() {
+local sub_cell=$1
+find_seed $cell_path || return 1
+create_sub_cell_with_seed $seed $sub_cell || return 1
+return 0
+}
+
+create_sub_cell_with_seed() {
 # seed is allowed to be empty, meaning no seed exists at this location
 local seed=$1 sub_cell=$2
 
@@ -644,7 +651,6 @@ handle_return
 migrate_deps() {
 begin_function_flat
 
-  debug_start
   migrate_dep $dna_path/up $sub_dna_path/up || fail
   migrate_dep $dna_path/down $sub_dna_path/down || fail
 
@@ -654,6 +660,7 @@ handle_return
 
 migrate_dep() {
 local -r from=$1 to=$2
+debug_start
 begin_function_flat
   if [[ -e $from && ! -e $to ]]; then
 
@@ -681,79 +688,111 @@ handle_return
 
 # should be forked because dims will be altered
 migrate_cell() {
-local -r from=$1 to=$2 to_dims=$to_dims
+local -r from=$(realpath $1) dep_link=$1 to=$2 to_dims=$to_dims
 begin_function_flat
 
-  local dep_dims= dep_dim branch_dim branch_member
-  get_dep_dims || fail
-
-  local found_match i branch_dim_count=${#branch_dims[*]}
-  begin_for dep_dim in ${dep_dims[*]}; doo
-    found_match=f
-
-    begin_for ((i=0; i<branch_dim_count; i++)); doo 
-      branch_dim=${branch_dims[$i]}
-      sane_branch_member=${sane_branch_members[$i]}
-      if [[ $dep_dim == $branch_dim ]]; then
-        found_match=t
-        break
-      fi
-    end_for
-    
-    if [[ $found_match == t ]]; then
-      promote_dep $dep_dim $sane_branch_member || fail
-    else
-      break
-    fi
-
-  end_for
+  promote_dep_cell || fail
   
-  if is_leaf_cell $from && is_leaf_cell $to; then
-    safe_link $from $to || fail
+  if is_leaf_cell $to; then
+    if is_leaf_cell $from; then
+      safe_link $from $to || fail
+    else
+      fatal \
+"Unable to match leaf cells between $from and $to.
+This means dimension mapping is not properly set up between these cells, 
+so the dependency can't be resolved."
+      fail1
+    fi
   else
-    fatal "Unable to match leaf cells between $from and $to."
-    fatal "This means dimension mapping is not properly set up between these cells," 
-    fatal "so the dependency can't be resolved."
-    fail1
+    safe_link $from $to || fail
   fi
 
 end_function_flat
 handle_return
 }
 
-get_dep_dims() {
-local -r prep_file=$from.prep
-if [[ -f $prep_file ]]; then
-  source $prep_file || return 1
-fi
-
-local -r dep_cell=$(realpath $from)
-local dep_cell_parent=${dep_cell%/*}
-if [[ ${dep_cell_parent##*/} == .dim ]]; then
-  dep_cell_parent=${dep_cell_parent%/*}
-fi
-
-if [[ -d $dep_cell_parent/.dna/dim ]]; then
-  local first_dim
-  get_first_dim $dep_cell_parent || return 1
-  dep_dim=$first_dim
-else
-  dep_dim=
-fi
-
-return 0
+is_leaf_cell() {
+local cell_path=$1
+[[ ! -d $cell_path/.dna/dim ]]
 }
 
+promote_dep_cell() {
+begin_function_flat
+
+  local trunk_cell=
+  find_trunk_cell $from || fail
+
+  local dims= 
+  get_dims $trunk_cell || fail
+
+  local -r prep_file=$dep_link.prep
+  if [[ -f $prep_file ]]; then
+    source $prep_file || return 1
+  fi
+
+  local found_match dep_dim
+  begin_for dep_dim in ${dep_dims[*]}; doo
+
+    local member=
+    if [[ -v $dep_dim ]]; then
+      member=${!dep_dim}
+      local sane_value
+      get_sane_value "$member" || fail
+      from=$from/.dim/$sane_value
+      if [[ ! -d $from ]]; then
+        create_sub_cell $from || fail
+      fi
+      break
+    fi
+
+    #local i branch_dim_count=${#branch_dims[*]} branch_dim sane_branch_member
+    #begin_for ((i=0; i<branch_dim_count; i++)); doo 
+    #  branch_dim=${branch_dims[$i]}
+    #  # TODO: no, don't take member from branch, but from translated value
+    #  sane_branch_member=${sane_branch_members[$i]}
+    #  if [[ $dep_dim == $branch_dim ]]; then
+    #    found_match=t
+    #    from=$from/.dim/$sane_branch_member
+    #    if [[ ! -d $from ]]; then
+    #      create_sub_cell $from || fail
+    #    fi
+    #    break
+    #  fi
+    #end_for
+    #
+    #if [[ $found_match == f ]]; then
+    #  local prop_count=${#prop_names[*]} prop_name prop_value sane_prop_value
+    #  begin_for ((i=0; i<prop_count; i++)); doo 
+    #    prop_name=${prop_names[$i]}
+    #    prop_value=${prop_values[$i]}
+    #    sane_prop_value=${sane_prop_values[$i]}
+    #    if [[ $dep_dim == $prop_name ]]; then
+    #      found_match=t
+    #      from=$from/.dim/$sane_prop_value
+    #      if [[ ! -d $from ]]; then
+    #        create_sub_cell $from || fail
+    #      fi
+    #      break
+    #    fi
+    #  end_for
+    #fi
+    
+  end_for
+end_function_flat
+handle_return
+}
+
+# returns array of dims, which may be empty if there are no dims
 get_dims() {
 local -r cell=$1
-dims=$( \
-  find1 $cell/.dna/dim \
-  -not -name '.*' \
-  printf '%f\n' \
-  | sort -g) || return 1
-if [[ ! "$dims" ]]; then
-  fatal "Could not find dim of $cell"
-  return 1
+if [[ -d $cell/.dna/dim ]]; then
+  dims=( $( \
+    find1 $cell/.dna/dim \
+    -not -name '.*' \
+    printf '%f\n' \
+    | sort -g) ) || return 1
+else
+  dims=()
 fi
 return 0
 }
