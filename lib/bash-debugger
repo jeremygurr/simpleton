@@ -273,7 +273,6 @@ debug_trap() {
        ]]; then
 #          && $debug_current_function != none \
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_line${RESET}" >&$fd_original_err
-    debug_step_to_next_line=f
     ok_to_debug=t
 
   elif [[ $debug_step_to_later_line == t \
@@ -345,6 +344,7 @@ debug_trap() {
 
   if [[ $debug_expansion == 1 && $debug_long_command == f || $debug_expansion == 2 ]]; then
     if [[ -f "$debug_out_path" ]]; then
+
       rm "$debug_fifo_path" &>/dev/null
       cat "$debug_out_path" >&$fd_original_err
       [[ "${debug_expansion_pid:-}" ]] && kill $debug_expansion_pid &>/dev/null
@@ -352,6 +352,16 @@ debug_trap() {
       let tracing_depth-- || true
       [[ $tracing_depth -lt 0 ]] && tracing_depth=0
       BASH_XTRACEFD=$debug_original_tracefd
+
+      if [[ $debug_prev_command =~ for\ (.*)\ in ]]; then
+        set +u
+        local w=${BASH_REMATCH[1]}
+        local wn=${w#\$}
+        eval "local s=\"+ \$wn=\$$w\""
+        echo "$s" >&$fd_original_err
+        set -u
+      fi
+
     fi
   elif [[ -f "$debug_out_path" ]]; then
     rm "$debug_out_path"
@@ -363,26 +373,6 @@ debug_trap() {
      && [[ $debug_current_function != none ]]; then
     display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
     raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
-  fi
-
-  if [[ $debug_prev_command =~ for\ (.*)\ in ]]; then
-    debug_watch_once=${BASH_REMATCH[1]}
-  fi
-
-  if [[ "$debug_watch_once" ]]; then
-    set +u
-    local w wn
-    for w in $debug_watch_once; do
-      if [[ $debug_watch_style == compact ]]; then
-        eval "echo -n \"+ \$$w \"" >&$fd_original_err
-      else
-        wn=${w#\$}
-        eval "echo -n \"+ \$wn=\$$w \"" >&$fd_original_err
-      fi
-    done
-    echo >&$fd_original_err
-    debug_watch_once=
-    set -u
   fi
 
   debug_step_to_next_line=f
@@ -981,7 +971,7 @@ reserve_tmp_file() {
 
 show_array() {
 local array=( "$@" )
-begin_no_tracing_zone
+#begin_no_tracing_zone
 if [[ "${array:-}" ]]; then
   local i size=${#array[*]}
   echo "size=$size" >&$fd_original_err
@@ -989,7 +979,7 @@ if [[ "${array:-}" ]]; then
     echo "$i: ${array[$i]}" >&$fd_original_err
   done
 fi
-end_no_tracing_zone
+#end_no_tracing_zone
 }
 
 debugging=f
@@ -1036,7 +1026,6 @@ if [[ $debugging == f ]]; then
   export debug_subshell=${debug_subshell:-f}
   export debug_var=${debug_var:-}
   export debug_watch=${debug_watch:-}
-  export debug_watch_once=${debug_watch_once:-}
   export debug_watch_style=${debug_watch_style:-wide}
 
   reserve_tmp_file debug_fifo_path debug-fifo || exit 1
@@ -1089,7 +1078,7 @@ fi
 }
 
 debug_setup() {
-export debug_ignore=${debug_ignore:- begin_fork change_log_file debug defer echo_align error fatal find1 fork info out pause_tee safe_link trace unpause_tee unrealpath warn write_to_log }
+export debug_ignore=${debug_ignore:- begin_fork change_log_file debug debug_start defer echo_align error fatal find1 fork info out pause_tee safe_link trace unpause_tee unrealpath warn write_to_log }
 if [[ "${debug_unignore:-}" ]]; then
   local x
   for x in ${debug_unignore}; do

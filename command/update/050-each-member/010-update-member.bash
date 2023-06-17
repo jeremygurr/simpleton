@@ -7,7 +7,7 @@ vars=member; begin_function
     if [[ ! -d $cell_path/.dim ]]; then
       mkdir $cell_path/.dim || fail
     fi
-    create_sub_cell "$seed" $member_path || fail
+    create_sub_cell $member_path || fail
   fi
   get_node_needs_update $member_path || return 1
   if [[ $needs_update == t ]]; then

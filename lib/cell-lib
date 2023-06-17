@@ -660,7 +660,6 @@ handle_return
 
 migrate_dep() {
 local -r from=$1 to=$2
-debug_start
 begin_function_flat
   if [[ -e $from && ! -e $to ]]; then
 
@@ -688,7 +687,8 @@ handle_return
 
 # should be forked because dims will be altered
 migrate_cell() {
-local -r from=$(realpath $1) dep_link=$1 to=$2 to_dims=$to_dims
+local -r dep_link=$1 to=$2 to_dims=$to_dims
+local from=$(realpath $dep_link) 
 begin_function_flat
 
   promote_dep_cell || fail
@@ -719,6 +719,7 @@ local cell_path=$1
 promote_dep_cell() {
 begin_function_flat
 
+  debug_start
   local trunk_cell=
   find_trunk_cell $from || fail
 
@@ -730,18 +731,19 @@ begin_function_flat
     source $prep_file || return 1
   fi
 
-  local found_match dep_dim
-  begin_for dep_dim in ${dep_dims[*]}; doo
+  local dep_dim
+  begin_for dep_dim in ${dims[*]}; doo
 
-    local member=
-    if [[ -v $dep_dim ]]; then
-      member=${!dep_dim}
+    local member= dep_dim_var=d_$dep_dim
+    if [[ -v $dep_dim_var ]]; then
+      member=${!dep_dim_var}
       local sane_value
       get_sane_value "$member" || fail
       from=$from/.dim/$sane_value
       if [[ ! -d $from ]]; then
         create_sub_cell $from || fail
       fi
+    else
       break
     fi
 
@@ -789,8 +791,10 @@ if [[ -d $cell/.dna/dim ]]; then
   dims=( $( \
     find1 $cell/.dna/dim \
     -not -name '.*' \
-    printf '%f\n' \
-    | sort -g) ) || return 1
+    -printf '%f\n' \
+    | sort -g \
+    | sed -E 's/^[0-9]+-(.*)/\1/' \
+    ) ) || return 1
 else
   dims=()
 fi
