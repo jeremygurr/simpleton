@@ -55,6 +55,7 @@ begin_function
     setup_context_defaults || fail
     setup_dims $cell || fail
     setup_cell_path_vars $cell || fail
+    setup_branch_dims $cell || fail
 
   fi
 
@@ -544,7 +545,7 @@ begin_function
   if [[ ! -d $sub_cell ]]; then
 
     local parent=${sub_cell%/*}
-    info "Creating sub cell ${parent##*/}/${sub_cell##*/}"
+    debug "Creating sub cell ${parent##*/}/${sub_cell##*/}"
 
     if [[ -d $sub_cell.new ]]; then
       rm -rf $sub_cell.new || fail
@@ -588,12 +589,21 @@ begin_function_flat
   if [[ "$seed_dna" ]]; then
     safe_link $(realpath $seed_dna) $cell/ || fail
   else
-    local sub_dna_path=$cell/.dna super_dims
+    # append branch dim
+    local branch_dims=( ${branch_dims[*]} ) branch_dim_count=${#branch_dims[*]}
+    local -r leaf_dim_count=${#leaf_dims[*]}
+    if (( branch_dim_count >= leaf_dim_count )); then
+      fatal "Interal error: there are more branch dims than dims defined for this cell: $cell_path"
+      fail1
+    fi
+    branch_dims+=( ${leaf_dims[$branch_dim_count]} )
+    
+    local sub_dna_path=$cell/.dna 
     mkdir $sub_dna_path || fail
-    super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
+    local -r super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
+    local -r super_dim_count=${#super_dims[*]}
     if [[ "$super_dims" ]]; then
-      local super_dim_count=${#super_dims[*]} 
-      if [[ "$super_dim_count" -gt 1 ]]; then
+      if (( super_dim_count > 1 )); then
         create_sub_branch || fail
       else
         create_sub_leaf || fail
@@ -666,7 +676,7 @@ begin_function_flat
     if [[ -f $from || -f $from/.dna ]]; then
       safe_link $(realpath $from) $to || fail
     elif [[ -d $from/.dna ]]; then
-      fork "to_dims=( ${leaf_dims[*]} ) migrate_cell $from $to" || fail
+      fork "migrate_cell $from $to" || fail
     elif [[ -d $from ]]; then
       mkdir $to || fail
       local item item_name \
@@ -687,25 +697,12 @@ handle_return
 
 # should be forked because dims will be altered
 migrate_cell() {
-local -r dep_link=$1 to=$2 to_dims=$to_dims
+local -r dep_link=$1 to=$2
 local from=$(realpath $dep_link) 
 begin_function_flat
 
   promote_dep_cell || fail
-  
-  if is_leaf_cell $to; then
-    if is_leaf_cell $from; then
-      safe_link $from $to || fail
-    else
-      fatal \
-"Unable to match leaf cells between $from and $to.
-This means dimension mapping is not properly set up between these cells, 
-so the dependency can't be resolved."
-      fail1
-    fi
-  else
-    safe_link $from $to || fail
-  fi
+  safe_link $from $to || fail
 
 end_function_flat
 handle_return
@@ -721,7 +718,7 @@ begin_function_flat
 
   debug_start
   local trunk_cell=
-  find_trunk_cell $from || fail
+  get_trunk_cell $from || fail
 
   local dims= 
   get_dims $trunk_cell || fail
@@ -799,23 +796,6 @@ begin_function_flat
   end_for
 end_function_flat
 handle_return
-}
-
-# returns array of dims, which may be empty if there are no dims
-get_dims() {
-local -r cell=$1
-if [[ -d $cell/.dna/dim ]]; then
-  dims=( $( \
-    find1 $cell/.dna/dim \
-    -not -name '.*' \
-    -printf '%f\n' \
-    | sort -g \
-    | sed -E 's/^[0-9]+-(.*)/\1/' \
-    ) ) || return 1
-else
-  dims=()
-fi
-return 0
 }
 
 get_dep_member() {
@@ -919,31 +899,6 @@ if [[ ! -e $seed_dna ]]; then
     # recursive
     find_seed_dna $parent ${seed#$parent/}/$path_to_cell || return 1
   fi
-fi
-return 0
-}
-
-find_trunk_cell() {
-local cell=$1
-local parent=${cell%/*}
-local parent_part=${parent##*/}
-if [[ $parent_part == .dim ]]; then
-  local grandparent=${parent%/*}
-  if [[ "$grandparent" != "$parent" ]]; then
-    # recursive
-    find_trunk_cell $grandparent || return 1
-  else
-    return 1
-  fi
-elif [[ ! -e $cell/.dna ]]; then
-  if [[ "$parent" != "$cell" ]]; then
-    # recursive
-    find_trunk_cell $parent || return 1
-  else
-    return 1
-  fi
-else
-  trunk_cell=$cell
 fi
 return 0
 }
@@ -1539,6 +1494,7 @@ min_pause=250 \
 current_pause=250 \
 max_pause=60000 \
 reuse_existing_out=f \
+branch_dims= \
 in_path= \
 out_path= 
 return 0
@@ -1657,6 +1613,72 @@ begin_function_flat
 end_function_flat
 handle_return
 }
+
+setup_branch_dims() {
+local cell_path=$1 \
+  trunk_cell dims
+
+debug_start
+get_trunk_cell $cell_path || return 1
+get_dims $trunk_cell || return 1
+local -r dim_count=${#dims[*]}
+
+branch_dims=() 
+local dim
+for dim in ${dims[*]}; do
+  if [[ $cell_path =~ .dim ]]; then
+    cell_path=${cell_path%/.dim/*}
+    branch_dims+=( $dim )
+  else
+    break
+  fi
+done
+
+return 0
+}
+
+# returns array of dims, which may be empty if there are no dims
+get_dims() {
+local -r cell=$1
+if [[ -d $cell/.dna/dim ]]; then
+  dims=( $( \
+    find1 $cell/.dna/dim \
+    -not -name '.*' \
+    -printf '%f\n' \
+    | sort -g \
+    | sed -E 's/^[0-9]+-(.*)/\1/' \
+    ) ) || return 1
+else
+  dims=()
+fi
+return 0
+}
+
+get_trunk_cell() {
+local cell=$1
+local parent=${cell%/*}
+local parent_part=${parent##*/}
+if [[ $parent_part == .dim ]]; then
+  local grandparent=${parent%/*}
+  if [[ "$grandparent" != "$parent" ]]; then
+    # recursive
+    get_trunk_cell $grandparent || return 1
+  else
+    return 1
+  fi
+elif [[ ! -e $cell/.dna ]]; then
+  if [[ "$parent" != "$cell" ]]; then
+    # recursive
+    get_trunk_cell $parent || return 1
+  else
+    return 1
+  fi
+else
+  trunk_cell=$cell
+fi
+return 0
+}
+
 
 update_cell_value_file() {
 begin_function_flat
