@@ -367,6 +367,20 @@ debug_trap() {
     rm "$debug_out_path"
   fi
 
+  if [[ $debug_prev_command =~ if\ (\[\[.*\]\])\;\ then ]]; then
+    set +u
+    local condition=${BASH_REMATCH[1]}
+    eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
+    set -u
+  fi
+
+  if [[ $debug_prev_command =~ if\ (\(\(.*\)\))\;\ then ]]; then
+    set +u
+    local condition=${BASH_REMATCH[1]}
+    eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
+    set -u
+  fi
+
   local display_command=$debug_command
   local raw_display_command=$display_command
   if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] \
@@ -999,7 +1013,7 @@ if [[ $debugging == f ]]; then
   export debug_function=${debug_function:-}
   export debug_function_old=${debug_function_old:-}
   export debug_id=${debug_id:-t}
-  export debug_immediate=${debug_immediate:-t}
+  export debug_immediate=${debug_immediate:-f}
   export debug_last_location=${debug_last_location:-}
   export debug_line=${debug_line:-}
   export debug_line_old=${debug_line_old:-}
@@ -1021,7 +1035,7 @@ if [[ $debugging == f ]]; then
   export debug_step_to_next_file=${debug_step_to_next_file:-f}
   export debug_step_to_next_function=${debug_step_to_next_function:-f}
   export debug_step_to_next_line=${debug_step_to_next_line:-f}
-  export debug_stepping=${debug_stepping:-t}
+  export debug_stepping=${debug_stepping:-f}
   export debug_stop_at=${debug_stop_at:-}
   export debug_subshell=${debug_subshell:-f}
   export debug_var=${debug_var:-}
@@ -1089,7 +1103,7 @@ fi
 if [[ -n "${debug:-}" && $debug != f || \
    -n "${debug_search:-}" || \
    -n "${debug_search_deep:-}" || \
-   -n "${debug_id:-}" || \
+   -n "${debug_id:-}" && -z "${log_id:-}" || \
    -n "${debug_var:-}" || \
    -n "${debug_function:-}" || \
    -n "${debug_line:-}" ]]; then
@@ -1119,11 +1133,10 @@ if [[ -n "${debug:-}" && $debug != f || \
       debug_search=${debug_search//\$/\\\$}
       debug_search=${debug_search//[/\\[}
     fi
-    echo "${CYAN}debug_search=$debug_search${RESET}" >&$fd_original_err
+    echo "${CYAN}Will debug when code is found to contain: $debug_search${RESET}" >&$fd_original_err
     debug_search_deep=t
     debug_long_command=t
     debug_subshell=t
-    debug_stepping=f
   fi
 
   if [[ "${debug_function:-}" ]]; then
@@ -1131,7 +1144,6 @@ if [[ -n "${debug:-}" && $debug != f || \
     debug_search_deep=t
     debug_long_command=t
     debug_subshell=t
-    debug_stepping=f
     if [[ "$debug_ignore" == *" $debug_function "* ]]; then
       local left_side=${debug_ignore% $debug_function *}
       local right_side=${debug_ignore#* $debug_function }
@@ -1143,25 +1155,22 @@ if [[ -n "${debug:-}" && $debug != f || \
     debug_search_deep=t
     debug_long_command=t
     debug_subshell=t
-    debug_stepping=f
   fi
 
   if [[ "${debug_var:-}" ]]; then
     echo "${CYAN}Will debug var $debug_var" >&$fd_original_err
     debug_subshell=t
-    debug_stepping=f
   fi
 
   if [[ "${debug_id:-}" ]]; then
     if [[ "$debug_id" != t ]]; then
-      echo "${CYAN}Will debug starting at debug_id $debug_id or later.${RESET}" >&$fd_original_err
+      echo "${CYAN}Will debug starting at debug_id $debug_id or later${RESET}" >&$fd_original_err
     fi
     debug_subshell=t
-    debug_stepping=f
   fi
 
   debug_search_old=${debug_search_old:-${debug_search:-}}
-  debug_immediate=f debug_start
+  debug_start
 fi
 }
 
