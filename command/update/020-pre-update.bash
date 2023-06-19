@@ -16,6 +16,9 @@ if [[ "$log_path" ]]; then
 fi
 if [[ "$status_path" ]]; then
   touch $status_path/last-update-start || return 1
+  # this needs to be at the beginning of the update so other processes
+  #   could potentially invalidate it, requiring another update
+  touch $status_path/up-to-date || return 1
 fi
 return 0
 }

@@ -88,25 +88,45 @@ needs_update=f
 local log_message="No update needed"
 begin_function_flat
 
+  get_node_needs_update $cell_path || fail
+  [[ $needs_update == t ]] && succeed
+
   if [[ -v leaf_dims ]]; then
     fork=f par=f function=get_leaf_needs_update for_each_leaf ${leaf_dims[*]} || fail
     if [[ $needs_update == t ]]; then
       log_message="Needs update because at least one leaf cell is out of date"
     fi
+    [[ $needs_update == t ]] && succeed
   fi
 
-  if [[ $needs_update == f ]]; then
-    get_node_needs_update $cell_path || fail
-  fi
-
-  if [[ $needs_update == t ]]; then
-    action=update_check debug "$log_message"
-  else
-    action=update_check info "$log_message"
+  if [[ -d $up_path ]]; then
+    local -r upstream_cells=( $(find1 $up_path -not -name '.*' | sort -g) ) || fail
+    local up
+    begin_for up in ${upstream_cells[*]}; doo
+      get_node_needs_update $up || fail
+      if [[ $needs_update == t ]]; then
+        log_message="Needs update because at least one upstream cell is out of date"
+        break
+      fi
+    end_for
+    [[ $needs_update == t ]] && succeed
   fi
 
 end_function_flat
+
+if [[ $needs_update == t ]]; then
+  action=update_check debug "$log_message"
+else
+  action=update_check info "$log_message"
+fi
+
 handle_return
+}
+
+get_leaf_needs_update() {
+local cell_path=$cell_path
+local leaf_path=$leaf_path
+get_node_needs_update $cell_path$leaf_path
 }
 
 get_node_needs_update() {
@@ -116,12 +136,9 @@ begin_function_flat
   
   needs_update=f
 
-  if [[ ! -e $status_path/subs-up-to-date ]]; then
+  if [[ ! -e $status_path/up-to-date ]]; then
     needs_update=t
-    log_message="Needs update because a sub cell is outdated"
-  elif [[ ! -e $status_path/deps-up-to-date ]]; then
-    needs_update=t
-    log_message="Needs update because a dependency is outdated"
+    log_message="Needs update because something changed"
   elif [[ ! -e $status_path/last-good-update-end ]]; then
     needs_update=t
     log_message="Needs update because cell has never been updated successfully"
@@ -151,13 +168,8 @@ end_function_flat
 handle_return
 }
 
-get_leaf_needs_update() {
-local cell_path=$cell_path
-local leaf_path=$leaf_path
-get_node_needs_update $cell_path$leaf_path
-}
-
 get_is_stale() {
+local status_path=$status_path
 begin_function_flat
   is_stale=t
   if [[ ! "$required_freshness" || "$required_freshness" == inf ]]; then
@@ -181,56 +193,10 @@ end_function_flat
 handle_return
 }
 
-propagate_success_to_parents() {
-local from_cell=$from_cell dim_path=${1:-} \
-  completion_time=${completion_time:-} \
-  changed=$changed
-local parent=${from_cell%/*} from_cell_part=${from_cell##*/}
-local parent_part=${parent##*/}
-if [[ $parent != $from_cell && ${#parent} -gt 1 ]]; then
-  if [[ $parent_part == .dim ]]; then
-    if [[ "$dim_path" ]]; then
-      dim_path="${from_cell_part}_$dim_path"
-    else
-      dim_path=${from_cell_part}
-    fi
-    # recursive
-    from_cell=$parent propagate_success_to_parents $dim_path || return 1
-  elif [[ -d $parent/.dna ]]; then
-    local cyto=$parent/.cyto
-    if [[ ! -e $cyto ]]; then
-      fork make_cyto $cell || fail
-    fi
-
-    local sub_status=$cyto/status/sub
-    if [[ -d $sub_status ]]; then
-      if [[ ! -d $sub_status/$dim_path ]]; then
-        mkdir -p $sub_status/$dim_path || return 1
-      fi
-      if [[ "$completion_time" ]]; then
-        touch -d @$completion_time $sub_status/$dim_path/last-good-update-end || return 1
-      fi
-    fi
-
-    local parent_status=$cyto/status
-    if [[ $changed == t && -f $parent_status/self-up-to-date ]]; then
-      rm $parent_status/self-up-to-date || return 1
-      if [[ "$parent" == */.dim/* ]]; then
-        from_cell=$parent propagate_success_to_parents $dim_path || return 1
-      fi
-    fi
-
-  fi
-fi
-return 0
-}
-
-propagate_success_to_downstream() {
+propagate_change_to_downstream() {
 begin_function_flat
 
 local from_cell=$from_cell \
-  completion_time=${completion_time:-} \
-  changed=$changed \
   down_path=$from_cell/.cyto/down down_folder folders
 
 local start_folder=${start_folder:-$down_path}
@@ -238,7 +204,7 @@ if [[ -d $start_folder ]]; then
   folders=$(find1 $start_folder -not -name '.*' -type d) || fail
   loop_over_var=folders \
     par=t fork=f \
-    body=propagate_success_to_downstream2 \
+    body=propagate_change_to_downstream2 \
     parallel_loop || fail
 fi
 
@@ -246,39 +212,48 @@ end_function_flat
 handle_return
 }
 
-propagate_success_to_downstream2() {
+propagate_change_to_downstream2() {
 begin_function_flat
 
   local down_cell_path=$(realpath $value)
-  local down_cell_name \
-    cell=${down_cell_path%/*/*/*}
-  local status_up=$cell/.cyto/status/up
-
-  local cell_name
-  get_cell_name $down_cell_path || fail
-  down_cell_name=$cell_name
+  local cell=${down_cell_path%/*/*/*}
+  local status_self=$cell/.cyto/status
+  
+  local dep_stack=${dep_stack:-( )}
+  if already_in_dep_stack $down_cell_path; then
+    succeed
+  fi
+  dep_stack+=( $down_cell_path )
 
   if [[ -d $cell && $cell != $down_cell_path ]]; then
-    if [[ -d $status_up ]]; then
-      if [[ "$completion_time" ]]; then
-        if [[ ! -d $status_up/$down_cell_name ]]; then
-          mkdir $status_up/$down_cell_name || fail
-        fi
-        touch -d @$completion_time \
-          $status_up/$down_cell_name/last-good-update-end || fail
-      fi
-      if [[ $changed == t && -f $status_up/$down_cell_name/deps-up-to-date ]]; then
-        rm $status_up/$down_cell_name/deps-up-to-date || fail
+    if [[ -d $status_self ]]; then
+      # can't combine these if statements or it will alter the else condition
+      #   and break things
+      if [[ -f $status_self/up-to-date ]]; then
+        rm $status_self/up-to-date || fail
+        from_cell=$cell \
+          propagate_change_to_downstream || fail
       fi
     else
       # recursive
       from_cell=$cell \
-        propagate_success_to_downstream || fail
+        propagate_change_to_downstream || fail
     fi
   fi
 
 end_function_flat
 handle_return
+}
+
+already_in_dep_stack() {
+local find_dep=$1
+local dep
+for dep in ${dep_stack[*]}; do
+  if [[ $dep == $find_dep ]]; then
+    return 0
+  fi
+done
+return 1
 }
 
 # This is run if cell hasn't been initialized = missing .cyto folder
@@ -482,8 +457,6 @@ begin_function_flat
     fi
     if [[ $make_status == t ]]; then
       mkdir -p $new_cyto/status || fail
-      mkdir -p $new_cyto/status/sub || fail
-      mkdir -p $new_cyto/status/up || fail
     fi
   fi
 
@@ -1455,6 +1428,7 @@ init_context() {
 #     update and set something_changed=t accordingly. 
 
 default_freshness= \
+needs_update= \
 retry_max=1 \
 retry_delay=1 \
 retry_scale=2 \
@@ -1547,11 +1521,6 @@ begin_function_flat
   status_path=$cyto_path/status
   if [[ ! -d $status_path ]]; then
     status_path=
-  fi
-
-  sub_status_path=$cyto_path/status/sub
-  if [[ ! -d $sub_status_path ]]; then
-    sub_status_path=
   fi
 
   debug_path=$cyto_path/debug
