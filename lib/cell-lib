@@ -249,26 +249,33 @@ handle_return
 propagate_success_to_downstream2() {
 begin_function_flat
 
-local down_cell_path=$(realpath $value)
-local down_cell_name=${down_cell_path##*/} \
-  cell=${down_cell_path%/*/*/*}
-local status_up=$cell/.cyto/status/up
+  local down_cell_path=$(realpath $value)
+  local down_cell_name \
+    cell=${down_cell_path%/*/*/*}
+  local status_up=$cell/.cyto/status/up
 
-if [[ -d $cell && $cell != $down_cell_path ]]; then
-  if [[ -d $status_up ]]; then
-    if [[ "$completion_time" ]]; then
-      touch -d @$completion_time \
-        $status_up/$down_cell_name/last-good-update-end || fail
+  local cell_name
+  get_cell_name $down_cell_path || fail
+  down_cell_name=$cell_name
+
+  if [[ -d $cell && $cell != $down_cell_path ]]; then
+    if [[ -d $status_up ]]; then
+      if [[ "$completion_time" ]]; then
+        if [[ ! -d $status_up/$down_cell_name ]]; then
+          mkdir $status_up/$down_cell_name || fail
+        fi
+        touch -d @$completion_time \
+          $status_up/$down_cell_name/last-good-update-end || fail
+      fi
+      if [[ $changed == t && -f $status_up/$down_cell_name/deps-up-to-date ]]; then
+        rm $status_up/$down_cell_name/deps-up-to-date || fail
+      fi
+    else
+      # recursive
+      from_cell=$cell \
+        propagate_success_to_downstream || fail
     fi
-    if [[ $changed == t && -f $status_up/$down_cell_name/deps-up-to-date ]]; then
-      rm $status_up/$down_cell_name/deps-up-to-date || fail
-    fi
-  else
-    # recursive
-    from_cell=$cell \
-      propagate_success_to_downstream || fail
   fi
-fi
 
 end_function_flat
 handle_return
@@ -544,13 +551,15 @@ begin_function
 
   if [[ ! -d $sub_cell ]]; then
 
-    local parent=${sub_cell%/*}
-    debug "Creating sub cell ${parent##*/}/${sub_cell##*/}"
+    local short_cell
+    get_short_cell $sub_cell 
+    debug "Creating sub cell $short_cell"
 
     if [[ -d $sub_cell.new ]]; then
       rm -rf $sub_cell.new || fail
     fi
 
+    local parent=${sub_cell%/*}
     if [[ "$parent" == "$sub_cell" ]]; then
       fatal "Can't create sub cells in a cell without parents: $sub_cell"
       stack_trace
@@ -589,14 +598,12 @@ begin_function_flat
   if [[ "$seed_dna" ]]; then
     safe_link $(realpath $seed_dna) $cell/ || fail
   else
-    # append branch dim
-    local branch_dims=( ${branch_dims[*]} ) branch_dim_count=${#branch_dims[*]}
-    local -r leaf_dim_count=${#leaf_dims[*]}
-    if (( branch_dim_count >= leaf_dim_count )); then
-      fatal "Interal error: there are more branch dims than dims defined for this cell: $cell_path"
+    local branch_dims=( ${branch_dims[*]} )
+    if (( branch_dim_count >= trunk_dim_count )); then
+      fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
       fail1
     fi
-    branch_dims+=( ${leaf_dims[$branch_dim_count]} )
+    branch_dims+=( ${trunk_dims[$branch_dim_count]} )
     
     local sub_dna_path=$cell/.dna 
     mkdir $sub_dna_path || fail
@@ -758,9 +765,13 @@ begin_function_flat
       else
         sane_value=$empty_member
       fi
+      local old_from=$from
       from=$from/.dim/$sane_value
       if [[ ! -d $from ]]; then
-        create_sub_cell $from || fail
+        (
+        cell=$old_from cell_context_load && \
+        create_sub_cell $from
+        ) || fail
       fi
     else
       break
@@ -1283,14 +1294,6 @@ else
 fi
 }
 
-get_cell_name() {
-local cell_path=$1
-local short_cell
-get_short_cell $cell_path || return 1
-cell_name=${short_cell//\//_}
-return 0
-}
-
 validate_dims() {
 local dim
 for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
@@ -1587,13 +1590,19 @@ end_function_flat
 handle_return
 }
 
+# returns:
+#   branch_dims
+#   branch_dim_count
+#   trunk_dims
+#   trunk_dim_count
 setup_branch_dims() {
 local cell_path=$1 \
   trunk_cell dims
 
 get_trunk_cell $cell_path || return 1
 get_dims $trunk_cell || return 1
-local -r dim_count=${#dims[*]}
+trunk_dims=( ${dims[*]} )
+trunk_dim_count=${#trunk_dims[*]}
 
 branch_dims=() 
 local dim
@@ -1605,6 +1614,7 @@ for dim in ${dims[*]}; do
     break
   fi
 done
+branch_dim_count=${#branch_dims[*]}
 
 return 0
 }
@@ -2430,6 +2440,13 @@ fi
 return 0
 }
 
+get_cell_name() {
+local cell_path=$1
+local short_cell
+get_short_cell $cell_path || fail
+cell_name=${short_cell//\//_}
+cell_name=${cell_name// /:}
+}
 
 get_short_cell() {
 local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string=
