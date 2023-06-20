@@ -15,7 +15,6 @@ if [[ $pretend == f ]]; then
       cp -a $status_path/last-update-start \
             $status_path/last-good-update-start || return 1
       if [[ $something_changed == t ]]; then
-        debug_start
         from_cell=$cell_path \
           propagate_change_to_downstream || return 1
       fi

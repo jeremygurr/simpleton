@@ -199,9 +199,8 @@ begin_function_flat
 local from_cell=$from_cell \
   down_path=$from_cell/.cyto/down down_folder folders
 
-local start_folder=${start_folder:-$down_path}
-if [[ -d $start_folder ]]; then
-  folders=$(find1 $start_folder -not -name '.*' -type d) || fail
+if [[ -d $down_path ]]; then
+  folders=$(find1 $down_path -not -name '.*' -type d) || fail
   loop_over_var=folders \
     par=t fork=f \
     body=propagate_change_to_downstream2 \
@@ -215,17 +214,16 @@ handle_return
 propagate_change_to_downstream2() {
 begin_function_flat
 
-  local down_cell_path=$(realpath $value)
-  local cell=${down_cell_path%/*/*/*}
+  local cell=$(realpath $value)
   local status_self=$cell/.cyto/status
   
-  local dep_stack=${dep_stack:-( )}
-  if already_in_dep_stack $down_cell_path; then
+  local dep_stack=${dep_stack:-}
+  if already_in_dep_stack $cell; then
     succeed
   fi
-  dep_stack+=( $down_cell_path )
+  dep_stack+=( $cell )
 
-  if [[ -d $cell && $cell != $down_cell_path ]]; then
+  if [[ -d $cell ]]; then
     if [[ -d $status_self ]]; then
       # can't combine these if statements or it will alter the else condition
       #   and break things
@@ -415,6 +413,7 @@ begin_function_flat
       make_job=f \
       make_cyto_key=f \
       make_dna_key=f \
+      make_leaf_key=f \
       make_status=f 
     begin_for feature in "${cell_features[@]}"; doo
       case $feature in
@@ -435,6 +434,9 @@ begin_function_flat
         ;;
         key)
           make_dna_key=t
+        ;;
+        leaf-key)
+          make_leaf_key=t
         ;;
         local-key) 
           # Use this if you don't want the keys of this cell to be saved to repo
@@ -458,6 +460,9 @@ begin_function_flat
     fi
     if [[ $make_dna_key == t ]]; then
       mkdir -p $dna_path/key || fail
+    fi
+    if [[ $make_leaf_key == t ]]; then
+      mkdir -p $dna_path/leaf/key || fail
     fi
     if [[ $make_cyto_key == t ]]; then
       mkdir -p $new_cyto/key || fail
@@ -1820,7 +1825,7 @@ begin_function
       debug "There are no keys for this cell yet. Will create a new key."
 
       # create a new main key
-      if ! log_and_run openssl rand -base64 40 >$tmp_path/main; then
+      if ! out_to_file=$tmp_path/main log_and_run openssl rand -base64 40; then
         fatal "Failed to generate new main key."
         fail1
       fi
