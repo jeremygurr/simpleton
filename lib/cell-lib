@@ -413,7 +413,8 @@ begin_function_flat
     local make_req=f \
       make_log=f \
       make_job=f \
-      make_key=f \
+      make_cyto_key=f \
+      make_dna_key=f \
       make_status=f 
     begin_for feature in "${cell_features[@]}"; doo
       case $feature in
@@ -432,10 +433,13 @@ begin_function_flat
         status)
           make_status=t
         ;;
+        key)
+          make_dna_key=t
+        ;;
         local-key) 
           # Use this if you don't want the keys of this cell to be saved to repo
           # They will only be stored locally instead
-          make_key=t
+          make_cyto_key=t
         ;;
         *)
           fatal "Unknown feature $feature"
@@ -452,7 +456,10 @@ begin_function_flat
     if [[ $make_job == t ]]; then
       mkdir -p $new_cyto/job || fail
     fi
-    if [[ $make_key == t ]]; then
+    if [[ $make_dna_key == t ]]; then
+      mkdir -p $dna_path/key || fail
+    fi
+    if [[ $make_cyto_key == t ]]; then
       mkdir -p $new_cyto/key || fail
     fi
     if [[ $make_status == t ]]; then
@@ -1469,7 +1476,6 @@ begin_function_flat
 
   dna_path=$cell_path/.dna \
     cyto_path=$cell_path/.cyto \
-    short_cell=$cell_path \
     command_path=$cyto_path/command
 
   if [[ -d $dna_path/dim ]]; then
@@ -1738,14 +1744,14 @@ begin_function
   fi
 
   # extract the main key
-  if ! openssl pkeyutl -decrypt -inkey $user_private_key -in "$key_path/key.$USER" -out $tmp_path/main; then
+  if ! log_and_run openssl pkeyutl -decrypt -inkey $user_private_key -in "$key_path/key.$USER" -out $tmp_path/main; then
     fatal "Failed to decrypt main key." 
     fail1
   fi
   defer "rm $tmp_path/main"
 
   # decrypt the secret file
-  if ! openssl enc -aes256 -pbkdf2 -in $from -out $to -d -pass file:$tmp_path/main; then 
+  if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -d -pass file:$tmp_path/main; then 
     fatal "Failed to decrypt secret file." 
     fail1
   fi
@@ -1814,20 +1820,20 @@ begin_function
       debug "There are no keys for this cell yet. Will create a new key."
 
       # create a new main key
-      if ! openssl rand -base64 40 >$tmp_path/main; then
+      if ! log_and_run openssl rand -base64 40 >$tmp_path/main; then
         fatal "Failed to generate new main key."
         fail1
       fi
       defer "rm $tmp_path/main"
 
       # create a compatible public key from the user's private key
-      if ! openssl pkey -in $user_private_key -out $tmp_path/public -pubout; then 
+      if ! log_and_run openssl pkey -in $user_private_key -out $tmp_path/public -pubout; then 
         fatal "Failed to convert private key to public key."
         fail1
       fi
 
       # encrypt main key with given user key
-      if ! openssl pkeyutl -encrypt -pubin -inkey $tmp_path/public -in $tmp_path/main -out $key_path/key.$USER; then
+      if ! log_and_run openssl pkeyutl -encrypt -pubin -inkey $tmp_path/public -in $tmp_path/main -out $key_path/key.$USER; then
         fatal "Failed to encrypt main key."
         fail1
       fi
@@ -1835,7 +1841,7 @@ begin_function
     fi
   else 
     # extract the main key
-    if ! openssl pkeyutl -decrypt -inkey $user_private_key -in $key_path/key.$USER -out $tmp_path/main; then
+    if ! log_and_run openssl pkeyutl -decrypt -inkey $user_private_key -in $key_path/key.$USER -out $tmp_path/main; then
       fatal "Failed to decrypt main key." 
       fail1
     fi
@@ -1844,7 +1850,7 @@ begin_function
   fi
     
   # encrypt the file with main key
-  if ! openssl enc -aes256 -pbkdf2 -in $from -out $to -pass file:$tmp_path/main; then
+  if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -pass file:$tmp_path/main; then
     fatal "Failed to create new secret file."
     fail1
   fi

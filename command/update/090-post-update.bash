@@ -14,8 +14,11 @@ if [[ $pretend == f ]]; then
       touch -d @$completion_time $status_path/last-good-update-end || return 1
       cp -a $status_path/last-update-start \
             $status_path/last-good-update-start || return 1
-      from_cell=$cell_path \
-        propagate_change_to_downstream || return 1
+      if [[ $something_changed == t ]]; then
+        debug_start
+        from_cell=$cell_path \
+          propagate_change_to_downstream || return 1
+      fi
     else
       touch -d @$completion_time $status_path/last-bad-update-end || return 1
       cp -a $status_path/last-update-start \

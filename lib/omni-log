@@ -241,8 +241,9 @@ if [[ $pretend == t ]]; then
 fi
 log_function=${FUNCNAME[1]} write_to_log debug command "$prefix$command"
 if [[ $pretend == f ]]; then
-  eval "$command"
+  eval "$command" || return 1
 fi
+return 0
 }
 
 declare -A log_level_num_map=( 
@@ -271,7 +272,8 @@ declare -A log_level_color_map=(
 write_to_log() {
 begin_no_tracing_zone
 
-local level=$1 action=${2:-${1:-}} message=${3:-} var_name var value new_vars=
+local level=$1 action=${2:-${1:-}} message=${3:-} \
+  var_name var value new_vars= trace_vars=
 
 for var in $trace_var ${vars:-}; do
 
@@ -292,7 +294,11 @@ for var in $trace_var ${vars:-}; do
     # value=${value// /\\ }
   fi
 
-  new_vars+=" $var_name=$value"
+  if [[ "$trace_var" =~ $var ]]; then
+    trace_vars+=" $var_name=$value"
+  else
+    new_vars+=" $var_name=$value"
+  fi
 
 done
 
@@ -326,7 +332,7 @@ if [[ ! "${output_teed_to_file:-}" ]]; then
 fi
 
 if [[ $log_to_out == t ]]; then
-  echo "$to_log" >&2
+  echo "$to_log$trace_vars" >&2
 else
 
   local hide=f
@@ -359,7 +365,7 @@ else
     pid=" pid=$pid"
     log_id=" log_id=$log_id"
     eval "local to_terminal=\"$log_format\""
-    echo "$to_terminal" >&2
+    echo "$to_terminal$trace_vars" >&2
   fi
 fi
 
