@@ -143,10 +143,16 @@ begin_function_flat
     needs_update=t
     log_message="Needs update because cell has never been updated successfully"
   else
-    get_is_stale $status_path || fail
-    if [[ $is_stale == t ]]; then
+    get_prop_changed $cell_path || fail
+    if [[ $prop_changed == t ]]; then
       needs_update=t
-      log_message="Needs update because cell is stale"
+      log_message="Needs update because properties have changed"
+    else
+      get_is_stale $status_path || fail
+      if [[ $is_stale == t ]]; then
+        needs_update=t
+        log_message="Needs update because cell is stale"
+      fi
     fi
   fi
 
@@ -166,6 +172,30 @@ begin_function_flat
 
 end_function_flat
 handle_return
+}
+
+get_prop_changed() {
+local cell_path=$1 \
+  status_path=$cell_path/.cyto/status \
+  hash=0 \
+  value
+prop_changed=t
+if [[ -d $status_path ]]; then
+  local -r status_file=$status_path/last_run_prop_hash
+  local prop
+  for prop in ${props[*]:-}; do
+    if [[ -v d_$prop ]]; then
+      eval "value=\$d_$prop"
+      hash=$(echo "$hash $prop=$value" | sha1sum) || return 1
+    fi
+  done
+  if [[ -f $status_file && "$hash" == $(<$status_file) ]]; then
+    prop_changed=f
+  else
+    echo "$hash" >$status_file || return 1
+  fi
+fi
+return 0
 }
 
 get_is_stale() {
@@ -1457,6 +1487,9 @@ current_pause=250 \
 max_pause=60000 \
 reuse_existing_out=f \
 branch_dims= \
+props= \
+leaf_dims= \
+sub_dims= \
 in_path= \
 out_path= 
 return 0
