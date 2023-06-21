@@ -11,11 +11,13 @@ if [[ -f $upstream.prep ]]; then
   $f || return 1
   setup_dep_defaults || return 1
 fi
-get_node_needs_update $upstream || return 1
+
+get_needs_update $upstream || return 1
 if [[ $needs_update == t ]]; then
   downstream_ref_path=$upstream
   execute_command_step "$(realpath $upstream)" || return 1
 fi
+
 return 0
 }
 

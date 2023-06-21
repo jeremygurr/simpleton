@@ -3,7 +3,7 @@ begin_function_flat
   if [[ ! "${needs_update:-}" ]]; then
     needs_update=t
     if [[ "$status_path" ]]; then
-      get_needs_update || fail
+      get_needs_update $cell_path || fail
     fi
   fi
   if [[ $needs_update == f ]]; then
