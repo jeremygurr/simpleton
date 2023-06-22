@@ -492,7 +492,7 @@ debug_trap() {
         echo >&$fd_original_err
         read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
         set +u
-        if [[ "$debug_display" =~ ^[a-zA-Z_]+$ ]]; then
+        if [[ "$debug_display" =~ ^[a-zA-Z_0-9]+$ ]]; then
           eval 'echo "$'$debug_display'"' >&$fd_original_err
         else
           eval 'echo "'$debug_display'"' >&$fd_original_err
@@ -742,6 +742,14 @@ debug_trap() {
         debug_save_state
         no_follow_once=t
         ;;
+      u)
+        echo >&$fd_original_err
+        local f
+        read -e -p "Unignore function: " f <&$fd_original_in >&$fd_original_err
+        if [[ "${f:-}" ]]; then
+          debug_ignore_remove $f
+        fi
+        ;;
       w)
         echo >&$fd_original_err
         read -e -p "Watch: " debug_watch <&$fd_original_in >&$fd_original_err
@@ -870,6 +878,7 @@ debug_trap() {
         echo "   not stepping into function calls" >&$fd_original_err
         echo "S  show stack trace" >&$fd_original_err
         echo "t  add timestamps to each debug trace line" >&$fd_original_err
+        echo "u  unignore: remove given function from ignore list" >&$fd_original_err
         echo "w  set or clear current watched variable" >&$fd_original_err
         echo "W  toggle debug watch style" >&$fd_original_err
         echo "x  toggle expanded command mode. If on, will expand each *short* command that is executed" >&$fd_original_err
@@ -1087,19 +1096,23 @@ else
 fi
 }
 
+debug_ignore_remove() {
+local remove_functions="$*"
+for x in $remove_functions; do
+  remove_from_string debug_ignore "$x"
+done
+}
+
 debug_setup() {
 export debug_ignore=${debug_ignore:- begin_fork change_log_file debug debug_start defer echo_align error fatal find1 fork info out parallel_loop pause_tee safe_link tee_output_to_log trace unpause_tee unrealpath untee_output warn write_to_log }
 if [[ "${debug_unignore:-}" ]]; then
-  local x
-  for x in ${debug_unignore}; do
-    remove_from_string debug_ignore "$x"
-  done
+  debug_ignore_remove "$debug_unignore"
 fi
 
 if [[ -n "${debug:-}" && $debug != f || \
    -n "${debug_search:-}" || \
    -n "${debug_search_deep:-}" || \
-   -n "${debug_id:-}" && -z "${log_id:-}" || \
+   -n "${debug_id:-}" && -z "${debug_at_log_id:-}" || \
    -n "${debug_var:-}" || \
    -n "${debug_function:-}" || \
    -n "${debug_line:-}" ]]; then

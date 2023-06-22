@@ -12,6 +12,7 @@ if [[ -f $upstream.prep ]]; then
   setup_dep_defaults || return 1
 fi
 
+local needs_update
 get_needs_update $upstream || return 1
 if [[ $needs_update == t ]]; then
   downstream_ref_path=$upstream
