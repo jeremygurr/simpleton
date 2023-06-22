@@ -75,7 +75,7 @@ case $log_level in
   ;;
   trace|all)
     if [[ "$log_format" == default ]]; then
-      log_format='$time$pid$log_id$COL40$level_color$action$COL55$function$COL85$vars$message$RESET'
+      log_format='$time$pid$log_id$COL40$level_color$action$COL55$function$COL85$log_vars$message$RESET'
     fi
   ;;
   *)
@@ -89,22 +89,27 @@ case $log_format in
     log_format='$level_color$message$RESET'
   ;;
   short)
-    log_format='$level_color$action$COL15$function$COL45$vars$message$RESET'
+    log_format='$level_color$action$COL15$function$COL45$log_vars$message$RESET'
   ;;
   compact)
-    log_format='$level_color$action$function$vars$message$RESET'
+    log_format='$level_color$action$function$log_vars$message$RESET'
   ;;
 esac
 
+var_stack=( )
 alias begin_function='
   local return_value=0 break_out=f
   write_to_log trace call
   let log_depth_current++ || true
+  var_stack+=( $log_vars ) 
+  log_vars=
   while true; do
 '
 
 alias end_function='
   break; done; let log_depth_current-- || true
+  log_vars=${var_stack[-1]}
+  unset var_stack[-1]
   write_to_log trace "return($return_value)"
 '
 
@@ -141,7 +146,7 @@ begin_function_flat
 
   if [[ "${log_file:-}" ]]; then
     if [[ "$new_log_file" ]]; then
-      log_function=${FUNCNAME[1]} vars=new_log_file write_to_log trace log_branch
+      log_function=${FUNCNAME[1]} log_vars=new_log_file write_to_log trace log_branch
     else
       log_function=${FUNCNAME[1]} write_to_log trace log_close
     fi
@@ -157,7 +162,7 @@ begin_function_flat
     fi
 
     if [[ "$old_log_file" ]]; then
-      vars=old_log_file write_to_log trace log_from
+      log_vars=old_log_file write_to_log trace log_from
     fi
 
   fi
@@ -279,7 +284,7 @@ begin_no_tracing_zone
 local level=$1 action=${2:-${1:-}} message=${3:-} \
   var_name var value new_vars= trace_vars=
 
-for var in $trace_var ${vars:-}; do
+for var in $trace_var ${log_vars:-}; do
 
   if [[ $var =~ = ]]; then
     var_name=${var%%=*}
@@ -364,7 +369,7 @@ else
     function=" $function"
     action=" $action"
     message=" $message"
-    local vars="$new_vars"
+    local log_vars="$new_vars"
     time=" $time"
     pid=" pid=$pid"
     log_id=" log_id=$log_id"

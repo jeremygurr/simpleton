@@ -1,4 +1,5 @@
 update_self() {
+local log_vars='short_cell'
 begin_function
   update_successful=f 
   can_retry=f
