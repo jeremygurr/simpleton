@@ -13,7 +13,7 @@ if [[ -f $upstream.prep ]]; then
 fi
 
 local needs_update dims leaf_dims
-load_dims $cell/.dna/dim || return 1
+load_dims $upstream/.dna/dim || return 1
 leaf_dims=( ${dims[*]:-} )
 get_needs_update $(realpath $upstream) || return 1
 
