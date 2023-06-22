@@ -12,8 +12,11 @@ if [[ -f $upstream.prep ]]; then
   setup_dep_defaults || return 1
 fi
 
-local needs_update
-get_needs_update $upstream || return 1
+local needs_update dims leaf_dims
+load_dims $cell/.dna/dim || return 1
+leaf_dims=( ${dims[*]:-} )
+get_needs_update $(realpath $upstream) || return 1
+
 if [[ $needs_update == t ]]; then
   downstream_ref_path=$upstream
   execute_command_step "$(realpath $upstream)" || return 1

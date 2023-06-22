@@ -90,6 +90,11 @@ local status_path=$cell_path/.cyto/status \
 
 begin_function_flat
 
+  if [[ ! -d $cell_path ]]; then
+    fatal "Attempted to run get_needs_update on a non-existent cell: $cell_path"
+    fail1
+  fi
+
   needs_update=f
   get_short_cell $(realpath $cell_path)
   debug "Does $short_cell need to be updated?"
@@ -158,7 +163,10 @@ get_upstream_needs_update() {
 local -r upstream_cells=( $(find1 $up_path -not -name '.*' | sort -g) ) || return 1
 local up
 for up in ${upstream_cells[*]}; do
-  get_needs_update $up || return 1
+  local dims leaf_dims
+  load_dims $cell/.dna/dim || return 1
+  leaf_dims=( ${dims[*]:-} )
+  get_needs_update $(realpath $up) || return 1
   if [[ $needs_update == t ]]; then
     break
   fi
@@ -1941,12 +1949,11 @@ local dim_array=( $* ) multi_cell \
 
 begin_function_flat
 
-  debug_start
   eval "$localize_dim_vars" || fail
   local member_index_stack \
     member_index_stack_count \
     member_stack \
-    member_row \
+    member_stack_count \
     leaf_path_stack \
     branch_values \
     member_index \
@@ -1957,13 +1964,16 @@ begin_function_flat
     i value
   local last_row_index=$((dim_count-1))
 
-  begin_for ((i=0; i<dim_count; i++)); doo
-    local -n members$i
-  end_for
-
   begin_loop
 
-    if (( ${#member_index_stack[*]} < dim_count )); then
+debug_start
+    if [[ "${member_index_stack:-}" ]]; then
+      member_index_stack_count=${#member_index_stack[*]}
+    else
+      member_index_stack_count=0
+    fi
+
+    if (( member_index_stack_count < dim_count )); then
       for_each_leaf_flat_expand_members || fail
     elif (( member_index == dim_count - 1 )); then
       begin_while (( member_index == dim_count - 1 )); doo
@@ -1984,15 +1994,15 @@ begin_function_flat
       let member_index++ || true
     fi
 
-    if [[ "${#values[*]}" -gt 1 ]]; then
+    local -n member_row=${member_stack[$last_row_index]}
+    if [[ "${#member_row[*]}" -gt 1 ]]; then
       multi_cell=t
     else
       multi_cell=f
     fi
 
-    member_row=${member_stack[$last_row_index]}
     value=${member_row[$member_index]}
-    get_sane_value \"$value\"
+    get_sane_value "$value"
     leaf_path=${leaf_path_stack[-2]}/.dim/$sane_value
     branch_values[-1]=$value
     eval "local d_$dim=\$value"
@@ -2012,22 +2022,38 @@ handle_return
 
 for_each_leaf_flat_expand_members() {
 begin_function_flat
-local row dim
-begin_for ((row=${#member_stack[*]}; row < dim_count; row++)); doo
+local row 
+if [[ "${member_stack:-}" ]]; then
+  member_stack_count=${#member_stack[*]}
+else
+  member_stack_count=0
+fi
+begin_for ((row=$member_stack_count; row < dim_count; row++)); doo
 
   dim=${dim_array[$row]}
   expand_values || fail
+  value=$values
+  eval "local d_$dim=\$value"
+  branch_values+=( "$value" )
 
   eval "members$row=( \"\${values[@]}\" )"
   member_stack+=( members$row )
 
-  member_index_stack[-1]=$member_index
+  if [[ "${member_index_stack:-}" ]]; then
+    member_index_stack[-1]=$member_index
+  fi
   member_index=0
   member_index_stack+=( 0 )
 
-  leaf_path_stack[-1]=$leaf_path/.dim/$sane_value
-  leaf_path_stack+=( )
-  branch_values+=( $value )
+  local previous_leaf_stack
+  if (( row > 0 )); then
+    previous_leaf_path=${leaf_path_stack[-1]}
+  else
+    previous_leaf_path=
+  fi
+
+  get_sane_value "$value"
+  leaf_path_stack+=( $previous_leaf_path/.dim/$sane_value )
 
 end_for
 
@@ -2205,7 +2231,7 @@ local -r value=$1
 if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
   sane_value=$value
 else
-  hash=$(echo "$value" | cksum -a md5 | awk '{ print $4 }')
+  hash=$(echo "$value" | sha1sum | awk '{ print $1 }')
   sane_value=${hash:0:8}
 fi
 return 0
