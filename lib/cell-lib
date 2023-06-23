@@ -97,6 +97,7 @@ begin_function_flat
   fi
 
   needs_update=f
+  local short_cell
   get_short_cell $cell_path
   debug "Need update? ($short_cell)"
 
@@ -208,24 +209,35 @@ return 0
 get_prop_changed() {
 local cell_path=$1 \
   status_path=$cell_path/.cyto/status \
-  hash=0 \
+  prop_hash=0 \
   value
 prop_changed=t
 if [[ -d $status_path ]]; then
   local -r status_file=$status_path/last_run_prop_hash
-  local prop
-  for prop in ${props[*]:-}; do
-    if [[ -v d_$prop ]]; then
-      eval "value=\$d_$prop"
-      hash=$(echo "$hash $prop=$value" | sha1sum) || return 1
-    fi
-  done
-  if [[ -f $status_file && "$hash" == $(<$status_file) ]]; then
+  get_prop_hash || return 1
+  if [[ -f $status_file && "$prop_hash" == $(<$status_file) ]]; then
     prop_changed=f
-  else
-    echo "$hash" >$status_file || return 1
   fi
 fi
+return 0
+}
+
+update_prop_hash() {
+local prop_hash
+get_prop_hash || return 1
+local -r status_file=$status_path/last_run_prop_hash
+echo "$prop_hash" >$status_file || return 1
+return 0
+}
+
+get_prop_hash() {
+local prop
+for prop in ${props[*]:-}; do
+  if [[ -v d_$prop ]]; then
+    eval "value=\$d_$prop"
+    prop_hash=$(echo "$prop=$value" | sha1sum) || return 1
+  fi
+done
 return 0
 }
 
@@ -1781,7 +1793,7 @@ begin_function
     fail1
   fi
 
-  if [[ -f "$to" ]]; then
+  if [[ -s "$to" ]]; then
     fatal "Decrypt: target file already exists: $to"
     fail1
   fi
