@@ -32,6 +32,7 @@ export log_depth=${log_depth:-}
 export log_function=${log_function:-}
 export log_level=${log_level:-info}
 export log_format=${log_format:-default}
+export nice_stack=( ${nice_stack[*]:-} )
 
 case $log in
   off|fatal|error|warn|info|debug|trace|all)
@@ -340,8 +341,19 @@ if [[ ! "${output_teed_to_file:-}" ]]; then
   pause_tee
 fi
 
+case $action in
+  call)
+    nice_stack+=( "$function$COL40$new_vars$trace_vars" )
+  ;;
+  return*)
+    unset nice_stack[-1]
+  ;;
+esac
+
+local out_line=
 if [[ $log_to_out == t ]]; then
-  echo "$to_log$trace_vars" >&2
+  out_line="$to_log$trace_vars"
+  echo "$out_line" >&2
 else
 
   local hide=f
@@ -364,17 +376,19 @@ else
     hide=t
   fi
 
+  local level_color=${log_level_color_map[$level]}
+  function=" $function"
+  action=" $action"
+  message=" $message"
+  local log_vars="$new_vars"
+  time=" $time"
+  pid=" pid=$pid"
+  log_id=" log_id=$log_id"
+  eval "local to_terminal=\"$log_format\""
+  out_line="$to_terminal$trace_vars"
+
   if [[ $hide == f ]]; then
-    local level_color=${log_level_color_map[$level]}
-    function=" $function"
-    action=" $action"
-    message=" $message"
-    local log_vars="$new_vars"
-    time=" $time"
-    pid=" pid=$pid"
-    log_id=" log_id=$log_id"
-    eval "local to_terminal=\"$log_format\""
-    echo "$to_terminal$trace_vars" >&2
+    echo "$out_line" >&2
   fi
 fi
 
