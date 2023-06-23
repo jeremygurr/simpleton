@@ -10,7 +10,7 @@ begin_function
     fi
     create_sub_cell $member_path || fail
   fi
-  get_node_needs_update $member_path || return 1
+  get_needs_update $member_path || return 1
   if [[ $needs_update == t ]]; then
     fork execute_command $member_path update || fail
   fi

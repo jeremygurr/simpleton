@@ -31,6 +31,7 @@ begin_function
   last_context_loaded=${last_context_loaded:-}
   if [[ "$last_context_loaded" != $cell ]]; then
 
+    debug "Loading context of $cell"
     last_context_loaded=$cell
 
     dna_path=$cell/.dna
@@ -84,7 +85,7 @@ handle_return
 
 # returns needs_update
 get_needs_update() {
-local cell_path=$1
+local cell_path=$(realpath $1)
 local status_path=$cell_path/.cyto/status \
   log_message="No update needed"
 
@@ -96,8 +97,16 @@ begin_function_flat
   fi
 
   needs_update=f
-  get_short_cell $(realpath $cell_path)
+  get_short_cell $cell_path
   debug "Does $short_cell need to be updated?"
+
+  if [[ ${last_cell_dims_loaded:-} != $cell_path ]]; then
+    local dims localize_dim_vars= leaf_dims
+    load_dims $cell_path/.dna/dim || fail
+    leaf_dims=( ${dims[*]:-} )
+    eval "$localize_dim_vars" || fail
+    last_cell_dims_loaded=$cell_path
+  fi
 
   if [[ ! -e $status_path/up-to-date ]]
   then
@@ -117,15 +126,17 @@ begin_function_flat
   then
     needs_update=t
     log_message="Needs update because cell is stale"
-  elif [[ -v leaf_dims ]]
-       function=get_leaf_needs_update \
-         for_each_leaf_flat ${leaf_dims[*]} || fail
-       [[ $needs_update == t ]]
+  elif [[ -v leaf_dims ]] \
+       && { 
+         function=get_leaf_needs_update \
+         for_each_leaf_flat ${leaf_dims[*]} || fail 
+       } \
+       && [[ $needs_update == t ]]
   then
     log_message="Needs update because at least one leaf cell is out of date"
-  elif [[ -d $up_path ]]
-       get_upstream_needs_update || fail
-       [[ $needs_update == t ]]
+  elif [[ -d $up_path ]] \
+       && { get_upstream_needs_update || fail; } \
+       && [[ $needs_update == t ]]
   then
     log_message="Needs update because at least one upstream cell is out of date"
   fi
@@ -160,13 +171,12 @@ handle_return
 }
 
 get_upstream_needs_update() {
+debug "Does upstream need update?"
 local -r upstream_cells=( $(find1 $up_path -not -name '.*' | sort -g) ) || return 1
 local up
 for up in ${upstream_cells[*]}; do
-  local dims leaf_dims
-  load_dims $cell/.dna/dim || return 1
-  leaf_dims=( ${dims[*]:-} )
-  get_needs_update $(realpath $up) || return 1
+  # recursive
+  get_needs_update $up || return 1
   if [[ $needs_update == t ]]; then
     break
   fi
@@ -176,10 +186,11 @@ return 0
 
 get_leaf_needs_update() {
 needs_update=f
+if [[ ! "${leaf_path:-}" ]]; then
+  fatal "leaf_path is missing"
+  return 1
+fi
 local leaf_cell_path=$cell_path$leaf_path
-local dims leaf_dims
-load_dims $leaf_cell_path/.dna/dim || return 1
-leaf_dims=( ${dims[*]:-} )
 # recursive
 get_needs_update $leaf_cell_path || return 1
 if [[ $needs_update == t ]]; then
@@ -1980,6 +1991,8 @@ begin_function_flat
 
     if (( member_index_stack_count < dim_count )); then
       for_each_leaf_flat_expand_members || fail
+    elif [[ ! "${member_index:-}" ]]; then
+      debug_start
     elif (( member_index == dim_count - 1 )); then
       begin_while (( member_index == dim_count - 1 )); doo
         unset member_index_stack[-1] \
@@ -2008,7 +2021,13 @@ begin_function_flat
 
     value=${member_row[$member_index]}
     get_sane_value "$value"
-    leaf_path=${leaf_path_stack[-2]}/.dim/$sane_value
+
+    if (( ${#leaf_path_stack[*]} > 1 )); then
+      leaf_path=${leaf_path_stack[-2]}/.dim/$sane_value
+    else
+      leaf_path=/.dim/$sane_value
+    fi
+
     branch_values[-1]=$value
     eval "local d_$dim=\$value"
 
@@ -2381,6 +2400,7 @@ localize_dim_vars=
 
 load_dims $cell/.dna/dim || return 1
 leaf_dims=( ${dims[*]:-} )
+last_cell_dims_loaded=$cell
 
 load_dims $cell/.dna/sub-dim || return 1
 sub_dims=( ${dims[*]:-} )
@@ -2395,6 +2415,7 @@ load_dims() {
 local dim_path=$1 dim dim_var dim_var_plural 
 dims=()
 if [[ -d $dim_path ]]; then
+  debug "Loading dims from $dim_path"
   local contents=$(find1 $dim_path -not -name ".*" | sort -g) || return 1
   for dim in $contents; do
     source $dim || return 1
