@@ -16,7 +16,9 @@ begin_function_flat
         touch -d @$completion_time $status_path/last-good-update-end || fail
         cp -a $status_path/last-update-start \
               $status_path/last-good-update-start || fail
-        update_prop_hash || fail
+        if [[ "${props:-}" ]]; then
+          update_prop_hash || fail
+        fi
         if [[ $something_changed == t ]]; then
           from_cell=$cell_path \
             propagate_change_to_downstream || fail

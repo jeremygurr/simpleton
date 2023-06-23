@@ -1,5 +1,10 @@
 update_upstream() {
 local required_freshness= fresh= default_freshness=
+
+if [[ "${localize_dim_vars:-}" ]]; then
+  eval "$localize_dim_vars"
+fi
+
 if [[ -f $upstream.prep ]]; then
   source $upstream.prep || return 1
   local f=${upstream##*/}
