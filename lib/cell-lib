@@ -98,7 +98,7 @@ begin_function_flat
 
   needs_update=f
   get_short_cell $cell_path
-  debug "Does $short_cell need to be updated?"
+  debug "Need update? ($short_cell)"
 
   if [[ ${last_cell_dims_loaded:-} != $cell_path ]]; then
     local dims localize_dim_vars= leaf_dims
@@ -134,11 +134,15 @@ begin_function_flat
        && [[ $needs_update == t ]]
   then
     log_message="Needs update because at least one leaf cell is out of date"
-  elif [[ -d $up_path ]] \
-       && { get_upstream_needs_update || fail; } \
-       && [[ $needs_update == t ]]
-  then
-    log_message="Needs update because at least one upstream cell is out of date"
+#    Needs some work: 
+#      should only go one level deep (use [[ "$downstream_cell" ]] && ...)
+#      handle up_path properly in get_upstream_needs_update (.cyto/up .dna/up ?)
+#      
+#  elif [[ -d $up_path ]] \
+#       && { get_upstream_needs_update $cell_path || fail; } \
+#       && [[ $needs_update == t ]]
+#  then
+#    log_message="Needs update because at least one upstream cell is out of date"
   fi
 
   if [[ $needs_update=t && ${pre_validate:-f} == t ]]; then
@@ -159,9 +163,9 @@ end_function_flat
 
 if succeeded; then
   if [[ $needs_update == t ]]; then
-    action=update_check debug "$short_cell: $log_message"
+    action=update_check debug "$log_message ($short_cell)"
   else
-    action=update_check info "$short_cell: $log_message"
+    action=update_check info "$log_message ($short_cell)"
   fi
 else
   action=update_check fatal "Failed to check update need"
@@ -171,6 +175,8 @@ handle_return
 }
 
 get_upstream_needs_update() {
+local cell_path=$1
+local up_path=$cell_path/.dna/up
 debug "Does upstream need update?"
 local -r upstream_cells=( $(find1 $up_path -not -name '.*' | sort -g) ) || return 1
 local up
@@ -2052,7 +2058,7 @@ if [[ "${member_stack:-}" ]]; then
 else
   member_stack_count=0
 fi
-begin_for ((row=$member_stack_count; row < dim_count; row++)); doo
+begin_for ((row=member_stack_count; row < dim_count; row++)); doo
 
   dim=${dim_array[$row]}
   expand_values || fail
