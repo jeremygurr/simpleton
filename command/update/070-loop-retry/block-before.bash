@@ -20,11 +20,11 @@ for ((retry=0; retry < retry_max; retry++)); do
     let 'delay *= retry_scale' || true
   fi
 
-  if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-    info "Executing local update of $short_cell"
-  else
+  #if [[ $cell_is_leaf == t || $show_branches == t ]]; then
+  #  info "Executing local update of $short_cell"
+  #else
     debug "Executing local update of $short_cell"
-  fi
+  #fi
 
   debug "Attempt $((retry+1)) of $retry_max" 
 
