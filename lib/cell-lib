@@ -135,15 +135,6 @@ begin_function_flat
        && [[ $needs_update == t ]]
   then
     log_message="Needs update because at least one leaf cell is out of date"
-#    Needs some work: 
-#      should only go one level deep (use [[ "$downstream_cell" ]] && ...)
-#      handle up_path properly in get_upstream_needs_update (.cyto/up .dna/up ?)
-#      
-#  elif [[ -d $up_path ]] \
-#       && { get_upstream_needs_update $cell_path || fail; } \
-#       && [[ $needs_update == t ]]
-#  then
-#    log_message="Needs update because at least one upstream cell is out of date"
   fi
 
   if [[ $needs_update=t && ${pre_validate:-f} == t ]]; then
@@ -177,7 +168,7 @@ handle_return
 
 get_upstream_needs_update() {
 local cell_path=$1
-local up_path=$cell_path/.dna/up
+local up_path=$cell_path/.cyto/up
 debug "Does upstream need update?"
 local -r upstream_cells=( $(find1 $up_path -not -name '.*' | sort -g) ) || return 1
 local up
@@ -377,6 +368,10 @@ begin_function_flat
     source $context_path || fail
   fi
   setup_features || fail
+
+  if [[ -d $cell/.dna/up ]]; then
+    rsync -a $cell/.dna/up/ $new_cyto/up/ || fail
+  fi
 
   if [[ -d $cell/.dna/down ]]; then
     rsync -a $cell/.dna/down/ $new_cyto/down/ || fail
@@ -1639,7 +1634,12 @@ begin_function_flat
 
   op_path=$dna_path/op
 
-  up_path=$dna_path/up
+  dna_up_path=$dna_path/up
+  if [[ ! -d $dna_up_path ]]; then
+    dna_up_path=
+  fi
+
+  up_path=$cyto_path/up
   if [[ ! -d $up_path ]]; then
     up_path=
   fi
