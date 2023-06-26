@@ -679,13 +679,15 @@ begin_function_flat
     local -r super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
     local -r super_dim_count=${#super_dims[*]}
     if [[ "$super_dims" ]]; then
+      local is_branch=f
       if (( super_dim_count > 1 )); then
+        is_branch=t
         create_sub_branch || fail
       else
         create_sub_leaf || fail
       fi
-      migrate_deps || fail
       append_dim_var_to_context ${super_dims[0]} || fail
+      migrate_deps || fail
     fi
   fi
 end_function_flat
@@ -697,7 +699,7 @@ begin_function_flat
 
   mkdir $sub_dna_path/dim || fail
 
-  begin_for ((i=1; i<super_dim_count; i++)); doo
+  begin_for ((i = 1; i < super_dim_count; i++)); doo
     local from_dim=${super_dims[$i]}
     local to_dim=$sub_dna_path/dim/${from_dim##*/}
     safe_link $(realpath $from_dim) $to_dim || fail
@@ -709,11 +711,25 @@ begin_function_flat
        || "$part" == */context* \
        || "$part" == */up \
        || "$part" == */down \
+       || "$part" == */leaf \
        ]]; then
       continue
     fi
     safe_link $(realpath $part) $sub_dna_path/ || fail
   end_for 
+
+  if [[ -d $dna_path/leaf ]]; then
+  local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
+    mkdir $sub_dna_path/leaf || fail
+    begin_for part in $contents; doo
+      if [[ "$part" == */up \
+         || "$part" == */down \
+         ]]; then
+        continue
+      fi
+      safe_link $(realpath $part) $sub_dna_path/leaf || fail
+    end_for 
+  fi
 
 end_function_flat
 handle_return
@@ -726,6 +742,11 @@ begin_function_flat
     local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
     local part
     begin_for part in $contents; doo
+      if [[ "$part" == */up \
+         || "$part" == */down \
+         ]]; then
+        continue
+      fi
       safe_link $(realpath $part) $sub_dna_path/ || fail
     end_for 
   fi
@@ -737,8 +758,15 @@ handle_return
 migrate_deps() {
 begin_function_flat
 
-  migrate_dep $dna_path/up $sub_dna_path/up || fail
-  migrate_dep $dna_path/down $sub_dna_path/down || fail
+  if [[ $is_branch == t ]]; then
+    migrate_dep $dna_path/up $sub_dna_path/up || fail
+    migrate_dep $dna_path/down $sub_dna_path/down || fail
+    migrate_dep $dna_path/leaf/up $sub_dna_path/leaf/up || fail
+    migrate_dep $dna_path/leaf/down $sub_dna_path/leaf/down || fail
+  else
+    migrate_dep $dna_path/leaf/up $sub_dna_path/up || fail
+    migrate_dep $dna_path/leaf/down $sub_dna_path/down || fail
+  fi
 
 end_function_flat
 handle_return
@@ -1570,6 +1598,7 @@ leaf_dims= \
 sub_dims= \
 in_path= \
 out_path= 
+unset cell_features
 return 0
 }
 
@@ -2671,8 +2700,9 @@ if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
     exec 1>&$fd_original_out || return 1
     exec 2>&$fd_original_err || return 1
     eval "exec $fd_trace>&-" || return 1
-    local tee_size=${#tee_files[*]}
-    tee_files=( ${tee_files[*]:0:$((tee_size-1))} )
+    #local tee_size=${#tee_files[*]}
+    #tee_files=( ${tee_files[*]:0:$((tee_size-1))} )
+    unset tee_files[-1]
   else
     # warn "untee was called when nothing was teed"
     :

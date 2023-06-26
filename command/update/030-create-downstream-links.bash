@@ -4,7 +4,6 @@ begin_function_flat
 if [[ "${downstream_ref_path:-}" ]]; then
   local cell_path down_cell_path down_cell_name
 
-  debug_start
   get_cell_path ${downstream_ref_path%/*} || fail
   down_cell_path=$cell_path
   # unset this so it doesn't affect any more cell updates from here
