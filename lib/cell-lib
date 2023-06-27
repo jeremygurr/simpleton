@@ -89,7 +89,9 @@ handle_return
 get_needs_update() {
 local cell_path=$(realpath $1)
 local status_path=$cell_path/.cyto/status \
-  log_message="No update needed"
+  up_path=$cell_path/.cyto/up \
+  log_message="No update needed" \
+  check_upstream_depth=${check_upstream_depth:-1}
 
 begin_function_flat
 
@@ -137,6 +139,11 @@ begin_function_flat
        && [[ $needs_update == t ]]
   then
     log_message="Needs update because at least one leaf cell is out of date"
+  elif [[ -d $up_path ]] \
+       && { get_upstream_needs_update $cell_path || fail; } \
+       && [[ $needs_update == t ]]
+  then
+    log_message="Needs update because at least one upstream cell is out of date"
   fi
 
   if [[ $needs_update=t && ${pre_validate:-f} == t ]]; then
@@ -171,16 +178,22 @@ handle_return
 get_upstream_needs_update() {
 local cell_path=$1
 local up_path=$cell_path/.cyto/up
-debug "Does upstream need update?"
-local -r upstream_cells=( $(find1 $up_path -not -name '.*' | sort -g) ) || return 1
-local up
-for up in ${upstream_cells[*]}; do
-  # recursive
-  get_needs_update $up || return 1
-  if [[ $needs_update == t ]]; then
-    break
-  fi
-done
+if (( check_upstream_depth > 0 )); then
+  let check_upstream_depth-- || true
+  debug "Checking upstream of $short_cell"
+  local -r upstream_cells=( 
+    $(find1 $up_path -not -name '.*' -not -name '*.prep' | sort -g) 
+    ) || return 1
+  local up
+  for up in ${upstream_cells[*]}; do
+    # recursive
+    prep_upstream $up || return 1
+    get_needs_update $up || return 1
+    if [[ $needs_update == t ]]; then
+      break
+    fi
+  done
+fi
 return 0
 }
 
@@ -246,16 +259,14 @@ begin_function_flat
     local fresh_seconds
     convert_to_seconds $required_freshness fresh_seconds || fail
     local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds)) \
-      out_timestamp= freshness_file
+      out_timestamp= 
     is_stale=f
-    begin_for freshness_file in sub-freshness dep-freshness last-good-update-end; doo
-      if [[ -f $status_path/$freshness_file ]]; then
-        out_timestamp=$(date -r $status_path/freshness_file +%s)
-      fi
-      if [[ "$out_timestamp" && $out_timestamp -lt $fresh_cutoff ]]; then
-        is_stale=t
-      fi
-    end_for
+    if [[ -f $status_path/last-good-update-end ]]; then
+      out_timestamp=$(date -r $status_path/last-good-update-end +%s)
+    fi
+    if [[ "$out_timestamp" && $out_timestamp -lt $fresh_cutoff ]]; then
+      is_stale=t
+    fi
   fi
 end_function_flat
 handle_return
@@ -2083,7 +2094,7 @@ local dim_array=( $* ) multi_cell \
 
 begin_function_flat
 
-  debug "Checking leaves of $cell_path"
+  debug "Checking leaves of $short_cell"
   if [[ "$localize_dim_vars" != local ]]; then
     eval "$localize_dim_vars" || fail
   fi
