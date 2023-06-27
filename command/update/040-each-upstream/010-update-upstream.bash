@@ -5,17 +5,7 @@ if [[ "${localize_dim_vars:-}" ]]; then
   eval "$localize_dim_vars"
 fi
 
-if [[ -f $upstream.prep ]]; then
-  source $upstream.prep || return 1
-  local f=${upstream##*/}
-  f=${f//-/_}_prep
-  if ! type -t $f >/dev/null; then
-    fatal "Because $upstream.prep exists, a function called $f must be defined within that file"
-    return 1
-  fi
-  $f || return 1
-  setup_dep_defaults || return 1
-fi
+prep_upstream $upstream || return 1
 
 local needs_update
 get_needs_update $upstream || return 1

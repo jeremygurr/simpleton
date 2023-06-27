@@ -819,12 +819,9 @@ begin_function_flat
   get_trunk_cell $from || fail
 
   local dims= 
-  get_dims $trunk_cell || fail
+  load_dims $trunk_cell/.dna/dim || fail
 
-  local -r prep_file=$dep_link.prep
-  if [[ -f $prep_file ]]; then
-    source $prep_file || return 1
-  fi
+  prep_upstream $dep_link || fail
 
   local dep_dim already_promoted_path=$from
   begin_for dep_dim in ${dims[*]}; doo
@@ -835,28 +832,40 @@ begin_function_flat
       continue
     fi
 
-    local branch_dim found_branch_dim=f
-    begin_for branch_dim in ${branch_dims[*]}; doo
-      if [[ $branch_dim == $dep_dim ]]; then
-        found_branch_dim=t
-        break
-      fi
-    end_for
+    #local branch_dim found_branch_dim=f
+    #begin_for branch_dim in ${branch_dims[*]}; doo
+    #  if [[ $branch_dim == $dep_dim ]]; then
+    #    found_branch_dim=t
+    #    break
+    #  fi
+    #end_for
 
-    if [[ $found_branch_dim == f ]]; then
-      # can't promote if dep dim doesn't exist on the branch 
-      break
+    # if [[ $found_branch_dim == f ]]; then
+    #   # can't promote if dep dim doesn't exist on the branch 
+    #   break
+    # fi
+
+    local dep_dim_var=d_$dep_dim
+    local values=
+
+    if [[ -v $dep_dim_var ]]; then
+      values=${!dep_dim_var}
     fi
 
-    local member= dep_dim_var=d_$dep_dim
-    if [[ -v $dep_dim_var ]]; then
-      member=${!dep_dim_var}
+    if type -t ${dep_dim}_member_expand >/dev/null; then
+      eval "value=\$values ${dep_dim}_member_expand" &>/dev/null || is_required=t
+    fi
+
+    values=( $values )
+
+    if [[ "${#values[*]}" -gt 1 ]]; then
+      fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
+      fail1
+    fi
+
+    if [[ "$values" ]]; then
       local sane_value
-      if [[ "$member" ]]; then
-        get_sane_value "$member" || fail
-      else
-        sane_value=$empty_member
-      fi
+      get_sane_value "$values" || fail
       local old_from=$from
       from=$from/.dim/$sane_value
       if [[ ! -d $from ]]; then
@@ -869,6 +878,22 @@ begin_function_flat
   end_for
 end_function_flat
 handle_return
+}
+
+prep_upstream() {
+local upstream=$1
+if [[ -f $upstream.prep ]]; then
+  source $upstream.prep || return 1
+  local f=${upstream##*/}
+  f=${f//-/_}_prep
+  if ! type -t $f >/dev/null; then
+    fatal "Because $upstream.prep exists, a function called $f must be defined within that file"
+    return 1
+  fi
+  $f || return 1
+  setup_dep_defaults || return 1
+fi
+return 0
 }
 
 load_context_and_create_sub() {
