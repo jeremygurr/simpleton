@@ -1,5 +1,5 @@
 get_value() {
-if [[ -e $dna_path/op/get ]]; then
+if [[ -e $op_path/get ]]; then
   execute_op get || return 1
 else
   if [[ "$out_path" ]]; then
