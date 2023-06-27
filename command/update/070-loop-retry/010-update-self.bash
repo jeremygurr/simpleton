@@ -1,7 +1,7 @@
 update_self() {
 local log_vars='short_cell'
 begin_function
-  update_successful=f 
+  update_successful=
   can_retry=f
 
   if [[ $can_update == t ]]; then
@@ -28,6 +28,10 @@ begin_function
     execute_op update || fail
     completion_time=$EPOCHSECONDS
     untee_output || fail
+
+    if [[ ! "$update_successful" ]]; then
+      update_successful=f
+    fi
 
     if [[ "$out_path" ]]; then
       if [[ $reuse_existing_out == f ]]; then

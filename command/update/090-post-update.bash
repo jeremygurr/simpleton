@@ -31,13 +31,17 @@ begin_function_flat
     fi
 
     if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-      info "Update $result_string."
+      info "Update $result_string. ($short_cell)"
     else
-      debug "Update $result_string."
+      debug "Update $result_string. ($short_cell)"
     fi
 
   else
     info "Pretend update $result_string."
+  fi
+
+  if [[ "${reply_file:-}" ]]; then
+    echo "update_successful=${update_successful:-}" >>$reply_file || fail
   fi
 
   if [[ "$job_path" ]]; then

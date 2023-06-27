@@ -11,28 +11,33 @@ if [[ "$found_op_function" || "$found_op" ]]; then
   can_update=t
 fi
 
+if [[ "$update_successful" ]]; then
+  can_update=f
+fi
+
 local action=local_update
-for ((retry=0; retry < retry_max; retry++)); do
+if [[ $can_update == t ]]; then
+  for ((retry=0; retry < retry_max; retry++)); do
 
-  if [[ $retry -gt 0 ]]; then
-    info "Waiting $delay seconds before trying again" 
-    sleep $delay
-    let 'delay *= retry_scale' || true
-  fi
+    if [[ $retry -gt 0 ]]; then
+      info "Waiting $delay seconds before trying again" 
+      sleep $delay
+      let 'delay *= retry_scale' || true
+    fi
 
-  #if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-  #  info "Executing local update of $short_cell"
-  #else
-    debug "Executing local update of $short_cell"
-  #fi
+    local attempt_string=
+    if (( retry_max > 1 )); then
+      attempt_string=", attempt $((retry+1)) of $retry_max"
+    fi
+      
+    debug "Executing local update of $short_cell$attempt_string" 
 
-  debug "Attempt $((retry+1)) of $retry_max" 
+    execute_command_step_folder || return 1
 
-  execute_command_step_folder || return 1
+    [[ $can_retry == f || $update_successful == t ]] && break
 
-  [[ $can_retry == f || $update_successful == t ]] && break
-
-done
+  done
+fi
 
 return 0
 

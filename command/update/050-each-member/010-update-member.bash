@@ -13,6 +13,11 @@ begin_function
   get_needs_update $member_path || return 1
   if [[ $needs_update == t ]]; then
     fork execute_command $member_path update || fail
+    if [[ $update_successful == f ]]; then
+      error "Failed to update member cell $member"
+    else 
+      update_successful=
+    fi
   fi
 end_function
 handle_return

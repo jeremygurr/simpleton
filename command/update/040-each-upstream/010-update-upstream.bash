@@ -1,20 +1,30 @@
 update_upstream() {
 local required_freshness= fresh= default_freshness=
 
-if [[ "${localize_dim_vars:-}" ]]; then
-  eval "$localize_dim_vars"
-fi
+local log_vars=upstream 
+begin_function
 
-prep_upstream $upstream || return 1
+  if [[ "${localize_dim_vars:-}" ]]; then
+    eval "$localize_dim_vars"
+  fi
 
-local needs_update
-get_needs_update $upstream || return 1
+  prep_upstream $upstream || fail
 
-if [[ $needs_update == t ]]; then
-  downstream_ref_path=$upstream
-  execute_command_step "$(realpath $upstream)" || return 1
-fi
+  local needs_update
+  get_needs_update $upstream || fail
 
-return 0
+  if [[ $needs_update == t ]]; then
+    downstream_ref_path=$upstream
+    downstream_cell_stack+=( $cell_path )
+    fork execute_command "$(realpath $upstream)" update || fail
+    if [[ "$update_successful" == f ]]; then
+      error "Failed to update upstream cell $upstream"
+    else 
+      update_successful=
+    fi
+  fi
+
+end_function
+handle_return
 }
 

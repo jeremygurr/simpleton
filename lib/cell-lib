@@ -18,6 +18,8 @@ parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 # Whether we should show logging for each seperate branch or only for leaves
 show_branches=${show_branches:-f}
 
+downstream_cell_stack=( ) 
+
 cell_context_load() {
 
 local log_vars=cell
@@ -264,6 +266,7 @@ local from_cell=$from_cell \
   down_path=$from_cell/.cyto/down down_folder folders
 
 if [[ -d $down_path ]]; then
+  local dep_stack=( ${downstream_cell_stack[*]} )
   folders=( $(find1 $down_path -not -name '.*' -type d) ) || fail
   loop_over_var=folders \
     par=t fork=f \
@@ -280,6 +283,9 @@ begin_function_flat
 
   local cell=$(realpath $value)
 
+  local short_cell
+  get_short_cell $cell || fail
+
   local t1 t2 trunk_cell
   get_trunk_cell $cell
   t1=$trunk_cell
@@ -292,7 +298,6 @@ begin_function_flat
   
   local status_self=$cell/.cyto/status
   
-  local dep_stack=${dep_stack:-}
   if already_in_dep_stack $cell; then
     succeed
   fi
@@ -303,6 +308,7 @@ begin_function_flat
       # can't combine these if statements or it will alter the else condition
       #   and break things
       if [[ -f $status_self/up-to-date ]]; then
+        debug "Removing up-to-date from $short_cell"
         rm $status_self/up-to-date || fail
         from_cell=$cell \
           propagate_change_to_downstream || fail
