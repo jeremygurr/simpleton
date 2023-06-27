@@ -5,7 +5,7 @@ type -t cell_context_load >/dev/null && return 0
 # don't let other users read any files written by these scripts
 umask 0077
 
-readonly failed_but_can_retry=2 skip=2 \
+failed_but_can_retry=2 skip=2 \
   somethings_wrong=1 everythings_fine=0 \
   empty_member=_ wild_sub_path=_ 
 
@@ -2806,5 +2806,73 @@ elif x=${trunk_cell##*/}
   trunk_cell=$x
 fi
 short_cell="$trunk_cell$dim_string"
+}
+
+cd_to_leaf() {
+while true; do
+  local last_part=${PWD##*/}
+  if [[ -d .dim ]]; then
+    cd .dim || return 1
+  elif [[ "$last_part" == .dim ]]; then
+    if [[ "${1:-}" && -d "$1" ]]; then
+      cd "$1" || return 1
+      shift || true
+    else
+      local files=( $(find -mindepth 1 -maxdepth 1 -type d -not -name ".*") )
+      if [[ -d "$files/.dim" ]]; then
+        cd $files/.dim || return 1
+      elif [[ -d "$files/.dna" ]]; then
+        cd $files || return 1
+        break
+      else
+        break
+      fi
+    fi
+  fi
+done
+return 0
+}
+
+cd_to_trunk() {
+local trunk_cell
+get_trunk_cell $PWD || return 1
+if [[ "$trunk_cell" ]]; then
+  cd "$trunk_cell" 
+else
+  echo "No trunk found" >&2
+  return 1
+fi
+return 0
+}
+
+cd_to_seed() {
+local seed from=$PWD
+find_seed $from || return 1
+if [[ "$seed" ]]; then
+  local path=${from#$seed/}
+  local to=$seed/.dna/sub/$path 
+  if [[ -d $to ]]; then
+    cd $to || return 1
+  else
+    echo "Seed for $path not found in $seed" >&2
+    return 1
+  fi
+else
+  echo "No seed found" >&2
+  return 1
+fi
+return 0
+}
+
+cd_to_plant() {
+local from=$PWD
+local to=${from//.dna\/sub/}
+if [[ "$from" != "$to" ]]; then
+  cd $to || return 1
+else
+  echo "No plant found" >&2
+  return 1
+fi
+return 0
 }
 

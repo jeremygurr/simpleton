@@ -222,48 +222,27 @@ export LS_OPTIONS='--color=auto'
 export EDITOR=vim
 
 leaf() {
-while true; do
-  local last_part=${PWD##*/}
-  if [[ -d .dim ]]; then
-    cd .dim || return 1
-  elif [[ "$last_part" == .dim ]]; then
-    if [[ "${1:-}" && -d "$1" ]]; then
-      cd "$1" || return 1
-      shift || true
-    else
-      local files=( $(find -mindepth 1 -maxdepth 1 -type d -not -name ".*") )
-      if [[ -d "$files/.dim" ]]; then
-        cd $files/.dim || return 1
-      elif [[ -d "$files/.dna" ]]; then
-        cd $files || return 1
-        break
-      else
-        break
-      fi
-    fi
-  fi
-done
-return 0
+source $SIMPLETON_REPO/lib/post-bash
+source $SIMPLETON_REPO/lib/cell-lib
+cd_to_leaf
 }
 
 trunk() {
-while true; do
-  local last=${PWD##*/}
-  local parent=${PWD%/*}
-  parent=${parent##*/}
-  if [[ ${#PWD} -lt 2 ]]; then
-    break
-  fi
-  if [[ "$last" == .dim || "$last" == .dna ]]; then
-    cd .. || return 1
-  elif [[ "$PWD" == */.dim/* ]]; then
-    cd ${PWD%%/.dim/*} || return 1
-  elif [[ "$PWD" == */.dna/* ]]; then
-    cd ${PWD%%/.dna/*} || return 1
-  else
-    break
-  fi
-done
+source $SIMPLETON_REPO/lib/post-bash
+source $SIMPLETON_REPO/lib/cell-lib
+cd_to_trunk
+}
+
+seed() {
+source $SIMPLETON_REPO/lib/post-bash
+source $SIMPLETON_REPO/lib/cell-lib
+cd_to_seed
+}
+
+plant() {
+source $SIMPLETON_REPO/lib/post-bash
+source $SIMPLETON_REPO/lib/cell-lib
+cd_to_plant
 }
 
 unset parse_git_branch
@@ -293,6 +272,7 @@ LIGHT_PURPLE="\[\033[1;35m\]"
 CYAN="\[\033[0;36m\]"
 LIGHT_GREEN=$'\033[0;32m'
 
+# could be overridden by other components
 custom_prompt_status() {
   :
 }
