@@ -29,9 +29,7 @@ begin_function
     completion_time=$EPOCHSECONDS
     untee_output || fail
 
-    if [[ ! "$update_successful" ]]; then
-      update_successful=f
-    fi
+    update_successful=${update_successful:-f}
 
     if [[ "$out_path" ]]; then
       if [[ $reuse_existing_out == f ]]; then

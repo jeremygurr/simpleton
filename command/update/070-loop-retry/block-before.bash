@@ -39,6 +39,8 @@ if [[ $can_update == t ]]; then
   done
 fi
 
+update_successful=${update_successful:-t}
+
 return 0
 
 }
