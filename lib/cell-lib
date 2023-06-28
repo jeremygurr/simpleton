@@ -1107,43 +1107,92 @@ local cell=$(realpath $1) command=$2
 
 local log_vars='cell command'
 begin_function
-  if [[ "$cell" == */.dna/sub/* ]]; then
-    fatal "Can't execute a command within a cell template. Only real cells are valid."
-    fatal "Likely a link was made to a template inside of the .dna/sub folder instead of the real cell."
-    fail1
-  fi
 
   # should not need this since context_load will generate a new one
   #local localize_dim_vars=${localize_dim_vars:-local}
 
   local short_cell; get_short_cell $cell
+
   # recursive
-  cell_context_load || {
-    fatal "Context failed to load for $cell"
-    fail1
-    }
-  if [[ "$localize_dim_vars" != local ]]; then
-    eval "$localize_dim_vars" || fail
+  if [[ $command != edit ]]; then
+    cell_context_load || {
+      fatal "Context failed to load for $cell"
+      fail1
+      }
+
+    if [[ "$localize_dim_vars" != local ]]; then
+      eval "$localize_dim_vars" || fail
+    fi
+  else
+    local cell_path=
+    get_cell_path $cell || fail
+    if [[ ! "$cell_path" ]]; then
+      fatal "You must execute this command from within a cell"
+      fail1
+    fi
+    dna_path=$cell_path/.dna
+    key_path=$dna_path/key
+    status_path=
+    if [[ ! -e $key_path ]]; then
+      mkdir $key_path || fail
+    fi
   fi
-  validate_dims || fail
-  if [[ $cell_is_leaf == t || $show_branches == t ]]; then
+
+  local command_path=$cell/.cyto/command/$command
+
+  if [[ ! -e $command_path && ! -e $cell/.cyto ]]; then
+    local dna_command=
+    cell=$cell command=$command get_dna_command || fail
+    if [[ "$dna_command" ]]; then
+      command_path=$dna_command
+    fi
+  fi
+
+  if [[ ! -e $command_path ]]; then
+    fatal "Command $command doesn't exist in $command_path or as a function"
+    fail1
+  fi
+
+  if type -t command_${command}_prep &>/dev/null; then
+    command_${command}_prep || fail
+  elif [[ -f $command_path.prep ]]; then
+    source $command_path.prep || fail
+    if ! type -t ${command}_prep &>/dev/null; then
+      fatal "$command_path.prep must contain a function named ${command}_prep"
+      fail1
+    fi
+    ${command}_prep || fail
+  fi
+
+  if [[ ${skip_dim_validation:-f} == f ]]; then
+    validate_dims || fail
+  fi
+
+  if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
     info "Executing command: $command $short_cell"
   else
     debug "Executing command: $command $short_cell"
   fi
+
   if type -t command_$command &>/dev/null; then
     command_$command || fail
   else
-    local command_path=$cell/.cyto/command/$command
-    if [[ -e $command_path ]]; then
-      execute_command_step $command_path || fail
-    else
-      fatal "Command $command doesn't exist in $command_path or as a function"
-      fail1
-    fi
+    execute_command_step $command_path || fail
   fi
+
 end_function
 handle_return
+}
+
+get_dna_command() {
+local cell=$cell command=$command
+local parent=${cell%/*}
+if [[ -e $cell/.dna/command/$command ]]; then
+  dna_command=$cell/.dna/command/$command
+elif [[ $parent != $cell ]]; then
+  cell=$parent get_dna_command || return 1
+fi
+return 0
 }
 
 # executes a step of the folder language
@@ -1222,7 +1271,7 @@ begin_function_flat
       fatal "Java steps not implemented yet"
       fail1
     ;;
-    *.bash)
+    *)
       source $step || fail
       local function_name=${base%.bash}
       function_name=${function_name##*/}
@@ -1235,10 +1284,10 @@ begin_function_flat
         fail1
       fi
     ;;
-    *)
-      fatal "Unknown file format for $step. Can't execute."
-      fail1
-    ;;
+#    *)
+#      fatal "Unknown file format for $step. Can't execute."
+#      fail1
+#    ;;
   esac
 end_function_flat
 handle_return
@@ -1471,9 +1520,10 @@ return 0
 
 handle_secure_edit() {
 
-local log_vars=
+local log_vars= old_file=$file new_file=$file.new
 begin_function
 
+  setup_tmp_path || fail
   local unsafe_file=${file%.safe}
   local new_unsafe_file=$tmp_path/$unsafe_file.new
   local old_unsafe_file=$tmp_path/$unsafe_file.old
@@ -1491,7 +1541,7 @@ begin_function
     cp $old_unsafe_file $new_unsafe_file || fail
   fi
 
-  if [[ "$content" ]]; then
+  if [[ "${content:-}" ]]; then
     echo "$content" >$new_unsafe_file || fail
   else
     $EDITOR $new_unsafe_file || fail
@@ -1511,7 +1561,7 @@ begin_function
   if [[ $changed == t ]]; then
     from=$new_unsafe_file to=$new_file encrypt_file || fail
     mv $new_file $old_file || fail
-    update_modify_times "${new_file%/*}" "${current_cell}" || fail
+    update_modify_times $new_file || fail
   fi
 
 end_function
@@ -1520,14 +1570,14 @@ handle_return
 
 handle_insecure_edit() {
 
-local log_vars=
+local log_vars= old_file=$file new_file=$file.new
 begin_function
 
   if [[ -f $old_file ]]; then
     cp $old_file $new_file || fail 
   fi
 
-  if [[ "$content" ]]; then
+  if [[ "${content:-}" ]]; then
     echo "$content" | trim_nl >$new_file || fail
   else
     $EDITOR $new_file || fail
@@ -1537,7 +1587,7 @@ begin_function
     if files_are_different $old_file $new_file >/dev/null; then
       changed=t
     else
-      debu "No change"
+      debug "No change"
       rm $new_file || fail
     fi
   else
@@ -1546,11 +1596,19 @@ begin_function
 
   if [[ $changed == t ]]; then
     mv $new_file $old_file || fail
-    update_modify_times "${new_file%/*}" "$cell_path" || fail
+    update_modify_times $new_file || fail
   fi
 
 end_function
 handle_return
+}
+
+update_modify_times() {
+local file=$1
+if [[ "$status_path" && -f "$status_path/up-to-date" ]]; then
+  rm $status_path/up-to-date || return 1
+fi
+return 0
 }
 
 # will set top_cell, which will be empty if no cell cells are found
@@ -1852,8 +1910,8 @@ return 0
 }
 
 setup_tmp_path() {
-if [[ ! "$tmp_path" ]]; then
-  if [[ -d $cell_path/.cyto/tmp ]]; then
+if [[ ! "${tmp_path:-}" ]]; then
+  if [[ -d ${cell_path:-}/.cyto/tmp ]]; then
     tmp_path=$cell_path/.cyto/tmp
   elif [[ -d ~/tmp ]]; then
     tmp_path=~/tmp
