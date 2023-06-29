@@ -387,12 +387,25 @@ begin_function_flat
   fi
   setup_features || fail
 
-  if [[ -d $cell/.dna/up ]]; then
-    rsync -a $cell/.dna/up/ $new_cyto/up/ || fail
+  local dna_path=$cell/.dna
+  if [[ -d $dna_path/up ]]; then
+    rsync -a $dna_path/up/ $new_cyto/up/ || fail
   fi
 
-  if [[ -d $cell/.dna/down ]]; then
-    rsync -a $cell/.dna/down/ $new_cyto/down/ || fail
+  if [[ -d $dna_path/down ]]; then
+    rsync -a $dna_path/down/ $new_cyto/down/ || fail
+  fi
+
+  if [[ -d $dna_path/out && "$out_path" ]]; then
+    local item
+    local contents=$(find1 $dna_path/out) || fail
+    local out_path=$cell/$out_path
+    if [[ ! -d $out_path  ]]; then
+      mkdir $out_path || fail
+    fi
+    begin_for item in $contents; doo
+      safe_link $item $out_path/ || fail
+    end_for
   fi
 
   mv $new_cyto $cell/.cyto || fail
@@ -771,14 +784,15 @@ handle_return
 migrate_deps() {
 begin_function_flat
 
-  debug_start
-  migrate_out $dna_path/out $sub_dna_path/out || fail
   if [[ $is_branch == t ]]; then
+    migrate_out $dna_path/leaf/out $sub_dna_path/leaf/out || fail
+    migrate_out $dna_path/out $sub_dna_path/out || fail
     migrate_dep $dna_path/up $sub_dna_path/up || fail
     migrate_dep $dna_path/down $sub_dna_path/down || fail
     migrate_dep $dna_path/leaf/up $sub_dna_path/leaf/up || fail
     migrate_dep $dna_path/leaf/down $sub_dna_path/leaf/down || fail
   else
+    migrate_out $dna_path/leaf/out $sub_dna_path/out || fail
     migrate_dep $dna_path/leaf/up $sub_dna_path/up || fail
     migrate_dep $dna_path/leaf/down $sub_dna_path/down || fail
   fi
@@ -1528,7 +1542,10 @@ for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
     get_plural $dim
     local value=
     if [[ -v d_$dim ]]; then
-      eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim}}}}"
+      eval "local d_value=\${d_$dim}"
+      if [[ "$d_value" ]]; then
+        eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim}}}}"
+      fi
     fi
     if [[ ! "$value" ]]; then
       fatal "Missing require parameter: $dim"
