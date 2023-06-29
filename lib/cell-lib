@@ -398,18 +398,40 @@ begin_function_flat
 
   if [[ -d $dna_path/out && "$out_path" ]]; then
     local item
-    local contents=$(find1 $dna_path/out) || fail
     local out_path=$cell/$out_path
     if [[ ! -d $out_path  ]]; then
       mkdir $out_path || fail
     fi
-    begin_for item in $contents; doo
-      safe_link $item $out_path/ || fail
-    end_for
+
+    local key_path=$dna_path/key
+    setup_cyto_out $dna_path/out $out_path || fail
   fi
 
   mv $new_cyto $cell/.cyto || fail
 
+end_function_flat
+handle_return
+}
+
+setup_cyto_out() {
+local from=$1 to=$2
+begin_function_flat
+  local contents=$(find1 $from) || fail
+  begin_for item in $contents; doo
+    if [[ -d $item ]]; then
+      local last_part=${item##*/}
+      if [[ ! -d $to/$last_part ]]; then
+        mkdir $to/$last_part || fail
+      fi
+      setup_cyto_out $from/$last_part $to/$last_part || fail
+    elif [[ ${item%.safe} != $item ]]; then
+      local target_file=${item##*/}
+      target_file=${target_file%.safe}
+      from=$item to=$to/$target_file decrypt_file || fail
+    else
+      safe_link $item $to/ || fail
+    fi
+  end_for
 end_function_flat
 handle_return
 }
@@ -775,6 +797,10 @@ begin_function_flat
       fi
       safe_link $(realpath $part) $sub_dna_path/ || fail
     end_for 
+  fi
+
+  if [[ -d $dna_path/key ]]; then
+    safe_link $(realpath $dna_path/key) $sub_dna_path/ || fail
   fi
 
 end_function_flat
