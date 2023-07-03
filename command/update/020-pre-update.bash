@@ -20,5 +20,9 @@ if [[ "$status_path" ]]; then
   #   could potentially invalidate it, requiring another update
   touch $status_path/up-to-date || return 1
 fi
+if [[ $reuse_existing_out == t && -f $status_path/last-good-update-end ]]; then
+  # Don't allow cells to reuse old data when it is mid-modification and this update fails
+  rm $status_path/last-good-update-end || return 1
+fi
 return 0
 }
