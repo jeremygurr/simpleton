@@ -773,7 +773,7 @@ begin_function_flat
   end_for 
 
   if [[ -d $dna_path/leaf ]]; then
-  local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
+    local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
     mkdir $sub_dna_path/leaf || fail
     begin_for part in $contents; doo
       if [[ "$part" == */up \
@@ -866,6 +866,7 @@ begin_function_flat
       local item item_name \
         items=$(find1 $from \
         -not -name '.*' \
+        -not -name '*.prep' \
         | sort -g) || fail
       begin_for item in $items; doo
         item_name=${item##*/}
@@ -909,6 +910,12 @@ begin_function_flat
   prep_upstream $dep_link || fail
 
   local dep_dim already_promoted_path=$from
+
+  # We don't need to promote all dims in target, but only the dims in the source
+  # e1 -> e1, not e1 -> e1/ods
+  # only promote what is in source + provided by prep
+  #   can't just promote because a var exists, only if it's actually used at that point
+
   begin_for dep_dim in ${dims[*]}; doo
 
     # is this dim already promoted?
@@ -917,18 +924,19 @@ begin_function_flat
       continue
     fi
 
-    #local branch_dim found_branch_dim=f
-    #begin_for branch_dim in ${branch_dims[*]}; doo
-    #  if [[ $branch_dim == $dep_dim ]]; then
-    #    found_branch_dim=t
-    #    break
-    #  fi
-    #end_for
+    local branch_dim found_branch_dim=f
+    # upstream prep script can add extra_dims as needed
+    begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
+      if [[ $branch_dim == $dep_dim ]]; then
+        found_branch_dim=t
+        break
+      fi
+    end_for
 
-    # if [[ $found_branch_dim == f ]]; then
-    #   # can't promote if dep dim doesn't exist on the branch 
-    #   break
-    # fi
+    if [[ $found_branch_dim == f ]]; then
+      # can't promote if dep dim doesn't exist on the branch 
+      break
+    fi
 
     local dep_dim_var=d_$dep_dim
     local values=
@@ -969,7 +977,9 @@ prep_upstream() {
 local upstream=$1
 # Don't inherit parent's freshness requirements, 
 #   only what upstream prep explicitly states
-fresh= required_freshness= default_freshness=
+# extra_dims includes dimensions that need to be promoted in upstream that don't
+#   exist in branch_dims
+fresh= required_freshness= default_freshness= extra_dims=
 if [[ -f $upstream.prep ]]; then
   source $upstream.prep || return 1
   local f=${upstream##*/}
@@ -2836,7 +2846,7 @@ change_log_file
 end_fork() {
 if [[ "$reply_file" ]]; then
   #debug "Recording log_id=$log_id to $reply_file"
-  echo "log_id=${log_id:-} debug_id=${debug_id:-}" >>$reply_file || return 1
+  echo "log_id=${log_id:-} debug_id_current=${debug_id_current:-}" >>$reply_file || return 1
 fi
 return 0
 }
