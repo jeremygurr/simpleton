@@ -17,6 +17,26 @@ alias uu='cd ../..'
 alias uuu='cd ../../..'
 alias vi=vim
 
+to() {
+local target=$1
+if [[ ! "$target" ]]; then
+  target=$PWD
+fi
+if [[ ! -d "$target" ]]; then
+  echo "Error: target doesn't exist or is not a folder: $target" >&2
+  return 1
+fi
+pushd "$target" >/dev/null || return 1
+return 0
+}
+
+back() {
+popd >/dev/null
+}
+alias b=back
+alias bb='back; back;'
+alias bbb='back; back; back;'
+
 alias up='cell update'
 alias clean='cell clean'
 
@@ -296,14 +316,14 @@ if [ ! "$BASH" ]; then
   return 0
 fi
 
-export PS1="| ${RED}\$(prompt_error_string)${LIGHT_GREEN}\$prompt_name$PURPLE\u $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
+export PS1="| $RED\$(prompt_error_string)$LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
 | $LIGHT_RED\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
 export PS2='> '
 export PS4='+ '
 }
 
 medium_prompt() {
-export PS1="${LIGHT_GREEN}\$prompt_name$PURPLE\u $LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+export PS1="$LIGHT_GREEN\$prompt_name $LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
 }
 
 small_prompt() {
