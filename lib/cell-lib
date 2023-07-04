@@ -975,24 +975,27 @@ handle_return
 
 prep_upstream() {
 local upstream=$1
+
 # down_fresh may be used by prep script to propagate freshness requirements to upstream
 down_fresh=$required_freshness
+
 # Don't inherit parent's freshness requirements, 
 #   only what upstream prep explicitly states
 # extra_dims includes dimensions that need to be promoted in upstream that don't
 #   exist in branch_dims
 fresh= required_freshness= default_freshness= extra_dims=
+
+# prep script may override this function to change behavior
+upstream_prep() {
+  fresh=$down_fresh
+}
+
 if [[ -f $upstream.prep ]]; then
   source $upstream.prep || return 1
-  local f=${upstream##*/}
-  f=${f//-/_}_prep
-  if ! type -t $f >/dev/null; then
-    fatal "Because $upstream.prep exists, a function called $f must be defined within that file"
-    return 1
-  fi
-  $f || return 1
+  upstream_prep || return 1
   setup_dep_defaults || return 1
 fi
+
 return 0
 }
 
@@ -1191,13 +1194,19 @@ local cell=$(realpath $1) command=$2
 local log_vars='cell command'
 begin_function
 
-  # should not need this since context_load will generate a new one
-  #local localize_dim_vars=${localize_dim_vars:-local}
-
   local short_cell; get_short_cell $cell
 
-  # recursive
   if [[ $command != edit ]]; then
+    if [[ $cell == */.dna/sub/* ]]; then
+      local new_cell=${cell//\/.dna\/sub\//\/}
+      if [[ -d $new_cell ]]; then
+        cell=$new_cell
+      else
+        fatal "You can't run this command within a seed."
+        fail1
+      fi
+    fi
+    # recursive
     cell_context_load || {
       fatal "Context failed to load for $cell"
       fail1
