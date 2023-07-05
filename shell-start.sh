@@ -17,6 +17,7 @@ alias uu='cd ../..'
 alias uuu='cd ../../..'
 alias vi=vim
 
+# saves existing dir before changing to the given dir
 to() {
 local target=$1
 if [[ ! "$target" ]]; then
@@ -26,7 +27,8 @@ if [[ ! -d "$target" ]]; then
   echo "Error: target doesn't exist or is not a folder: $target" >&2
   return 1
 fi
-pushd "$target" >/dev/null || return 1
+pushd $PWD >/dev/null || return 1
+cd "$target" || return 1
 return 0
 }
 
