@@ -340,9 +340,15 @@ custom_prompt_status() {
   echo -n "$cell_location_string "
 }
 
+out_exec() {
+local p=( "$@" )
+echo '' "${p[@]}" >&2
+eval "${p[@]}"
+}
+
 # moves a file or folder and updates all links pointing to it
 relink() {
-local from=$(realpath $1) to=$(realpath $2)
+local from=$(realpath $1) to=$(realpath $2) start_at=${start_at:-$PWD}
 
 if [[ ! -e "$from" ]]; then
   echo "ERROR: $from doesn't exist" >&2
@@ -354,18 +360,15 @@ if [[ -e "$to" ]]; then
   return 1
 fi
 
-if [[ "$to" == */.dna/sub/* ]]; then
-  local planted_to=${to//.dna\/sub\//}
-  if [[ -e "$planted_to" ]]; then
-    to=$planted_to
-  fi
-fi
+local planted_to=${to//.dna\/sub\//}
+local planted_from=${from//.dna\/sub\//}
 
 local link target planted_from=${from//.dna\/sub\//}
-for link in $(find "$current_folder" -mindepth 1 -type l); do
+local links=( $(find "$start_at" -mindepth 1 -type l) ) || return 1
+for link in "${links[@]}"; do
   if [[ ! -e $link ]]; then
-    echo "Broken link: $link -> $(readlink $link). Fix this before proceeding." >&2
-    return 1
+    #echo "Broken link: $link -> $(readlink $link) : Ignoring" >&2
+    continue
   fi
   target=$(realpath $link)
   if [[ "$target" == "$from" \
@@ -381,16 +384,15 @@ for link in $(find "$current_folder" -mindepth 1 -type l); do
       sub_path=${target#$planted_from}
     fi
 
-    set -x
-    rm "$link" || return 1
-    ln -s "$to$sub_path" "$link" || return 1
-    set +x
+    out_exec rm "$link" || return 1
+    out_exec ln -s "$planted_to$sub_path" "$link" || return 1
   fi
 done
 
-set -x
-mv "$from" "$to" || return 1
-set +x
+out_exec mv "$from" "$to" || return 1
+if [[ "$from" != "$planted_from" ]]; then
+  out_exec mv "$planted_from" "$planted_to" || return 1
+fi
 
 return 0
 }
