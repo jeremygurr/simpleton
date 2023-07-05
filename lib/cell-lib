@@ -95,6 +95,11 @@ local status_path=$cell_path/.cyto/status \
 
 begin_function_flat
 
+  if [[ "$needs_update" ]]; then
+    # needs_update is already known, don't need to compute it again
+    succeed
+  fi
+
   if [[ ! -d $cell_path ]]; then
     fatal "Attempted to run get_needs_update on a non-existent cell: $cell_path"
     fail1
@@ -866,7 +871,6 @@ begin_function_flat
       local item item_name \
         items=$(find1 $from \
         -not -name '.*' \
-        -not -name '*.prep' \
         | sort -g) || fail
       begin_for item in $items; doo
         item_name=${item##*/}
@@ -885,6 +889,18 @@ migrate_cell() {
 local -r dep_link=$1 to=$2
 local from=$(realpath $dep_link) 
 begin_function_flat
+
+  if [[ "$from" == */.dna/sub/* ]]; then
+    local fixed_from=${from//.dna\/sub\//}
+    if [[ -d $fixed_from ]]; then
+      rm $dep_link || fail
+      safe_link $fixed_from $dep_link || fail
+      from=$fixed_from
+    else
+      fatal "Dependencies must link to planted cells, not seeds: $from"
+      fail1
+    fi
+  fi
 
   promote_dep_cell || fail
   safe_link $from $to || fail

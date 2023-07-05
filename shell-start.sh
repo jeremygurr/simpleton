@@ -292,9 +292,81 @@ LIGHT_PURPLE="\[\033[1;35m\]"
 CYAN="\[\033[0;36m\]"
 LIGHT_GREEN=$'\033[0;32m'
 
+get_cell_location_string() {
+  local p=
+  if [[ $PWD == /work/* ]]; then
+
+    if [[ $PWD == */.dna/sub/* ]]; then
+      p+="[seed"
+    else
+      p+="[plant"
+    fi
+
+    if [[ -d .dna ]]; then
+      p+=" cell"
+    fi
+
+    if [[ $PWD == */.dim/* ]]; then
+      if [[ -d .dim ]]; then
+        p+=" branch"
+      else
+        p+=" leaf"
+      fi
+    elif [[ -d .dim ]]; then
+      p+=" trunk"
+    fi
+
+    local without_seed=${PWD##*/.dna/sub}
+    if [[ $without_seed == */.dna/* ]]; then
+      p+=" dna"
+    elif [[ $PWD == */.cyto/* ]]; then
+      p+=" cyto"
+    fi
+
+    if [[ $PWD == */up/* ]]; then
+      p+=" up"
+    elif [[ $PWD == */down/* ]]; then
+      p+=" down"
+    fi
+
+    p+="] "
+  fi
+  cell_location_string=$p
+}
+
 # could be overridden by other components
 custom_prompt_status() {
-  :
+  get_cell_location_string
+  echo -n "$cell_location_string "
+}
+
+# moves a file or folder and updates all links pointing to it
+relink() {
+local from=$(realpath $1) to=$(realpath $2)
+
+if [[ ! -e "$from" ]]; then
+  echo "ERROR: $from doesn't exist" >&2
+  return 1
+fi
+
+if [[ -e "$to" ]]; then
+  echo "ERROR: $to already exists" >&2
+  return 1
+fi
+
+mv "$from" "$to" || return 1
+
+local link target
+for link in $(find "$current_folder" -mindepth 1 -type L); do
+  target=$(realpath $link)
+  if [[ "$target" == "$from" ]]; then
+    echo "Relinking $link to $to"
+    rm "$link" || return 1
+    ln -s "$to" "$link" || return 1
+  fi
+done
+
+return 0
 }
 
 prompt_error_string() {

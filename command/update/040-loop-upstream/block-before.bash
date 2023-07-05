@@ -6,6 +6,7 @@ if [[ "$up_path" && ! "$update_successful" ]]; then
     -not -name '.*' \
     -not -name '*.prep' \
     -not -regex '.*/\([0-9]+-\)?\(before\|choose\)-.*' \
+    | sort -g \
     ) )
 else
   upstreams=

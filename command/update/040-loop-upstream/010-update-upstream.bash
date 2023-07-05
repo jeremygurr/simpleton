@@ -17,9 +17,9 @@ begin_function
     fi
   }
 
+  local needs_update=
   prep_upstream $upstream || fail
 
-  local needs_update
   get_needs_update $upstream || fail
 
   if [[ $needs_update == t ]]; then
