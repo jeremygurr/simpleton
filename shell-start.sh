@@ -354,17 +354,43 @@ if [[ -e "$to" ]]; then
   return 1
 fi
 
-mv "$from" "$to" || return 1
+if [[ "$to" == */.dna/sub/* ]]; then
+  local planted_to=${to//.dna\/sub\//}
+  if [[ -e "$planted_to" ]]; then
+    to=$planted_to
+  fi
+fi
 
-local link target
-for link in $(find "$current_folder" -mindepth 1 -type L); do
+local link target planted_from=${from//.dna\/sub\//}
+for link in $(find "$current_folder" -mindepth 1 -type l); do
+  if [[ ! -e $link ]]; then
+    echo "Broken link: $link -> $(readlink $link). Fix this before proceeding." >&2
+    return 1
+  fi
   target=$(realpath $link)
-  if [[ "$target" == "$from" ]]; then
-    echo "Relinking $link to $to"
+  if [[ "$target" == "$from" \
+     || "$target" == "$from"/* \
+     || "$target" == "$planted_from" \
+     || "$target" == "$planted_from"/* \
+     ]]; then
+
+    local sub_path=
+    if [[ "$target" == "$from"/* ]]; then
+      sub_path=${target#$from}
+    elif [[ "$target" == "$planted_from"/* ]]; then
+      sub_path=${target#$planted_from}
+    fi
+
+    set -x
     rm "$link" || return 1
-    ln -s "$to" "$link" || return 1
+    ln -s "$to$sub_path" "$link" || return 1
+    set +x
   fi
 done
+
+set -x
+mv "$from" "$to" || return 1
+set +x
 
 return 0
 }
@@ -388,7 +414,8 @@ if [ ! "$BASH" ]; then
   return 0
 fi
 
-export PS1="| $RED\$(prompt_error_string)$LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
+export PS1="
+| $RED\$(prompt_error_string)$LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
 | $LIGHT_RED\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
 export PS2='> '
 export PS4='+ '
