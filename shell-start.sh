@@ -117,6 +117,7 @@ LANG=$old
 
 real() {
 cd $(realpath .)
+pwd
 }
 
 # this unlinks a linked file by copying what it links to locally
