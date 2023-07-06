@@ -15,6 +15,7 @@ begin_function
     fork execute_command $member_path update || fail
     if [[ $update_successful == f ]]; then
       error "Failed to update member cell $member"
+      reply_to_caller "update_successful=f" || fail
     else 
       update_successful=
     fi
