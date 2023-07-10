@@ -26,14 +26,14 @@ local log_vars=cell
 begin_function
 
   if [[ ! -e $cell/.dna ]]; then
-    fatal "$cell is not a cell"
+    log_fatal "$cell is not a cell"
     fail1
   fi
 
   last_context_loaded=${last_context_loaded:-}
   if [[ "$last_context_loaded" != $cell ]]; then
 
-    debug "Loading context of $cell"
+    log_debug "Loading context of $cell"
     last_context_loaded=$cell
 
     dna_path=$cell/.dna
@@ -88,7 +88,7 @@ handle_return
 # returns needs_update
 get_needs_update() {
 if [[ ! -e $1 ]]; then
-  fatal "Cell doesn't exist: $1"
+  log_fatal "Cell doesn't exist: $1"
   stack_trace
   return 1
 fi
@@ -110,12 +110,12 @@ begin_function_flat
   fi
 
   if [[ ! -d $cell_path ]]; then
-    fatal "Attempted to run get_needs_update on a non-existent cell: $cell_path"
+    log_fatal "Attempted to run get_needs_update on a non-existent cell: $cell_path"
     fail1
   fi
 
   needs_update=
-  debug "Need update? ($short_cell)"
+  log_debug "Need update? ($short_cell)"
 
   if [[ ${last_cell_dims_loaded:-} != $cell_path ]]; then
     local dims localize_dim_vars=${localize_dim_vars:-local} leaf_dims
@@ -166,7 +166,7 @@ begin_function_flat
         log_message="No update needed because remote value already matches intended value"
       fi
     else
-      fatal "Failed to pre-validate. Something is wrong with the check operator."
+      log_fatal "Failed to pre-validate. Something is wrong with the check operator."
       fail1
     fi
 
@@ -181,7 +181,7 @@ if succeeded; then
   fi
   action=update_check $level "$log_message ($short_cell)"
 else
-  action=update_check fatal "Failed to check update need"
+  action=update_check log_fatal "Failed to check update need"
 fi
 
 if [[ ! "$needs_update" ]]; then
@@ -196,7 +196,7 @@ local cell_path=$1
 local up_path=$cell_path/.cyto/up
 if (( check_upstream_depth > 0 )); then
   let check_upstream_depth-- || true
-  debug "Checking upstream of $short_cell"
+  log_debug "Checking upstream of $short_cell"
   local -r upstream_cells=( 
     $(find1 $up_path -not -name '.*' -not -name '*.prep' | sort -g) 
     ) || return 1
@@ -216,7 +216,7 @@ return 0
 get_leaf_needs_update() {
 needs_update=f
 if [[ ! "${leaf_path:-}" ]]; then
-  fatal "leaf_path is missing"
+  log_fatal "leaf_path is missing"
   return 1
 fi
 local leaf_cell_path=$cell_path$leaf_path
@@ -327,7 +327,7 @@ begin_function_flat
   get_trunk_cell $from_cell
   t2=$trunk_cell
   if [[ $t1 == $t2 ]]; then
-    fatal "Cell is propagating change to itself: $cell" 
+    log_fatal "Cell is propagating change to itself: $cell" 
     fail1
   fi
   
@@ -375,7 +375,7 @@ local cell=$1 new_cyto=$cell/.cyto.new
 begin_function_flat
 
   if [[ -e $cell/.cyto ]]; then
-    fatal "$cell/.cyto already exists. make_cyto should not be called unless it doesn't."
+    log_fatal "$cell/.cyto already exists. make_cyto should not be called unless it doesn't."
     stack_trace
     fail1
   fi
@@ -391,7 +391,7 @@ begin_function_flat
   if [[ -d $top_cell/.dna/command ]]; then
     safe_link $top_cell/.dna/command $new_cyto/command || fail
   else
-    fatal "Top cell doesn't have a command folder ($top_cell/.dna/command missing)"
+    log_fatal "Top cell doesn't have a command folder ($top_cell/.dna/command missing)"
     fail1
   fi
   if [[ -d $top_cell/.dna/lib ]]; then
@@ -543,7 +543,7 @@ begin_function_flat
         if [[ "${found:-}" ]]; then
           target_file=$found
           if [[ "${#found[*]}" -gt 1 ]]; then
-            warn "Found more than one match for $lib in $to. Will use $target_file."
+            log_warn "Found more than one match for $lib in $to. Will use $target_file."
           fi
         fi
       fi
@@ -598,7 +598,7 @@ begin_function_flat
           make_cyto_key=t
         ;;
         *)
-          fatal "Unknown feature $feature"
+          log_fatal "Unknown feature $feature"
           fail1
         ;;
       esac
@@ -683,8 +683,8 @@ local log_vars=sub_cell
 begin_function
 
   if [[ "$sub_cell" =~ .dna ]]; then
-    fatal "Internal error: Invalid sub_cell $sub_cell."
-    fatal "We should not be creating a sub cell inside of a dna folder"
+    log_fatal "Internal error: Invalid sub_cell $sub_cell."
+    log_fatal "We should not be creating a sub cell inside of a dna folder"
     fail1
   fi
 
@@ -692,7 +692,7 @@ begin_function
 
     local short_cell
     get_short_cell $sub_cell 
-    debug "Creating sub cell $short_cell"
+    log_debug "Creating sub cell $short_cell"
 
     if [[ -d $sub_cell.new ]]; then
       rm -rf $sub_cell.new || fail
@@ -700,7 +700,7 @@ begin_function
 
     local parent=${sub_cell%/*}
     if [[ "$parent" == "$sub_cell" ]]; then
-      fatal "Can't create sub cells in a cell without parents: $sub_cell"
+      log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
       stack_trace
       fail1
     fi
@@ -726,7 +726,7 @@ create_sub_branch_or_leaf() {
 local seed=$seed cell=$cell 
 begin_function_flat
   if [[ -d $cell ]]; then
-    fatal "Cell already exists $cell"
+    log_fatal "Cell already exists $cell"
     fail1
   fi
   mkdir -p $cell || fail
@@ -739,7 +739,7 @@ begin_function_flat
   else
     local branch_dims=( ${branch_dims[*]} )
     if (( branch_dim_count >= trunk_dim_count )); then
-      fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
+      log_fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
       fail1
     fi
     branch_dims+=( ${trunk_dims[$branch_dim_count]} )
@@ -861,7 +861,7 @@ if [[ -d $from ]]; then
   from+=/$sane_value
   from=$(realpath $from)
   if [[ ! -d $from ]]; then
-    fatal "dna out dim path is missing: $from"
+    log_fatal "dna out dim path is missing: $from"
     return 1
   fi
   safe_link $from $to || return 1
@@ -911,7 +911,7 @@ begin_function_flat
       safe_link $fixed_from $dep_link || fail
       from=$fixed_from
     else
-      fatal "Dependencies must link to planted cells, not seeds: $from"
+      log_fatal "Dependencies must link to planted cells, not seeds: $from"
       fail1
     fi
   fi
@@ -982,7 +982,7 @@ begin_function_flat
     values=( $values )
 
     if [[ "${#values[*]}" -gt 1 ]]; then
-      fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
+      log_fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
       fail1
     fi
 
@@ -1020,7 +1020,7 @@ unset prep
 if [[ -f $upstream.prep ]]; then
   source $upstream.prep || return 1
   if ! type -t prep &>/dev/null; then
-    fatal "$upstream.prep must have a function named prep"
+    log_fatal "$upstream.prep must have a function named prep"
     return 1
   fi
   prep || return 1
@@ -1046,15 +1046,15 @@ get_dep_member() {
 if [[ -f $dep_cell/.dna/context-before ]]; then
   source $dep_cell/.dna/context-before || return 1
 else
-  fatal "Missing context-before in $dep_cell/.dna."
-  fatal "Should have been generated by update of it's trunk."
-  fatal "Maybe try to run a clean on it and update again."
+  log_fatal "Missing context-before in $dep_cell/.dna."
+  log_fatal "Should have been generated by update of it's trunk."
+  log_fatal "Maybe try to run a clean on it and update again."
   return 1
 fi
 
 if [[ ! -v $dep_dim ]]; then
-  fatal "Missing member for $dep_dim."
-  fatal "This should have been defined in $dep_cell/.dna/context-before"
+  log_fatal "Missing member for $dep_dim."
+  log_fatal "This should have been defined in $dep_cell/.dna/context-before"
   return 1
 fi
 
@@ -1087,7 +1087,7 @@ begin_function_flat
   local ddim=d_$dim ddims=d_$dims
 
   if [[ ! -v $ddim ]]; then
-    fatal "Internal error: While trying to create a branch sub cell, required dim value $dim is missing."
+    log_fatal "Internal error: While trying to create a branch sub cell, required dim value $dim is missing."
     fail1
   fi
   local value=${!ddim}
@@ -1097,7 +1097,7 @@ begin_function_flat
   echo "# Generated by create_sub_branch from $cell_path
 $ddim='$value'
 localize_dim_vars+=' $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}'" >$sub_dna_path/context-before || fail
-  debug "Appending dim $ddim=$value to $sub_dna_path/context-before"
+  log_debug "Appending dim $ddim=$value to $sub_dna_path/context-before"
 end_function_flat
 handle_return
 }
@@ -1190,9 +1190,9 @@ begin_function
   else
 
     if [[ $ignore_missing == t ]]; then
-      debug "No $op_name operation found in $op_path, ignoring"
+      log_debug "No $op_name operation found in $op_path, ignoring"
     else
-      fatal "No $op_name operation found in $op_path"
+      log_fatal "No $op_name operation found in $op_path"
       fail1
     fi
 
@@ -1233,13 +1233,13 @@ begin_function
       if [[ -d $new_cell ]]; then
         cell=$new_cell
       else
-        fatal "You can't run this command within a seed."
+        log_fatal "You can't run this command within a seed."
         fail1
       fi
     fi
     # recursive
     cell_context_load || {
-      fatal "Context failed to load for $cell"
+      log_fatal "Context failed to load for $cell"
       fail1
       }
 
@@ -1250,7 +1250,7 @@ begin_function
     local cell_path=
     get_cell_path $cell || fail
     if [[ ! "$cell_path" ]]; then
-      fatal "You must execute this command from within a cell"
+      log_fatal "You must execute this command from within a cell"
       fail1
     fi
     dna_path=$cell_path/.dna
@@ -1272,7 +1272,7 @@ begin_function
   fi
 
   if [[ ! -e $command_path ]]; then
-    fatal "Command $command doesn't exist in $command_path or as a function"
+    log_fatal "Command $command doesn't exist in $command_path or as a function"
     fail1
   fi
 
@@ -1281,7 +1281,7 @@ begin_function
   elif [[ -f $command_path.prep ]]; then
     source $command_path.prep || fail
     if ! type -t ${command}_prep &>/dev/null; then
-      fatal "$command_path.prep must contain a function named ${command}_prep"
+      log_fatal "$command_path.prep must contain a function named ${command}_prep"
       fail1
     fi
     ${command}_prep || fail
@@ -1292,9 +1292,9 @@ begin_function
   fi
 
   if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
-    info "Executing command: $command $short_cell"
+    log_info "Executing command: $command $short_cell"
   else
-    debug "Executing command: $command $short_cell"
+    log_debug "Executing command: $command $short_cell"
   fi
 
   if type -t command_$command &>/dev/null; then
@@ -1366,7 +1366,7 @@ begin_function
   elif [[ -f $step ]]; then
     execute_command_step_file $step || fail
   else 
-    fatal "I don't know how to process this step: $step"
+    log_fatal "I don't know how to process this step: $step"
     fail1
   fi
 end_function
@@ -1379,19 +1379,19 @@ local log_vars=step
 begin_function_flat
   case $base in
     *.py)
-      fatal "Python steps not implemented yet"
+      log_fatal "Python steps not implemented yet"
       fail1
     ;;
     *.js)
-      fatal "JavaScript steps not implemented yet"
+      log_fatal "JavaScript steps not implemented yet"
       fail1
     ;;
     *.go)
-      fatal "GoLang steps not implemented yet"
+      log_fatal "GoLang steps not implemented yet"
       fail1
     ;;
     *.java)
-      fatal "Java steps not implemented yet"
+      log_fatal "Java steps not implemented yet"
       fail1
     ;;
     *)
@@ -1403,12 +1403,12 @@ begin_function_flat
       if [[ "$function_exists" ]]; then
         $function_name || fail
       else
-        fatal "Step $step requires that a function named $function_name be defined in that file."
+        log_fatal "Step $step requires that a function named $function_name be defined in that file."
         fail1
       fi
     ;;
 #    *)
-#      fatal "Unknown file format for $step. Can't execute."
+#      log_fatal "Unknown file format for $step. Can't execute."
 #      fail1
 #    ;;
   esac
@@ -1636,7 +1636,7 @@ for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
       fi
     fi
     if [[ ! "$value" ]]; then
-      fatal "Missing require parameter: $dim"
+      log_fatal "Missing require parameter: $dim"
       return 1
     fi
   fi
@@ -1655,7 +1655,7 @@ begin_function
   local old_unsafe_file=$tmp_path/$unsafe_file.old
 
   if [[ -f $new_unsafe_file ]]; then
-    fatal "$new_unsafe_file already exists, delete that first if you want to edit $file"
+    log_fatal "$new_unsafe_file already exists, delete that first if you want to edit $file"
     fail1
   fi
 
@@ -1677,7 +1677,7 @@ begin_function
     if files_are_different $old_unsafe_file $new_unsafe_file >/dev/null; then
       changed=t
     else
-      trace $log_trace "No change"
+      log_trace $log_trace "No change"
       rm $new_unsafe_file || fail
     fi
   else
@@ -1713,7 +1713,7 @@ begin_function
     if files_are_different $old_file $new_file >/dev/null; then
       changed=t
     else
-      debug "No change"
+      log_debug "No change"
       rm $new_file || fail
     fi
   else
@@ -2078,29 +2078,29 @@ local tmp_path=$tmp_path
 local key_path=$key_path
 local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
-debug "Decrypting $from to $to"
+log_debug "Decrypting $from to $to"
 
 local log_vars='from to'
 begin_function
 
   if [[ ! -f "$from" ]]; then
-    fatal "Attempting to decrypt non-existent file: $from"
+    log_fatal "Attempting to decrypt non-existent file: $from"
     fail1
   fi
 
   if [[ -s "$to" ]]; then
-    fatal "Decrypt: target file already exists: $to"
+    log_fatal "Decrypt: target file already exists: $to"
     fail1
   fi
 
   if [[ ! -f "$user_private_key" ]]; then
-    fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
-    fatal "You may create one using: ssh-keygen -mPEM"
+    log_fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
+    log_fatal "You may create one using: ssh-keygen -mPEM"
     fail1
   fi
 
   if [[ ! "$tmp_path" ]]; then
-    fatal "tmp_path must be set to a directory before calling decrypt_file."
+    log_fatal "tmp_path must be set to a directory before calling decrypt_file."
     fail1
   fi
 
@@ -2113,21 +2113,21 @@ begin_function
   fi
 
   if [[ ! -f "$key_path/key.$USER" ]]; then
-    fatal "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
+    log_fatal "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
     find -L $key_path -name "key.*" >&2
     fail1
   fi
 
   # extract the main key
   if ! log_and_run openssl pkeyutl -decrypt -inkey $user_private_key -in "$key_path/key.$USER" -out $tmp_path/main; then
-    fatal "Failed to decrypt main key." 
+    log_fatal "Failed to decrypt main key." 
     fail1
   fi
   defer "rm $tmp_path/main"
 
   # decrypt the secret file
   if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -d -pass file:$tmp_path/main; then 
-    fatal "Failed to decrypt secret file." 
+    log_fatal "Failed to decrypt secret file." 
     fail1
   fi
 
@@ -2146,29 +2146,29 @@ local tmp_path=$tmp_path
 local key_path=$key_path
 local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
-debug "Encrypting $from to $to"
+log_debug "Encrypting $from to $to"
 
 local log_vars='from to'
 begin_function
 
   if [[ ! -f "$from" ]]; then
-    fatal "Attempting to encrypt non-existent file: $from"
+    log_fatal "Attempting to encrypt non-existent file: $from"
     fail1
   fi
 
   if [[ -f "$to" ]]; then
-    fatal "Encrypt: target file already exists: $to"
+    log_fatal "Encrypt: target file already exists: $to"
     fail1
   fi
 
   if [[ ! -f "$user_private_key" ]]; then
-    fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
-    fatal "You may create one using: ssh-keygen -mPEM"
+    log_fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
+    log_fatal "You may create one using: ssh-keygen -mPEM"
     fail1
   fi
 
   if [[ ! "$tmp_path" ]]; then
-    fatal "tmp_path must be set to a directory before calling decrypt_file."
+    log_fatal "tmp_path must be set to a directory before calling decrypt_file."
     fail1
   fi
 
@@ -2186,30 +2186,30 @@ begin_function
 
     if [[ $key_count -gt 0 ]]; then
 
-      fatal "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
+      log_fatal "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
       find -L $key_path -name "key.*" >&2
       fail1
 
     else
 
-      debug "There are no keys for this cell yet. Will create a new key."
+      log_debug "There are no keys for this cell yet. Will create a new key."
 
       # create a new main key
       if ! out_to_file=$tmp_path/main log_and_run openssl rand -base64 40; then
-        fatal "Failed to generate new main key."
+        log_fatal "Failed to generate new main key."
         fail1
       fi
       defer "rm $tmp_path/main"
 
       # create a compatible public key from the user's private key
       if ! log_and_run openssl pkey -in $user_private_key -out $tmp_path/public -pubout; then 
-        fatal "Failed to convert private key to public key."
+        log_fatal "Failed to convert private key to public key."
         fail1
       fi
 
       # encrypt main key with given user key
       if ! log_and_run openssl pkeyutl -encrypt -pubin -inkey $tmp_path/public -in $tmp_path/main -out $key_path/key.$USER; then
-        fatal "Failed to encrypt main key."
+        log_fatal "Failed to encrypt main key."
         fail1
       fi
 
@@ -2217,7 +2217,7 @@ begin_function
   else 
     # extract the main key
     if ! log_and_run openssl pkeyutl -decrypt -inkey $user_private_key -in $key_path/key.$USER -out $tmp_path/main; then
-      fatal "Failed to decrypt main key." 
+      log_fatal "Failed to decrypt main key." 
       fail1
     fi
 
@@ -2226,7 +2226,7 @@ begin_function
     
   # encrypt the file with main key
   if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -pass file:$tmp_path/main; then
-    fatal "Failed to create new secret file."
+    log_fatal "Failed to create new secret file."
     fail1
   fi
 
@@ -2278,7 +2278,7 @@ local dim_array=( $* ) multi_cell \
 
 begin_function_flat
 
-  debug "Checking leaves of $short_cell"
+  log_debug "Checking leaves of $short_cell"
   if [[ "$localize_dim_vars" != local ]]; then
     eval "$localize_dim_vars" || fail
   fi
@@ -2479,14 +2479,14 @@ begin_function_flat
     expand_values_single || failed=t
   fi
   if [[ "$problem" ]]; then
-    fatal "$problem"
+    log_fatal "$problem"
     fail1
   elif [[ $failed == t ]]; then
     if [[ ! "$values" ]]; then
-      fatal "Missing required dimension: $dim"
+      log_fatal "Missing required dimension: $dim"
       fail1
     else
-      fatal "Error expanding values for dimension: $dim"
+      log_fatal "Error expanding values for dimension: $dim"
       fail1
     fi
   fi
@@ -2502,7 +2502,7 @@ expand_values_single() {
 begin_function_flat
 
   if [[ "${#values[*]}" -gt 1 ]]; then
-    fatal "Too many values for a singular dim $dim." \
+    log_fatal "Too many values for a singular dim $dim." \
       "Use plural dim $dims if you intend to have multiple values."
     fail1
   fi
@@ -2513,11 +2513,11 @@ begin_function_flat
     fi
     value=$values ${dim}_member_expand || fail
     if [[ ! "${values:-}" ]]; then
-      fatal "Dim $dim has invalid value '$value'"
+      log_fatal "Dim $dim has invalid value '$value'"
       fail1
     fi
     if [[ "${#values[*]}" -gt 1 ]]; then
-      fatal "Too many values for a singular dim $dim." \
+      log_fatal "Too many values for a singular dim $dim." \
         "Use plural dim $dims if you intend to have multiple values."
       fail1
     fi
@@ -2542,7 +2542,7 @@ begin_function_flat
       value= ${dim}_member_expand || fail
       new_values=( "${values[@]}" )
     else
-      fatal "Missing value for dimension: $RESET$dim"
+      log_fatal "Missing value for dimension: $RESET$dim"
       fail1
     fi
 
@@ -2555,7 +2555,7 @@ begin_function_flat
         fi
         value=$value ${dim}_member_expand || fail
         if [[ ! "${values:-}" ]]; then
-          fatal "Dim $dims has invalid value '$value'"
+          log_fatal "Dim $dims has invalid value '$value'"
           fail1
         fi
         new_values+=( "${values[@]}" )
@@ -2603,7 +2603,7 @@ local log_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
 begin_function_flat
 
   if [[ ! -v $loop_over_var2 ]]; then
-    fatal "Internal error: Variable doesn't exist: $loop_over_var2"
+    log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
     stack_trace
     fail
   fi
@@ -2625,7 +2625,6 @@ begin_function_flat
 
     if [[ $parallel == t ]]; then
       { begin_fork; eval "$body2"; } &
-      after_fork
       processes+=" $!"
     else
       if [[ $fork2 == t ]]; then
@@ -2650,24 +2649,25 @@ handle_return
 # input: parallel processes
 wait_for_sub_processes() {
 if [[ "$processes" ]]; then
-  debug "Waiting for sub processes to complete"
+  log_debug "Waiting for sub processes to complete"
   local process last_err_code= last_failed_process= rc
   for process in $processes; do
-    debug "Waiting for process $process"
+    log_debug "Waiting for process $process"
     wait $process &>/dev/null; rc=$?
     if [[ $rc -gt 0 && $rc -lt 127 ]]; then
       if [[ ! "$last_err_code" ]]; then
         last_err_code=$rc
         last_failed_process=$process
       else
-        warn "Subprocess $process failed to terminate successfully"
+        log_warn "Subprocess $process failed to terminate successfully"
         return 1
       fi
     fi
   done
+  after_fork
   if [[ "$last_err_code" ]]; then
     if [[ "$last_err_code" == 1 ]]; then
-      warn "Subprocess $last_failed_process failed to terminate successfully"
+      log_warn "Subprocess $last_failed_process failed to terminate successfully"
       return 1
     fi
     return $last_err_code
@@ -2682,14 +2682,14 @@ local cell_max_load=${cell_max_load:-10}
 local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
 local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
 if [[ $current_load -gt $cell_max_load ]]; then
-  warn "Load average is too high ($current_load > $cell_max_load)," \
+  log_warn "Load average is too high ($current_load > $cell_max_load)," \
     "waiting until things cool down first."
   local time_waited=0
   while [[ $current_load -gt $cell_max_load ]]; do
     current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
     sleep 5; let time_waited+=5
     if [[ "$cell_load_wait_timeout" -gt 0 && $time_waited -ge $cell_load_wait_timeout ]]; then
-      fatal "Timed out waiting for cpu load to be low enough. Aborting"
+      log_fatal "Timed out waiting for cpu load to be low enough. Aborting"
       return 1
     fi
   done
@@ -2742,7 +2742,7 @@ load_dims() {
 local dims_path=$1 dim_path dim 
 dim_array=()
 if [[ -d $dims_path ]]; then
-  debug "Loading dims from $dims_path"
+  log_debug "Loading dims from $dims_path"
   local contents=$(find1 $dims_path -not -name ".*" | sort -g) || return 1
   for dim_path in $contents; do
     source $dim_path || return 1
@@ -2857,15 +2857,23 @@ reply_file=
 # return $return_code
 # }
 
+current_reply_id=0
+get_new_reply_file() {
+reply_file=$tmp_folder/reply.$$.$current_reply_id
+let current_reply_id++ || true
+#reply_file=$(mktemp $tmp_folder/reply.$$.XXXXXX)
+return 0
+}
+
 fork() {
 local reply_file command=$* return_code=0
-reply_file=$(mktemp $tmp_folder/reply.$$.XXXXXX)
+get_new_reply_file
 defer "rm $reply_file"
 
 (
-begin_fork
+begin_fork || exit 1
 eval "$command"; return_code=$?
-end_fork
+#end_fork || exit 1
 exit $return_code
 )
 
@@ -2876,15 +2884,18 @@ return $return_code
 
 # run within the subshell at the beginning
 begin_fork() {
+get_next_fork_id || return 1
+log_pos=0
 change_log_file
+return 0
 }
 
 # run within the subshell at the beginning
 end_fork() {
-if [[ "$reply_file" ]]; then
-  #debug "Recording log_id=$log_id to $reply_file"
-  echo "log_id=${log_id:-} debug_id_current=${debug_id_current:-}" >>$reply_file || return 1
-fi
+#if [[ "$reply_file" ]]; then
+  #log_debug "Recording log_id=$log_id to $reply_file"
+  #echo "log_id=${log_id:-} debug_id_current=${debug_id_current:-}" >>$reply_file || return 1
+#fi
 return 0
 }
 
@@ -2892,15 +2903,15 @@ return 0
 after_fork() {
 if [[ -f "$reply_file" ]]; then
   source $reply_file || return 1
-  #debug "Loaded reply_file $reply_file"
+  #log_debug "Loaded reply_file $reply_file"
   rm $reply_file
   reply_file=
-else
-  #debug "No reply_file set"
-  let log_id+=100 || true
-  if [[ "${debug_id:-}" && "$debug_id" != t ]]; then
-    let debug_id_current+=1000 || true
-  fi
+#else  # Should not be needed any more
+#  #log_debug "No reply_file set"
+#  let log_id+=100 || true
+#  if [[ "${debug_id:-}" && "$debug_id" != t ]]; then
+#    let debug_id_current+=1000 || true
+#  fi
 fi
 return 0
 }
@@ -2937,7 +2948,7 @@ if [[ "$log_to_file" && "$log_file" && $debugging == f ]]; then
     #tee_files=( ${tee_files[*]:0:$((tee_size-1))} )
     unset tee_files[-1]
   else
-    # warn "untee was called when nothing was teed"
+    # log_warn "untee was called when nothing was teed"
     :
   fi
 fi

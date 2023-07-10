@@ -11,12 +11,12 @@ else
       fi
     else
       if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-        warn "$short_cell: No cached value."
+        log_warn "$short_cell: No cached value."
       fi
     fi
   else
     if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-      debug "$short_cell: No out_path defined."
+      log_debug "$short_cell: No out_path defined."
     fi
   fi
 fi

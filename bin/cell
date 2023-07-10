@@ -1,13 +1,15 @@
 #!/bin/bash
 
 set -u -o pipefail
-source $SIMPLETON_REPO/lib/pre-bash "$0" "$@" || exit 1
+original_cmd="$0 $*"
+source $SIMPLETON_REPO/lib/command-prep "$0" "$@" || exit 1
 set "${real_params[@]}"; shift
 
 optional_var trace           1             # 0 means no tracing output, higher numbers increases verbosity of tracing
 
-source $SIMPLETON_REPO/lib/post-bash || exit 1
+source $SIMPLETON_REPO/lib/bash-lib || exit 1
 source $SIMPLETON_REPO/lib/omni-log || exit 1
+source $SIMPLETON_REPO/lib/omni-navigator || exit 1
 source $SIMPLETON_REPO/lib/bash-debugger || exit 1
 source $SIMPLETON_REPO/lib/cell-lib || exit 1
 
@@ -21,11 +23,14 @@ local multi_cell=f
 
 begin_function_flat
 
+  init_debugger || fail
+  command="$original_cmd" init_omni_log || fail
+  init_omni_navigator || fail
+
   local cell first_cell=t
   begin_for cell in $cells; doo
 
     cell=$(unrealpath $cell) || {
-      echo "${CYAN}After unreal fail 1${RESET}" >&$fd_original_err
       fatal "Failed to resolve path for $cell"
       fail1
       }
@@ -50,6 +55,18 @@ begin_function_flat
           handle_help_command "${commands[@]:$((i+1))}"
           succeed
         ;;
+        shell)
+          export prompt_name='cell shell'
+          bash --init-file <(
+            cat \
+            /etc/profile \
+            $SIMPLETON_REPO/lib/bash-lib \
+            $SIMPLETON_REPO/lib/omni-log \
+            $SIMPLETON_REPO/lib/omni-navigator \
+            $SIMPLETON_REPO/lib/bash-debugger \
+            $SIMPLETON_REPO/lib/cell-lib \
+            )
+        ;;
         clean)
           get_bottom_cell $cell || fail
           if [[ ! "$bottom_cell" ]]; then
@@ -57,7 +74,7 @@ begin_function_flat
             fail1
           fi
           local cell_path=$bottom_cell
-          info "Cleaning $cell_path..." 
+          log_info "Cleaning $cell_path..." 
           local clean_file=$cell_path/.dna/op/clean.bash
           if [[ -f $clean_file ]]; then
             source $clean_file || fail
@@ -72,9 +89,9 @@ begin_function_flat
           fi
           if [[ -e "$cell_path/.cyto" ]]; then
             rm -rf $cell_path/.cyto || fail
-            info "Cleaned."
+            log_info "Cleaned."
           else
-            info "Already clean."
+            log_info "Already clean."
           fi
         ;;
         *)

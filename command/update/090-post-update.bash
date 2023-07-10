@@ -31,13 +31,13 @@ begin_function_flat
     fi
 
     if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-      info "Update $result_string. ($short_cell)"
+      log_info "Update $result_string. ($short_cell)"
     else
-      debug "Update $result_string. ($short_cell)"
+      log_debug "Update $result_string. ($short_cell)"
     fi
 
   else
-    info "Pretend update $result_string."
+    log_info "Pretend update $result_string."
   fi
 
   if [[ "${reply_file:-}" ]]; then

@@ -1,8 +1,6 @@
 #!/bin/bash
 
-# This library of aliases and functions follows the standard hi-shell
-# output interface but changes the implementation to always output trace info
-# but with additional info to allow easy filtering or browsing of that info.
+type -t init_omni_log >/dev/null && return 0
 
 # if log_file is set, trace output will be sent to this file
 
@@ -14,91 +12,123 @@
 #   handle_return
 # }
 
-debug_at_log_id=
-if [[ "${log_id:-}" ]]; then
-  echo "${CYAN}Will debug starting at log_id $log_id or later${RESET}" >&2
-  debug_at_log_id=$log_id
-fi
+get_next_fork_id() {
+  local base_log_file=$base_log_file
+  timeout=3 lock_path=$fork_log fd_write_lock || {
+    echo "Failed to get lock on $fork_log" >&2
+    return 1
+  }
+  local last_id=$(tail -n1 $fork_log | awk '{print $1}')
+  let fork_id=last_id+1 || true
+  new_log_file=$base_log_file-$fork_id.olog
+  echo "$fork_id $new_log_file" >>$fork_log || return 1
+  fd_unlock
+  return 0
+}
 
-first_log=t
-log_depth_current=0
-log_id=0
-trace_var=${trace_var:-}
-declare -A trace_var_value=()
-log=${log:-file}
-log_to_file=t
-log_to_out=f
-log_action=${log_action:-}
-log_depth=${log_depth:-}
-log_function=${log_function:-}
-log_level=${log_level:-info}
-log_format=${log_format:-default}
-cooked_stack=( ${cooked_stack[*]:-} )
+init_omni_log() {
+  local command="$*"  
+  # local exported_vars=$(export | grep '^declare -x [a-z]' | cut -d' ' -f3-)
+  # exported_vars=${exported_vars//$NL/ }
+  # command="$command $exported_vars"
+  fork_log=${fork_log:-~/fork-log/$$}
+  if [[ ! -d ${fork_log%/*} ]]; then
+    mkdir ${fork_log%/*} || return 1
+  fi
+  fork_id=0
+  # echo "$fork_id $command" >>$fork_log || return 1
 
-case $log in
-  off|fatal|error|warn|info|debug|trace|all)
-    log_level=$log
-    log=file
+  if [[ "${debugger_available:-f}" == t ]]; then
+    debug_at_log_id=
+    if [[ "${log_id:-}" ]]; then
+      echo "${CYAN}Will debug starting at log_id $log_id or later${RESET}" >&2
+      debug_at_log_id=$log_id
+    fi
+  fi
+
+  first_log_file=
+  first_log=t
+  log_depth_current=0
+  log_pos=0
+  trace_var=${trace_var:-}
+  declare -A trace_var_value=()
+  log=${log:-file}
+  log_to_file=t
+  log_to_out=f
+  log_action=${log_action:-}
+  log_depth=${log_depth:-}
+  log_function=${log_function:-}
+  log_level=${log_level:-info}
+  log_format=${log_format:-default}
+  cooked_stack=( ${cooked_stack[*]:-} )
+
+  case $log in
+    off|fatal|error|warn|info|debug|trace|all)
+      log_level=$log
+      log=file
+      ;;
+    file)
+      # default behavior
+      ;;
+    out)
+      log_to_out=t
+      log_level=warn
+      if [[ "$log_format" == default ]]; then
+        log_format='$level_color$message$RESET'
+      fi
+      ;;
+    both)
+      log_to_file=t
+      log_to_out=t
+      ;;
+    *)
+      log_to_file=t
+      log_to_out=t
+      log_action=$log
+      ;;
+  esac
+
+  case $log_level in
+    none)
+      log_format=
     ;;
-  file)
-    # default behavior
+    fatal|error|warn|info)
+      if [[ "$log_format" == default ]]; then
+        log_format='$level_color$message$RESET'
+      fi
     ;;
-  out)
-    log_to_out=t
-    log_level=warn
-    if [[ "$log_format" == default ]]; then
+    debug)
+      if [[ "$log_format" == default ]]; then
+        log_format='$log_id$level_color$message$RESET'
+      fi
+    ;;
+    trace|all)
+      if [[ "$log_format" == default ]]; then
+        log_format='$time$pid$log_id$COL40$level_color$action$COL55$function$COL85$log_vars$message$RESET'
+      fi
+    ;;
+    *)
+      log_fatal "Invalid log_level value. Must be one of: none, error, warn, info, trace, debug"
+      exit 1
+    ;;
+  esac
+
+  case $log_format in
+    tiny)
       log_format='$level_color$message$RESET'
-    fi
     ;;
-  both)
-    log_to_file=t
-    log_to_out=t
+    short)
+      log_format='$level_color$action$COL15$function$COL45$log_vars$message$RESET'
     ;;
-  *)
-    log_to_file=t
-    log_to_out=t
-    log_action=$log
+    compact)
+      log_format='$level_color$action$function$log_vars$message$RESET'
     ;;
-esac
+  esac
 
-case $log_level in
-  none)
-    log_format=
-  ;;
-  fatal|error|warn|info)
-    if [[ "$log_format" == default ]]; then
-      log_format='$level_color$message$RESET'
-    fi
-  ;;
-  debug)
-    if [[ "$log_format" == default ]]; then
-      log_format='$log_id$level_color$message$RESET'
-    fi
-  ;;
-  trace|all)
-    if [[ "$log_format" == default ]]; then
-      log_format='$time$pid$log_id$COL40$level_color$action$COL55$function$COL85$log_vars$message$RESET'
-    fi
-  ;;
-  *)
-    fatal "Invalid log_level value. Must be one of: none, error, warn, info, trace, debug"
-    exit 1
-  ;;
-esac
+  var_stack=( )
+  log_file=
+}
 
-case $log_format in
-  tiny)
-    log_format='$level_color$message$RESET'
-  ;;
-  short)
-    log_format='$level_color$action$COL15$function$COL45$log_vars$message$RESET'
-  ;;
-  compact)
-    log_format='$level_color$action$function$log_vars$message$RESET'
-  ;;
-esac
-
-var_stack=( )
 alias begin_function='
   local return_value=0 break_out=f
   write_to_log trace call
@@ -119,27 +149,26 @@ alias end_function='
 #   change_log_file {log file base}   point to new log file
 #   change_log_file                   point to same base but new pid (forked)
 #   change_log_file -                 stop logging
-log_file=
 change_log_file() {
 begin_function_flat
 
-  local new_base=${1:-} new_log_file old_log_file
+  local new_base=${1:-} new_log_file old_log_file old_fork_id=$fork_id
 
   if [[ "$new_base" == - ]]; then
     new_log_file=
   elif [[ "$new_base" ]]; then
     base_log_file=$new_base
-    new_log_file=$base_log_file-$BASHPID.olog
+    get_next_fork_id || fail
     local first_log=$base_log_file-first.olog
     if [[ -e "$first_log" ]]; then
-      fatal "Log already exists: $first_log" 
+      log_fatal "Log already exists: $first_log" 
       stack_trace
       fail1
     fi
     ln -s $new_log_file $first_log || fail
   else
     [[ ! "${base_log_file:-}" ]] && succeed
-    new_log_file=$base_log_file-$BASHPID.olog
+    get_next_fork_id || fail
   fi
 
   if [[ "${log_file:-}" == "$new_log_file" ]]; then
@@ -159,7 +188,7 @@ begin_function_flat
     log_file=$new_log_file
 
     if [[ -f $log_file ]]; then
-      fatal "log file already exists: $log_file"
+      log_fatal "log file already exists: $log_file"
       fail1
     fi
 
@@ -173,7 +202,7 @@ end_function_flat
 handle_return
 }
 
-trace() {
+log_trace() {
 begin_no_tracing_zone
 local message="$*"
 log_function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
@@ -181,35 +210,35 @@ end_no_tracing_zone
 return 0
 }
 
-debug() {
+log_debug() {
 begin_no_tracing_zone
 log_function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
-info() {
+log_info() {
 begin_no_tracing_zone
 log_function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
-warn() {
+log_warn() {
 begin_no_tracing_zone
 log_function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
-error() {
+log_error() {
 begin_no_tracing_zone
 log_function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
 end_no_tracing_zone
 return 0
 }
 
-fatal() {
+log_fatal() {
 begin_no_tracing_zone
 log_function=${FUNCNAME[1]} write_to_log fatal "${action:-}" "$*"
 end_no_tracing_zone
@@ -218,7 +247,7 @@ return 0
 
 # zombie logs are used to output temporary debugging logs
 # they should be removed from the code after the issue is resolved
-zombie() {
+log_zombie() {
 begin_no_tracing_zone
 echo "$CYAN$*$RESET" >&$fd_original_err
 end_no_tracing_zone
@@ -326,12 +355,13 @@ done
 
 local time="$EPOCHREALTIME"
 local pid="$BASHPID"
-local to_log="= $time pid=$pid"
+local to_log="= ts=$time pid=$pid"
 
 if [[ "${debug_id:-}" ]]; then
   to_log+=" debug_id=$debug_id_current"
 fi
 
+log_id=$fork_id:$log_pos
 to_log+=" log_id=$log_id depth=$log_depth_current level=$level"
 
 if [[ "$action" ]]; then
@@ -404,19 +434,24 @@ fi
 
 unpause_tee
 
-if [[ "$debug_at_log_id" && $log_id -ge "$debug_at_log_id" ]]; then
-  debug_at_log_id=
-  if [[ ! "${debug_id:-}" ]]; then
-    debug_immediate=t
-  else
-    echo "${CYAN}Will debug starting at debug_id $debug_id or later${RESET}" >&2
-    debug_subshell=t
-    debug_stepping=f
-    debug_immediate=f
+if [[ "$debug_at_log_id" ]]; then
+  local debug_at_fork_id=${debug_at_log_id%:*}
+  local debug_at_log_pos=${debug_at_log_id#*:}
+  if [[ $fork_id == $debug_at_fork_id \
+     && $log_pos -ge $debug_at_log_pos ]]; then
+    debug_at_log_id=
+    if [[ ! "${debug_id:-}" ]]; then
+      debug_immediate=t
+    else
+      echo "${CYAN}Will debug starting at debug_id $debug_id or later${RESET}" >&2
+      debug_subshell=t
+      debug_stepping=f
+      debug_immediate=f
+    fi
+    debug_start
   fi
-  debug_start
 fi
-let log_id++ || true
+let log_pos++ || true
 
 end_no_tracing_zone
 }

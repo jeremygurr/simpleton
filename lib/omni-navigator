@@ -1,0 +1,103 @@
+#!/bin/bash
+
+type -t init_omni_navigator >/dev/null && return 0
+
+init_omni_navigator() {
+  omni_list_window=${omni_list_window:-20}
+  if [[ ! -v fd_original_in ]]; then
+    exec {fd_original_in}<&0
+    exec {fd_original_out}>&1
+    exec {fd_original_err}>&2
+    exec {fd_original_trace}>&${fd_trace:-2}
+  fi
+}
+
+omni_navigator() (
+  local cursor_a_job_id=${cursor_a_job_id:-} \
+    cursor_a_fork_id=${cursor_a_fork_id:-} \
+    cursor_a_log_pos=${cursor_a_log_pos:-} \
+    cursor_a_all_forks_log=${cursor_a_all_forks_log:-} \
+    cursor_a_log_file=${cursor_a_log_file:-} 
+  local -n log_array=omni_log_array_a_$cursor_fork_id
+
+  begin_function_flat
+    begin_loop
+      update_log_cursor || fail
+      local current_log_line=${log_array[$cursor_a_array_index]}
+      local omni_list_offset=$(( -omni_list_window / 2 + 1 )) || true
+      omni_show_log || fail
+      local omni_list_dir=forwards
+      let omni_list_offset+=omni_list_window-1 || true
+    end_loop
+  end_function_flat
+
+  handle_return
+)
+
+update_log_cursor() {
+  begin_function_flat
+    if [[ ! -v log_array ]]; then
+      mapfile log_array < <(cat $cursor_a_log_file) || fail
+    fi
+    cursor_a_array_index=0
+    local i found=f array_size=${#log_array[*]} entries line
+    begin_for ((i=0; i < array_size; i++)); doo
+      line=${log_array[$i]}
+      if [[ "$line" == \=\ * ]]; then
+        local ts pid log_id depth level action function
+        entries=${line#= }
+        eval "$entries" || fail
+        if [[ $log_id -ge $cursor_a_log_pos ]]; then
+          found=t
+          break
+        fi
+      fi
+    end_for
+    if [[ $found == t ]]; then
+      cursor_a_array_index=$i
+    fi
+  end_function_flat
+  handle_return
+}
+
+omni_show_log() {
+  begin_function_flat
+    omni_show_reversed_line || fail
+  end_function_flat
+  handle_return
+}
+
+omni_show_reversed_line() {
+  echo -n "$REVERSE" >&$fd_original_err
+  local processed_line
+  omni_get_processed_line "$current_log_line" || return 1
+  local -n line=$processed_line
+  local pad_size line_length=${#line}
+  ((pad_size=COLUMNS-line_length))
+  echo -n "$line" >&$fd_original_err
+  printf %${pad_size}s >&$fd_original_err
+  echo "$RESET" >&$fd_original_err
+  return 0
+}
+
+omni_get_processed_line() {
+  local line=$1 ts pid log_id depth level action function
+  processed_line=$line
+  if [[ "$line" == \=\ * ]]; then
+    entries=${line#= }
+    eval "$entries" || return 1
+    case $action in
+      call)
+        processed_line="$action $function"
+      ;;
+      return\(*)
+        processed_line="$action from $function"
+      ;;
+      debug)
+        processed_line="$action $info"
+      ;;
+    esac
+  fi
+  return 0
+}
+

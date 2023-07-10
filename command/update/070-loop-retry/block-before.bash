@@ -20,7 +20,7 @@ if [[ $can_update == t ]]; then
   for ((retry=0; retry < retry_max; retry++)); do
 
     if [[ $retry -gt 0 ]]; then
-      info "Waiting $delay seconds before trying again" 
+      log_info "Waiting $delay seconds before trying again" 
       sleep $delay
       let 'delay *= retry_scale' || true
     fi
@@ -30,7 +30,7 @@ if [[ $can_update == t ]]; then
       attempt_string=", attempt $((retry+1)) of $retry_max"
     fi
       
-    debug "Executing local update of $short_cell$attempt_string" 
+    log_debug "Executing local update of $short_cell$attempt_string" 
 
     execute_command_step_folder || return 1
 

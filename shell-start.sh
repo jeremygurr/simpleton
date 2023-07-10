@@ -245,25 +245,25 @@ export LS_OPTIONS='--color=auto'
 export EDITOR=vim
 
 leaf() {
-source $SIMPLETON_REPO/lib/post-bash
+source $SIMPLETON_REPO/lib/bash-lib
 source $SIMPLETON_REPO/lib/cell-lib
 cd_to_leaf
 }
 
 trunk() {
-source $SIMPLETON_REPO/lib/post-bash
+source $SIMPLETON_REPO/lib/bash-lib
 source $SIMPLETON_REPO/lib/cell-lib
 cd_to_trunk
 }
 
 seed() {
-source $SIMPLETON_REPO/lib/post-bash
+source $SIMPLETON_REPO/lib/bash-lib
 source $SIMPLETON_REPO/lib/cell-lib
 cd_to_seed
 }
 
 plant() {
-source $SIMPLETON_REPO/lib/post-bash
+source $SIMPLETON_REPO/lib/bash-lib
 source $SIMPLETON_REPO/lib/cell-lib
 cd_to_plant
 }

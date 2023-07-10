@@ -1,16 +1,15 @@
 #!/bin/bash
 
+type -t init_debugger >/dev/null && return 0
+
 ######################################################
 # BASH Debugger
-# Usage: {command} debug=t
+# At beginning of script you wish to debug: 
+#   source this file. example: source bash-debugger
+#   execute init_debugger function.
+#   execute debug_start in the code where you wish to begin debugging.
 # press '?' for list of commands while debugging
 ######################################################
-
-# used by debugger, in case input or output is redirected from somewhere else during debugging
-exec {fd_original_in}<&0
-exec {fd_original_out}>&1
-exec {fd_original_err}>&2
-exec {fd_original_trace}>&${fd_trace:-2}
 
 NL=$'\n'
 TAB=$'\t'
@@ -38,31 +37,9 @@ CLEAR_SCREEN=$'\033[2J\r\033[H'
    CURSOR_UP=$'\033[1A'
      REVERSE=$'\033[7m'
 
-tmp_folder=${tmp_folder:-/tmp}
-debug_state_file=$tmp_folder/debug-state-$$
-debug_id_current=0
-
-rm $tmp_folder/debug-* $tmp_folder/side-bug-* &>/dev/null || true
-
-# used to debug complex debugger internal issues
-side_bug_file=$tmp_folder/side-bug-$$
 side_bug() {
-echo "$*" >>$side_bug_file
+  echo "$*" >>$side_bug_file
 }
-
-# debug_cleanup='
-#   if [[ $BASH_SUBSHELL -eq 0 ]]; then
-#     rm "$debug_state_file" &>/dev/null || true
-#   fi
-#   '
-
-# if type defer &>/dev/null; then
-#   defer "$debug_cleanup"
-# else
-#   trap "$debug_cleanup" EXIT
-# fi
-
-COLUMNS=${COLUMNS:-120}
 
 debug_expansion_clean() {
   local line shortest= plusses code plus_length from=$1
@@ -1038,7 +1015,6 @@ done
 return 0
 }
 
-debugging=f
 debug_start() {
 parallel_execution=${p_par:-f}
 if [[ $debugging == f ]]; then
@@ -1142,6 +1118,8 @@ done
 }
 
 debug_setup() {
+debugging=f
+
 export debug_ignore=${debug_ignore:- begin_fork change_log_file debug debug_start defer echo_align error fatal find1 fork info out parallel_loop pause_tee safe_link tee_output_to_log trace unpause_tee unrealpath untee_output warn write_to_log }
 if [[ "${debug_unignore:-}" ]]; then
   debug_ignore_remove "$debug_unignore"
@@ -1224,5 +1202,27 @@ if [[ $debug != f \
 fi
 }
 
-debug_setup
+init_debugger() {
+  # used by debugger, in case input or output is redirected from somewhere else during debugging
+  exec {fd_original_in}<&0
+  exec {fd_original_out}>&1
+  exec {fd_original_err}>&2
+  exec {fd_original_trace}>&${fd_trace:-2}
+
+  tmp_folder=${tmp_folder:-/tmp}
+  debug_state_file=$tmp_folder/debug-state-$$
+  debug_id_current=0
+  debugger_available=t
+
+  rm $tmp_folder/debug-* $tmp_folder/side-bug-* &>/dev/null || true
+
+  # used to debug complex debugger internal issues
+  side_bug_file=$tmp_folder/side-bug-$$
+
+  COLUMNS=${COLUMNS:-120}
+
+  debug_setup
+
+  return 0
+}
 

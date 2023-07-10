@@ -1,6 +1,20 @@
 #!/bin/bash
 
-fd_trace=${fd_trace:-3}
+type -t bash_lib_loaded >/dev/null && return 0
+bash_lib_loaded=t
+
+set -ue +H
+shopt -s expand_aliases   # make sure aliases are expanded even for non-interactive scripts
+shopt -s extglob
+
+umask 0077  # to make created files readable only by the user by default
+
+if [[ ! -v fd_original_in ]]; then
+  exec {fd_original_in}<&0
+  exec {fd_original_out}>&1
+  exec {fd_original_err}>&2
+  exec {fd_original_trace}>&${fd_trace:-2}
+fi
 
 # some required defaults
 export tmp_folder="${tmp_folder:-/tmp}"
@@ -158,7 +172,7 @@ prompt_ynq() {
         echo "Quit" >&2 
         ;;
       *)
-        fatal "Pick one of: (y)es (n)o (q)uit"
+        log_fatal "Pick one of: (y)es (n)o (q)uit"
         continue
         ;;
     esac
@@ -232,18 +246,6 @@ trim_stream() {
   sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'
 }
 
-to_lower() {
-  tr '[:upper:]' '[:lower:]'
-}
-
-to_upper() {
-  tr '[:lower:]' '[:upper:]'
-}
-
-spaces_to_minus() {
-  sed 's/  */-/g'
-}
-
 upper_first_char() {
   local string=$1
   local first=${string:0:1}
@@ -278,7 +280,7 @@ convert_to_seconds() {
         # default to seconds
         eval "$to=$from"
       else
-        fatal "Unknown time format, use something like: 4h, 3d, 5m"
+        log_fatal "Unknown time format, use something like: 4h, 3d, 5m"
         return 1
       fi
     ;;
@@ -465,36 +467,6 @@ get_overlap() {
 }
 
 # usage: convert_to_seconds {from time period} {to var name}
-convert_to_seconds() {
-  local from=$1; shift
-  local to=$1
-  case "$from" in
-    *s)
-      eval "$to=${from%s}"
-      ;;
-    *m)
-      eval "$to=$((${from%m}*60))"
-      ;;
-    *h)
-      eval "$to=$((${from%h}*60*60))"
-      ;;
-    *d)
-      eval "$to=$((${from%d}*24*60*60))"
-      ;;
-    *w)
-      eval "$to=$((${from%w}*7*24*60*60))"
-      ;;
-    *y)
-      eval "$to=$((${from%y}*365*24*60*60))"
-      ;;
-    *)
-      fatal "Unknown time format, use something like: 4h, 3d, 5m"
-      return 1
-      ;;
-  esac
-  return 0
-}
-
 # inputs: folder_to_lock timeout pid_file
 # if timeout is not given, then attempt will immediately fail if it can't get the lock right away
 #   otherwise it will keep trying until the timeout is reached or the lock is obtained.
@@ -508,13 +480,13 @@ vars='folder_to_lock timeout'; begin_function
 
   if [[ -d "$folder_to_lock" ]]; then
 
-    debug "Lock folder exists already: $folder_to_lock"
+    log_debug "Lock folder exists already: $folder_to_lock"
     local pid=
 
     if [[ -f "$pid_file" ]]; then
       pid=$(<"$pid_file")
       if [[ "$pid" == $$ ]]; then
-        debug "This process already owns the lock, so we are done."
+        log_debug "This process already owns the lock, so we are done."
         succeed
       fi
     fi
@@ -522,7 +494,7 @@ vars='folder_to_lock timeout'; begin_function
     # check to see if the process is still running
     if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
       rm -rf "$folder_to_lock" || fail
-      debug "Removed stale lock: $folder_to_lock with pid: $pid"
+      log_debug "Removed stale lock: $folder_to_lock with pid: $pid"
     fi
 
   fi
@@ -545,23 +517,23 @@ vars='folder_to_lock timeout'; begin_function
       fi
 
       local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
-      debug "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
+      log_debug "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
       sleep $seconds_to_wait
       timeleft=$((timeleft-delay))
       let delay*=2
       if [ "$timeleft" -le 0 ]; then
-        warn "Timeout reached. Couldn't obtain the lock in time."
+        log_warn "Timeout reached. Couldn't obtain the lock in time."
         break
       fi
     end_while
   else
-    fatal "Attempting to obtain a folder lock when it's parent doesn't exist: $parent"
+    log_fatal "Attempting to obtain a folder lock when it's parent doesn't exist: $parent"
     stack_trace
     fail1
   fi
 
   if [[ $success == f ]]; then
-    debug "Failed to obtain lock."
+    log_debug "Failed to obtain lock."
     fail1
   fi
 
@@ -570,7 +542,7 @@ vars='folder_to_lock timeout'; begin_function
   fi
 
   # lock obtained
-  debug "Succeeded in obtaining lock."
+  log_debug "Succeeded in obtaining lock."
 
 end_function
 handle_return
@@ -598,7 +570,7 @@ local pid_file=${pid_file:-$folder_to_unlock/pid}
 local remove_folder_when_unlocked=${remove_folder_when_unlocked:-f}
 
 if [[ ! "$folder_to_unlock" ]]; then
-  fatal "Usage: folder_to_unlock=... folder_unlock "
+  log_fatal "Usage: folder_to_unlock=... folder_unlock "
   return 1
 fi
 
@@ -614,41 +586,30 @@ return 0
 }
 
 fd_read_lock() {
-local lock_path=$1
-local timeout=${2:-$lock_timeout}
+local lock_path=$lock_path timeout=$timeout
+exec {lock_fd}<>$lock_path
 flock -s -w $timeout $lock_fd || {
-  fatal "Failed to get read lock for $lock_path within $timeout seconds"
+  log_fatal "Failed to get read lock for $lock_path within $timeout seconds"
   return 1
   }
 }
 
 fd_write_lock() {
-local lock_path=$1
-local timeout=${2:-$lock_timeout}
+local lock_path=$lock_path timeout=$timeout
+exec {lock_fd}<>$lock_path
 flock -e -w $timeout $lock_fd || {
-  fatal "Failed to get write lock for $lock_path within $timeout seconds"
+  log_fatal "Failed to get write lock for $lock_path within $timeout seconds"
   return 1
   }
 }
 
 fd_unlock() {
-flock -u $1
+flock -u $lock_fd
 }
 
 get_next_fd() {
 next_fd=$(ls -1 /proc/self/fd | tail -n1)
 let next_fd++
-}
-
-update_modify_times() {
-local from_inclusive=$1; shift
-local to_exclusive=$1
-local current=$from_inclusive
-while [[ ${#current} > 1 && $current =~ / && $current != $to_exclusive ]]; do
-  touch $current || return 1
-  current=${current%/*}
-done
-return 0
 }
 
 is_dir_empty() {
@@ -702,13 +663,13 @@ case $pretend in
     esac
   ;;
   *)
-    fatal "Invalid pretend setting: $pretend. Must be one of: t f ask"
+    log_fatal "Invalid pretend setting: $pretend. Must be one of: t f ask"
     return 1
   ;;
 esac
 
 if [[ $execute == t ]]; then
-  info "Executing: $command_to_execute"
+  log_info "Executing: $command_to_execute"
   eval "$command_to_execute" || return $?
 fi
 
@@ -746,7 +707,7 @@ if [[ $to != */ && -L "$to" ]]; then
   rm "$to" || return 1
 fi
 if [[ ! -e "$from" ]]; then
-  fatal "Internal error: Source of link doesn't exist: $from"
+  log_fatal "Internal error: Source of link doesn't exist: $from"
   stack_trace
   return 1
 fi
@@ -764,7 +725,7 @@ unrealpath() {
 local p=$PWD x=$1
 cd / || return 1
 realpath -s "$p/$x" || {
-  fatal "Internal error: could not resolve $p/$x"
+  log_fatal "Internal error: could not resolve $p/$x"
   return 1 
   }
 return 0
@@ -779,3 +740,31 @@ if [[ -v $from_var ]]; then
   eval "$from_var=\"\$left \$right\""
 fi
 }
+
+cooked_stack_trace() {
+echo "Cooked call stack:" >&$fd_original_err
+local count=${#cooked_stack[*]} n
+for ((n = 0; n < count; n++)); do
+  echo " ${cooked_stack[$n]}" >&$fd_original_err
+done
+return 0
+}
+
+stack_trace() {
+local start_frame=${start_frame:-1}
+local count=${#FUNCNAME[*]}
+local p n
+
+if [ ${tracing_midline:-f} == t ]; then
+  tracing_midline=f
+  echo >&$fd_original_err
+fi
+
+echo "Raw call stack:" >&$fd_original_err
+for ((n = count - 1; n >= start_frame; n--)) ; do
+  let p=n-1
+  echo "  ${BASH_SOURCE[$n]} ${FUNCNAME[$n]} ${BASH_LINENO[$p]}" >&$fd_original_err
+done
+return 0
+}
+
