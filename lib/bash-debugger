@@ -143,7 +143,7 @@ debug_trap() {
 
   # if code inside the debug trap is changed, you may need to adjust this offset to ensure the code displayed in the debugger lines up with what is actually being executed.
   # the number being subtracted is the number of source lines in the trap which are executed before this function is called
-  let debug_line_num-=13 || true
+  let debug_line_num-=16 || true
 
   local line_part=$debug_line file_part=
   if [[ "$debug_line" ]]; then
@@ -295,6 +295,8 @@ debug_trap() {
     return 0
   fi
 
+  debug_return=f
+
   local debug_r=-1
 
   debug_last_location="$debug_path_to_source_file $debug_line_num"
@@ -428,7 +430,9 @@ debug_trap() {
     if [[ "$debug_id" ]]; then
       prefix+="${CYAN}debug_id=$debug_id_current "
     fi
-    echo -n "$prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
+    if [[ $debug_source_file != none ]]; then
+      echo -n "$prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
+    fi
     echo -n " $GREEN$debug_current_function $RESET:" >&$fd_original_err
 
     if [[ $debug_follow_source == t ]]; then
@@ -707,13 +711,18 @@ debug_trap() {
           rm "$debug_out_path"
         fi
         force_save=t debug_save_state
-        if (( ${#FUNCNAME[*]} > 1 )); then
+        if [[ $- != *i* ]]; then
+          # current shell is not interactive, so exit normally
           debug_exit=t
-          exit 1
+          exit 0
         else
-          trap - DEBUG
+          # current shell is interactive, which means this function was 
+          #   executed inline, so we don't want to exit or it will close
+          #   the entire interactive shell
+          trap 'set_return_code 1' DEBUG
           [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
-          debug_r=2
+          debug_r=1
+          debug_return=t
         fi
         ;;
       r)
@@ -954,10 +963,11 @@ debug_original_tracefd='$debug_original_tracefd'
 debug_prev_command='${debug_prev_command//\'/\'\"\'\"\'}'
 debug_prev_function='$debug_prev_function'
 debug_prev_line='$debug_prev_line'
-debug_search_old='$debug_search_old'
 debug_prev_source_file='$debug_prev_source_file'
+debug_return='$debug_return'
 debug_search='$debug_search'
 debug_search_deep='$debug_search_deep'
+debug_search_old='$debug_search_old'
 debug_step_to_later_line='$debug_step_to_later_line'
 debug_step_to_next_line='$debug_step_to_next_line'
 debug_step_to_next_file='$debug_step_to_next_file'
@@ -1079,7 +1089,9 @@ if [[ $debugging == f ]]; then
   export debug_prev_line=${debug_prev_line:-0}
   export debug_search_old=${debug_search_old:-}
   export debug_prev_source_file=${debug_prev_source_file:-none}
+  export debug_return=${debug_return:-f}
   export debug_rewind=${debug_rewind:-f}
+  export debug_saved_shell_options=${debug_saved_shell_options:-$-}
   export debug_search=${debug_search:-}
   export debug_search_deep=${debug_search_deep:-t}
   export debug_step_to_later_line=${debug_step_to_later_line:-f}
@@ -1103,38 +1115,47 @@ if [[ $debugging == f ]]; then
   # and adjust the -4 part based on how many lines were added or removed. If you get it right,
   # debugging will show the right line compared to what is being executed. 
   trap '
-    set +x
-    set +T
-    debug_rematch=( "${BASH_REMATCH[@]}" )
-    if [[ "${FUNCNAME:-}" ]]; then 
-      debug_depth=${#FUNCNAME[*]}
+    debug_saved_shell_options=$-
+    set +xvT
+    if [[ $debug_return == t ]]; then
+      debug_rc=1
     else
-      debug_depth=0
-    fi
-    if [[ "$debug_var" ]]; then
-      set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
-    fi
-    # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]:-}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
-    debug_trap "${BASH_SOURCE[0]:-none}" "${LINENO[0]:-none}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
-    if [[ "$debug_var" ]]; then
-      set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
-    fi
-    [[ $debug_rewind == t ]] && continue
-    [[ $debug_exit == t ]] && exit 1
-    tracing=f
-    if [[ $debug_expansion -gt 0 
-          && -n "${debug_expansion_pid:-}" \
-          && ${no_trace_depth:-0} -le 0 \
-       ]]; then
-      if [[ $debug_expansion == 1 \
-            && " $debug_ignore " != *" $debug_prev_command "* \
-            || $debug_expansion -gt 1 ]]; then
-        tracing=t
+      debug_rematch=( "${BASH_REMATCH[@]}" )
+      if [[ "${FUNCNAME:-}" ]]; then 
+        debug_depth=${#FUNCNAME[*]}
+      else
+        debug_depth=0
+      fi
+      if [[ "$debug_var" ]]; then
+        set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
+      fi
+      # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]:-}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
+      debug_trap "${BASH_SOURCE[0]:-none}" "${LINENO[0]:-none}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
+      if [[ "$debug_var" ]]; then
+        set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
+      fi
+      [[ $debug_rewind == t ]] && continue
+      [[ $debug_exit == t ]] && exit 0
+      tracing=f
+      if [[ $debug_expansion -gt 0 
+            && -n "${debug_expansion_pid:-}" \
+            && ${no_trace_depth:-0} -le 0 \
+         ]]; then
+        if [[ $debug_expansion == 1 \
+              && " $debug_ignore " != *" $debug_prev_command "* \
+              || $debug_expansion -gt 1 ]]; then
+          tracing=t
+        fi
+      fi
+      [[ $debug_subshell == t ]] && set -T
+      BASH_REMATCH=( "${debug_rematch[@]}" )
+      set +e # so returning 1 does not cause failure
+      if [[ $debug_return == t ]]; then
+        tracing=f
+        set +xvT
+        # return $debug_rc &>/dev/null
       fi
     fi
-    [[ $debug_subshell == t ]] && set -T
-    BASH_REMATCH=( "${debug_rematch[@]}" )
-    set +e # so returning 1 does not cause failure
     set_return_code $debug_rc
     ' DEBUG
 else

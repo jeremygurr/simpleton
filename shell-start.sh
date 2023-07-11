@@ -402,7 +402,7 @@ return 0
 
 prompt_error_string() {
 local rc=$?
-[[ $rc > 0 ]] && echo -n "err $rc "
+(( rc > 0 )) && echo -n "err $rc "
 }
 
 short_path() {
