@@ -73,6 +73,9 @@ debug_output_reversed_line() {
 }
 
 debug_display_source() {
+  if [[ "$debug_path_to_source_file" == none ]]; then
+    return 0
+  fi
   local debug_start_line=$((debug_list_offset+debug_line_num))
   if [[ $debug_start_line -lt 1 ]]; then
     let 'debug_list_offset += -debug_start_line + 1'
@@ -100,6 +103,12 @@ debug_trap() {
     debug_current_function=$3 \
     debug_command=$4 \
     debug_current_depth=${#FUNCNAME[*]}
+
+  if [[ $debug_path_to_source_file == /dev/fd/* ]]; then
+    debug_path_to_source_file=none
+  fi
+
+  zombie "1: debug_path_to_source_file=$debug_path_to_source_file"
 
 #     && $debug_immediate == f \
   if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
@@ -292,9 +301,10 @@ debug_trap() {
 
   debug_last_location="$debug_path_to_source_file $debug_line_num"
 
-  if [ $debug_highlight == t ]; then
+  if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
 
     debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
+    zombie "2: debug_path_to_source_file=$debug_path_to_source_file"
     local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
     if [ ! -f "$highlighted_source" ]; then
       mkdir -p "${highlighted_source%/*}"
@@ -302,11 +312,12 @@ debug_trap() {
       cat "$debug_path_to_source_file" | source-highlight -s bash -f esc >"$highlighted_source"
     fi
     debug_path_to_source_file=$highlighted_source
+    zombie "3: debug_path_to_source_file=$debug_path_to_source_file"
 
   fi
 
   local backlog=
-  if [[ "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
+  if [[ $debug_path_to_source_file != none && "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
     local start_line=$((debug_prev_line+1))
     local end_line=$((debug_line_num-1))
     backlog=$(sed -n "$start_line,${end_line}p;${end_line}q" "$debug_path_to_source_file")
@@ -360,7 +371,8 @@ debug_trap() {
   local display_command=$debug_command
   local raw_display_command=$display_command
   if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] \
-     && [[ $debug_current_function != none ]]; then
+     && [[ $debug_current_function != none ]] \
+     && [[ $debug_path_to_source_file != none ]]; then
     display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
     raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
   fi
@@ -374,10 +386,13 @@ debug_trap() {
 
     # echo >&$fd_original_err
 
-    local current_source_line_without_comment=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file" \
-      | sed -E 's/^ *(.*) *$/\1/' \
-      | sed -E 's/#.*//'
-      )
+    local current_source_line_without_comment=none
+    if [[ $debug_path_to_source_file != none ]]; then
+      current_source_line_without_comment=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file" \
+        | sed -E 's/^ *(.*) *$/\1/' \
+        | sed -E 's/#.*//'
+        )
+    fi
     if [[ $debug_follow_source == t && "$current_source_line_without_comment" ]]; then
       if [[ $no_follow_once == t ]]; then
         no_follow_once=f
@@ -456,13 +471,17 @@ debug_trap() {
         debug_save_state
         ;;
       c)
-        echo >&$fd_original_err
-        echo >&$fd_original_err
-        let debug_list_offset=$((-debug_list_window/2+1))
-        debug_display_source
-        debug_list_dir=forwards
-        let debug_list_offset+=$((debug_list_window))
-        no_follow_once=t
+        if [[ $debug_path_to_source_file == none ]]; then
+          echo "# Source not available" >&$fd_original_err
+        else
+          echo >&$fd_original_err
+          echo >&$fd_original_err
+          let debug_list_offset=$((-debug_list_window/2+1))
+          debug_display_source
+          debug_list_dir=forwards
+          let debug_list_offset+=$((debug_list_window))
+          no_follow_once=t
+        fi
         ;;
       d)
         echo >&$fd_original_err
@@ -552,6 +571,7 @@ debug_trap() {
         if [[ $debug_highlight == t ]]; then
           echo "# Syntax highlighting is now off" >&$fd_original_err
           debug_path_to_source_file=$raw_debug_path_to_source_file
+          zombie "4: debug_path_to_source_file=$debug_path_to_source_file"
           debug_highlight=f
         else
           echo "# Syntax highlighting is now on" >&$fd_original_err
@@ -595,27 +615,35 @@ debug_trap() {
         debug_stepping=t
         ;;
       l)
-        if [[ $debug_list_dir != none ]]; then
-          echo -n "$CLEAR_LINE" >&$fd_original_err
-          if [[ "$debug_watch" ]]; then
-            echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
+        if [[ $debug_path_to_source_file == none ]]; then
+          echo "# Source not available" >&$fd_original_err
+        else
+          if [[ $debug_list_dir != none ]]; then
+            echo -n "$CLEAR_LINE" >&$fd_original_err
+            if [[ "$debug_watch" ]]; then
+              echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
+            fi
           fi
-        fi
 
-        [[ $debug_list_dir == none ]] && echo >&$fd_original_err
-        [[ $debug_list_dir == backwards ]] && let debug_list_offset+=$((debug_list_window))
-        debug_display_source
-        let debug_list_offset+=$((debug_list_window))
-        debug_list_dir=forwards
-        no_follow_once=t
+          [[ $debug_list_dir == none ]] && echo >&$fd_original_err
+          [[ $debug_list_dir == backwards ]] && let debug_list_offset+=$((debug_list_window))
+          debug_display_source
+          let debug_list_offset+=$((debug_list_window))
+          debug_list_dir=forwards
+          no_follow_once=t
+        fi
         ;;
       L)
-        echo -n "$CLEAR_SCREEN" >&$fd_original_err
-        [[ $debug_list_dir == forwards ]] && let debug_list_offset-=$((debug_list_window))
-        let debug_list_offset-=$((debug_list_window))
-        debug_display_source
-        debug_list_dir=backwards
-        no_follow_once=t
+        if [[ $debug_path_to_source_file == none ]]; then
+          echo "# Source not available" >&$fd_original_err
+        else
+          echo -n "$CLEAR_SCREEN" >&$fd_original_err
+          [[ $debug_list_dir == forwards ]] && let debug_list_offset-=$((debug_list_window))
+          let debug_list_offset-=$((debug_list_window))
+          debug_display_source
+          debug_list_dir=backwards
+          no_follow_once=t
+        fi
         ;;
       n)
         echo "# Stepping over" >&$fd_original_err
@@ -1001,7 +1029,7 @@ fi
 echo "Raw call stack:" >&$fd_original_err
 for ((n = count - 1; n >= start_frame; n--)) ; do
   let p=n-1
-  echo "  ${BASH_SOURCE[$n]} ${FUNCNAME[$n]} ${BASH_LINENO[$p]}" >&$fd_original_err
+  echo "  ${BASH_SOURCE[$n]:-(no source)} ${FUNCNAME[$n]:-(no func)} ${BASH_LINENO[$p]:-(no line)}" >&$fd_original_err
 done
 return 0
 }
@@ -1017,6 +1045,9 @@ return 0
 
 debug_start() {
 parallel_execution=${p_par:-f}
+if [[ ! -v debugging ]]; then
+  init_debugger || return 1
+fi
 if [[ $debugging == f ]]; then
   export debugging=t
   export debug
@@ -1082,8 +1113,8 @@ if [[ $debugging == f ]]; then
     if [[ "$debug_var" ]]; then
       set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
     fi
-    # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
-    debug_trap "${BASH_SOURCE[0]}" "${LINENO[0]}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
+    # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]:-}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
+    debug_trap "${BASH_SOURCE[0]:-none}" "${LINENO[0]:-none}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
     if [[ "$debug_var" ]]; then
       set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
     fi
@@ -1109,6 +1140,8 @@ else
   debug_immediate=t
 fi
 }
+
+alias debug='debug_start;'
 
 debug_ignore_remove() {
 local remove_functions="$*"
@@ -1224,5 +1257,11 @@ init_debugger() {
   debug_setup
 
   return 0
+}
+
+# used for temporary logging to debug issues. Uses of this should be removed before
+#   committing changes. 
+zombie() {
+  echo "$*" >&$fd_original_trace
 }
 
