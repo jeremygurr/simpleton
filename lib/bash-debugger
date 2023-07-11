@@ -108,8 +108,6 @@ debug_trap() {
     debug_path_to_source_file=none
   fi
 
-  zombie "1: debug_path_to_source_file=$debug_path_to_source_file"
-
 #     && $debug_immediate == f \
   if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
@@ -304,7 +302,6 @@ debug_trap() {
   if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
 
     debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
-    zombie "2: debug_path_to_source_file=$debug_path_to_source_file"
     local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
     if [ ! -f "$highlighted_source" ]; then
       mkdir -p "${highlighted_source%/*}"
@@ -312,7 +309,6 @@ debug_trap() {
       cat "$debug_path_to_source_file" | source-highlight -s bash -f esc >"$highlighted_source"
     fi
     debug_path_to_source_file=$highlighted_source
-    zombie "3: debug_path_to_source_file=$debug_path_to_source_file"
 
   fi
 
@@ -571,7 +567,6 @@ debug_trap() {
         if [[ $debug_highlight == t ]]; then
           echo "# Syntax highlighting is now off" >&$fd_original_err
           debug_path_to_source_file=$raw_debug_path_to_source_file
-          zombie "4: debug_path_to_source_file=$debug_path_to_source_file"
           debug_highlight=f
         else
           echo "# Syntax highlighting is now on" >&$fd_original_err
@@ -708,12 +703,18 @@ debug_trap() {
         ;;
       q) 
         echo "# Quitting (debug state: $debug_state_file)" >&$fd_original_err
-        debug_exit=t
         if [[ -f "$debug_out_path" ]]; then
           rm "$debug_out_path"
         fi
         force_save=t debug_save_state
-        exit 1
+        if (( ${#FUNCNAME[*]} > 1 )); then
+          debug_exit=t
+          exit 1
+        else
+          trap - DEBUG
+          [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
+          debug_r=2
+        fi
         ;;
       r)
         echo "# Rewinding..." >&$fd_original_err
@@ -1255,8 +1256,6 @@ init_debugger() {
   COLUMNS=${COLUMNS:-120}
 
   debug_setup
-
-  return 0
 }
 
 # used for temporary logging to debug issues. Uses of this should be removed before
