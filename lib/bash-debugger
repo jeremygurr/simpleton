@@ -37,8 +37,8 @@ CLEAR_SCREEN=$'\033[2J\r\033[H'
    CURSOR_UP=$'\033[1A'
      REVERSE=$'\033[7m'
 
-side_bug() {
-  echo "$*" >>$side_bug_file
+side_log() {
+  echo "$*" >>$side_log_file
 }
 
 debug_expansion_clean() {
@@ -76,7 +76,10 @@ debug_display_source() {
   if [[ "$debug_path_to_source_file" == none ]]; then
     return 0
   fi
+  side_log "debug_display_source()"
+  side_log "  debug_list_offset=$debug_list_offset debug_line_num=$debug_line_num"
   local debug_start_line=$((debug_list_offset+debug_line_num))
+  side_log "  debug_start_line=$debug_start_line"
   if [[ $debug_start_line -lt 1 ]]; then
     let 'debug_list_offset += -debug_start_line + 1'
     debug_start_line=1
@@ -103,6 +106,13 @@ debug_trap() {
     debug_current_function=$3 \
     debug_command=$4 \
     debug_current_depth=${#FUNCNAME[*]}
+
+  side_log "debug_trap()"
+  side_log "  debug_path_to_source_file=$debug_path_to_source_file"
+  side_log "  debug_line_num=$debug_line_num"
+  side_log "  debug_current_function=$debug_current_function"
+  side_log "  debug_command=$debug_command"
+  side_log "  debug_current_depth=$debug_current_depth"
 
   if [[ $debug_path_to_source_file == /dev/fd/* ]]; then
     debug_path_to_source_file=none
@@ -143,7 +153,7 @@ debug_trap() {
 
   # if code inside the debug trap is changed, you may need to adjust this offset to ensure the code displayed in the debugger lines up with what is actually being executed.
   # the number being subtracted is the number of source lines in the trap which are executed before this function is called
-  let debug_line_num-=16 || true
+  let debug_line_num-=17 || true
 
   local line_part=$debug_line file_part=
   if [[ "$debug_line" ]]; then
@@ -1145,8 +1155,8 @@ if [[ $debugging == f ]]; then
       if [[ "$debug_var" ]]; then
         set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
       fi
-      # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]:-}:$((BASH_LINENO[0]-15)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
-      debug_trap "${BASH_SOURCE[0]:-none}" "${BASH_LINENO[0]:-none}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
+      # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]:-}:$((LINENO-15)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
+      debug_trap "${BASH_SOURCE[0]:-none}" "${LINENO:-none}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
       if [[ "$debug_var" ]]; then
         set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
       fi
@@ -1287,10 +1297,10 @@ init_debugger() {
   debug_id_current=0
   debugger_available=t
 
-  rm $tmp_folder/debug-* $tmp_folder/side-bug-* &>/dev/null || true
+  rm $tmp_folder/debug-* $tmp_folder/side-log-* &>/dev/null || true
 
   # used to debug complex debugger internal issues
-  side_bug_file=$tmp_folder/side-bug-$$
+  side_log_file=$tmp_folder/side-log-$$
 
   COLUMNS=${COLUMNS:-120}
 
