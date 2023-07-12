@@ -3,7 +3,7 @@
 type -t bash_lib_loaded >/dev/null && return 0
 bash_lib_loaded=t
 
-set -ue +H
+set -ue +Hm 
 shopt -s expand_aliases   # make sure aliases are expanded even for non-interactive scripts
 shopt -s extglob
 
@@ -15,6 +15,12 @@ if [[ ! -v fd_original_in ]]; then
   exec {fd_original_err}>&2
   exec {fd_original_trace}>&${fd_trace:-2}
 fi
+
+# used for temporary logging to debug issues. Uses of this should be removed before
+#   committing changes. 
+zombie() {
+  echo "$*" >&$fd_original_trace
+}
 
 # some required defaults
 export tmp_folder="${tmp_folder:-/tmp}"
@@ -90,17 +96,6 @@ fi
 local path=$1; shift
 find -L "$path" -mindepth 1 -maxdepth 1 "$@"
 }
-
-# make sure we clean up after ourselves whether we've launched a background job or allocated resources
-# this needs to be run again whenever forking to a subprocess
-setup_exit_trap() {
-trap '
-  trap - DEBUG ERR EXIT &>/dev/null
-  eval "${cleanup_on_exit:-}" &>/dev/null || true;
-  ' EXIT
-  # { kill $(jobs -p); } 2>/dev/null || true; 
-}
-setup_exit_trap
 
 NL=$'\n'
 TAB=$'\t'
@@ -767,4 +762,39 @@ for ((n = count - 1; n >= start_frame; n--)) ; do
 done
 return 0
 }
+
+show_array() {
+local -n array=$1
+if [[ "${array:-}" ]]; then
+  local i size=${#array[*]}
+  echo "size=$size" >&$fd_original_err
+  for ((i=0; i<size; i++)); do
+    echo "$i: ${array[$i]}" >&$fd_original_err
+  done
+fi
+}
+
+# make sure we clean up after ourselves whether we've launched a background job or allocated resources
+# this needs to be run again whenever forking to a subprocess
+setup_exit_trap() {
+trap '
+  zombie "EXIT $BASH_COMMAND"
+  trap - DEBUG ERR EXIT RETURN QUIT &>/dev/null
+  set +TeuExvm
+  eval "${cleanup_on_exit:-}" &>/dev/null
+  ' EXIT
+  # { kill $(jobs -p); } 2>/dev/null || true; 
+trap '
+  zombie "ERR $BASH_COMMAND"
+  ' ERR
+trap '
+  zombie "QUIT $BASH_COMMAND"
+  ' QUIT
+# trap '
+#   zombie "RETURN $BASH_COMMAND"
+#   f=( "${FUNCNAME[@]:1}" )
+#   show_array f
+#   ' RETURN
+}
+setup_exit_trap
 

@@ -295,7 +295,7 @@ debug_trap() {
     return 0
   fi
 
-  debug_return=f
+  debug_return=${debug_return:-f}
 
   local debug_r=-1
 
@@ -459,7 +459,7 @@ debug_trap() {
       a)
         echo >&$fd_original_err
         read -e -p "Name of array variable: " debug_array <&$fd_original_in >&$fd_original_err
-        eval "show_array \"\${$debug_array[@]}\""
+        show_array $debug_array
         no_follow_once=t
         ;;
       C)
@@ -711,19 +711,34 @@ debug_trap() {
           rm "$debug_out_path"
         fi
         force_save=t debug_save_state
-        if [[ $- != *i* ]]; then
+        # if [[ $- != *i* ]]; then
           # current shell is not interactive, so exit normally
           debug_exit=t
+          debug_save_state
           exit 0
-        else
-          # current shell is interactive, which means this function was 
-          #   executed inline, so we don't want to exit or it will close
-          #   the entire interactive shell
-          trap 'set_return_code 1' DEBUG
-          [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
-          debug_r=1
-          debug_return=t
-        fi
+        # else
+        #   # current shell is interactive, which means this function was 
+        #   #   executed inline, so we don't want to exit or it will close
+        #   #   the entire interactive shell
+        #   [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
+        #   set -T
+        #   trap '
+        #     zombie "DEBUG ${FUNCNAME[0]:-} ${FUNCNAME[1]:-}"
+        #     # if (( ${#FUNCNAME[*]} > 0 )); then
+        #     #   set_return_code 1
+        #     #   zombie "Skipping: ${BASH_COMMAND}"
+        #     # else
+        #     #   zombie "Executing: ${BASH_COMMAND}"
+        #     # fi
+        #     ' DEBUG
+        #   # trap - DEBUG
+        #   trap '
+        #     zombie "RETURN $BASH_COMMAND"
+        #     ' RETURN
+        #   debug_r=1
+        #   debug_return=t
+        #   debug_save_state
+        # fi
         ;;
       r)
         echo "# Rewinding..." >&$fd_original_err
@@ -1017,7 +1032,7 @@ reserve_tmp_file() {
 }
 
 show_array() {
-local array=( "$@" )
+local -n array=$1
 if [[ "${array:-}" ]]; then
   local i size=${#array[*]}
   echo "size=$size" >&$fd_original_err
@@ -1117,6 +1132,7 @@ if [[ $debugging == f ]]; then
   trap '
     debug_saved_shell_options=$-
     set +xvT
+    # zombie "DEBUG debug_return=$debug_return $BASH_COMMAND"
     if [[ $debug_return == t ]]; then
       debug_rc=1
     else
@@ -1129,8 +1145,8 @@ if [[ $debugging == f ]]; then
       if [[ "$debug_var" ]]; then
         set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
       fi
-      # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]:-}:$((LINENO[0]-10)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
-      debug_trap "${BASH_SOURCE[0]:-none}" "${LINENO[0]:-none}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
+      # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]:-}:$((BASH_LINENO[0]-15)) ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
+      debug_trap "${BASH_SOURCE[0]:-none}" "${BASH_LINENO[0]:-none}" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
       if [[ "$debug_var" ]]; then
         set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
       fi
@@ -1151,9 +1167,11 @@ if [[ $debugging == f ]]; then
       BASH_REMATCH=( "${debug_rematch[@]}" )
       set +e # so returning 1 does not cause failure
       if [[ $debug_return == t ]]; then
+        # zombie "debug_return == t at end of DEBUG trap"
         tracing=f
-        set +xvT
-        # return $debug_rc &>/dev/null
+        set +euExvm
+        # trap - DEBUG ERR EXIT &>/dev/null
+        return $debug_rc &>/dev/null
       fi
     fi
     set_return_code $debug_rc
@@ -1163,7 +1181,7 @@ else
 fi
 }
 
-alias debug='debug_start;'
+alias debug='debug_start &&'
 
 debug_ignore_remove() {
 local remove_functions="$*"
