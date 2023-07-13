@@ -1,0 +1,142 @@
+#!/bin/bash
+
+# default for tracing messages is to go to stderr, but that can easily be overridden
+exec {fd_trace}>&2
+
+set -ue
+shopt -s expand_aliases      # make sure aliases are expanded even for non-interactive scripts
+shopt -s extglob
+
+umask 0077  # to make created files readable only by the user by default
+
+parameters_to_env() {
+local term OIFS k v
+real_params=( )
+for term; do
+  if [[ "$term" =~ ^([a-zA-Z0-9_]+)=(.*)$ ]]; then
+    k=${BASH_REMATCH[1]}
+    v=${BASH_REMATCH[2]}
+    v=${v//\'/\'\\\'\'}
+    if [[ "$v" == \? ]]; then
+      read -p "$k=" -rs v || return 1
+      echo '************'
+    fi
+    eval "$k='$v'"
+    eval "p_$k='$v'"
+  else
+    real_params+=( "$term" )
+  fi
+done
+
+if [ "${real_params:-}" ]; then
+  set "${real_params[@]}"
+fi
+}
+
+parameters_to_env "$@"
+
+# usage: required_function {function(s) to check...}
+# fails if the function doesn't exist
+required_function() {
+  local i
+  for i ; do
+    local tempStatus=`type -t $i &>/dev/null && echo true`
+    if [ -z "$tempStatus" ]; then
+      echo "Missing function: $i" >&2
+      exit 1
+    fi
+  done
+eval "$1=\${$1:-$v}"
+}
+
+# usage: optional_var {variable} {default}
+# fails if any variable doesn't exist
+optional_var() {
+  local v="$2"
+  v="${v//\"/\\\"}"
+  eval "export $1=\${$1:-$v}"
+}
+
+# usage: require_var {variable(s) to check...}
+# fails if any variable doesn't exist
+require_var() {
+  local i
+  for i; do
+    [[ -v $i ]] || {
+      echo "Required variable is not defined: $i" >&2
+      if type -t stack_trace &>/dev/null; then
+        stack_trace
+      fi
+      exit 1
+    }
+    #eval "export $i"
+  done
+}
+
+# usage: require_var {variable(s) to check...}
+# fails if none of the variables exist
+require_var_any() {
+  local i found inputs
+  for i ; do
+    inputs="$inputs $i"
+    declare -p $i &>/dev/null && found=t
+    #eval "export $i"
+  done
+  if [ ! "${found:-}" ]; then
+    echo "Missing required var. At least one of these must be defined:$inputs" >&2
+    exit 1
+  fi
+  return 0
+}
+
+# usage: require_var_or_ask {var name} {question if missing}
+require_var_or_ask() {
+  local v new_value var_name="$1"
+  shift
+  local description="$1"
+
+  v=`eval echo "$"$var_name`
+  while true; do
+    if [ -z "$v" ]; then
+      v=`eval echo "$"{#$var_name[*]}`
+      if [ "$v" == "0" ]; then
+        IFS= read -ep "${description}? ${var_name}=" new_value
+        if [ "$new_value" ]; then
+          eval "var_name=\"${new_value}\""
+          break
+        else
+          echo "You must enter a valid value to continue."
+        fi
+      fi
+    else
+      break
+    fi
+  done
+}
+
+# usage: require_command {command_name} [{hint}]
+require_command() {
+  local command_name=$1; shift
+  local hint=$1
+
+  if ! which $command_name &>/dev/null; then
+    echo "Couldn't find required command $command_name on your path." >&2
+    [ "$hint" ] && echo "Possible solution: $hint" >&2
+    exit 1
+  fi
+
+  return 0
+}
+
+# Make sure that Control-C exits this script, even if running a subcommand which doesn't handle Control-C properly.
+trap '
+  trap - INT # restore default INT handler
+  kill -s INT "$$"
+' INT
+
+# increase tracing when control-T is used
+trap '
+  let trace+=5
+  echo "trace=$trace" >&2
+' HUP
+

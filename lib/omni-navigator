@@ -13,11 +13,11 @@ init_omni_navigator() {
 }
 
 omni_navigator() (
-  local cursor_a_job_id=${cursor_a_job_id:-} \
-    cursor_a_fork_id=${cursor_a_fork_id:-} \
-    cursor_a_log_pos=${cursor_a_log_pos:-} \
-    cursor_a_all_forks_log=${cursor_a_all_forks_log:-} \
-    cursor_a_log_file=${cursor_a_log_file:-} 
+  local cursor_a_job_id=${cursor_a_job_id:-${cursor_job_id:-}} \
+    cursor_a_fork_id=${cursor_a_fork_id:-${cursor_fork_id:-}} \
+    cursor_a_log_pos=${cursor_a_log_pos:-${cursor_log_pos:-}} \
+    cursor_a_all_forks_log=${cursor_a_all_forks_log:-${cursor_all_forks_log:-}} \
+    cursor_a_log_file=${cursor_a_log_file:-${cursor_log_file:-}} 
 
   begin_function_flat
     begin_loop
@@ -34,26 +34,41 @@ omni_navigator() (
 )
 
 update_log_cursor() {
+  local cursor=${cursor:-a}
+  local -n \
+    cursor_log_file=cursor_${cursor}_log_file \
+    cursor_all_forks_log=cursor_${cursor}_all_forks_log \
+    cursor_fork_id=cursor_${cursor}_fork_id \
+    cursor_log_pos=cursor_${cursor}_log_pos \
+    cursor_array_index=cursor_${cursor}_array_index \
+    cursor_array=cursor_${cursor}_array
+
   begin_function_flat
 
-    if [[ ! "$cursor_a_log_file" ]]; then
-      if [[ "$cursor_a_all_forks_log" ]]; then
-        if [[ "$cursor_a_fork_id" ]]; then
-          cursor_a_log_file=$(look $cursor_a_fork_id $cursor_a_all_forks_log)
+    if [[ ! "$cursor_log_file" ]]; then
+      if [[ "$cursor_all_forks_log" ]]; then
+        if [[ "$cursor_fork_id" ]]; then
+          cursor_log_file=$(look $cursor_fork_id $cursor_all_forks_log)
         fi
       fi
     fi
 
-    if [[ ! "$cursor_a_log_file" ]]; then
+    if [[ ! "$cursor_log_file" ]]; then
       fatal "Can't determine log file. Either pass in cursor_a_log_file explicitly, or give the fork id and all forks log."
       fail1
     fi
 
-    if [[ ! -v log_array ]]; then
-      mapfile log_array < <(cat $cursor_a_log_file) || fail
+    if [[ ! "$cursor_fork_id" ]]; then
+      cursor_fork_id=${cursor_log_file%.olog}
+      cursor_fork_id=${cursor_fork_id##*-}
     fi
 
-    cursor_a_array_index=0
+    if [[ ! -v omni_log_array_$cursor_fork_id ]]; then
+      mapfile omni_log_array_$cursor_fork_id < <(cat $cursor_log_file) || fail
+      declare -n cursor_array=omni_log_array_$cursor_fork_id
+    fi
+
+    cursor_array_index=0
     local i found=f array_size=${#log_array[*]} entries line
     begin_for ((i=0; i < array_size; i++)); doo
       line=${log_array[$i]}
@@ -68,8 +83,8 @@ update_log_cursor() {
             fork_id=${log_id%:*}
           fi
         fi
-        cursor_a_fork_id=$fork_id
-        if [[ $log_pos -ge $cursor_a_log_pos ]]; then
+        cursor_fork_id=$fork_id
+        if [[ $log_pos -ge $cursor_log_pos ]]; then
           found=t
           break
         fi
@@ -77,11 +92,11 @@ update_log_cursor() {
     end_for
 
     if [[ $found == t ]]; then
-      cursor_a_array_index=$i
+      cursor_array_index=$i
     fi
 
-    if [[ "$cursor_a_fork_id" ]]; then
-      declare -n log_array=omni_log_array_a_$cursor_a_fork_id
+    if [[ "$cursor_fork_id" ]]; then
+      declare -n log_array=omni_log_array_a_$cursor_fork_id
     else
       fatal "Could not figure out fork id"
       fail1
