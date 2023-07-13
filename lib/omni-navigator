@@ -18,7 +18,6 @@ omni_navigator() (
     cursor_a_log_pos=${cursor_a_log_pos:-} \
     cursor_a_all_forks_log=${cursor_a_all_forks_log:-} \
     cursor_a_log_file=${cursor_a_log_file:-} 
-  local -n log_array=omni_log_array_a_$cursor_fork_id
 
   begin_function_flat
     begin_loop
@@ -36,6 +35,7 @@ omni_navigator() (
 
 update_log_cursor() {
   begin_function_flat
+
     if [[ ! "$cursor_a_log_file" ]]; then
       if [[ "$cursor_a_all_forks_log" ]]; then
         if [[ "$cursor_a_fork_id" ]]; then
@@ -43,13 +43,16 @@ update_log_cursor() {
         fi
       fi
     fi
+
     if [[ ! "$cursor_a_log_file" ]]; then
       fatal "Can't determine log file. Either pass in cursor_a_log_file explicitly, or give the fork id and all forks log."
       fail1
     fi
+
     if [[ ! -v log_array ]]; then
       mapfile log_array < <(cat $cursor_a_log_file) || fail
     fi
+
     cursor_a_array_index=0
     local i found=f array_size=${#log_array[*]} entries line
     begin_for ((i=0; i < array_size; i++)); doo
@@ -58,15 +61,32 @@ update_log_cursor() {
         local ts pid log_id depth level action function
         entries=${line#= }
         eval "$entries" || fail
-        if [[ $log_id -ge $cursor_a_log_pos ]]; then
+        local log_pos fork_id 
+        if [[ "${log_id:-}" ]]; then
+          log_pos=${log_id#*:}
+          if [[ ! "${fork_id:-}" ]]; then
+            fork_id=${log_id%:*}
+          fi
+        fi
+        cursor_a_fork_id=$fork_id
+        if [[ $log_pos -ge $cursor_a_log_pos ]]; then
           found=t
           break
         fi
       fi
     end_for
+
     if [[ $found == t ]]; then
       cursor_a_array_index=$i
     fi
+
+    if [[ "$cursor_a_fork_id" ]]; then
+      declare -n log_array=omni_log_array_a_$cursor_a_fork_id
+    else
+      fatal "Could not figure out fork id"
+      fail1
+    fi
+
   end_function_flat
   handle_return
 }
