@@ -19,10 +19,19 @@ omni_navigator() (
     cursor_a_all_forks_log=${cursor_a_all_forks_log:-${cursor_all_forks_log:-}} \
     cursor_a_log_file=${cursor_a_log_file:-${cursor_log_file:-}} 
 
+  local cursor_a_array_index cursor_a_array
+
   begin_function_flat
+    if [[ -L "$cursor_a_log_file" ]]; then
+      cursor_a_log_file=$(realpath $cursor_a_log_file)
+    fi
     begin_loop
+      debug_start
+
       update_log_cursor || fail
-      local current_log_line=${log_array[$cursor_a_array_index]}
+      declare -n cursor_a_array=omni_log_array_$cursor_a_fork_id
+
+      local current_log_line=${cursor_a_array[$cursor_a_array_index]}
       local omni_list_offset=$(( -omni_list_window / 2 + 1 )) || true
       omni_show_log || fail
       local omni_list_dir=forwards
@@ -39,9 +48,10 @@ update_log_cursor() {
     cursor_log_file=cursor_${cursor}_log_file \
     cursor_all_forks_log=cursor_${cursor}_all_forks_log \
     cursor_fork_id=cursor_${cursor}_fork_id \
-    cursor_log_pos=cursor_${cursor}_log_pos \
-    cursor_array_index=cursor_${cursor}_array_index \
-    cursor_array=cursor_${cursor}_array
+    cursor_log_pos=cursor_${cursor}_log_pos 
+  declare -gn \
+    cursor_array_index=cursor_${cursor}_array_index 
+  declare -ga cursor_a_array cursor_array
 
   begin_function_flat
 
@@ -63,45 +73,51 @@ update_log_cursor() {
       cursor_fork_id=${cursor_fork_id##*-}
     fi
 
-    if [[ ! -v omni_log_array_$cursor_fork_id ]]; then
-      mapfile omni_log_array_$cursor_fork_id < <(cat $cursor_log_file) || fail
-      declare -n cursor_array=omni_log_array_$cursor_fork_id
-    fi
-
-    cursor_array_index=0
-    local i found=f array_size=${#log_array[*]} entries line
-    begin_for ((i=0; i < array_size; i++)); doo
-      line=${log_array[$i]}
-      if [[ "$line" == \=\ * ]]; then
-        local ts pid log_id depth level action function
-        entries=${line#= }
-        eval "$entries" || fail
-        local log_pos fork_id 
-        if [[ "${log_id:-}" ]]; then
-          log_pos=${log_id#*:}
-          if [[ ! "${fork_id:-}" ]]; then
-            fork_id=${log_id%:*}
-          fi
-        fi
-        cursor_fork_id=$fork_id
-        if [[ $log_pos -ge $cursor_log_pos ]]; then
-          found=t
-          break
-        fi
-      fi
-    end_for
-
-    if [[ $found == t ]]; then
-      cursor_array_index=$i
-    fi
-
-    if [[ "$cursor_fork_id" ]]; then
-      declare -n log_array=omni_log_array_a_$cursor_fork_id
-    else
-      fatal "Could not figure out fork id"
+    if [[ ! "$cursor_fork_id" =~ ^[0-9]+$ ]]; then
+      fatal "Could not figure out fork id. Got [$cursor_fork_id]"
+      fatal "Maybe log file doesn't comply with convention: {path}/{log}-{fork_id}.olog"
       fail1
     fi
 
+    if [[ ! -v omni_log_array_$cursor_fork_id ]]; then
+      eval "declare -ga omni_log_array_$cursor_fork_id"
+      mapfile omni_log_array_$cursor_fork_id < <(cat $cursor_log_file) || fail
+    fi
+    eval "declare -n cursor_${cursor}_array=omni_log_array_$cursor_fork_id"
+    declare -n cursor_array=cursor_${cursor}_array
+
+    cursor_array_index=0
+    if (( $cursor_log_pos > 0 )); then
+
+      local i found=f array_size=${#cursor_array[*]} entries line
+      begin_for ((i=0; i < array_size; i++)); doo
+        
+        line=${cursor_array[$i]}
+        if [[ "$line" == \=\ * ]]; then
+          local ts pid log_id depth level action function
+          entries=${line#= }
+          eval "$entries" || fail
+          local log_pos fork_id 
+          if [[ "${log_id:-}" ]]; then
+            log_pos=${log_id#*:}
+            fork_id=${log_id%:*}
+          fi
+          if [[ "$fork_id" && $fork_id != $cursor_fork_id ]]; then
+            warn "fork_id in log doesn't match fork id in log title: $fork_id != $cursor_fork_id"
+          fi
+          if [[ $log_pos -ge $cursor_log_pos ]]; then
+            found=t
+            break
+          fi
+        fi
+
+      end_for
+
+      if [[ $found == t ]]; then
+        cursor_array_index=$i
+      fi
+
+    fi
   end_function_flat
   handle_return
 }
