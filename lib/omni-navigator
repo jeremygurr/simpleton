@@ -3,7 +3,7 @@
 type -t omni_navigator_init >/dev/null && return 0
 
 omni_navigator_init() {
-  omni_list_window=${omni_list_window:-20}
+  omni_list_radius=${omni_list_radius:-20}
   if [[ ! -v fd_original_in ]]; then
     exec {fd_original_in}<&0
     exec {fd_original_out}>&1
@@ -15,9 +15,9 @@ omni_navigator_init() {
 omni_navigator() (
   local \
     cursor_a_log_file=${cursor_a_log_file:-${cursor_log_file:-${log_file:-}}} \
-    cursor_a_array=${cursor_a_array:-} \
-    cursor_a_index=${cursor_a_index:-${cursor_index:-${index:-0}}} \
-    cursor_a_fork_id
+    cursor_a_log_array=${cursor_a_log_array:-} \
+    cursor_a_log_array_index=${cursor_a_log_array_index:-${cursor_index:-${index:-0}}} \
+    cursor_a_log_file_id
 
   begin_function_flat
 
@@ -30,147 +30,139 @@ omni_navigator() (
       fail1
     fi
 
-    if [[ ! "${cursor_a_fork_id:-}" ]]; then
-      cursor_a_fork_id=${cursor_a_log_file%.olog}
-      cursor_a_fork_id=${cursor_a_fork_id##*-}
+    if [[ ! "${cursor_a_log_file_id:-}" ]]; then
+      cursor_a_log_file_id=${cursor_a_log_file%.olog}
+      cursor_a_log_file_id=${cursor_a_log_file_id##*-}
     fi
 
-    if [[ ! "$cursor_a_fork_id" =~ ^[0-9]+$ ]]; then
-      fatal "Could not figure out fork id. Got [$cursor_a_fork_id]"
-      fatal "Maybe log file doesn't comply with convention: {path}/{log}-{fork_id}.olog"
+    if [[ ! "$cursor_a_log_file_id" =~ ^[0-9]+_[0-9]+$ ]]; then
+      fatal "Could not figure out log file id. Got [$cursor_a_log_file_id]"
+      fatal "Maybe log file doesn't comply with convention: {path}/{log}-{job_id}_{fork_id}.olog"
       fail1
     fi
 
-    if [[ ! -v omni_log_array_$cursor_a_fork_id ]]; then
-      eval "declare -ga omni_log_array_$cursor_a_fork_id"
-      mapfile omni_log_array_$cursor_a_fork_id < <(cat $cursor_a_log_file) || fail
+    if [[ ! -v omni_log_array_$cursor_a_log_file_id ]]; then
+      omni_load_log_array $cursor_a_log_file_id
     fi
-    declare -n cursor_a_array=omni_log_array_$cursor_fork_id
+    declare -n cursor_a_log_array=omni_log_array_$cursor_log_file_id
     
     begin_loop
 
-      local current_log_line=${cursor_a_array[$cursor_a_array_index]}
-      local offset=$(( -omni_list_window / 2 + 1 )) || true
+      local current_log_line=${cursor_a_log_array[$cursor_a_log_array_index]}
+      local next_log_start=$cursor_a_log_array_index
+      omni_rewind_index next_log_start $omni_list_radius
       omni_show_log || fail
       local omni_list_dir=forwards
-      let omni_list_offset+=omni_list_window-1 || true
+      let omni_list_offset+=omni_list_radius-1 || true
       succeed
+
     end_loop
   end_function_flat
 
   handle_return
 )
 
-update_log_cursor() {
-  local cursor=${cursor:-a}
-  local -n \
-    cursor_log_file=cursor_${cursor}_log_file \
-    cursor_all_forks_log=cursor_${cursor}_all_forks_log \
-    cursor_fork_id=cursor_${cursor}_fork_id \
-    cursor_log_pos=cursor_${cursor}_log_pos 
-  declare -gn \
-    cursor_array_index=cursor_${cursor}_array_index 
-  declare -ga cursor_a_array cursor_array
-
-  begin_function_flat
-
-    if [[ ! "$cursor_log_file" ]]; then
-      if [[ "$cursor_all_forks_log" ]]; then
-        if [[ "$cursor_fork_id" ]]; then
-          cursor_log_file=$(look $cursor_fork_id $cursor_all_forks_log)
-        fi
-      fi
-    fi
-
-    if [[ ! -v omni_log_array_$cursor_fork_id ]]; then
-      eval "declare -ga omni_log_array_$cursor_fork_id"
-      mapfile omni_log_array_$cursor_fork_id < <(cat $cursor_log_file) || fail
-    fi
-    eval "declare -n cursor_${cursor}_array=omni_log_array_$cursor_fork_id"
-    declare -n cursor_array=cursor_${cursor}_array
-
-    if [[ ! "${cursor_array_index:-}" \
-       && "$cursor_log_pos" ]] \
-       && (( cursor_log_pos > 0 )); then
-
-      local i found=f array_size=${#cursor_array[*]} entries line
-      begin_for ((i=0; i < array_size; i++)); doo
-        
-        line=${cursor_array[$i]}
-        if [[ "$line" == \=\ * ]]; then
-          local ts pid log_id depth level action function
-          entries=${line#= }
-          eval "$entries" || fail
-          local log_pos fork_id 
-          if [[ "${log_id:-}" ]]; then
-            log_pos=${log_id#*:}
-            fork_id=${log_id%:*}
-          fi
-          if [[ "$fork_id" && $fork_id != $cursor_fork_id ]]; then
-            warn "fork_id in log doesn't match fork id in log title: $fork_id != $cursor_fork_id"
-          fi
-          if [[ $log_pos -ge $cursor_log_pos ]]; then
-            found=t
-            break
-          fi
-        fi
-
-      end_for
-
-      if [[ $found == t ]]; then
-        cursor_array_index=$i
-      fi
-
-    fi
-  end_function_flat
-  handle_return
-}
-
 omni_show_log() {
-  local offset=$offset \
+  local next_log_start=$next_log_start \
     to_show_index to_show_start to_show_end \
-    omni_list_window=$omni_list_window
+    omni_list_radius=$omni_list_radius
   local -a to_show
 
   begin_function_flat
 
-    local -n plane_map=omni_plane_map_$cursor_a_fork_id
-    local -r plane_id=${plane_map[$cursor_a_index]}
-    local -n plane=omni_plane_${cursor_a_fork_id}_${plane_id}
+    local -n plane_map=omni_plane_map_$cursor_a_log_file_id \
+      log_array=cursor_a_log_array
+    local log_array_index=$cursor_a_log_array_index
+    local -r plane_id=${plane_map[$log_array_index]} \
+      log_array_size=${#log_array[*]}
 
-    if (( offset < 0 ); then
-      (( to_show_start = 0 ))
-      (( to_show_index = -offset ))
-    else
-      (( to_show_start = offset ))
-      (( to_show_index = 0 ))
-    fi
-    (( to_show_end = to_show_start + omni_list_window ))
+    # search forwards
+    begin_for (( i = to_show_index + 1, j = log_array_index + 1;
+              i < to_show_end && log_array_index < log_array_size;
+              log_array_index++ )); doo
+      if (( plane_map[log_array_index] == plane_id )); then
+        to_show[$i]=$log_array_index
+        (( i++ ))
+      fi
+    end_for
 
-    omni_show_reversed_line || fail
-    local remaining_lines=$omni_list_window
+    # display lines until end
+    local remaining_lines=$(( omni_list_radius * 2 + 1 ))
     local found_line i
     begin_while (( remaining_lines-- > 0 )); doo
       found_line=f
-      begin_while (( i=omni_list_offset
-
+      begin_while (( i++ < log_array_size )); doo
+        if (( plane_map[i] == plane_id )); then
+          found_line=t
+          break
+        fi
+      end_while
+      if [[ $found_line == t ]]; then
+        omni_show_line $i || fail
+      else
+      fi
     end_while
   end_function_flat
   handle_return
 }
 
-omni_show_reversed_line() {
-  echo -n "$REVERSE" >&$fd_original_err
-  local processed_line
-  omni_get_processed_line "$current_log_line" || return 1
-  local -n line=processed_line
-  local pad_size line_length=${#line}
-  ((pad_size=COLUMNS-line_length))
-  echo -n "$line" >&$fd_original_err
-  printf %${pad_size}s >&$fd_original_err
-  echo "$RESET" >&$fd_original_err
+omni_rewind_index() {
+  local -n index=$1
+  local amount=$2 plane_id=$plane_id
+
+  # search backwards
+  local i rewound_count=0
+  for (( i = index;
+            i >= 0 && rewound_count < amount;
+            i-- )); do
+    if (( plane_map[i] == plane_id )); then
+      index=$i
+      (( rewound_count++ ))
+    fi
+  done
   return 0
 }
+
+omni_show_line() {
+  local index=$1
+
+  local reverse=f
+  if (( index == cursor_a_log_array_index )); then
+    reverse=t
+  fi
+
+  if [[ $reverse == t ]]; then
+    echo -n "$REVERSE" >&$fd_original_err
+  fi
+
+  local -n log_output_array=omni_log_output_array_$cursor_log_file_id
+  if [[ ! -v log_output_array ]]; then
+    fatal "Internal error: Missing log_output_array"
+    return 1
+  fi
+
+  local line=${log_output_array[$index]}
+
+  if [[ $reverse == t ]]; then
+    local pad_size line_length=${#line}
+    (( pad_size = COLUMNS - line_length ))
+    echo -n "$line" >&$fd_original_err
+    printf %${pad_size}s >&$fd_original_err
+    echo "$RESET" >&$fd_original_err
+  else
+    echo "$line" >&$fd_original_err
+  fi
+
+  return 0
+}
+
+omni_load_log_array() {
+      eval "declare -ga omni_log_array_$cursor_a_log_file_id"
+      mapfile omni_log_array_$cursor_a_log_file_id < <(cat $cursor_a_log_file) || fail
+}
+#  local processed_line
+#  omni_get_processed_line $index || return 1
+#  local -n line=processed_line
 
 omni_get_processed_line() {
   local line=$1 ts pid log_id depth level action function
