@@ -21,6 +21,7 @@ omni_navigator() (
 
   begin_function_flat
 
+    debug
     if [[ -L "$cursor_a_log_file" ]]; then
       cursor_a_log_file=$(realpath $cursor_a_log_file)
     fi
@@ -42,7 +43,7 @@ omni_navigator() (
     fi
 
     if [[ ! -v omni_log_array_$cursor_a_log_file_id ]]; then
-      omni_load_log_array $cursor_a_log_file_id
+      file=$cursor_a_log_file log_file_id=$cursor_a_log_file_id omni_load_log_array
     fi
     declare -n cursor_a_log_array=omni_log_array_$cursor_log_file_id
     
@@ -100,6 +101,7 @@ omni_show_log() {
       if [[ $found_line == t ]]; then
         omni_show_line $i || fail
       else
+        break
       fi
     end_while
   end_function_flat
@@ -135,13 +137,13 @@ omni_show_line() {
     echo -n "$REVERSE" >&$fd_original_err
   fi
 
-  local -n log_output_array=omni_log_output_array_$cursor_log_file_id
-  if [[ ! -v log_output_array ]]; then
-    fatal "Internal error: Missing log_output_array"
+  local -n output_array=omni_log_output_array_$cursor_log_file_id
+  if [[ ! -v output_array ]]; then
+    fatal "Internal error: Missing output_array"
     return 1
   fi
 
-  local line=${log_output_array[$index]}
+  local line=${output_array[$index]}
 
   if [[ $reverse == t ]]; then
     local pad_size line_length=${#line}
@@ -157,12 +159,55 @@ omni_show_line() {
 }
 
 omni_load_log_array() {
-      eval "declare -ga omni_log_array_$cursor_a_log_file_id"
-      mapfile omni_log_array_$cursor_a_log_file_id < <(cat $cursor_a_log_file) || fail
+  local file=$file log_file_id=$log_file_id
+
+  begin_function_flat
+
+    eval "declare -ga omni_log_array_$cursor_a_log_file_id"
+    local -n array=omni_log_array_$cursor_a_log_file_id
+    mapfile array < <(cat $cursor_a_log_file) || fail
+
+    eval "declare -ga omni_plane_map_$cursor_a_log_file_id"
+    local -n plane_map=omni_plane_map_$cursor_a_log_file_id \
+      output_array=omni_log_output_array_$cursor_a_log_file_id
+
+    local i array_size=${#array[*]} \
+      plane_stack next_plane_id=1 plane_id=0 \
+      processed_line line \
+      ts pid log_id depth level action function
+
+    begin_for (( i = 0; i < array_size; i++ )); doo
+
+      line=${array[$i]} action=none
+      if [[ "$line" == \=\ * ]]; then
+        entries=${line#= }
+        eval "$entries" || return 1
+        omni_get_processed_line $index || return 1
+      fi 
+
+      output_array[$i]=$processed_line
+      plane_map[$i]=$plane_id
+
+      case $action in
+        call)
+          plane_stack+=( $plane_id )
+          (( plane_id = next_plane_id++ ))
+        ;;
+        return\(*)
+          if (( ${#plane_stack[*]} > 0 )); then
+            (( plane_id = plane_stack[-1] ))
+            unset plane_stack[-1]
+          else
+            plane_id=0
+          fi
+        ;;
+      esac
+
+    end_for
+  
+  end_function_flat
+  handle_return
 }
-#  local processed_line
-#  omni_get_processed_line $index || return 1
-#  local -n line=processed_line
 
 omni_get_processed_line() {
   local line=$1 ts pid log_id depth level action function
