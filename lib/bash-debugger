@@ -1,12 +1,13 @@
 #!/bin/bash
 
-type -t init_debugger >/dev/null && return 0
+type -t debugger_init >/dev/null && return 0
+shopt -s expand_aliases   # make sure aliases are expanded even for non-interactive scripts
 
 ######################################################
 # BASH Debugger
 # At beginning of script you wish to debug: 
 #   source this file. example: source bash-debugger
-#   execute init_debugger function.
+#   execute debugger_init function.
 #   execute debug_start in the code where you wish to begin debugging.
 # press '?' for list of commands while debugging
 ######################################################
@@ -1082,7 +1083,7 @@ return 0
 debug_start() {
 parallel_execution=${p_par:-f}
 if [[ ! -v debugging ]]; then
-  init_debugger || return 1
+  debugger_init || return 1
 fi
 if [[ $debugging == f ]]; then
   export debugging=t
@@ -1191,7 +1192,27 @@ else
 fi
 }
 
-alias debug='debug_start &&'
+alias debug='debug_start; '
+
+debug_shell() {
+  local c
+  echo "Debug shell started. " >&$fd_original_err
+  echo "Use q to exit debug shell and resume execution of the script. " >&$fd_original_err
+  echo "Use 'exit' to abort all further code execution. " >&$fd_original_err
+  echo "You have access to the full execution environment (variables and functions). " >&$fd_original_err
+  while true; do
+    read -e -p "debug $ " c <&$fd_original_in
+    case $c in
+      q|quit)
+        echo "Leaving debug shell." >&$fd_original_err
+        break
+        ;;
+      *)
+        eval "$c" || { rc=$?; echo; echo "Command failed ($rc)"; }
+        ;;
+    esac
+  done
+}
 
 debug_ignore_remove() {
 local remove_functions="$*"
@@ -1285,7 +1306,7 @@ if [[ $debug != f \
 fi
 }
 
-init_debugger() {
+debugger_init() {
   # used by debugger, in case input or output is redirected from somewhere else during debugging
   exec {fd_original_in}<&0
   exec {fd_original_out}>&1
