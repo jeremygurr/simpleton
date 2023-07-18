@@ -21,8 +21,6 @@ omni_navigator() (
 
   begin_function_flat
 
-    debug_shell
-    debug
     if [[ -L "$cursor_a_log_file" ]]; then
       cursor_a_log_file=$(realpath $cursor_a_log_file)
     fi
@@ -35,16 +33,19 @@ omni_navigator() (
     if [[ ! "${cursor_a_log_file_id:-}" ]]; then
       cursor_a_log_file_id=${cursor_a_log_file%.olog}
       cursor_a_log_file_id=${cursor_a_log_file_id##*-}
+      cursor_a_log_file_id=${cursor_a_log_file_id//:/_}
     fi
 
-    if [[ ! "$cursor_a_log_file_id" =~ ^[0-9]+_[0-9]+$ ]]; then
+    if [[ ! "$cursor_a_log_file_id" =~ ^[0-9_]+$ ]]; then
       fatal "Could not figure out log file id. Got [$cursor_a_log_file_id]"
       fatal "Maybe log file doesn't comply with convention: {path}/{log}-{job_id}_{fork_id}.olog"
       fail1
     fi
 
     if [[ ! -v omni_log_array_$cursor_a_log_file_id ]]; then
-      file=$cursor_a_log_file log_file_id=$cursor_a_log_file_id omni_load_log_array
+      file=$cursor_a_log_file \
+        log_file_id=$cursor_a_log_file_id \
+        omni_load_log_array || fail
     fi
     declare -n cursor_a_log_array=omni_log_array_$cursor_log_file_id
     
@@ -168,6 +169,7 @@ omni_load_log_array() {
     local -n array=omni_log_array_$cursor_a_log_file_id
     mapfile array < <(cat $cursor_a_log_file) || fail
 
+    debug_start
     eval "declare -ga omni_plane_map_$cursor_a_log_file_id"
     local -n plane_map=omni_plane_map_$cursor_a_log_file_id \
       output_array=omni_log_output_array_$cursor_a_log_file_id
@@ -183,7 +185,10 @@ omni_load_log_array() {
       if [[ "$line" == \=\ * ]]; then
         entries=${line#= }
         eval "$entries" || return 1
-        omni_get_processed_line $index || return 1
+        omni_get_processed_line "$line" || {
+          fatal "Bad log line: $line"
+          return 1
+          }
       fi 
 
       output_array[$i]=$processed_line

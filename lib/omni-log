@@ -20,7 +20,7 @@ get_next_fork_id() {
   }
   local last_id=$(tail -n1 $fork_log | awk '{print $1}')
   let fork_id=last_id+1 || true
-  new_log_file=$base_log_file-$fork_id.olog
+  new_log_file=$base_log_file-${job_id}_$fork_id.olog
   echo "$fork_id $new_log_file" >>$fork_log || return 1
   fd_unlock
   return 0
@@ -28,15 +28,11 @@ get_next_fork_id() {
 
 omni_log_init() {
   local command="$*"  
-  # local exported_vars=$(export | grep '^declare -x [a-z]' | cut -d' ' -f3-)
-  # exported_vars=${exported_vars//$NL/ }
-  # command="$command $exported_vars"
   fork_log=${fork_log:-~/fork-log/$$}
   if [[ ! -d ${fork_log%/*} ]]; then
     mkdir ${fork_log%/*} || return 1
   fi
-  fork_id=0
-  # echo "$fork_id $command" >>$fork_log || return 1
+  job_id=0 fork_id=0
 
   if [[ "${debugger_available:-f}" == t ]]; then
     debug_at_log_id=
@@ -361,18 +357,21 @@ if [[ "${debug_id:-}" ]]; then
   to_log+=" debug_id=$debug_id_current"
 fi
 
-log_id=$fork_id:$log_pos
+log_id=${fork_id}_$log_pos
 to_log+=" log_id=$log_id depth=$log_depth_current level=$level"
 
+local quoted_value
 if [[ "$action" ]]; then
-  to_log+=" action=$action"
+  get_shell_quoted_value "$action"
+  to_log+=" action=$quoted_value"
 fi
 local function=${log_function:-${FUNCNAME[1]}}
 if [[ "${function:-}" ]]; then
   to_log+=" function=$function$new_vars"
 fi
 if [[ "$message" ]]; then
-  to_log+=" info=\"${message//\"/\\\"}\""
+  get_shell_quoted_value "$message"
+  to_log+=" info=$quoted_value"
 fi
 
 if [[ $log_to_file == t && "${log_file:-}" ]]; then
@@ -435,8 +434,8 @@ fi
 unpause_tee
 
 if [[ "$debug_at_log_id" ]]; then
-  local debug_at_fork_id=${debug_at_log_id%:*}
-  local debug_at_log_pos=${debug_at_log_id#*:}
+  local debug_at_fork_id=${debug_at_log_id%_*}
+  local debug_at_log_pos=${debug_at_log_id#*_}
   if [[ $fork_id == $debug_at_fork_id \
      && $log_pos -ge $debug_at_log_pos ]]; then
     debug_at_log_id=
