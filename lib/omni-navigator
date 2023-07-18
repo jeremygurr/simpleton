@@ -41,25 +41,63 @@ omni_navigator() (
       fail1
     fi
 
-    local log_array_var=omni_log_array_${cursor_a_log_file_id//:/_}
+    local log_file_token=${cursor_a_log_file_id//:/_}
+    local log_array_var=omni_log_array_$log_file_token
     if [[ ! -v $log_array_var ]]; then
       file=$cursor_a_log_file \
         log_file_id=$cursor_a_log_file_id \
         omni_load_log_array || fail
     fi
-    declare -n cursor_a_log_array=omni_log_array_$cursor_a_log_file_id
-    local -n plane_map=omni_plane_map_$cursor_a_log_file_id \
+    declare -n cursor_a_log_array=$log_array_var
+    local -n plane_map=omni_plane_map_$log_file_token \
       index=cursor_a_log_array_index \
-      output_array=omni_log_output_array_$cursor_a_log_file_id
+      output_array=omni_log_output_array_$log_file_token
     
-    begin_loop
+    local next_log_start=$index
+    local plane_id=${plane_map[$index]}
+    omni_offset_index next_log_start -$omni_list_radius || fail
 
-      local next_log_start=$index
-      local plane_id=${plane_map[$index]}
-      omni_offset_index next_log_start -$omni_list_radius || fail
-      omni_show_log || fail
+    local debug_r=-1 no_follow_once
+    begin_while [[ $debug_r == -1 ]]; doo
 
-    end_loop
+      if [[ ${no_follow_once:=f} == t ]]; then
+        no_follow_once=f
+      else
+        omni_show_log || fail
+      fi
+
+      echo -n "$NL>> " >&$fd_original_err
+      local debug_c
+      read -rs -n1 debug_c <&$fd_original_in
+
+      case "$debug_c" in
+        c)
+          echo "# Show context" >&$fd_original_err
+          next_log_start=$index
+          omni_offset_index next_log_start -$omni_list_radius || fail
+          omni_show_log || fail
+          no_follow_once=t
+          ;;
+        l)
+          echo -n "$CLEAR_LINE" >&$fd_original_err
+          omni_show_log || fail
+          no_follow_once=t
+          ;;
+        L)
+          echo -n "$CLEAR_SCREEN" >&$fd_original_err
+          omni_offset_index next_log_start $((-omni_list_radius*2)) || fail
+          omni_show_log || fail
+          no_follow_once=t
+          ;;
+        q)
+          echo "# Quitting" >&$fd_original_err
+          debug_r=0
+          ;;
+        *)
+          echo "${NL}Unknown command: $debug_c"
+          ;;
+      esac
+    end_while
   end_function_flat
 
   handle_return
