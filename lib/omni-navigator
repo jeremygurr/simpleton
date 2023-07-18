@@ -52,6 +52,7 @@ omni_navigator() (
     local -n plane_map=omni_plane_map_$log_file_token \
       index=cursor_a_log_array_index \
       output_array=omni_log_output_array_$log_file_token
+    local plane_map_size=${#plane_map[*]}
     
     local next_log_start=$index
     local plane_id=${plane_map[$index]}
@@ -73,12 +74,30 @@ omni_navigator() (
       case "$debug_c" in
         b)
           echo "# Step back" >&$fd_original_err
+          local p=$index
           omni_offset_index index -1 || fail
+          if [[ $p == $index ]]; then
+            (( index-- ))
+            if (( index < 0 )); then
+              index=0
+            fi
+            plane_id=${plane_map[$index]}
+          fi
           omni_show_context || fail
           no_follow_once=t
           ;;
         c)
           echo "# Show context" >&$fd_original_err
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
+        i)
+          echo "# Step in" >&$fd_original_err
+          (( index++ ))
+          if (( index >= plane_map_size )); then
+            (( index = plane_map_size - 1 ))
+          fi
+          plane_id=${plane_map[$index]}
           omni_show_context || fail
           no_follow_once=t
           ;;
@@ -96,7 +115,15 @@ omni_navigator() (
           ;;
         n)
           echo "# Step over" >&$fd_original_err
+          local p=$index
           omni_offset_index index 1 || fail
+          if [[ $p == $index ]]; then
+            (( index++ ))
+            if (( index >= plane_map_size )); then
+              (( index = plane_map_size - 1 ))
+            fi
+            plane_id=${plane_map[$index]}
+          fi
           omni_show_context || fail
           no_follow_once=t
           ;;
@@ -104,20 +131,15 @@ omni_navigator() (
           echo "# Quitting" >&$fd_original_err
           debug_r=0
           ;;
-        r)
-          echo "# Step back" >&$fd_original_err
-          omni_offset_index index 1 || fail
-          omni_show_context || fail
-          no_follow_once=t
-          ;;
         \?)
           echo >&$fd_original_err
           echo >&$fd_original_err
-          echo "b  back: go to the previous log line of the same depth" >&$fd_original_err
+          echo "b  back: go to the previous log line of the same depth or shallower" >&$fd_original_err
           echo "c  list a few lines of logs before and after current line" >&$fd_original_err
+          echo "i  step in: go to the next log line of the same depth or deeper" >&$fd_original_err
           echo "l  list next few log lines" >&$fd_original_err
           echo "L  list previous log lines" >&$fd_original_err
-          echo "n  next: (step over) go to the next log line of the same depth" >&$fd_original_err
+          echo "n  next: (step over) go to the next log line of the same depth or shallower" >&$fd_original_err
           echo "q  quit: leave the omni navigator" >&$fd_original_err
           no_follow_once=t
           ;;
@@ -175,10 +197,7 @@ omni_show_log() {
 #   plane_id plane_map
 omni_offset_index() {
   local -n current_index=$1
-  local amount=$2
-
-  # search backwards
-  local i adjusted=0 d=1
+  local amount=$2 i adjusted=0 d=1
 
   if (( amount < 0 )); then
     d=-1
@@ -186,8 +205,10 @@ omni_offset_index() {
   fi
 
   for (( i = current_index + d;
-            i >= 0 && adjusted < amount;
-            i += d )); do
+         i >= 0 
+         && adjusted < amount 
+         && i < plane_map_size;
+         i += d )); do
     if (( plane_map[i] == plane_id )); then
       current_index=$i
       (( adjusted++ ))
