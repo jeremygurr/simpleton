@@ -50,6 +50,7 @@ omni_navigator() (
     fi
     declare -n cursor_a_log_array=$log_array_var
     local -n plane_map=omni_plane_map_$log_file_token \
+      plane_depth_map=omni_plane_depth_map_$log_file_token \
       index=cursor_a_log_array_index \
       output_array=omni_log_output_array_$log_file_token
     local plane_map_size=${#plane_map[*]}
@@ -127,6 +128,19 @@ omni_navigator() (
           omni_show_context || fail
           no_follow_once=t
           ;;
+        o)
+          echo "# Step out" >&$fd_original_err
+          local i=$index base_depth=${plane_depth_map[$index]}
+          begin_while (( ++i < plane_map_size )); doo
+            if (( ${plane_depth_map[$i]} < base_depth )); then
+              index=$i
+              plane_id=${plane_map[$index]}
+              break
+            fi
+          end_while
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
         q)
           echo "# Quitting" >&$fd_original_err
           debug_r=0
@@ -140,6 +154,7 @@ omni_navigator() (
           echo "l  list next few log lines" >&$fd_original_err
           echo "L  list previous log lines" >&$fd_original_err
           echo "n  next: (step over) go to the next log line of the same depth or shallower" >&$fd_original_err
+          echo "o  out: (step out) go to the next log line that is shallower" >&$fd_original_err
           echo "q  quit: leave the omni navigator" >&$fd_original_err
           no_follow_once=t
           ;;
@@ -265,7 +280,9 @@ omni_load_log_array() {
     mapfile array < <(cat $file) || fail
 
     eval "declare -ga omni_plane_map_$log_file_id_var"
+    eval "declare -ga omni_plane_depth_map_$log_file_id_var"
     local -n plane_map=omni_plane_map_$log_file_id_var \
+      plane_depth_map=omni_plane_depth_map_$log_file_id_var \
       output_array=omni_log_output_array_$log_file_id_var
 
     local i array_size=${#array[*]} \
@@ -290,6 +307,11 @@ omni_load_log_array() {
       case $action in
         call)
           plane_map[$i]=$plane_id
+          if [[ -v plane_stack ]]; then
+            plane_depth_map[$i]=${#plane_stack[*]}
+          else
+            plane_depth_map[$i]=0
+          fi
           plane_stack+=( $plane_id )
           (( plane_id = next_plane_id++ ))
         ;;
@@ -301,13 +323,20 @@ omni_load_log_array() {
             else
               plane_id=0
             fi
+            plane_depth_map[$i]=${#plane_stack[*]}
           else
             plane_id=0
+            plane_depth_map[$i]=0
           fi
           plane_map[$i]=$plane_id
         ;;
         *)
           plane_map[$i]=$plane_id
+          if [[ -v plane_stack ]]; then
+            plane_depth_map[$i]=${#plane_stack[*]}
+          else
+            plane_depth_map[$i]=0
+          fi
         ;;
       esac
 
