@@ -47,13 +47,15 @@ omni_navigator() (
         log_file_id=$cursor_a_log_file_id \
         omni_load_log_array || fail
     fi
-    declare -n cursor_a_log_array=omni_log_array_$cursor_log_file_id
+    debug_start
+    declare -n cursor_a_log_array=omni_log_array_$cursor_a_log_file_id
+    local -n plane_map=omni_plane_map_$cursor_a_log_file_id
     
     begin_loop
 
-      local current_log_line=${cursor_a_log_array[$cursor_a_log_array_index]}
+      # local current_log_line=${cursor_a_log_array[$cursor_a_log_array_index]}
       local next_log_start=$cursor_a_log_array_index
-      omni_rewind_index next_log_start $omni_list_radius
+      omni_offset_index next_log_start -$omni_list_radius
       omni_show_log || fail
       local omni_list_dir=forwards
       let omni_list_offset+=omni_list_radius-1 || true
@@ -65,36 +67,22 @@ omni_navigator() (
   handle_return
 )
 
+# inputs: next_log_start omni_list_radius plane_map plane_id output_array
 omni_show_log() {
   local next_log_start=$next_log_start \
-    to_show_index to_show_start to_show_end \
     omni_list_radius=$omni_list_radius
-  local -a to_show
 
   begin_function_flat
 
-    local -n plane_map=omni_plane_map_$cursor_a_log_file_id \
-      log_array=cursor_a_log_array
-    local log_array_index=$cursor_a_log_array_index
-    local -r plane_id=${plane_map[$log_array_index]} \
-      log_array_size=${#log_array[*]}
-
-    # search forwards
-    begin_for (( i = to_show_index + 1, j = log_array_index + 1;
-              i < to_show_end && log_array_index < log_array_size;
-              log_array_index++ )); doo
-      if (( plane_map[log_array_index] == plane_id )); then
-        to_show[$i]=$log_array_index
-        (( i++ ))
-      fi
-    end_for
+    local -n plane_map=omni_plane_map_$cursor_a_log_file_id
+    local -r plane_map_size=${#plane_map[*]}
 
     # display lines until end
     local remaining_lines=$(( omni_list_radius * 2 + 1 ))
     local found_line i
     begin_while (( remaining_lines-- > 0 )); doo
       found_line=f
-      begin_while (( i++ < log_array_size )); doo
+      begin_while (( i++ < plane_map_size )); doo
         if (( plane_map[i] == plane_id )); then
           found_line=t
           break
@@ -110,18 +98,25 @@ omni_show_log() {
   handle_return
 }
 
-omni_rewind_index() {
+omni_offset_index() {
   local -n index=$1
-  local amount=$2 plane_id=$plane_id
+  local amount=$2 \
+    plane_id=${plane_map[$index]}
 
   # search backwards
-  local i rewound_count=0
+  local i adjusted=0 d=1
+
+  if (( amount < 0 )); then
+    d=-1
+    (( amount = -amount ))
+  fi
+
   for (( i = index;
-            i >= 0 && rewound_count < amount;
-            i-- )); do
+            i >= 0 && adjusted < amount;
+            i += d )); do
     if (( plane_map[i] == plane_id )); then
       index=$i
-      (( rewound_count++ ))
+      (( adjusted++ ))
     fi
   done
   return 0
@@ -169,7 +164,6 @@ omni_load_log_array() {
     local -n array=omni_log_array_$cursor_a_log_file_id
     mapfile array < <(cat $cursor_a_log_file) || fail
 
-    debug_start
     eval "declare -ga omni_plane_map_$cursor_a_log_file_id"
     local -n plane_map=omni_plane_map_$cursor_a_log_file_id \
       output_array=omni_log_output_array_$cursor_a_log_file_id
@@ -192,20 +186,28 @@ omni_load_log_array() {
       fi 
 
       output_array[$i]=$processed_line
-      plane_map[$i]=$plane_id
 
       case $action in
         call)
+          plane_map[$i]=$plane_id
           plane_stack+=( $plane_id )
           (( plane_id = next_plane_id++ ))
         ;;
         return\(*)
-          if (( ${#plane_stack[*]} > 0 )); then
-            (( plane_id = plane_stack[-1] ))
+          if [[ -v plane_stack && ${#plane_stack[*]} -gt 0 ]]; then
             unset plane_stack[-1]
+            if [[ ${#plane_stack[*]} -gt 0 ]]; then
+              (( plane_id = plane_stack[-1] ))
+            else
+              plane_id=0
+            fi
           else
             plane_id=0
           fi
+          plane_map[$i]=$plane_id
+        ;;
+        *)
+          plane_map[$i]=$plane_id
         ;;
       esac
 
