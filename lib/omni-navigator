@@ -70,7 +70,7 @@ omni_navigator() (
         omni_show_log || fail
       fi
 
-      echo -n "$NL>> " >&$fd_original_err
+      echo -n "${NL}${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
       local debug_c
       read -rs -n1 debug_c <&$fd_original_in
 
@@ -143,6 +143,11 @@ omni_navigator() (
           omni_show_context || fail
           no_follow_once=t
           ;;
+        p)
+          echo "# Print details" >&$fd_original_err
+          omni_print_details || fail
+          no_follow_once=t
+          ;;
         q)
           echo "# Quitting" >&$fd_original_err
           debug_r=0
@@ -169,6 +174,7 @@ omni_navigator() (
           echo "L  list previous log lines" >&$fd_original_err
           echo "n  next: (step over) go to the next log line with a function call of the same depth or shallower" >&$fd_original_err
           echo "o  out: (step out) go to the next log line that is shallower" >&$fd_original_err
+          echo "p  print: show all details of current log line" >&$fd_original_err
           echo "q  quit: leave the omni navigator" >&$fd_original_err
           echo "s  step: step to the next log line even if it's not a function call" >&$fd_original_err
           echo "t  stack: show stack trace" >&$fd_original_err
@@ -185,6 +191,30 @@ omni_navigator() (
 
   handle_return
 )
+
+omni_print_details() {
+  local line=${log_array[$index]}
+  if [[ "$line" == \=\ * ]]; then
+    local ts pid log_id depth level action function entries info
+    entries=${line#= }
+    eval "$entries" || return 1
+
+    local kvs=( ${entries} )
+    local kv keys=
+    for kv in "${kvs[@]}"; do
+      keys+="${kv%%=*}$NL"
+    done
+
+    keys=$(echo "${keys[*]}" | sort)
+    local key
+    for key in $keys; do
+      echo "$key: ${!key}" >&$fd_original_err
+    done
+  else
+    echo "No further details available." >&$fd_original_err
+  fi
+  return 0
+}
 
 omni_show_context() {
   next_log_start=$index
@@ -334,9 +364,9 @@ omni_load_log_array() {
         ;;
         return\(*)
           if [[ -v plane_stack && ${#plane_stack[*]} -gt 0 ]]; then
-            unset plane_stack[-1]
             if [[ ${#plane_stack[*]} -gt 0 ]]; then
               (( plane_id = plane_stack[-1] ))
+              unset plane_stack[-1]
             else
               plane_id=0
             fi
@@ -400,25 +430,24 @@ omni_show_stack() {
 #   line_id
 omni_get_processed_line() {
   local line=$1 line_id=$line_id \
-    ts pid log_id depth level action function
+    ts pid log_id depth level action function entries info
 
   if [[ "$line" == \=\ * ]]; then
     entries=${line#= }
-    unset info
     eval "$entries" || return 1
     case $action in
       call)
-        processed_line="$action $function"
+        processed_line="[$action] $function"
       ;;
       return\(*)
-        processed_line="$action from $function"
+        processed_line="[$action] from $function"
       ;;
       log_from)
-        processed_line="$action $old_log_file"
+        processed_line="[$action] $old_log_file"
       ;;
       *)
         if [[ "${info:-}" ]]; then
-          processed_line="$action $info"
+          processed_line="[$action] $info"
         else
           processed_line=${line%$NL}
         fi
