@@ -12,16 +12,77 @@ omni_navigator_init() {
   fi
 }
 
+# inputs:
+#   cursor log_file_token
+# should be executed after change_cursor_log has selected a log for this cursor
+alias omni_select_cursor='
+local -n \
+  action_map=omni_action_map_$log_file_token \
+  index=cursor_${cursor}_log_array_index \
+  log_array=cursor_${cursor}_log_array \
+  log_array=cursor_${cursor}_log_array \
+  log_file=cursor_${cursor}_log_file \
+  log_file_id=cursor_${cursor}_log_file_id \
+  output_array=omni_log_output_array_$log_file_token \
+  plane_depth_map=omni_plane_depth_map_$log_file_token \
+  plane_map=omni_plane_map_$log_file_token \
+  plane_stack_map=omni_plane_stack_map_$log_file_token \
+
+local plane_map_size=${#plane_map[*]} \
+  fork_id=${log_file_id#*:}
+'
+
+# inputs:
+#   cursor 
+#   log_file
+change_cursor_log() {
+  begin_function_flat
+
+    if [[ ! -f "$log_file" ]]; then
+      fatal "Can't find log file: $log_file"
+      fail1
+    fi
+
+    if [[ -L "$log_file" ]]; then
+      log_file=$(realpath $log_file)
+    fi
+
+    log_file_id=${log_file%.olog}
+    log_file_id=${log_file_id##*-}
+
+    if [[ ! "$log_file_id" =~ ^[0-9:]+$ ]]; then
+      fatal "Could not figure out log file id. Got [$log_file_id]"
+      fatal "Maybe log file doesn't comply with convention: {path}/{log}-{job_id}:{fork_id}.olog"
+      fail1
+    fi
+
+    log_file_token=${log_file_id//:/_}
+    eval "
+      cursor_${cursor}_log_file=$log_file \
+      cursor_${cursor}_log_file_id=$log_file_id \
+      cursor_${cursor}_log_array_var=omni_log_array_$log_file_token \
+      cursor_${cursor}_log_array_index=$index \
+    "
+
+    if [[ ! -v log_array_var ]]; then
+      omni_load_log_array || fail
+    fi
+
+    next_log_start=$index
+    update_index || fail
+
+  end_function_flat
+  handle_return
+}
+
 # inputs: 
 #   log_file
 omni_navigator() (
   begin_function_flat
 
-    debug_start
-    local cursor=a
-    new_log_file=$log_file \
-      update_log_file_vars || fail
-    omni_select_cursor || fail
+    local cursor=a index=0
+    change_cursor_log || fail
+    omni_select_cursor
 
     var=next_log_start offset=-$omni_list_radius \
       omni_offset_index || fail
@@ -273,37 +334,80 @@ omni_show_line() {
   return 0
 }
 
-# inputs: 
-#   file log_file_id
-omni_load_log_array() {
-  local file=$file \
-    log_file_id_var=${log_file_id//:/_} \
-    fork_id=${log_file_id#*:}
+omni_step_in() {
+  local action=${action_map[$index]}
+  if [[ $action == log_to ]]; then
+    local i=$index line=${log_array[$index]} \
+      ts pid log_id depth level action function entries info new_log_file
+    entries=${line#= }
+    eval "$entries" || return 1
+    if [[ ! "${new_log_file:-}" ]]; then
+      log_fatal "log_to action is missing the new_log_file key"
+      return 1
+    fi
+    enter_log_file || return 1
+  else
+    (( index++ ))
+    if (( index >= plane_map_size )); then
+      (( index = plane_map_size - 1 ))
+    fi
+    plane_id=${plane_map[$index]}
+  fi
+  return 0
+}
 
+# inputs: 
+#   new_log_file
+#   log_file
+#   index
+#   log_file_stack
+#   log_file_pos_stack
+enter_log_file() {
+  log_file_stack+=( $log_file )
+  log_file_pos_stack+=( $index )
+  change_cursor_log
+  index=0
+  update_index
+  return 0
+}
+
+update_index() {
+  plane_id=${plane_map[$index]}
+}
+
+# inputs: 
+#   log_file log_file_id log_file_token fork_id
+omni_load_log_array() {
   begin_function_flat
 
-    eval "declare -ga omni_log_array_$log_file_id_var"
-    local -n array=omni_log_array_$log_file_id_var
-    mapfile array < <(cat $file) || fail
+    eval "declare -ga omni_log_array_$log_file_token"
+    local -n array=omni_log_array_$log_file_token
+    mapfile array < <(cat $log_file) || fail
 
-    eval "declare -ga omni_plane_map_$log_file_id_var"
-    eval "declare -ga omni_plane_depth_map_$log_file_id_var"
-    local -n plane_map=omni_plane_map_$log_file_id_var \
-      plane_depth_map=omni_plane_depth_map_$log_file_id_var \
-      plane_stack_map=omni_plane_stack_map_$log_file_id_var \
-      output_array=omni_log_output_array_$log_file_id_var
+    eval "declare -ga \
+      omni_plane_map_$log_file_token \
+      omni_plane_depth_map_$log_file_token \
+      omni_action_map_$log_file_token"
 
     local i array_size=${#array[*]} \
       plane_stack next_plane_id=1 plane_id=0 \
       processed_line line \
-      ts pid log_id depth level action function
+      ts pid log_id depth level action function entries info
 
     begin_for (( i = 0; i < array_size; i++ )); doo
 
-      line=${array[$i]} action=none
+      line=${array[$i]} action=none processed_line=$line
       if [[ "$line" == \=\ * ]]; then
         entries=${line#= }
         eval "$entries" || return 1
+
+        if [[ $action == none ]]; then
+          fatal "Log line is missing action key: $line"
+          return 1
+        fi
+
+        action_map[$i]=$action
+
         line_id=$fork_id:$i omni_get_processed_line "$line" || {
           fatal "Bad log line: $line"
           return 1
@@ -312,6 +416,7 @@ omni_load_log_array() {
 
       output_array[$i]=$processed_line
 
+      debug_start
       case $action in
         call)
           plane_map[$i]=$plane_id
@@ -354,123 +459,9 @@ omni_load_log_array() {
   handle_return
 }
 
-omni_step_in() {
-  local action=${action_map[$index]}
-  if [[ $action == log_to ]]; then
-    local i=$index line=${log_array[$index]} \
-      ts pid log_id depth level action function entries info new_log_file
-    entries=${line#= }
-    eval "$entries" || return 1
-    if [[ ! "${new_log_file:-}" ]]; then
-      log_fatal "log_to action is missing the new_log_file key"
-      return 1
-    fi
-    enter_log_file || return 1
-  else
-    (( index++ ))
-    if (( index >= plane_map_size )); then
-      (( index = plane_map_size - 1 ))
-    fi
-    plane_id=${plane_map[$index]}
-  fi
-  return 0
-}
-
-# inputs: 
-#   new_log_file
-#   log_file
-#   index
-#   log_file_stack
-#   log_file_pos_stack
-enter_log_file() {
-  log_file_stack+=( $log_file )
-  log_file_pos_stack+=( $index )
-  update_log_file_vars
-  index=0
-  update_index
-  return 0
-}
-
-update_index() {
-  local plane_id=${plane_map[$index]}
-}
-
-# inputs:
-#   cursor 
-#   new_log_file
-update_log_file_vars() {
-  begin_function_flat
-
-    if [[ ! -f "$log_file" ]]; then
-      fatal "Can't find log file: $log_file"
-      fail1
-    fi
-
-    if [[ -L "$log_file" ]]; then
-      log_file=$(realpath $log_file)
-    fi
-
-    log_file_id=${log_file%.olog}
-    log_file_id=${log_file_id##*-}
-
-    if [[ ! "$log_file_id" =~ ^[0-9:]+$ ]]; then
-      fatal "Could not figure out log file id. Got [$log_file_id]"
-      fatal "Maybe log file doesn't comply with convention: {path}/{log}-{job_id}:{fork_id}.olog"
-      fail1
-    fi
-
-    log_file=$new_log_file \
-      omni_point_cursor
-
-    if [[ ! -v $log_array_var ]]; then
-      file=$cursor_a_log_file \
-        log_file_id=$cursor_a_log_file_id \
-        omni_load_log_array || fail
-    fi
-
-    next_log_start=$index
-    update_index || fail
-
-    log_file=$new_log_file
-
-  end_function_flat
-  handle_return
-}
-
-# inputs: 
-#   log_file log_file_id cursor index
-omni_point_cursor() {
-  log_file_token=${log_file_id//:/_}
-eval "
-  cursor_${cursor}_log_file=$log_file
-  cursor_${cursor}_log_file_id=$log_file_id
-  cursor_${cursor}_log_array_var=omni_log_array_$log_file_token
-  cursor_${cursor}_log_array_index=$index
-"
-}
-
-# inputs:
-#   cursor log_file_token
-# should be executed after omni_point_cursor has already setup a cursor
-alias omni_select_cursor='
-local -n \
-  action_map=omni_action_map_$log_file_token \
-  index=cursor_${cursor}_log_array_index \
-  log_array=cursor_${cursor}_log_array \
-  log_array=cursor_${cursor}_log_array \
-  log_file=cursor_${cursor}_log_file \
-  log_file_id=cursor_${cursor}_log_file_id \
-  output_array=omni_log_output_array_$log_file_token \
-  plane_depth_map=omni_plane_depth_map_$log_file_token \
-  plane_map=omni_plane_map_$log_file_token \
-  plane_stack_map=omni_plane_stack_map_$log_file_token \
-
-local plane_map_size=${#plane_map[*]}
-'
-
 omni_show_stack() {
   local i=$index line \
-    ts pid log_id depth level action function
+    ts pid log_id depth level action function entries info
   local -A return_map
   local functions=
   begin_while (( i-- > 0 )); doo
@@ -504,31 +495,27 @@ omni_show_stack() {
 # input: {line}
 #   line_id
 omni_get_processed_line() {
-  local line=$1 line_id=$line_id \
-    ts pid log_id depth level action function entries info
+  local line=$1 line_id=$line_id
 
-  if [[ "$line" == \=\ * ]]; then
-    entries=${line#= }
-    eval "$entries" || return 1
-    case $action in
-      call)
-        processed_line="[$action] $function"
-      ;;
-      return\(*)
-        processed_line="[$action] from $function"
-      ;;
-      log_from)
-        processed_line="[$action] $old_log_file"
-      ;;
-      *)
-        if [[ "${info:-}" ]]; then
-          processed_line="[$action] $info"
-        else
-          processed_line=${line%$NL}
-        fi
-      ;;
-    esac
-  fi
+  case $action in
+    call)
+      processed_line="[$action] $function"
+    ;;
+    return\(*)
+      processed_line="[$action] from $function"
+    ;;
+    log_from)
+      processed_line="[$action] $old_log_file"
+    ;;
+    *)
+      if [[ "${info:-}" ]]; then
+        processed_line="[$action] $info"
+      else
+        processed_line=${line%$NL}
+      fi
+    ;;
+  esac
+
   processed_line="$line_id $processed_line"
   return 0
 }
