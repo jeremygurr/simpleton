@@ -14,7 +14,7 @@ omni_navigator_init() {
 
 get_log_file_token() {
   if [[ ! -f "$log_file" ]]; then
-    fatal "Can't find log file: $log_file"
+    log_fatal "Can't find log file: $log_file"
     return 1
   fi
 
@@ -26,8 +26,8 @@ get_log_file_token() {
   log_file_id=${log_file_id##*-}
 
   if [[ ! "$log_file_id" =~ ^[0-9:]+$ ]]; then
-    fatal "Could not figure out log file id. Got [$log_file_id]"
-    fatal "Maybe log file doesn't comply with convention: {path}/{log}-{job_id}:{fork_id}.olog"
+    log_fatal "Could not figure out log file id. Got [$log_file_id]"
+    log_fatal "Maybe log file doesn't comply with convention: {path}/{log}-{job_id}:{fork_id}.olog"
     return 1
   fi
 
@@ -35,28 +35,96 @@ get_log_file_token() {
   return 0
 }
 
-# inputs:
-#   cursor 
-#   log_file
-change_cursor_log() {
+update_index() {
+  plane_id=${plane_map[$index]}
+}
+
+# inputs: 
+#   log_file log_file_id log_file_token fork_id
+omni_load_log_array() {
   begin_function_flat
 
-    get_log_file_token || fail
+    eval "declare -ga omni_log_array_$log_file_token"
+    local -n array=omni_log_array_$log_file_token
+    mapfile array < <(cat $log_file) || fail
 
-    eval "
-      cursor_${cursor}_log_file=$log_file \
-      cursor_${cursor}_log_file_id=$log_file_id \
-      cursor_${cursor}_log_array_var=omni_log_array_$log_file_token \
-      cursor_${cursor}_log_array_index=$index \
-    "
+    eval "declare -ga \
+      omni_plane_map_$log_file_token \
+      omni_plane_depth_map_$log_file_token \
+      omni_action_map_$log_file_token"
 
-    if [[ ! -v log_array_var ]]; then
-      omni_load_log_array || fail
-    fi
+    local -n \
+      plane_map=omni_plane_map_$log_file_token \
+      plane_depth_map=omni_plane_depth_map_$log_file_token \
+      action_map=omni_action_map_$log_file_token \
 
-    next_log_start=$index
-    update_index || fail
+    local i array_size=${#array[*]} \
+      plane_stack next_plane_id=1 plane_id=0 \
+      processed_line line \
+      ts pid log_id depth level action function entries info
 
+    begin_for (( i = 0; i < array_size; i++ )); doo
+
+      line=${array[$i]} action=none processed_line=$line
+      if [[ "$line" == \=\ * ]]; then
+        entries=${line#= }
+        eval "$entries" || return 1
+
+        if [[ $action == none ]]; then
+          log_fatal "Log line is missing action key: $line"
+          return 1
+        fi
+
+        action_map[$i]=$action
+
+        line_id=$fork_id:$i omni_get_processed_line "$line" || {
+          log_fatal "Bad log line: $line"
+          return 1
+          }
+      fi 
+
+      output_array[$i]=$processed_line
+
+      case $action in
+        call)
+          plane_map[$i]=$plane_id
+          if [[ -v plane_stack ]]; then
+            plane_depth_map[$i]=${#plane_stack[*]}
+          else
+            plane_depth_map[$i]=0
+          fi
+          plane_stack+=( $plane_id )
+          (( plane_id = next_plane_id++ ))
+        ;;
+        return\(*)
+          if [[ -v plane_stack && ${#plane_stack[*]} -gt 0 ]]; then
+            if [[ ${#plane_stack[*]} -gt 0 ]]; then
+              (( plane_id = plane_stack[-1] ))
+              unset plane_stack[-1]
+            else
+              plane_id=0
+            fi
+            plane_depth_map[$i]=${#plane_stack[*]}
+          else
+            plane_id=0
+            plane_depth_map[$i]=0
+          fi
+          plane_map[$i]=$plane_id
+        ;;
+        *)
+          plane_map[$i]=$plane_id
+          if [[ -v plane_stack ]]; then
+            plane_depth_map[$i]=${#plane_stack[*]}
+          else
+            plane_depth_map[$i]=0
+          fi
+        ;;
+      esac
+
+    end_for
+
+    plane_map_size=${#plane_map[*]}
+  
   end_function_flat
   handle_return
 }
@@ -77,28 +145,53 @@ local -n \
   plane_map=omni_plane_map_$log_file_token \
   plane_stack_map=omni_plane_stack_map_$log_file_token \
 
-local fork_id=${log_file_id#*:} plane_map_size=0
+local fork_id=${log_file_id#*:} \
+    plane_map_size=${#plane_map[*]}
 '
+
+# inputs:
+#   cursor 
+#   log_file
+# should be able to run even before omni_select_cursor
+change_cursor_log() {
+  begin_function_flat
+
+    get_log_file_token || fail
+
+    eval "
+      cursor_${cursor}_log_file=$log_file \
+      cursor_${cursor}_log_file_id=$log_file_id \
+      cursor_${cursor}_log_array_var=omni_log_array_$log_file_token \
+      cursor_${cursor}_log_array_index=$index \
+    "
+
+    if [[ ! -v omni_log_array_$log_file_token ]]; then
+      omni_load_log_array || fail
+    fi
+
+  end_function_flat
+  handle_return
+}
 
 # inputs: 
 #   log_file
 omni_navigator() (
-  side_log "omni_navigator()
-  FUNCNAME[0]=${FUNCNAME[0]:-}
-  FUNCNAME[1]=${FUNCNAME[1]:-}
-  FUNCNAME[2]=${FUNCNAME[2]:-}
-  BASH_LINENO[0]=${BASH_LINENO[0]:-}
-  BASH_LINENO[1]=${BASH_LINENO[1]:-}
-  LINENO=${LINENO:-}
-  "
+  # side_log "omni_navigator()
+  # FUNCNAME[0]=${FUNCNAME[0]:-}
+  # FUNCNAME[1]=${FUNCNAME[1]:-}
+  # FUNCNAME[2]=${FUNCNAME[2]:-}
+  # BASH_LINENO[0]=${BASH_LINENO[0]:-}
+  # BASH_LINENO[1]=${BASH_LINENO[1]:-}
+  # LINENO=${LINENO:-}
+  # "
 
-  debug_start
   begin_function_flat
 
     local cursor=a index=0
-    get_log_file_token || fail
-    omni_select_cursor
     change_cursor_log || fail
+    omni_select_cursor
+    next_log_start=$index
+    update_index || fail
 
     var=next_log_start offset=-$omni_list_radius \
       omni_offset_index || fail
@@ -331,7 +424,7 @@ omni_show_line() {
   fi
 
   if [[ ! -v output_array ]]; then
-    fatal "Internal error: Missing output_array"
+    log_fatal "Internal error: Missing output_array"
     return 1
   fi
 
@@ -385,95 +478,6 @@ enter_log_file() {
   index=0
   update_index
   return 0
-}
-
-update_index() {
-  plane_id=${plane_map[$index]}
-}
-
-# inputs: 
-#   log_file log_file_id log_file_token fork_id
-omni_load_log_array() {
-  begin_function_flat
-
-    eval "declare -ga omni_log_array_$log_file_token"
-    local -n array=omni_log_array_$log_file_token
-    mapfile array < <(cat $log_file) || fail
-
-    eval "declare -ga \
-      omni_plane_map_$log_file_token \
-      omni_plane_depth_map_$log_file_token \
-      omni_action_map_$log_file_token"
-
-    local i array_size=${#array[*]} \
-      plane_stack next_plane_id=1 plane_id=0 \
-      processed_line line \
-      ts pid log_id depth level action function entries info
-
-    begin_for (( i = 0; i < array_size; i++ )); doo
-
-      line=${array[$i]} action=none processed_line=$line
-      if [[ "$line" == \=\ * ]]; then
-        entries=${line#= }
-        eval "$entries" || return 1
-
-        if [[ $action == none ]]; then
-          fatal "Log line is missing action key: $line"
-          return 1
-        fi
-
-        action_map[$i]=$action
-
-        line_id=$fork_id:$i omni_get_processed_line "$line" || {
-          fatal "Bad log line: $line"
-          return 1
-          }
-      fi 
-
-      output_array[$i]=$processed_line
-
-      case $action in
-        call)
-          plane_map[$i]=$plane_id
-          if [[ -v plane_stack ]]; then
-            plane_depth_map[$i]=${#plane_stack[*]}
-          else
-            plane_depth_map[$i]=0
-          fi
-          plane_stack+=( $plane_id )
-          (( plane_id = next_plane_id++ ))
-        ;;
-        return\(*)
-          if [[ -v plane_stack && ${#plane_stack[*]} -gt 0 ]]; then
-            if [[ ${#plane_stack[*]} -gt 0 ]]; then
-              (( plane_id = plane_stack[-1] ))
-              unset plane_stack[-1]
-            else
-              plane_id=0
-            fi
-            plane_depth_map[$i]=${#plane_stack[*]}
-          else
-            plane_id=0
-            plane_depth_map[$i]=0
-          fi
-          plane_map[$i]=$plane_id
-        ;;
-        *)
-          plane_map[$i]=$plane_id
-          if [[ -v plane_stack ]]; then
-            plane_depth_map[$i]=${#plane_stack[*]}
-          else
-            plane_depth_map[$i]=0
-          fi
-        ;;
-      esac
-
-    end_for
-
-    plane_map_size=${#plane_map[*]}
-  
-  end_function_flat
-  handle_return
 }
 
 omni_show_stack() {
