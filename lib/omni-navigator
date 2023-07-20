@@ -57,6 +57,7 @@ omni_load_log_array() {
       plane_map=omni_plane_map_$log_file_token \
       plane_depth_map=omni_plane_depth_map_$log_file_token \
       action_map=omni_action_map_$log_file_token \
+      output_array=omni_log_output_array_$log_file_token \
 
     local i array_size=${#array[*]} \
       plane_stack next_plane_id=1 plane_id=0 \
@@ -134,19 +135,19 @@ omni_load_log_array() {
 # should be executed after change_cursor_log has selected a log for this cursor
 alias omni_select_cursor='
 local -n \
-  action_map=omni_action_map_$log_file_token \
+  action_map=cursor_${cursor}_action_map \
   index=cursor_${cursor}_log_array_index \
-  log_array=cursor_${cursor}_log_array \
   log_array=cursor_${cursor}_log_array \
   log_file=cursor_${cursor}_log_file \
   log_file_id=cursor_${cursor}_log_file_id \
-  output_array=omni_log_output_array_$log_file_token \
-  plane_depth_map=omni_plane_depth_map_$log_file_token \
-  plane_map=omni_plane_map_$log_file_token \
-  plane_stack_map=omni_plane_stack_map_$log_file_token \
+  output_array=cursor_${cursor}_output_array \
+  plane_depth_map=cursor_${cursor}_plane_depth_map \
+  plane_map=cursor_${cursor}_plane_map \
+  plane_stack_map=cursor_${cursor}_plane_stack_map \
 
-local fork_id=${log_file_id#*:} \
-    plane_map_size=${#plane_map[*]}
+local \
+  fork_id=${log_file_id#*:} \
+  plane_map_size=${#plane_map[*]} \
 '
 
 # inputs:
@@ -164,11 +165,50 @@ change_cursor_log() {
       cursor_${cursor}_log_array_var=omni_log_array_$log_file_token \
       cursor_${cursor}_log_array_index=$index \
     "
+    eval "
+      declare -gn \
+        cursor_${cursor}_action_map=omni_action_map_$log_file_token \
+        cursor_${cursor}_output_array=omni_log_output_array_$log_file_token \
+        cursor_${cursor}_plane_depth_map=omni_plane_depth_map_$log_file_token \
+        cursor_${cursor}_plane_map=omni_plane_map_$log_file_token \
+        cursor_${cursor}_plane_stack_map=omni_plane_stack_map_$log_file_token \
+    "
 
     if [[ ! -v omni_log_array_$log_file_token ]]; then
       omni_load_log_array || fail
     fi
 
+  end_function_flat
+  handle_return
+}
+
+# inputs: next_log_start omni_list_radius plane_map plane_id output_array
+omni_show_log() {
+  begin_function_flat
+
+    local -r plane_map_size=${#plane_map[*]}
+
+    # display lines until end
+    local remaining_lines=$(( omni_list_radius * 2 + 1 ))
+    local found_line 
+    local -n i=next_log_start
+
+    begin_while (( remaining_lines-- > 0 )); doo
+      found_line=f
+      begin_while (( i < plane_map_size )); doo
+        if (( plane_map[i] == plane_id )); then
+          found_line=t
+          break
+        fi
+        (( i++ ))
+      end_while
+      if [[ $found_line == t ]]; then
+        omni_show_line $i || fail
+        (( i++ ))
+      else
+        break
+      fi
+    end_while
   end_function_flat
   handle_return
 }
@@ -354,61 +394,6 @@ omni_show_context() {
   return 0
 }
 
-# inputs: next_log_start omni_list_radius plane_map plane_id output_array
-omni_show_log() {
-  begin_function_flat
-
-    local -r plane_map_size=${#plane_map[*]}
-
-    # display lines until end
-    local remaining_lines=$(( omni_list_radius * 2 + 1 ))
-    local found_line 
-    local -n i=next_log_start
-
-    begin_while (( remaining_lines-- > 0 )); doo
-      found_line=f
-      begin_while (( i < plane_map_size )); doo
-        if (( plane_map[i] == plane_id )); then
-          found_line=t
-          break
-        fi
-        (( i++ ))
-      end_while
-      if [[ $found_line == t ]]; then
-        omni_show_line $i || fail
-        (( i++ ))
-      else
-        break
-      fi
-    end_while
-  end_function_flat
-  handle_return
-}
-
-# inputs: {index} {amount}
-#   plane_id plane_map
-omni_offset_index() {
-  local -n current_index=$var
-  local amount=$offset i adjusted=0 d=1
-
-  if (( amount < 0 )); then
-    d=-1
-    (( amount = -amount ))
-  fi
-
-  for (( i = current_index + d;
-         i >= 0 
-         && adjusted < amount 
-         && i < plane_map_size;
-         i += d )); do
-    if (( plane_map[i] == plane_id )); then
-      current_index=$i
-      (( adjusted++ ))
-    fi
-  done
-  return 0
-}
-
 # inputs: {index}
 #   output_array
 omni_show_line() {
@@ -440,6 +425,30 @@ omni_show_line() {
     echo "$line" >&$fd_original_err
   fi
 
+  return 0
+}
+
+# inputs: {index} {amount}
+#   plane_id plane_map
+omni_offset_index() {
+  local -n current_index=$var
+  local amount=$offset i adjusted=0 d=1
+
+  if (( amount < 0 )); then
+    d=-1
+    (( amount = -amount ))
+  fi
+
+  for (( i = current_index + d;
+         i >= 0 
+         && adjusted < amount 
+         && i < plane_map_size;
+         i += d )); do
+    if (( plane_map[i] == plane_id )); then
+      current_index=$i
+      (( adjusted++ ))
+    fi
+  done
   return 0
 }
 
