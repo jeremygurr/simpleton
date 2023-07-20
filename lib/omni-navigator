@@ -12,25 +12,28 @@ omni_navigator_init() {
   fi
 }
 
-# inputs:
-#   cursor log_file_token
-# should be executed after change_cursor_log has selected a log for this cursor
-alias omni_select_cursor='
-local -n \
-  action_map=omni_action_map_$log_file_token \
-  index=cursor_${cursor}_log_array_index \
-  log_array=cursor_${cursor}_log_array \
-  log_array=cursor_${cursor}_log_array \
-  log_file=cursor_${cursor}_log_file \
-  log_file_id=cursor_${cursor}_log_file_id \
-  output_array=omni_log_output_array_$log_file_token \
-  plane_depth_map=omni_plane_depth_map_$log_file_token \
-  plane_map=omni_plane_map_$log_file_token \
-  plane_stack_map=omni_plane_stack_map_$log_file_token \
+get_log_file_token() {
+  if [[ ! -f "$log_file" ]]; then
+    fatal "Can't find log file: $log_file"
+    return 1
+  fi
 
-local plane_map_size=${#plane_map[*]} \
-  fork_id=${log_file_id#*:}
-'
+  if [[ -L "$log_file" ]]; then
+    log_file=$(realpath $log_file)
+  fi
+
+  log_file_id=${log_file%.olog}
+  log_file_id=${log_file_id##*-}
+
+  if [[ ! "$log_file_id" =~ ^[0-9:]+$ ]]; then
+    fatal "Could not figure out log file id. Got [$log_file_id]"
+    fatal "Maybe log file doesn't comply with convention: {path}/{log}-{job_id}:{fork_id}.olog"
+    return 1
+  fi
+
+  log_file_token=${log_file_id//:/_}
+  return 0
+}
 
 # inputs:
 #   cursor 
@@ -38,25 +41,8 @@ local plane_map_size=${#plane_map[*]} \
 change_cursor_log() {
   begin_function_flat
 
-    if [[ ! -f "$log_file" ]]; then
-      fatal "Can't find log file: $log_file"
-      fail1
-    fi
+    get_log_file_token || fail
 
-    if [[ -L "$log_file" ]]; then
-      log_file=$(realpath $log_file)
-    fi
-
-    log_file_id=${log_file%.olog}
-    log_file_id=${log_file_id##*-}
-
-    if [[ ! "$log_file_id" =~ ^[0-9:]+$ ]]; then
-      fatal "Could not figure out log file id. Got [$log_file_id]"
-      fatal "Maybe log file doesn't comply with convention: {path}/{log}-{job_id}:{fork_id}.olog"
-      fail1
-    fi
-
-    log_file_token=${log_file_id//:/_}
     eval "
       cursor_${cursor}_log_file=$log_file \
       cursor_${cursor}_log_file_id=$log_file_id \
@@ -75,14 +61,44 @@ change_cursor_log() {
   handle_return
 }
 
+# inputs:
+#   cursor log_file_token
+# should be executed after change_cursor_log has selected a log for this cursor
+alias omni_select_cursor='
+local -n \
+  action_map=omni_action_map_$log_file_token \
+  index=cursor_${cursor}_log_array_index \
+  log_array=cursor_${cursor}_log_array \
+  log_array=cursor_${cursor}_log_array \
+  log_file=cursor_${cursor}_log_file \
+  log_file_id=cursor_${cursor}_log_file_id \
+  output_array=omni_log_output_array_$log_file_token \
+  plane_depth_map=omni_plane_depth_map_$log_file_token \
+  plane_map=omni_plane_map_$log_file_token \
+  plane_stack_map=omni_plane_stack_map_$log_file_token \
+
+local fork_id=${log_file_id#*:} plane_map_size=0
+'
+
 # inputs: 
 #   log_file
 omni_navigator() (
+  side_log "omni_navigator()
+  FUNCNAME[0]=${FUNCNAME[0]:-}
+  FUNCNAME[1]=${FUNCNAME[1]:-}
+  FUNCNAME[2]=${FUNCNAME[2]:-}
+  BASH_LINENO[0]=${BASH_LINENO[0]:-}
+  BASH_LINENO[1]=${BASH_LINENO[1]:-}
+  LINENO=${LINENO:-}
+  "
+
+  debug_start
   begin_function_flat
 
     local cursor=a index=0
-    change_cursor_log || fail
+    get_log_file_token || fail
     omni_select_cursor
+    change_cursor_log || fail
 
     var=next_log_start offset=-$omni_list_radius \
       omni_offset_index || fail
@@ -416,7 +432,6 @@ omni_load_log_array() {
 
       output_array[$i]=$processed_line
 
-      debug_start
       case $action in
         call)
           plane_map[$i]=$plane_id
@@ -454,6 +469,8 @@ omni_load_log_array() {
       esac
 
     end_for
+
+    plane_map_size=${#plane_map[*]}
   
   end_function_flat
   handle_return
