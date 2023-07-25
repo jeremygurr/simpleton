@@ -12,20 +12,6 @@ type -t omni_log_init >/dev/null && return 0
 #   handle_return
 # }
 
-get_next_fork_id() {
-  local base_log_file=$base_log_file
-  timeout=3 lock_path=$fork_log fd_write_lock || {
-    echo "Failed to get lock on $fork_log" >&2
-    return 1
-  }
-  local last_id=$(tail -n1 $fork_log | awk '{print $1}')
-  let fork_id=last_id+1 || true
-  new_log_file=$base_log_file-${job_id}:$fork_id.olog
-  echo "$fork_id $new_log_file" >>$fork_log || return 1
-  fd_unlock
-  return 0
-}
-
 omni_log_init() {
   local command="$*"  
   fork_log=${fork_log:-~/fork-log/$$}
@@ -142,30 +128,12 @@ alias end_function='
 '
 
 # Usage:
-#   change_log_file {log file base}   point to new log file
-#   change_log_file                   point to same base but new pid (forked)
-#   change_log_file -                 stop logging
+#   new_log_file=... change_log_file  point to new log file
+#   new_log_file= change_log_file     stop logging
 change_log_file() {
 begin_function_flat
 
-  local new_base=${1:-} new_log_file old_log_file old_fork_id=$fork_id
-
-  if [[ "$new_base" == - ]]; then
-    new_log_file=
-  elif [[ "$new_base" ]]; then
-    base_log_file=$new_base
-    get_next_fork_id || fail
-    local first_log=$base_log_file-first.olog
-    if [[ -e "$first_log" ]]; then
-      log_fatal "Log already exists: $first_log" 
-      stack_trace
-      fail1
-    fi
-    ln -s $new_log_file $first_log || fail
-  else
-    [[ ! "${base_log_file:-}" ]] && succeed
-    get_next_fork_id || fail
-  fi
+  local new_log_file=$new_log_file old_log_file 
 
   if [[ "${log_file:-}" == "$new_log_file" ]]; then
     succeed

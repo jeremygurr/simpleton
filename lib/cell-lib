@@ -20,50 +20,115 @@ show_branches=${show_branches:-f}
 
 downstream_cell_stack=( ) 
 
-cell_context_load() {
+# This is run if cell hasn't been initialized = missing .cyto folder
+make_cyto() {
+  local cell=$1 new_cyto=$cell/.cyto.new
+  begin_function_flat
 
-local log_vars=cell
-begin_function
-
-  if [[ ! -e $cell/.dna ]]; then
-    log_fatal "$cell is not a cell"
-    fail1
-  fi
-
-  last_context_loaded=${last_context_loaded:-}
-  if [[ "$last_context_loaded" != $cell ]]; then
-
-    log_debug "Loading context of $cell"
-    last_context_loaded=$cell
-
-    dna_path=$cell/.dna
-    cyto_path=$cell/.cyto
-    sub_path=$dna_path/sub
-
-    if [[ -e $cyto_path && $dna_path/context-local -nt $cyto_path/context ]]; then
-      rm -rf $cyto_path || fail
+    if [[ -e $cell/.cyto ]]; then
+      log_fatal "$cell/.cyto already exists. make_cyto should not be called unless it doesn't."
+      stack_trace
+      fail1
     fi
 
-    init_context || fail
-    local context_path=$cyto_path/context
-    if [[ ! -e $cyto_path ]]; then
-      if [[ -d $sub_path ]]; then
-        plant_seed $sub_path $cell || fail
-      fi
-      make_cyto $cell || fail
-    elif [[ -f "$context_path" ]]; then
+    if [[ -e $new_cyto ]]; then
+      rm -rf $new_cyto || fail
+    fi
+    mkdir -p $new_cyto || fail
+
+    record_context $cell || fail
+
+    get_top_cell $cell || fail
+    if [[ -d $top_cell/.dna/command ]]; then
+      safe_link $top_cell/.dna/command $new_cyto/command || fail
+    else
+      log_fatal "Top cell doesn't have a command folder ($top_cell/.dna/command missing)"
+      fail1
+    fi
+    if [[ -d $top_cell/.dna/lib ]]; then
+      safe_link $top_cell/.dna/lib $new_cyto/lib || fail
+    fi
+
+    #   older more powerful, but more fragile way
+    # mkdir -p $new_cyto/command || fail
+    # mkdir -p $new_cyto/lib || fail
+    # inherit_lib $cell || fail
+
+    local context_path=$new_cyto/context
+    if [[ -f "$context_path" ]]; then
       source $context_path || fail
     fi
 
-    setup_context_defaults || fail
-    setup_dims $cell || fail
-    setup_cell_path_vars $cell || fail
-    setup_branch_dims $cell || fail
+    local dna_path=$cell/.dna
+    if [[ -d $dna_path/up ]]; then
+      rsync -a $dna_path/up/ $new_cyto/up/ || fail
+    fi
 
-  fi
+    if [[ -d $dna_path/down ]]; then
+      rsync -a $dna_path/down/ $new_cyto/down/ || fail
+    fi
 
-end_function
-handle_return
+    if [[ -d $dna_path/out && "$out_path" ]]; then
+      local item
+      local out_path=$cell/$out_path
+      if [[ ! -d $out_path  ]]; then
+        mkdir $out_path || fail
+      fi
+
+      local key_path=$dna_path/key
+      setup_cyto_out $dna_path/out $out_path || fail
+    fi
+
+    mv $new_cyto $cell/.cyto || fail
+
+  end_function_flat
+  handle_return
+}
+
+cell_context_load() {
+
+  local log_vars=cell
+  begin_function
+
+    if [[ ! -e $cell/.dna ]]; then
+      log_fatal "$cell is not a cell"
+      fail1
+    fi
+
+    last_context_loaded=${last_context_loaded:-}
+    if [[ "$last_context_loaded" != $cell ]]; then
+
+      log_debug "Loading context of $cell"
+      last_context_loaded=$cell
+
+      dna_path=$cell/.dna
+      cyto_path=$cell/.cyto
+      sub_path=$dna_path/sub
+
+      if [[ -e $cyto_path && $dna_path/context-local -nt $cyto_path/context ]]; then
+        rm -rf $cyto_path || fail
+      fi
+
+      init_context || fail
+      local context_path=$cyto_path/context
+      if [[ ! -e $cyto_path ]]; then
+        if [[ -d $sub_path ]]; then
+          plant_seed $sub_path $cell || fail
+        fi
+        make_cyto $cell || fail
+      elif [[ -f "$context_path" ]]; then
+        source $context_path || fail
+      fi
+
+      setup_context_defaults || fail
+      setup_dims $cell || fail
+      setup_cell_path_vars $cell || fail
+      setup_branch_dims $cell || fail
+
+    fi
+
+  end_function
+  handle_return
 }
 
 plant_seed() {
@@ -369,72 +434,6 @@ done
 return 1
 }
 
-# This is run if cell hasn't been initialized = missing .cyto folder
-make_cyto() {
-local cell=$1 new_cyto=$cell/.cyto.new
-begin_function_flat
-
-  if [[ -e $cell/.cyto ]]; then
-    log_fatal "$cell/.cyto already exists. make_cyto should not be called unless it doesn't."
-    stack_trace
-    fail1
-  fi
-
-  if [[ -e $new_cyto ]]; then
-    rm -rf $new_cyto || fail
-  fi
-  mkdir -p $new_cyto || fail
-
-  record_context $cell || fail
-
-  get_top_cell $cell || fail
-  if [[ -d $top_cell/.dna/command ]]; then
-    safe_link $top_cell/.dna/command $new_cyto/command || fail
-  else
-    log_fatal "Top cell doesn't have a command folder ($top_cell/.dna/command missing)"
-    fail1
-  fi
-  if [[ -d $top_cell/.dna/lib ]]; then
-    safe_link $top_cell/.dna/lib $new_cyto/lib || fail
-  fi
-
-  #   older more powerful, but more fragile way
-  # mkdir -p $new_cyto/command || fail
-  # mkdir -p $new_cyto/lib || fail
-  # inherit_lib $cell || fail
-
-  local context_path=$new_cyto/context
-  if [[ -f "$context_path" ]]; then
-    source $context_path || fail
-  fi
-  setup_features || fail
-
-  local dna_path=$cell/.dna
-  if [[ -d $dna_path/up ]]; then
-    rsync -a $dna_path/up/ $new_cyto/up/ || fail
-  fi
-
-  if [[ -d $dna_path/down ]]; then
-    rsync -a $dna_path/down/ $new_cyto/down/ || fail
-  fi
-
-  if [[ -d $dna_path/out && "$out_path" ]]; then
-    local item
-    local out_path=$cell/$out_path
-    if [[ ! -d $out_path  ]]; then
-      mkdir $out_path || fail
-    fi
-
-    local key_path=$dna_path/key
-    setup_cyto_out $dna_path/out $out_path || fail
-  fi
-
-  mv $new_cyto $cell/.cyto || fail
-
-end_function_flat
-handle_return
-}
-
 setup_cyto_out() {
 local from=$1 to=$2
 begin_function_flat
@@ -553,79 +552,6 @@ begin_function_flat
       inherit_lib_folder $lib $to/$folder_name || fail
     fi
   end_for
-end_function_flat
-handle_return
-}
-
-setup_features() {
-begin_function_flat
-
-  local feature
-  if [[ "${cell_features:-}" ]]; then
-    local make_req=f \
-      make_log=f \
-      make_job=f \
-      make_cyto_key=f \
-      make_dna_key=f \
-      make_leaf_key=f \
-      make_status=f 
-    begin_for feature in "${cell_features[@]}"; doo
-      case $feature in
-        req)
-          make_req=t
-        ;;
-        log)
-          if [[ $make_job == f ]]; then
-            make_log=t
-          fi
-        ;;
-        job)
-          make_job=t
-          make_log=f
-        ;;
-        status)
-          make_status=t
-        ;;
-        key)
-          make_dna_key=t
-        ;;
-        leaf-key)
-          make_leaf_key=t
-        ;;
-        local-key) 
-          # Use this if you don't want the keys of this cell to be saved to repo
-          # They will only be stored locally instead
-          make_cyto_key=t
-        ;;
-        *)
-          log_fatal "Unknown feature $feature"
-          fail1
-        ;;
-      esac
-    end_for
-    if [[ $make_req == t ]]; then
-      mkdir -p $new_cyto/req || fail
-    fi
-    if [[ $make_log == t ]]; then
-      mkdir -p $new_cyto/log || fail
-    fi
-    if [[ $make_job == t ]]; then
-      mkdir -p $new_cyto/job || fail
-    fi
-    if [[ $make_dna_key == t ]]; then
-      mkdir -p $dna_path/key || fail
-    fi
-    if [[ $make_leaf_key == t ]]; then
-      mkdir -p $dna_path/leaf/key || fail
-    fi
-    if [[ $make_cyto_key == t ]]; then
-      mkdir -p $new_cyto/key || fail
-    fi
-    if [[ $make_status == t ]]; then
-      mkdir -p $new_cyto/status || fail
-    fi
-  fi
-
 end_function_flat
 handle_return
 }
@@ -1218,16 +1144,73 @@ else
 fi
 }
 
+cell_change_log_file() {
+  local new_log_file=$log_path/$current_command-$fork_id.olog
+  change_log_file
+}
+
+cell_close_log_file() {
+  local new_log_file=
+  change_log_file
+}
+
+get_job_id() {
+  begin_function_flat
+
+    if [[ ! -v job_id_log ]]; then
+      log_fatal "Internal error: Missing job_id_log"
+      fail1
+    fi
+
+    timeout=5 lock_path=$job_id_log fd_write_lock || {
+      echo "Failed to get lock on $job_id_log" >&2
+      fail1
+    }
+
+    if [[ -f "$job_id_log" ]]; then
+      local last_id=$(tail -n1 $job_id_log | awk '{print $1}')
+      (( job_id = last_id + 1 ))
+    else
+      job_id=1
+    fi
+
+    if [[ ! "$command_to_log" ]]; then
+      log_fatal "Missing command to log."
+      fail1
+    fi
+
+    echo "$job_id $command_to_log" >>$job_id_log || fail
+
+    fd_unlock
+
+  end_function_flat
+  handle_return
+}
+
+# inputs: fork_id_log 
+get_fork_id() {
+  timeout=5 lock_path=$fork_id_log fd_write_lock || {
+    echo "Failed to get lock on $fork_id_log" >&2
+    return 1
+  }
+  local last_id=$(tail -n1 $fork_id_log | awk '{print $1}')
+  (( fork_id = last_id + 1 ))
+  echo $fork_id >>$fork_id_log || return 1
+  fd_unlock
+  return 0
+}
+
 # should be run in a subshell since it loads the context
 execute_command() {
-local cell=$(realpath $1) command=$2
+local cell=$(realpath $1) current_command=$2
 
-local log_vars='cell command'
+local log_vars='cell current_command'
 begin_function
 
   local short_cell; get_short_cell $cell
 
-  if [[ $command != edit ]]; then
+  if [[ $current_command != edit ]]; then
+
     if [[ $cell == */.dna/sub/* ]]; then
       local new_cell=${cell//\/.dna\/sub\//\/}
       if [[ -d $new_cell ]]; then
@@ -1237,16 +1220,24 @@ begin_function
         fail1
       fi
     fi
-    # recursive
+
+    command_to_log="$current_command $original_cmd" \
+      get_job_id || fail
+
     cell_context_load || {
       log_fatal "Context failed to load for $cell"
       fail1
       }
 
+    get_fork_id || fail
+    local new_log_folder=$log_path
+    cell_change_log_file || fail
+
     if [[ "$localize_dim_vars" != local ]]; then
       eval "$localize_dim_vars" || fail
     fi
-  else
+
+  else # current_command == edit
     local cell_path=
     get_cell_path $cell || fail
     if [[ ! "$cell_path" ]]; then
@@ -1261,30 +1252,30 @@ begin_function
     fi
   fi
 
-  local command_path=$cell/.cyto/command/$command
+  local command_path=$cell/.cyto/command/$current_command
 
   if [[ ! -e $command_path && ! -e $cell/.cyto ]]; then
     local dna_command=
-    cell=$cell command=$command get_dna_command || fail
+    cell=$cell command=$current_command get_dna_command || fail
     if [[ "$dna_command" ]]; then
       command_path=$dna_command
     fi
   fi
 
   if [[ ! -e $command_path ]]; then
-    log_fatal "Command $command doesn't exist in $command_path or as a function"
+    log_fatal "Command $current_command doesn't exist in $command_path or as a function"
     fail1
   fi
 
-  if type -t command_${command}_prep &>/dev/null; then
-    command_${command}_prep || fail
+  if type -t command_${current_command}_prep &>/dev/null; then
+    command_${current_command}_prep || fail
   elif [[ -f $command_path.prep ]]; then
     source $command_path.prep || fail
-    if ! type -t ${command}_prep &>/dev/null; then
-      log_fatal "$command_path.prep must contain a function named ${command}_prep"
+    if ! type -t ${current_command}_prep &>/dev/null; then
+      log_fatal "$command_path.prep must contain a function named ${current_command}_prep"
       fail1
     fi
-    ${command}_prep || fail
+    ${current_command}_prep || fail
   fi
 
   if [[ ${skip_dim_validation:-f} == f ]]; then
@@ -1292,13 +1283,13 @@ begin_function
   fi
 
   if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
-    log_info "Executing command: $command $short_cell"
+    log_info "Executing command: $current_command $short_cell"
   else
-    log_debug "Executing command: $command $short_cell"
+    log_debug "Executing command: $current_command $short_cell"
   fi
 
-  if type -t command_$command &>/dev/null; then
-    command_$command || fail
+  if type -t command_$current_command &>/dev/null; then
+    command_$current_command || fail
   else
     execute_command_step $command_path || fail
   fi
@@ -1823,7 +1814,6 @@ leaf_dims= \
 sub_dims= \
 in_path= \
 out_path=out 
-unset cell_features
 return 0
 }
 
@@ -1914,19 +1904,12 @@ begin_function_flat
     req_path=
   fi
 
-  log_path=$cyto_path/log
-  if [[ ! -d $log_path ]]; then
-    log_path=
-  fi
-
   job_path=$cyto_path/job
   if [[ ! -d $job_path ]]; then
-    job_path=
-    current_job_path=
-  else
-    current_job_path=$job_path/current
-    log_path=$current_job_path/log
+    mkdir $job_path || fail
   fi
+  current_job_path=$job_path/$job_id
+  log_path=$current_job_path/log
 
   source_path=$cyto_path/source
   if [[ ! -d $source_path ]]; then
@@ -2884,10 +2867,10 @@ return $return_code
 
 # run within the subshell at the beginning
 begin_fork() {
-get_next_fork_id || return 1
-log_pos=0
-change_log_file
-return 0
+  get_fork_id || return 1
+  log_pos=0
+  cell_change_log_file || return 1
+  return 0
 }
 
 # run within the subshell at the beginning
