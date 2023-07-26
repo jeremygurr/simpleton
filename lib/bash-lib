@@ -262,6 +262,7 @@ upper_first_char() {
   echo -n "$first${string:1}"
 }
 
+# usage: convert_to_seconds {from time period} {to var name}
 convert_to_seconds() {
   local from=$1; shift
   local to=$1
@@ -475,7 +476,120 @@ get_overlap() {
   done
 }
 
-# usage: convert_to_seconds {from time period} {to var name}
+# inputs: 
+#   from    directory to link to target
+#   to      target to link to
+#   timeout how long to wait in miliseconds
+# if timeout is not given, then attempt will immediately fail if it can't get the lock right away
+#   otherwise it will keep trying until the timeout is reached or the lock is obtained.
+link_lock() {
+local from=$from
+local to=$to
+local timeout=${timeout:-}
+local pid_file=${pid_file:-$to/pid}
+
+vars='from to timeout'
+begin_function
+
+  if [[ ! -e "$from" ]]; then
+    log_fatal "$from doesn't exist, can't link lock it"
+    fail1
+  fi
+  
+  if [[ -L "$to" ]]; then
+
+    log_debug "Lock link exists already: $to"
+    local pid=
+
+    if [[ -f "$pid_file" ]]; then
+      pid=$(<"$pid_file")
+      if [[ "$pid" == $$ ]]; then
+        log_debug "This process already owns the lock, so we are done."
+        succeed
+      fi
+    fi
+
+    # check to see if the process is still running
+    if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
+      rm "$to" || fail
+      log_debug "Removed stale lock: $to with pid: $pid"
+    fi
+
+  elif [[ -e "$to" ]]; then
+    log_fatal "$to already exists and it's not a link. Can't obtain lock."
+    fail1
+  fi
+
+  local parent=${to%/*}
+  if [[ ! -d "$parent" ]]; then
+    log_fatal "Target of link lock isn't in a folder ($to)"
+    fail1
+  fi
+
+  local timeleft
+  let timeleft=timeout
+  local delay=250
+  local success=f
+  begin_while true; doo
+    ln -sn "$from" "$to" &>/dev/null && success=t
+    if [[ $success == t ]]; then
+      echo $$ >"$pid_file" || fail
+      break
+    fi
+
+    if [ ! "$timeout" ]; then
+      break
+    fi
+
+    local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
+    log_debug "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
+    sleep $seconds_to_wait
+    timeleft=$((timeleft-delay))
+
+    let delay*=2
+    if (( delay > 10000 )); then
+      delay=10000
+    fi
+
+    if (( timeleft <= 0 )); then
+      log_warn "Timeout reached. Couldn't obtain the lock in time."
+      break
+    fi
+
+  end_while
+
+  if [[ $success == f ]]; then
+    log_debug "Failed to obtain lock."
+    fail1
+  fi
+
+  defer "rm '$pid_file' '$to' &>/dev/null"
+
+  # lock obtained
+  log_debug "Succeeded in obtaining lock."
+
+end_function
+handle_return
+}
+
+link_unlock() {
+local to=$to
+local pid_file=${pid_file:-$to/pid}
+
+if [[ -f "$pid_file" ]]; then
+  rm "$pid_file" || return 1
+fi
+
+if [[ -L "$to" ]]; then
+  rm "$to" || return 1
+elif [[ -e "$to" ]]; then
+  log_fatal "$to is not a link, can't unlock it"
+  return 1
+fi
+
+return 0
+}
+
 # inputs: folder_to_lock timeout pid_file
 # if timeout is not given, then attempt will immediately fail if it can't get the lock right away
 #   otherwise it will keep trying until the timeout is reached or the lock is obtained.

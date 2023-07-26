@@ -44,12 +44,12 @@ begin_function_flat
     echo "update_successful=${update_successful:-}" >>$reply_file || fail
   fi
 
-  if [[ "$job_path" ]]; then
-    folder_to_unlock=$current_job_path folder_unlock || fail
-  fi
   if [[ "$log_path" ]]; then
     change_log_file - || fail
   fi
+
+  to=$running_job_path \
+    link_unlock 
 
 end_function_flat
 handle_return
