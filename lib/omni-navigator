@@ -166,10 +166,10 @@ omni_load_log_array() {
 }
 
 # inputs:
-#   cursor log_file_token
-# should be executed after change_cursor_log has selected a log for this cursor
-omni_select_cursor() {
-  declare -gn \
+#   cursor
+# should be evaluated after change_cursor_log has selected a log for this cursor
+omni_select_cursor='
+  local -n \
     action_map=cursor_${cursor}_action_map \
     index=cursor_${cursor}_log_array_index \
     log_array=cursor_${cursor}_log_array \
@@ -180,15 +180,14 @@ omni_select_cursor() {
     plane_map=cursor_${cursor}_plane_map \
     plane_stack_map=cursor_${cursor}_plane_stack_map 
 
-  fork_id=${log_file_id#*:} \
-  plane_map_size=${#plane_map[*]} 
-
-  return 0
-}
+  local fork_id=${log_file_id#*:} \
+    plane_map_size=${#plane_map[*]} 
+'
 
 # inputs:
 #   cursor 
 #   log_file
+#   index
 # should be able to run even before omni_select_cursor
 change_cursor_log() {
   begin_function_flat
@@ -198,7 +197,6 @@ change_cursor_log() {
     eval "
       cursor_${cursor}_log_file=$log_file \
       cursor_${cursor}_log_file_id=$log_file_id \
-      cursor_${cursor}_log_array_var=omni_log_array_$log_file_token \
       cursor_${cursor}_log_array_index=$index \
     "
     eval "
@@ -289,30 +287,41 @@ omni_step_in() {
   return 0
 }
 
+# inputs:
+#   from_log
+#   from_index
 omni_search() {
-  local \
-    from_log=$from_log \
-    from_index=$from_index \
-    skip_first=${skip_first:-t} \
-    direction=${direction:-1} \
-    find_level=${find_level:-} \
+  begin_function_flat
 
-  if (( amount < 0 )); then
-    d=-1
-    (( amount = -amount ))
-  fi
+    local \
+      from_log=$from_log \
+      from_index=$from_index \
+      skip_first=${skip_first:-t} \
+      direction=${direction:-1} \
+      find_level=${find_level:-} \
+      deep=${deep:-t} \
 
-  for (( i = current_index + d;
-         i >= 0 
-         && adjusted < amount 
-         && i < plane_map_size;
-         i += d )); do
-    if (( plane_map[i] == plane_id )); then
-      current_index=$i
-      (( adjusted++ ))
+    found_index= found_log=
+
+    local cursor=s 
+
+    log_file=$from_log \
+      index=$from_index \
+      change_cursor_log || fail
+
+    eval "$omni_select_cursor" || fail
+
+    local plane_id=${plane_map[$index]}
+
+    if [[ $skip_first == t ]]; then
+      (( index++ ))
     fi
-  done
-  return 0
+
+    begin_while (( index < plane_map_size )); doo
+    end_while
+
+  end_function_flat
+  handle_return
 }
 
 omni_next_error() {
@@ -375,7 +384,7 @@ omni_navigator() (
     local cursor=a
 
     change_cursor_log || fail
-    omni_select_cursor || fail
+    eval "$omni_select_cursor" || fail
     next_log_start=$index
     new_index=$index
       change_index || fail
