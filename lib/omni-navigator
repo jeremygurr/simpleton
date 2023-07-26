@@ -36,7 +36,9 @@ get_log_file_token() {
   return 0
 }
 
-update_index() {
+change_index() {
+  local new_index=$new_index
+  index=$new_index
   plane_id=${plane_map[$index]}
 }
 
@@ -250,6 +252,113 @@ omni_show_log() {
 }
 
 # inputs: 
+#   new_log_file
+#   log_file
+#   index
+#   log_file_stack
+#   log_file_pos_stack
+enter_log_file() {
+  debug_start
+  log_file_stack+=( $log_file )
+  log_file_pos_stack+=( $index )
+  log_file=$new_log_file change_cursor_log || return 1
+  new_index=0 \
+    change_index || return 1
+  return 0
+}
+
+omni_step_in() {
+  local action=${action_map[$index]}
+  if [[ $action == log_to ]]; then
+    local i=$index line=${log_array[$index]} \
+      ts pid log_id depth level action function entries info new_log_file
+    entries=${line#= }
+    eval "$entries" || return 1
+    if [[ ! "${new_log_file:-}" ]]; then
+      log_fatal "log_to action is missing the new_log_file key"
+      return 1
+    fi
+    enter_log_file || return 1
+  else
+    (( index++ ))
+    if (( index >= plane_map_size )); then
+      (( index = plane_map_size - 1 ))
+    fi
+    plane_id=${plane_map[$index]}
+  fi
+  return 0
+}
+
+omni_search() {
+  local \
+    from_log=$from_log \
+    from_index=$from_index \
+    skip_first=${skip_first:-t} \
+    direction=${direction:-1} \
+    find_level=${find_level:-} \
+
+  if (( amount < 0 )); then
+    d=-1
+    (( amount = -amount ))
+  fi
+
+  for (( i = current_index + d;
+         i >= 0 
+         && adjusted < amount 
+         && i < plane_map_size;
+         i += d )); do
+    if (( plane_map[i] == plane_id )); then
+      current_index=$i
+      (( adjusted++ ))
+    fi
+  done
+  return 0
+}
+
+omni_next_error() {
+from_log=$log_file
+  from_index=$index
+  skip_first=t
+  direction=1
+  find_level='(error|fatal)'
+  omni_search || return 1
+if [[ $found_index ]]; then
+  if [[ $log_file != $found_log ]]; then
+    cursor=a \
+      log_file=$found_log \
+      change_cursor_log || return 1
+  fi
+  new_index=$found_index \
+    change_index || return 1
+fi
+return 0
+}
+
+# inputs: {index} {amount}
+#   plane_id plane_map
+omni_offset_index() {
+  local -n current_index=$var
+  local amount=$offset i adjusted=0 d=1
+
+  if (( amount < 0 )); then
+    d=-1
+    (( amount = -amount ))
+  fi
+
+  for (( i = current_index + d;
+         i >= 0 
+         && adjusted < amount 
+         && i < plane_map_size;
+         i += d )); do
+    if (( plane_map[i] == plane_id )); then
+      current_index=$i
+      (( adjusted++ ))
+    fi
+  done
+  return 0
+}
+
+# inputs: 
 #   log_file
 omni_navigator() (
   # side_log "omni_navigator()
@@ -264,12 +373,12 @@ omni_navigator() (
   begin_function_flat
 
     local cursor=a
-    index=0 # Must be global
 
     change_cursor_log || fail
     omni_select_cursor || fail
     next_log_start=$index
-    update_index || fail
+    new_index=$index
+      change_index || fail
 
     var=next_log_start offset=-$omni_list_radius \
       omni_offset_index || fail
@@ -289,9 +398,9 @@ omni_navigator() (
 
       case "$debug_c" in
         b)
-          echo "# Step back" >&$fd_original_err
+          echo "# Step back, until next function call" >&$fd_original_err
           local p=$index
-          var=index offset=-1 omni_offset_index || fail
+          var=index offset=-1 match_action=call omni_offset_index || fail
           if [[ $p == $index ]]; then
             (( index-- ))
             if (( index < 0 )); then
@@ -308,7 +417,7 @@ omni_navigator() (
           no_follow_once=t
           ;;
         i)
-          echo "# Step in" >&$fd_original_err
+          echo "# Step in, forwards" >&$fd_original_err
           omni_step_in || fail
           omni_show_context || fail
           no_follow_once=t
@@ -326,9 +435,9 @@ omni_navigator() (
           no_follow_once=t
           ;;
         n)
-          echo "# Step over" >&$fd_original_err
+          echo "# Step over, until function call" >&$fd_original_err
           local p=$index
-          var=index offset=1 omni_offset_index || fail
+          var=index offset=1 match_action=call omni_offset_index || fail
           if [[ $p == $index ]]; then
             (( index++ ))
             if (( index >= plane_map_size )); then
@@ -361,6 +470,20 @@ omni_navigator() (
           echo "# Quitting" >&$fd_original_err
           debug_r=0
           ;;
+        s)
+          echo "# Step over, until next entry" >&$fd_original_err
+          local p=$index
+          var=index offset=1 omni_offset_index || fail
+          if [[ $p == $index ]]; then
+            (( index++ ))
+            if (( index >= plane_map_size )); then
+              (( index = plane_map_size - 1 ))
+            fi
+            plane_id=${plane_map[$index]}
+          fi
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
         S)
           echo "# Entering debug shell" >&$fd_original_err
           set +u
@@ -372,6 +495,10 @@ omni_navigator() (
           echo "# Show stack" >&$fd_original_err
           omni_show_stack || fail
           no_follow_once=t
+          ;;
+        \!)
+          echo "# Jump to next error" >&$fd_original_err
+          omni_next_error || fail
           ;;
         \?)
           echo >&$fd_original_err
@@ -387,6 +514,7 @@ omni_navigator() (
           echo "q  quit: leave the omni navigator" >&$fd_original_err
           echo "s  step: step to the next log line even if it's not a function call" >&$fd_original_err
           echo "t  stack: show stack trace" >&$fd_original_err
+          echo "!  go to next error" >&$fd_original_err
           no_follow_once=t
           ;;
         *)
@@ -463,67 +591,6 @@ omni_show_line() {
     echo "$line" >&$fd_original_err
   fi
 
-  return 0
-}
-
-# inputs: {index} {amount}
-#   plane_id plane_map
-omni_offset_index() {
-  local -n current_index=$var
-  local amount=$offset i adjusted=0 d=1
-
-  if (( amount < 0 )); then
-    d=-1
-    (( amount = -amount ))
-  fi
-
-  for (( i = current_index + d;
-         i >= 0 
-         && adjusted < amount 
-         && i < plane_map_size;
-         i += d )); do
-    if (( plane_map[i] == plane_id )); then
-      current_index=$i
-      (( adjusted++ ))
-    fi
-  done
-  return 0
-}
-
-omni_step_in() {
-  local action=${action_map[$index]}
-  if [[ $action == log_to ]]; then
-    local i=$index line=${log_array[$index]} \
-      ts pid log_id depth level action function entries info new_log_file
-    entries=${line#= }
-    eval "$entries" || return 1
-    if [[ ! "${new_log_file:-}" ]]; then
-      log_fatal "log_to action is missing the new_log_file key"
-      return 1
-    fi
-    enter_log_file || return 1
-  else
-    (( index++ ))
-    if (( index >= plane_map_size )); then
-      (( index = plane_map_size - 1 ))
-    fi
-    plane_id=${plane_map[$index]}
-  fi
-  return 0
-}
-
-# inputs: 
-#   new_log_file
-#   log_file
-#   index
-#   log_file_stack
-#   log_file_pos_stack
-enter_log_file() {
-  log_file_stack+=( $log_file )
-  log_file_pos_stack+=( $index )
-  change_cursor_log
-  index=0
-  update_index
   return 0
 }
 
