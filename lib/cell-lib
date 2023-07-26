@@ -1,6 +1,7 @@
 #!/bin/bash
 
-type -t cell_context_load >/dev/null && return 0
+[[ -v cell_lib_loaded ]] && return 0
+cell_lib_loaded=t
 
 # don't let other users read any files written by these scripts
 umask 0077
@@ -83,6 +84,121 @@ make_cyto() {
 
   end_function_flat
   handle_return
+}
+
+# input must be a folder
+setup_cell_path_vars() {
+cell_path=$1
+begin_function_flat
+
+  if [[ ! "${top_cell:-}" ]]; then
+    get_top_cell $cell_path || fail
+  fi
+
+  dna_path=$cell_path/.dna \
+    cyto_path=$cell_path/.cyto \
+    command_path=$cyto_path/command
+
+  if [[ -d $dna_path/dim ]]; then
+    cell_is_leaf=f
+  else
+    cell_is_leaf=t
+  fi
+
+  get_short_cell $cell_path
+
+  key_path=$cyto_path/key
+  if [[ ! -d $key_path ]]; then
+    # create this as needed
+    key_path=$dna_path/key
+  fi
+
+  op_path=$dna_path/op
+
+  dna_up_path=$dna_path/up
+  if [[ ! -d $dna_up_path ]]; then
+    dna_up_path=
+  fi
+
+  up_path=$cyto_path/up
+  if [[ ! -d $up_path ]]; then
+    up_path=
+  fi
+
+  dna_down_path=$dna_path/down
+  if [[ ! -d $dna_down_path ]]; then
+    dna_down_path=
+  fi
+
+  # create this folder as needed
+  down_path=$cyto_path/down
+
+  sub_path=$dna_path/sub
+  if [[ ! -d $sub_path ]]; then
+    sub_path=
+  fi
+
+  # context can override these as needed
+  # could be a relative path
+  in_path=${in_path:-}
+  if [[ "$in_path" && "$in_path" != /* ]]; then
+    in_path=$cell_path/$in_path
+  fi
+
+  out_path=${out_path:-}
+  if [[ "$out_path" && "$out_path" != /* ]]; then
+    out_path=$cell_path/$out_path
+  fi
+
+  status_path=$cyto_path/status
+  if [[ ! -d $status_path ]]; then
+    mkdir $status_path || fail
+  fi
+
+  debug_path=$cyto_path/debug
+  if [[ ! -d $debug_path ]]; then
+    debug_path=
+  fi
+
+  req_path=$cyto_path/req
+  if [[ ! -d $req_path ]]; then
+    req_path=
+  fi
+
+  job_path=$cyto_path/job
+  if [[ ! -d $job_path ]]; then
+    mkdir $job_path || fail
+  fi
+
+  if [[ "${job_id:-}" ]]; then
+
+    current_job_path=$job_path/$job_id
+    running_job_path=$job_path/running
+
+    if [[ ! -d $current_job_path ]]; then
+      mkdir $current_job_path || fail
+    fi
+
+    log_path=$current_job_path/log
+
+    if [[ ! -d $log_path ]]; then
+      mkdir $log_path || fail
+    fi
+
+    fork_id_log=$current_job_path/fork-id-log
+
+  fi
+
+  source_path=$cyto_path/source
+  if [[ ! -d $source_path ]]; then
+    mkdir $source_path || fail
+  fi
+
+  # create this when needed
+  tmp_path=$cyto_path/tmp
+
+end_function_flat
+handle_return
 }
 
 cell_context_load() {
@@ -1145,13 +1261,15 @@ fi
 }
 
 cell_change_log_file() {
-  local new_log_file=$log_path/$current_command-$fork_id.olog
-  change_log_file
+  local new_log_file=$log_path/$fork_id.olog
+  log_function=${FUNCNAME[1]} \
+    change_log_file
 }
 
 cell_close_log_file() {
   local new_log_file=
-  change_log_file
+  log_function=${FUNCNAME[1]} \
+    change_log_file
 }
 
 get_job_id() {
@@ -1232,6 +1350,7 @@ begin_function
     get_fork_id || fail
     local new_log_folder=$log_path
     cell_change_log_file || fail
+    force=t safe_link $current_job_path $job_path/last-attempt || fail
 
     if [[ "$localize_dim_vars" != local ]]; then
       eval "$localize_dim_vars" || fail
@@ -1823,115 +1942,6 @@ required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
 # fresh passed in by user should only apply to top level cell, not to deps or subs
 fresh=
 return 0
-}
-
-# input must be a folder
-setup_cell_path_vars() {
-cell_path=$1
-begin_function_flat
-
-  if [[ ! "${top_cell:-}" ]]; then
-    get_top_cell $cell_path || fail
-  fi
-
-  dna_path=$cell_path/.dna \
-    cyto_path=$cell_path/.cyto \
-    command_path=$cyto_path/command
-
-  if [[ -d $dna_path/dim ]]; then
-    cell_is_leaf=f
-  else
-    cell_is_leaf=t
-  fi
-
-  get_short_cell $cell_path
-
-  key_path=$cyto_path/key
-  if [[ ! -d $key_path ]]; then
-    # create this as needed
-    key_path=$dna_path/key
-  fi
-
-  op_path=$dna_path/op
-
-  dna_up_path=$dna_path/up
-  if [[ ! -d $dna_up_path ]]; then
-    dna_up_path=
-  fi
-
-  up_path=$cyto_path/up
-  if [[ ! -d $up_path ]]; then
-    up_path=
-  fi
-
-  dna_down_path=$dna_path/down
-  if [[ ! -d $dna_down_path ]]; then
-    dna_down_path=
-  fi
-
-  # create this folder as needed
-  down_path=$cyto_path/down
-
-  sub_path=$dna_path/sub
-  if [[ ! -d $sub_path ]]; then
-    sub_path=
-  fi
-
-  # context can override these as needed
-  # could be a relative path
-  in_path=${in_path:-}
-  if [[ "$in_path" && "$in_path" != /* ]]; then
-    in_path=$cell_path/$in_path
-  fi
-
-  out_path=${out_path:-}
-  if [[ "$out_path" && "$out_path" != /* ]]; then
-    out_path=$cell_path/$out_path
-  fi
-
-  status_path=$cyto_path/status
-  if [[ ! -d $status_path ]]; then
-    mkdir $status_path || fail
-  fi
-
-  debug_path=$cyto_path/debug
-  if [[ ! -d $debug_path ]]; then
-    debug_path=
-  fi
-
-  req_path=$cyto_path/req
-  if [[ ! -d $req_path ]]; then
-    req_path=
-  fi
-
-  job_path=$cyto_path/job
-  if [[ ! -d $job_path ]]; then
-    mkdir $job_path || fail
-  fi
-
-  current_job_path=$job_path/$job_id
-  running_job_path=$job_path/running
-  if [[ ! -d $current_job_path ]]; then
-    mkdir $current_job_path || fail
-  fi
-
-  log_path=$current_job_path/log
-  if [[ ! -d $log_path ]]; then
-    mkdir $log_path || fail
-  fi
-
-  fork_id_log=$current_job_path/fork-id-log
-
-  source_path=$cyto_path/source
-  if [[ ! -d $source_path ]]; then
-    mkdir $source_path || fail
-  fi
-
-  # create this when needed
-  tmp_path=$cyto_path/tmp
-
-end_function_flat
-handle_return
 }
 
 # returns:
@@ -2861,7 +2871,6 @@ return 0
 
 fork() {
 local reply_file command=$* return_code=0
-    debug_start
 get_new_reply_file
 defer "rm $reply_file"
 

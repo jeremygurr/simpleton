@@ -16,6 +16,7 @@ begin_function_flat
         touch -d @$completion_time $status_path/last-good-update-end || fail
         cp -a $status_path/last-update-start \
               $status_path/last-good-update-start || fail
+        force=t safe_link $current_job_path $job_path/last-success || fail
         if [[ "${props:-}" ]]; then
           update_prop_hash || fail
         fi
@@ -25,6 +26,7 @@ begin_function_flat
         fi
       else
         touch -d @$completion_time $status_path/last-bad-update-end || fail
+        force=t safe_link $current_job_path $job_path/last-failure || fail
         cp -a $status_path/last-update-start \
               $status_path/last-bad-update-start || fail
       fi
@@ -45,7 +47,7 @@ begin_function_flat
   fi
 
   if [[ "$log_path" ]]; then
-    change_log_file - || fail
+    cell_close_log_file || fail
   fi
 
   to=$running_job_path \

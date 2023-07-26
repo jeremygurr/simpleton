@@ -127,152 +127,6 @@ alias end_function='
   write_to_log trace "return($return_value)"
 '
 
-# Usage:
-#   new_log_file=... change_log_file  point to new log file
-#   new_log_file= change_log_file     stop logging
-change_log_file() {
-begin_function_flat
-
-  local new_log_file=$new_log_file old_log_file 
-
-  if [[ "${log_file:-}" == "$new_log_file" ]]; then
-    succeed
-  fi
-
-  if [[ "${log_file:-}" ]]; then
-    if [[ "$new_log_file" ]]; then
-      log_function=${FUNCNAME[1]} log_vars=new_log_file write_to_log trace log_to
-    else
-      log_function=${FUNCNAME[1]} write_to_log trace log_close
-    fi
-  fi
-
-  if [[ "$new_log_file" ]]; then
-    old_log_file=${log_file:-}
-    log_file=$new_log_file
-    log_pos=1
-
-    if [[ -f $log_file ]]; then
-      log_fatal "log file already exists: $log_file"
-      fail1
-    fi
-
-    if [[ "$old_log_file" ]]; then
-      log_vars=old_log_file write_to_log trace log_from
-    fi
-
-  fi
-
-end_function_flat
-handle_return
-}
-
-log_trace() {
-begin_no_tracing_zone
-local message="$*"
-log_function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
-end_no_tracing_zone
-return 0
-}
-
-log_debug() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
-end_no_tracing_zone
-return 0
-}
-
-log_info() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
-end_no_tracing_zone
-return 0
-}
-
-log_warn() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
-end_no_tracing_zone
-return 0
-}
-
-log_error() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
-end_no_tracing_zone
-return 0
-}
-
-log_fatal() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log fatal "${action:-}" "$*"
-end_no_tracing_zone
-return 0
-}
-
-# zombie logs are used to output temporary debugging logs
-# they should be removed from the code after the issue is resolved
-log_zombie() {
-begin_no_tracing_zone
-echo "$CYAN$*$RESET" >&$fd_original_err
-end_no_tracing_zone
-return 0
-}
-
-incomplete() {
-  begin_no_tracing_zone
-  if [ ${tracing_midline:-f} == t ]; then
-    tracing_midline=f
-    echo >&2
-  fi
-  if [ "${1:-}" ]; then
-    echo "Not implemented yet: ${1:-}" >&2
-  else
-    echo "Not implemented yet." >&2
-  fi
-  start_frame=2 stack_trace
-  end_no_tracing_zone
-  exit 1
-}
-
-log_and_run() {
-local prefix= command=$* out_to_file=${out_to_file:-}
-if [[ $pretend == t ]]; then
-  prefix="PRETEND: "
-fi
-log_function=${FUNCNAME[1]} write_to_log debug command "$prefix$command"
-if [[ $pretend == f ]]; then
-  if [[ "$out_to_file" ]]; then
-    eval "$command" >$out_to_file || return 1
-  else
-    eval "$command" || return 1
-  fi
-fi
-return 0
-}
-
-declare -A log_level_num_map=( 
-  [all]=0 
-  [trace]=1 
-  [debug]=2 
-  [info]=3 
-  [warn]=4 
-  [error]=5 
-  [fatal]=6 
-  [off]=9
-  )
-
-declare -A log_level_color_map=( 
-  [all]= 
-  [trace]= 
-  [debug]= 
-  [info]= 
-  [warn]=$YELLOW
-  [error]=$RED 
-  [fatal]=$RED 
-  [off]=
-  )
-
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
 begin_no_tracing_zone
@@ -410,6 +264,7 @@ if [[ "$debug_at_log_id" ]]; then
     debug_at_log_id=
     if [[ ! "${debug_id:-}" ]]; then
       debug_immediate=t
+      debug_start
     else
       echo "${CYAN}Will debug starting at debug_id $debug_id or later${RESET}" >&2
       debug_subshell=t
@@ -422,6 +277,153 @@ fi
 
 end_no_tracing_zone
 }
+
+# Usage:
+#   new_log_file=... change_log_file  point to new log file
+#   new_log_file= change_log_file     stop logging
+change_log_file() {
+begin_function_flat
+
+  local new_log_file=$new_log_file old_log_file \
+    log_function=${log_function:-${FUNCNAME[1]}} 
+
+  if [[ "${log_file:-}" == "$new_log_file" ]]; then
+    succeed
+  fi
+
+  if [[ "${log_file:-}" ]]; then
+    if [[ "$new_log_file" ]]; then
+      log_vars=new_log_file write_to_log trace log_to
+    else
+      write_to_log trace log_close
+    fi
+  fi
+
+  if [[ "$new_log_file" ]]; then
+    old_log_file=${log_file:-}
+    log_file=$new_log_file
+    log_pos=1
+
+    if [[ -f $log_file ]]; then
+      log_fatal "log file already exists: $log_file"
+      fail1
+    fi
+
+    if [[ "$old_log_file" ]]; then
+      log_vars=old_log_file write_to_log trace log_from
+    fi
+
+  fi
+
+end_function_flat
+handle_return
+}
+
+log_trace() {
+begin_no_tracing_zone
+local message="$*"
+log_function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
+end_no_tracing_zone
+return 0
+}
+
+log_debug() {
+begin_no_tracing_zone
+log_function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
+end_no_tracing_zone
+return 0
+}
+
+log_info() {
+begin_no_tracing_zone
+log_function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
+end_no_tracing_zone
+return 0
+}
+
+log_warn() {
+begin_no_tracing_zone
+log_function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
+end_no_tracing_zone
+return 0
+}
+
+log_error() {
+begin_no_tracing_zone
+log_function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
+end_no_tracing_zone
+return 0
+}
+
+log_fatal() {
+begin_no_tracing_zone
+log_function=${FUNCNAME[1]} write_to_log fatal "${action:-}" "$*"
+end_no_tracing_zone
+return 0
+}
+
+# zombie logs are used to output temporary debugging logs
+# they should be removed from the code after the issue is resolved
+log_zombie() {
+begin_no_tracing_zone
+echo "$CYAN$*$RESET" >&$fd_original_err
+end_no_tracing_zone
+return 0
+}
+
+incomplete() {
+  begin_no_tracing_zone
+  if [ ${tracing_midline:-f} == t ]; then
+    tracing_midline=f
+    echo >&2
+  fi
+  if [ "${1:-}" ]; then
+    echo "Not implemented yet: ${1:-}" >&2
+  else
+    echo "Not implemented yet." >&2
+  fi
+  start_frame=2 stack_trace
+  end_no_tracing_zone
+  exit 1
+}
+
+log_and_run() {
+local prefix= command=$* out_to_file=${out_to_file:-}
+if [[ $pretend == t ]]; then
+  prefix="PRETEND: "
+fi
+log_function=${FUNCNAME[1]} write_to_log debug command "$prefix$command"
+if [[ $pretend == f ]]; then
+  if [[ "$out_to_file" ]]; then
+    eval "$command" >$out_to_file || return 1
+  else
+    eval "$command" || return 1
+  fi
+fi
+return 0
+}
+
+declare -A log_level_num_map=( 
+  [all]=0 
+  [trace]=1 
+  [debug]=2 
+  [info]=3 
+  [warn]=4 
+  [error]=5 
+  [fatal]=6 
+  [off]=9
+  )
+
+declare -A log_level_color_map=( 
+  [all]= 
+  [trace]= 
+  [debug]= 
+  [info]= 
+  [warn]=$YELLOW
+  [error]=$RED 
+  [fatal]=$RED 
+  [off]=
+  )
 
 out() {
   #echo "$@" >&${fd_original_out}
