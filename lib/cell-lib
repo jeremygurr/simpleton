@@ -1261,15 +1261,24 @@ fi
 }
 
 cell_change_log_file() {
-  local new_log_file=$log_path/$fork_id.olog
-  log_function=${FUNCNAME[1]} \
-    change_log_file
+  if [[ $current_command != log ]]; then
+    local new_log_file=$log_path/$job_id:$fork_id.olog
+    if [[ ${is_first_log:-t} == t ]]; then
+      from_must_exist=f \
+        safe_link $new_log_file ${new_log_file%/*}/first.olog || return 1
+      is_first_log=f
+    fi
+    log_function=${FUNCNAME[1]} \
+      change_log_file
+  fi
 }
 
 cell_close_log_file() {
-  local new_log_file=
-  log_function=${FUNCNAME[1]} \
-    change_log_file
+  if [[ $current_command != log ]]; then
+    local new_log_file=
+    log_function=${FUNCNAME[1]} \
+      change_log_file
+  fi
 }
 
 get_job_id() {
@@ -1339,8 +1348,10 @@ begin_function
       fi
     fi
 
-    command_to_log="${original_cmd#* }" \
-      get_job_id || fail
+    if [[ ! "${job_id:-}" ]]; then
+      command_to_log="${original_cmd#* }" \
+        get_job_id || fail
+    fi
 
     cell_context_load || {
       log_fatal "Context failed to load for $cell"
@@ -1350,7 +1361,9 @@ begin_function
     get_fork_id || fail
     local new_log_folder=$log_path
     cell_change_log_file || fail
-    force=t safe_link $current_job_path $job_path/last-attempt || fail
+    if [[ $current_command != log ]]; then
+      force=t safe_link $current_job_path $job_path/last-attempt || fail
+    fi
 
     if [[ "$localize_dim_vars" != local ]]; then
       eval "$localize_dim_vars" || fail
