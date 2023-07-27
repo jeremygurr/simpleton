@@ -36,10 +36,12 @@ get_log_file_token() {
   return 0
 }
 
-change_index() {
+omni_change_index() {
   local new_index=$new_index
   index=$new_index
-  plane_id=${plane_map[$index]}
+  if (( index >= 0 && index < plane_map_size )); then
+    plane_id=${plane_map[$index]}
+  fi
 }
 
 # input: {line}
@@ -167,7 +169,7 @@ omni_load_log_array() {
 
 # inputs:
 #   cursor
-# should be evaluated after change_cursor_log has selected a log for this cursor
+# should be evaluated after omni_change_cursor_log has selected a log for this cursor
 omni_select_cursor='
   local -n \
     action_map=cursor_${cursor}_action_map \
@@ -187,11 +189,14 @@ omni_select_cursor='
 
 # inputs:
 #   cursor 
-#   log_file
-#   index
+#   new_log_file
+#   new_index
 # should be able to run even before omni_select_cursor
-change_cursor_log() {
+omni_change_cursor_log() {
   begin_function_flat
+
+    local log_file=$new_log_file
+    local index=${new_index:-0}
 
     get_log_file_token || fail
 
@@ -260,9 +265,9 @@ enter_log_file() {
   debug_start
   log_file_stack+=( $log_file )
   log_file_pos_stack+=( $index )
-  log_file=$new_log_file change_cursor_log || return 1
+  log_file=$new_log_file omni_change_cursor_log || return 1
   new_index=0 \
-    change_index || return 1
+    omni_change_index || return 1
   return 0
 }
 
@@ -304,10 +309,38 @@ omni_step_in() {
   return 0
 }
 
+next_or_enter_log() {
+  debug_start
+  local direction=${direction:-1}
+
+  begin_function_flat
+
+    if [[ ${action_map[$index]} == log_to ]]; then
+
+      index=$from_index \
+        vars=new_log_file \
+        omni_extract_vars || fail
+
+      if [[ -e "$new_log_file" ]]; then
+        enter_log_file || fail
+      else
+        log_error "Internal error: log points to non-existent file: $new_log_file"
+      fi
+
+    else
+      new_index=$((index + direction)) \
+        omni_change_index || fail
+    fi
+
+  end_function_flat
+  handle_return
+}
+
 # inputs:
 #   from_log
 #   from_index
 omni_search() {
+  debug_start
   begin_function_flat
 
     local \
@@ -324,39 +357,56 @@ omni_search() {
 
     log_file=$from_log \
       index=$from_index \
-      change_cursor_log || fail
+      omni_change_cursor_log || fail
 
     eval "$omni_select_cursor" || fail
 
-    local plane_id=${plane_map[$index]}
+    local original_plane_id=${plane_map[$index]}
+    local plane_id=$original_plane_id
 
     if [[ $skip_first == t ]]; then
+      next_or_enter_log || fail
+    fi
 
-      if [[ $deep == t && ${action_map[$index]} == log_to ]]; then
+    local entry_matches
+    begin_while (( index < plane_map_size && index >= 0 )); doo
+      entry_matches=t
+      if [[ $deep == f && $plane_id != $original_plane_id ]]; then
+        entry_matches=f
+      elif [[ "$find_level" ]]; then
+        local level=
+        vars=level \
+          omni_extract_vars || fail
+        if [[ "${level:-}" && ! $level =~ $find_level ]]; then
+          entry_matches=f
+        fi
+      fi
+      if [[ $entry_matches == t ]]; then
+        break
+      elif [[ $deep == t && ${action_map[$index]} == log_to ]]; then
 
         index=$from_index \
           vars=new_log_file \
           omni_extract_vars || fail
 
         if [[ -e "$new_log_file" ]]; then
-          from_log=$new_log_file
-            from_index=0
+          # recursive
+          from_log=$new_log_file \
+            from_index=0 \
+            skip_first=f \
             omni_search || fail
           if [[ "$found_index" ]]; then
-            index=$found_index
-            log_file=$found_log
+            break
           fi
         else
           log_error "Internal error: log points to non-existent file: $new_log_file"
         fi
 
       else
-        (( index++ ))
+        new_index=$((index + direction)) \
+          omni_change_index || fail
       fi
 
-    fi
-
-    begin_while (( index < plane_map_size )); doo
     end_while
 
   end_function_flat
@@ -364,21 +414,24 @@ omni_search() {
 }
 
 omni_next_error() {
+
 from_log=$log_file \
   from_index=$index \
   skip_first=t \
   direction=1 \
   find_level='(error|fatal)' \
   omni_search || return 1
+
 if [[ $found_index ]]; then
   if [[ $log_file != $found_log ]]; then
     cursor=a \
       log_file=$found_log \
-      change_cursor_log || return 1
+      omni_change_cursor_log || return 1
   fi
   new_index=$found_index \
-    change_index || return 1
+    omni_change_index || return 1
 fi
+
 return 0
 }
 
@@ -422,11 +475,11 @@ omni_navigator() (
 
     local cursor=a
 
-    change_cursor_log || fail
+    omni_change_cursor_log || fail
     eval "$omni_select_cursor" || fail
     next_log_start=$index
     new_index=$index
-      change_index || fail
+      omni_change_index || fail
 
     var=next_log_start offset=-$omni_list_radius \
       omni_offset_index || fail
