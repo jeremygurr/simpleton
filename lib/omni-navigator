@@ -359,10 +359,17 @@ omni_search() {
       direction=${direction:-1} \
       find_level=${find_level:-} \
       deep=${deep:-t} \
+      omni_search_stack=${omni_search_stack:-} \
 
     found_index= found_log=
 
     local cursor=s 
+
+    if [[ -v omni_search_stack && "$omni_search_stack" =~ \ $from_log\  ]]; then
+      log_fatal "Infinite loop detected in omni_search, hit $from_log twice"
+      fail1
+    fi
+    omni_search_stack+=" $from_log "
 
     new_log_file=$from_log \
       new_index=$from_index \
@@ -400,8 +407,8 @@ omni_search() {
           omni_extract_vars || fail
 
         if [[ -e "$new_log_file" ]]; then
-          debug_once
           # recursive
+          zombie "omni searching log $new_log_file"
           from_log=$new_log_file \
             from_index=0 \
             skip_first=f \
@@ -424,6 +431,7 @@ omni_search() {
     end_while
 
   end_function_flat
+  omni_search_stack=${omni_search_stack// $from_log /}
   handle_return
 }
 
