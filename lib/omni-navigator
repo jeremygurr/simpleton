@@ -289,7 +289,9 @@ omni_extract_vars() {
     entries=${line#= }
     eval "$entries" || return 1
     for var in $vars; do
-      eval "declare -g $var=\$$var"
+      if [[ -v $var ]]; then
+        eval "declare -g $var=\$$var"
+      fi
     done
   fi
   return 0
@@ -316,7 +318,6 @@ omni_step_in() {
 }
 
 next_or_enter_log() {
-  debug_start
   local direction=${direction:-1}
 
   begin_function_flat
@@ -345,8 +346,10 @@ next_or_enter_log() {
 # inputs:
 #   from_log
 #   from_index
+# outputs:
+#   found_index
+#   found_log
 omni_search() {
-  debug_start
   begin_function_flat
 
     local \
@@ -388,14 +391,16 @@ omni_search() {
         fi
       fi
       if [[ $entry_matches == t ]]; then
+        found_log=$from_log
+        found_index=$index
         break
       elif [[ $deep == t && ${action_map[$index]} == log_to ]]; then
 
-        index=$from_index \
-          vars=new_log_file \
+        vars=new_log_file \
           omni_extract_vars || fail
 
         if [[ -e "$new_log_file" ]]; then
+          debug_once
           # recursive
           from_log=$new_log_file \
             from_index=0 \
@@ -403,16 +408,19 @@ omni_search() {
             omni_search || fail
           if [[ "$found_index" ]]; then
             break
+          else
+            new_log_file=$from_log \
+              new_index=$index \
+              omni_change_cursor_log || fail
           fi
         else
           log_error "Internal error: log points to non-existent file: $new_log_file"
         fi
 
-      else
-        new_index=$((index + direction)) \
-          omni_change_index || fail
       fi
 
+      new_index=$((index + direction)) \
+        omni_change_index || fail
     end_while
 
   end_function_flat

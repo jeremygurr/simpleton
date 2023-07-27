@@ -126,12 +126,9 @@ debug_trap() {
     debug_path_to_source_file=none
   fi
 
-#     && $debug_immediate == f \
   if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
     return 0
-  else
-    [[ $debug_debug == t ]] && echo "${CYAN}Not ignoring $debug_current_function${RESET}" >&$fd_original_err
   fi
 
   if [[ "$debug_state_file" -nt "$debug_state_file-$$" ]]; then
@@ -437,12 +434,14 @@ debug_trap() {
     if [[ "$debug_watch" ]]; then
       local w wn
       for w in $debug_watch; do
+
+        w=${w#\$}
         if [[ $debug_watch_style == compact ]]; then
           eval "echo -n \"\$$w \"" >&$fd_original_err
         else
-          wn=${w#\$}
-          eval "echo -n \"\$wn=\$$w \"" >&$fd_original_err
+          eval "echo -n \"\\\$$w=\$$w \"" >&$fd_original_err
         fi
+
       done
       echo >&$fd_original_err
     fi
@@ -808,8 +807,13 @@ debug_trap() {
         ;;
       w)
         echo >&$fd_original_err
-        read -e -p "Watch: " debug_watch <&$fd_original_in >&$fd_original_err
-        debug_watch=${debug_watch#\$}
+        local new_watch
+        read -e -p "Watch: " new_watch <&$fd_original_in >&$fd_original_err
+        if [[ "$new_watch" == +* ]]; then
+          debug_watch+=" ${new_watch#+}"
+        else
+          debug_watch=$new_watch
+        fi
         debug_save_state
         no_follow_once=t
         ;;
@@ -940,6 +944,7 @@ debug_trap() {
         echo "   not stepping into function calls" >&$fd_original_err
         echo "   WARNING: In the rare case that the debugger hangs after this command is run on a line of code, exit (control-c) and start over" >&$fd_original_err
         echo "   the debugging, except when you get to this line, press 's' to do a small step first, and then 'n' and usually it will work" >&$fd_original_err
+        echo "   WARNING 2: If the debugger is crashing with a return code of 141 (SIGPIPE), then turn off expansion (x command) before hitting n command of the problematic line" >&$fd_original_err
         echo "N  continue executing until we reach a line later than the current line, completing loops if needed" >&$fd_original_err
         echo "o  step out from the current function" >&$fd_original_err
         echo "p  print variables in current line" >&$fd_original_err
@@ -1038,25 +1043,6 @@ set_return_code() {
   return $1
 }
 
-if [[ ! "${debug_highlight:-}" ]]; then
-  if which source-highlight >/dev/null; then
-    debug_highlight=t
-  else
-    debug_highlight=f
-  fi
-fi
-
-if [[ $debug_highlight == t ]]; then
-  if ! which source-highlight >/dev/null; then
-    fatal "You set debug_highlight=t, but are missing the highlight command."
-    fatal "You can use 'brew install highlight' to install it if you want."
-    exit 1
-  fi
-
-  rm -rf $tmp_folder/debug_highlight &>/dev/null
-  mkdir -p $tmp_folder/debug_highlight || exit 1
-fi
-
 reserve_tmp_file() {
   local var=$1; shift
   local base=${1:-$var}; shift
@@ -1107,6 +1093,8 @@ cooked_stack_trace() {
   fi
   return 0
 }
+
+alias debug_once='[[ ! "${debug_once_triggered:-}" ]] && { debug_once_triggered=t; debug_start; }'
 
 debug_start() {
 parallel_execution=${p_par:-f}
@@ -1165,9 +1153,10 @@ if [[ $debugging == f ]]; then
 
   shopt -s extdebug
   trap '
-    debug_trap_first_line=${LINENO:-0} \
-      debug_saved_shell_options=$-; \
-      set +xvT
+    debug_trap_first_line=${LINENO:-0} 
+    debug_saved_shell_options=$-
+    set +exvT +o pipefail
+    [[ "${trace_debugger:-0}" -gt 0 ]] && { set -x; BASH_XTRACEFD=2; (( trace_debugger-- )); }
     # side_log "trap
     #   debug_trap_first_line=$debug_trap_first_line
     #   FUNCNAME[0]=${FUNCNAME[0]:-}
@@ -1190,7 +1179,7 @@ if [[ $debugging == f ]]; then
       if [[ "$debug_var" ]]; then
         set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
       fi
-      # [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: ${BASH_SOURCE[0]:-}:$LINENO ${BASH_COMMAND}  # debug_subshell=$debug_subshell$RESET" >&$fd_original_err
+      [[ $debug_debug == t ]] && echo "${CYAN}debug_debug[$((debug_depth+1))]: debug_id=$debug_id_current ${BASH_SOURCE[0]:-no_source}:$((debug_trap_first_line-1))/${BASH_LINENO[0]:-no_line} ${FUNCNAME[0]:-no_func} ${BASH_COMMAND}$RESET" >&$fd_original_err
       debug_trap "${BASH_SOURCE[0]:-none}" "$debug_trap_first_line" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
       if [[ "$debug_var" ]]; then
         set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
@@ -1374,6 +1363,25 @@ debugger_init() {
   side_log_file=$tmp_folder/side-log-$$
 
   COLUMNS=${COLUMNS:-120}
+
+  if [[ ! "${debug_highlight:-}" ]]; then
+    if which source-highlight >/dev/null; then
+      debug_highlight=t
+    else
+      debug_highlight=f
+    fi
+  fi
+
+  if [[ $debug_highlight == t ]]; then
+    if ! which source-highlight >/dev/null; then
+      fatal "You set debug_highlight=t, but are missing the highlight command."
+      fatal "You can use 'brew install highlight' to install it if you want."
+      exit 1
+    fi
+
+    rm -rf $tmp_folder/debug_highlight &>/dev/null
+    mkdir -p $tmp_folder/debug_highlight || exit 1
+  fi
 
   debug_setup
 }
