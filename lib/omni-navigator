@@ -84,10 +84,13 @@ omni_load_log_array() {
     local -n array=omni_log_array_$log_file_token
     mapfile array < <(cat $log_file) || fail
 
-    eval "declare -ga \
-      omni_plane_map_$log_file_token \
-      omni_plane_depth_map_$log_file_token \
-      omni_action_map_$log_file_token"
+    eval "
+      declare -ga \
+        omni_plane_map_$log_file_token \
+        omni_plane_depth_map_$log_file_token \
+        omni_action_map_$log_file_token
+      omni_log_file_$log_file_token=$log_file
+      "
 
     local -n \
       plane_map=omni_plane_map_$log_file_token \
@@ -202,6 +205,12 @@ omni_change_cursor_log() {
     local index=${new_index:-0}
 
     get_log_file_token || fail
+    local -n old_log_file=omni_log_file_$log_file_token
+    if [[ "${old_log_file:-}" && $old_log_file != $log_file ]]; then
+      log_fatal "Two different logs have the same log_file_token (same fork_id):"
+      log_fatal "$old_log_file != $log_file"
+      fail1
+    fi
 
     eval "
       cursor_${cursor}_log_file=$log_file \
@@ -361,19 +370,22 @@ omni_search() {
       deep=${deep:-t} \
       omni_search_stack=${omni_search_stack:-} \
 
+    # debug_watch='from_log'
+    # debug_start
+
     found_index= found_log=
 
     local cursor=s 
+
+    new_log_file=$from_log \
+      new_index=$from_index \
+      omni_change_cursor_log || fail
 
     if [[ -v omni_search_stack && "$omni_search_stack" =~ \ $from_log\  ]]; then
       log_fatal "Infinite loop detected in omni_search, hit $from_log twice"
       fail1
     fi
     omni_search_stack+=" $from_log "
-
-    new_log_file=$from_log \
-      new_index=$from_index \
-      omni_change_cursor_log || fail
 
     eval "$omni_select_cursor" || fail
 
