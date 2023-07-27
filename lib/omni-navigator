@@ -76,7 +76,7 @@ omni_get_processed_line() {
 }
 
 # inputs: 
-#   log_file log_file_id log_file_token fork_id
+#   log_file log_file_id log_file_token log_fork_id
 omni_load_log_array() {
   begin_function_flat
 
@@ -98,6 +98,7 @@ omni_load_log_array() {
     local i array_size=${#array[*]} \
       plane_stack next_plane_id=1 plane_id=0 \
       processed_line line \
+      log_fork_id=${log_file_id#*:} \
       ts pid log_id depth level action function entries info
 
     begin_for (( i = 0; i < array_size; i++ )); doo
@@ -115,7 +116,7 @@ omni_load_log_array() {
 
         action_map[$i]=$action
 
-        line_id=$fork_id:$i omni_get_processed_line "$line" || {
+        line_id=$log_fork_id:$i omni_get_processed_line "$line" || {
           log_fatal "Bad log line: $line"
           return 1
           }
@@ -182,7 +183,9 @@ omni_select_cursor='
     plane_map=cursor_${cursor}_plane_map \
     plane_stack_map=cursor_${cursor}_plane_stack_map \
 
-  local fork_id=${log_file_id#*:} \
+  local \
+    log_fork_id=${log_file_id#*:} \
+    log_job_id=${log_file_id%:*} \
     plane_map_size=${#plane_map[*]} \
     plane_id=0 \
 '
@@ -262,10 +265,9 @@ omni_show_log() {
 #   log_file_stack
 #   log_file_pos_stack
 enter_log_file() {
-  debug_start
   log_file_stack+=( $log_file )
   log_file_pos_stack+=( $index )
-  log_file=$new_log_file omni_change_cursor_log || return 1
+  omni_change_cursor_log || return 1
   new_index=0 \
     omni_change_index || return 1
   return 0
@@ -274,6 +276,11 @@ enter_log_file() {
 # inputs:
 #   index: where in the current log to extract the vars from
 #   vars: space separated list of vars to extract from the given log line
+# warning: if you localize a variable before calling this, that variable can't be set
+#   by this function. Only global variables can be successfully set by this function.
+#   This is because this function localizes all variables it uses, and then globalizes
+#   the selected variable, which won't actually change an outer local version of the
+#   variable, only the shared global version.
 omni_extract_vars() {
   local line=${log_array[$index]} \
     ts pid log_id depth level action function entries info old_log_file new_log_file \
@@ -291,7 +298,6 @@ omni_extract_vars() {
 omni_step_in() {
   local action=${action_map[$index]}
   if [[ $action == log_to ]]; then
-    local new_log_file
     vars=new_log_file \
       omni_extract_vars || return 1
     if [[ ! "${new_log_file:-}" ]]; then
@@ -355,8 +361,8 @@ omni_search() {
 
     local cursor=s 
 
-    log_file=$from_log \
-      index=$from_index \
+    new_log_file=$from_log \
+      new_index=$from_index \
       omni_change_cursor_log || fail
 
     eval "$omni_select_cursor" || fail
@@ -374,7 +380,7 @@ omni_search() {
       if [[ $deep == f && $plane_id != $original_plane_id ]]; then
         entry_matches=f
       elif [[ "$find_level" ]]; then
-        local level=
+        level=
         vars=level \
           omni_extract_vars || fail
         if [[ "${level:-}" && ! $level =~ $find_level ]]; then
@@ -424,8 +430,7 @@ from_log=$log_file \
 
 if [[ $found_index ]]; then
   if [[ $log_file != $found_log ]]; then
-    cursor=a \
-      log_file=$found_log \
+    new_log_file=$found_log \
       omni_change_cursor_log || return 1
   fi
   new_index=$found_index \
@@ -475,10 +480,11 @@ omni_navigator() (
 
     local cursor=a
 
-    omni_change_cursor_log || fail
+    new_log_file=$log_file \
+      omni_change_cursor_log || fail
     eval "$omni_select_cursor" || fail
     next_log_start=$index
-    new_index=$index
+    new_index=$index \
       omni_change_index || fail
 
     var=next_log_start offset=-$omni_list_radius \
@@ -493,7 +499,7 @@ omni_navigator() (
         omni_show_log || fail
       fi
 
-      echo -n "${NL}${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
+      echo -n "${NL}${YELLOW}job_id=$log_job_id log_id=$log_fork_id:$index ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
       local debug_c
       read -rs -n1 debug_c <&$fd_original_in
 
