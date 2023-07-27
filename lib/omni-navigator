@@ -464,6 +464,53 @@ omni_offset_index() {
   return 0
 }
 
+omni_show_call_stack() {
+  local i=$index line \
+    ts pid log_id depth level action function entries info
+  local -A return_map
+  local functions=
+  begin_while (( i-- > 0 )); doo
+    line=${log_array[$i]}
+    if [[ "$line" == \=\ * ]]; then
+      entries=${line#= }
+      eval "$entries" || return 1
+      if [[ "${action:-}" == call ]]; then
+        if [[ ${return_map[$function]:-0} == 0 ]]; then
+          functions+="$function$NL"
+        else
+          (( return_map[$function]-- ))
+        fi
+      elif [[ "${action:-}" == return\(* ]]; then
+        if [[ "${return_map[$function]:-}" ]]; then
+          (( return_map[$function]++ ))
+        else
+          return_map[$function]=1
+        fi
+      fi
+    fi
+  end_while
+  if [[ "$functions" ]]; then
+    echo "${functions%$NL}" | tac >&$fd_original_err
+  else
+    echo "Not inside of a function" >&$fd_original_err
+  fi
+  return 0
+}
+
+omni_show_log_stack() {
+  local i size=0
+  if [[ -v log_file_stack ]]; then
+    size=${#log_file_stack[*]}
+  fi
+  if (( size > 0 )); then
+    for (( i = 0; i < size; i++ )); do
+      echo " ${log_file_stack[$i]}" >&$fd_original_err
+    done
+  fi
+  echo " $log_file" >&$fd_original_err
+  return 0
+}
+
 # inputs: 
 #   log_file
 omni_navigator() (
@@ -599,8 +646,13 @@ omni_navigator() (
           no_follow_once=t
           ;;
         t)
-          echo "# Show stack" >&$fd_original_err
-          omni_show_stack || fail
+          echo "# Show call stack" >&$fd_original_err
+          omni_show_call_stack || fail
+          no_follow_once=t
+          ;;
+        T)
+          echo "# Show log stack" >&$fd_original_err
+          omni_show_log_stack || fail
           no_follow_once=t
           ;;
         \!)
@@ -620,7 +672,8 @@ omni_navigator() (
           echo "p  print: show all details of current log line" >&$fd_original_err
           echo "q  quit: leave the omni navigator" >&$fd_original_err
           echo "s  step: step to the next log line even if it's not a function call" >&$fd_original_err
-          echo "t  stack: show stack trace" >&$fd_original_err
+          echo "t  stack: show call stack" >&$fd_original_err
+          echo "T  stack: show log stack" >&$fd_original_err
           echo "!  go to next error" >&$fd_original_err
           no_follow_once=t
           ;;
@@ -698,39 +751,6 @@ omni_show_line() {
     echo "$line" >&$fd_original_err
   fi
 
-  return 0
-}
-
-omni_show_stack() {
-  local i=$index line \
-    ts pid log_id depth level action function entries info
-  local -A return_map
-  local functions=
-  begin_while (( i-- > 0 )); doo
-    line=${log_array[$i]}
-    if [[ "$line" == \=\ * ]]; then
-      entries=${line#= }
-      eval "$entries" || return 1
-      if [[ "${action:-}" == call ]]; then
-        if [[ ${return_map[$function]:-0} == 0 ]]; then
-          functions+="$function$NL"
-        else
-          (( return_map[$function]-- ))
-        fi
-      elif [[ "${action:-}" == return\(* ]]; then
-        if [[ "${return_map[$function]:-}" ]]; then
-          (( return_map[$function]++ ))
-        else
-          return_map[$function]=1
-        fi
-      fi
-    fi
-  end_while
-  if [[ "$functions" ]]; then
-    echo "${functions%$NL}" | tac >&$fd_original_err
-  else
-    echo "Not inside of a function" >&$fd_original_err
-  fi
   return 0
 }
 
