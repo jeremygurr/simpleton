@@ -185,7 +185,11 @@ begin_function_flat
       mkdir $log_path || fail
     fi
 
-    fork_id_log=$current_job_path/fork-id-log
+    # only set this for the first cell in the job, all other cells should 
+    #   use the same fork_id log so that they all have unique ids across the job
+    if [[ ! "$fork_id_log" ]]; then
+      fork_id_log=$current_job_path/fork-id-log
+    fi
 
   fi
 
@@ -1290,7 +1294,7 @@ get_job_id() {
     fi
 
     timeout=5 lock_path=$job_id_log fd_write_lock || {
-      echo "Failed to get lock on $job_id_log" >&2
+      log_fatal "Failed to get lock on $job_id_log" 
       fail1
     }
 
@@ -1306,7 +1310,7 @@ get_job_id() {
       fail1
     fi
 
-    echo "$omni_log_job_id $command_to_log" >>$job_id_log || fail
+    echo "$omni_log_job_id $cell $command_to_log" >>$job_id_log || fail
 
     fd_unlock
 
@@ -1316,6 +1320,7 @@ get_job_id() {
 
 # inputs: fork_id_log 
 get_fork_id() {
+debug_start
   timeout=5 lock_path=$fork_id_log fd_write_lock || {
     echo "Failed to get lock on $fork_id_log" >&2
     return 1
@@ -1348,6 +1353,7 @@ begin_function
       fi
     fi
 
+    debug_start
     if [[ ! "${omni_log_job_id:-}" ]]; then
       command_to_log="${original_cmd#* }" \
         get_job_id || fail

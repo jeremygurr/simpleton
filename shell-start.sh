@@ -435,3 +435,4 @@ export PS1="$LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR
 }
 
 big_prompt
+
