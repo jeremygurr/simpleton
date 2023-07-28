@@ -562,14 +562,16 @@ debug_trap() {
         fi
         ;;
       F)
-        if [[ $debug_expanded_search == t ]]; then
-          echo "# Expanded search is now off" >&$fd_original_err
-          debug_expanded_search=f
+        if [[ "${debug_search_old:-}" ]]; then
+          echo "# Repeating search for $debug_search_old" >&$fd_original_err
+          debug_search=${debug_search_old:-}
+          debug_r=0
+          debug_long_command=t
+          debug_subshell=t
+          debug_save_state
         else
-          echo "# Expanded search is now on" >&$fd_original_err
-          debug_expanded_search=t
+          echo "# No previous search." >&$fd_original_err
         fi
-        debug_save_state
         ;;
       g)
         echo >&$fd_original_err
@@ -881,18 +883,6 @@ debug_trap() {
         debug_stepping=t
         debug_save_state
         ;;
-      .)
-        if [[ "${debug_search_old:-}" ]]; then
-          echo "# Repeating search for $debug_search_old" >&$fd_original_err
-          debug_search=${debug_search_old:-}
-          debug_r=0
-          debug_long_command=t
-          debug_subshell=t
-          debug_save_state
-        else
-          echo "# No previous search." >&$fd_original_err
-        fi
-        ;;
       @)
         echo >&$fd_original_err
         echo "$raw_debug_path_to_source_file" >&$fd_original_err
@@ -919,6 +909,16 @@ debug_trap() {
         fi
         debug_save_state
         ;;
+      .)
+        if [[ $debug_expanded_search == t ]]; then
+          echo "# Expanded search is now off" >&$fd_original_err
+          debug_expanded_search=f
+        else
+          echo "# Expanded search is now on" >&$fd_original_err
+          debug_expanded_search=t
+        fi
+        debug_save_state
+        ;;
       \?)
         echo >&$fd_original_err
         echo >&$fd_original_err
@@ -931,7 +931,7 @@ debug_trap() {
         echo "E  repeat last eval expression command" >&$fd_original_err
         echo "f  continue until a line contains the substring given" >&$fd_original_err
         echo "   put a ~ at the beginning of the search string to do a regex search" >&$fd_original_err
-        echo "F  toggle expanded search mode, which enables searching on evaluated string expressions" >&$fd_original_err
+        echo "F  repeat previous deep or shallow search" >&$fd_original_err
         echo "g  continue until the given function is reached" >&$fd_original_err
         echo "G  continue until the previously given function is reached" >&$fd_original_err
         echo "h  toggle syntax highlighting" >&$fd_original_err
@@ -944,7 +944,6 @@ debug_trap() {
         echo "   not stepping into function calls" >&$fd_original_err
         echo "   WARNING: In the rare case that the debugger hangs after this command is run on a line of code, exit (control-c) and start over" >&$fd_original_err
         echo "   the debugging, except when you get to this line, press 's' to do a small step first, and then 'n' and usually it will work" >&$fd_original_err
-        echo "   WARNING 2: If the debugger is crashing with a return code of 141 (SIGPIPE), then turn off expansion (x command) before hitting n command of the problematic line" >&$fd_original_err
         echo "N  continue executing until we reach a line later than the current line, completing loops if needed" >&$fd_original_err
         echo "o  step out from the current function" >&$fd_original_err
         echo "p  print variables in current line" >&$fd_original_err
@@ -968,7 +967,7 @@ debug_trap() {
         echo "]  continue until we reach a different function" >&$fd_original_err
         echo "}  continue until we reach a different file" >&$fd_original_err
         echo "\  add current function to jump ignore list, so using ] will not hit this function again" >&$fd_original_err
-        echo ".  repeat previous deep or shallow search" >&$fd_original_err
+        echo ".  toggle expanded search mode, which enables searching on evaluated string expressions" >&$fd_original_err
         echo >&$fd_original_err
         no_follow_once=t
         ;;
@@ -1152,7 +1151,9 @@ if [[ $debugging == f ]]; then
   reserve_tmp_file debug_out_path debug-out || exit 1
 
   trap '
+    BASH_XTRACEFD=2
     echo "PIPE signal was fired." >&$fd_original_err
+    debug_start
     ' PIPE
   shopt -s extdebug
   trap '
