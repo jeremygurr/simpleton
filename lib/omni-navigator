@@ -85,7 +85,6 @@ omni_load_log_array() {
     local -n array=omni_log_array_$log_file_token
     mapfile array < <(cat $log_file) || fail
 
-    zombie "omni_log_file_$log_file_token=$log_file"
     eval "
       declare -ga \
         omni_plane_map_$log_file_token \
@@ -121,7 +120,7 @@ omni_load_log_array() {
 
         action_map[$i]=$action
 
-        line_id=$log_fork_id:$i omni_get_processed_line "$line" || {
+        line_id=$log_fork_id:$((i+1)) omni_get_processed_line "$line" || {
           log_fatal "Bad log line: $line"
           return 1
           }
@@ -211,7 +210,6 @@ omni_change_cursor_log() {
     eval "local old_log_file=\${omni_log_file_$log_file_token:-}"
     if [[ "${old_log_file:-}" && $old_log_file != $log_file ]]; then
       log_fatal "Two different logs have the same log_file_token (same fork_id):"
-      debug_start
       log_fatal "$old_log_file != $log_file"
       fail1
     fi
@@ -238,6 +236,40 @@ omni_change_cursor_log() {
 
   end_function
   handle_return
+}
+
+# inputs: {index}
+#   output_array
+omni_show_line() {
+  local index=$1
+
+  local reverse=f
+  if (( index == cursor_a_log_array_index )); then
+    reverse=t
+  fi
+
+  if [[ $reverse == t ]]; then
+    echo -n "$REVERSE" >&$fd_original_err
+  fi
+
+  if [[ ! -v output_array ]]; then
+    log_fatal "Internal error: Missing output_array"
+    return 1
+  fi
+
+  local line=${output_array[$index]}
+
+  if [[ $reverse == t ]]; then
+    local pad_size line_length=${#line}
+    (( pad_size = COLUMNS - line_length ))
+    echo -n "$line" >&$fd_original_err
+    printf %${pad_size}s >&$fd_original_err
+    echo "$RESET" >&$fd_original_err
+  else
+    echo "$line" >&$fd_original_err
+  fi
+
+  return 0
 }
 
 # inputs: next_log_start omni_list_radius plane_map plane_id output_array
@@ -372,6 +404,7 @@ omni_search() {
       skip_first=${skip_first:-t} \
       direction=${direction:-1} \
       find_level=${find_level:-} \
+      find_action=${find_action:-} \
       deep=${deep:-t} \
       omni_search_stack=${omni_search_stack:-} \
 
@@ -403,17 +436,35 @@ omni_search() {
 
     local entry_matches
     begin_while (( index < plane_map_size && index >= 0 )); doo
+
       entry_matches=t
       if [[ $deep == f && $plane_id != $original_plane_id ]]; then
         entry_matches=f
-      elif [[ "$find_level" ]]; then
-        level=
-        vars=level \
-          omni_extract_vars || fail
-        if [[ "${level:-}" && ! $level =~ $find_level ]]; then
-          entry_matches=f
-        fi
       fi
+
+      if [[ $entry_matches == t && ( "$find_level" || "$find_action" ) ]]; then
+        entry_matches=f
+
+        if [[ "$find_level" ]]; then
+          level=
+          vars=level \
+            omni_extract_vars || fail
+          if [[ "${level:-}" && $level =~ $find_level ]]; then
+            entry_matches=t
+          fi
+        fi
+
+        if [[ $entry_matches == f && "$find_action" ]]; then
+          action=
+          vars=action \
+            omni_extract_vars || fail
+          if [[ "${action:-}" && $action =~ $find_action ]]; then
+            entry_matches=t
+          fi
+        fi
+
+      fi
+
       if [[ $entry_matches == t ]]; then
         found_log=$from_log
         found_index=$index
@@ -453,11 +504,13 @@ omni_search() {
 
 omni_next_error() {
 
+  debug_start
 from_log=$log_file \
   from_index=$index \
   skip_first=t \
   direction=1 \
   find_level='(error|fatal)' \
+  find_action='return\([^0].*\)' \
   omni_search || return 1
 
 if [[ $found_index ]]; then
@@ -578,7 +631,7 @@ omni_navigator() (
         omni_show_log || fail
       fi
 
-      echo -n "${NL}${YELLOW}job_id=$log_job_id log_id=$log_fork_id:$index ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
+      echo -n "${NL}${YELLOW}job_id=$log_job_id log_id=$log_fork_id:$((index+1)) ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
       local debug_c
       read -rs -n1 debug_c <&$fd_original_in
 
@@ -690,6 +743,8 @@ omni_navigator() (
         \!)
           echo "# Jump to next error" >&$fd_original_err
           omni_next_error || fail
+          omni_show_context || fail
+          no_follow_once=t
           ;;
         \?)
           echo >&$fd_original_err
@@ -749,40 +804,6 @@ omni_show_context() {
   next_log_start=$index
   var=next_log_start offset=-$omni_list_radius omni_offset_index || return 1
   omni_show_log || return 1
-  return 0
-}
-
-# inputs: {index}
-#   output_array
-omni_show_line() {
-  local index=$1
-
-  local reverse=f
-  if (( index == cursor_a_log_array_index )); then
-    reverse=t
-  fi
-
-  if [[ $reverse == t ]]; then
-    echo -n "$REVERSE" >&$fd_original_err
-  fi
-
-  if [[ ! -v output_array ]]; then
-    log_fatal "Internal error: Missing output_array"
-    return 1
-  fi
-
-  local line=${output_array[$index]}
-
-  if [[ $reverse == t ]]; then
-    local pad_size line_length=${#line}
-    (( pad_size = COLUMNS - line_length ))
-    echo -n "$line" >&$fd_original_err
-    printf %${pad_size}s >&$fd_original_err
-    echo "$RESET" >&$fd_original_err
-  else
-    echo "$line" >&$fd_original_err
-  fi
-
   return 0
 }
 
