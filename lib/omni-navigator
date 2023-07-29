@@ -172,6 +172,12 @@ omni_load_log_array() {
   handle_return
 }
 
+update_cursor_vars() {
+  log_fork_id=${log_file_id#*:} \
+  log_job_id=${log_file_id%:*} \
+  log_array_size=${#log_array[*]} 
+}
+
 # inputs:
 #   new_cursor
 # should be evaluated after omni_change_cursor_log has selected a log for this cursor
@@ -190,10 +196,7 @@ omni_select_cursor() {
       plane_stack_map=cursor_${cursor}_plane_stack_map \
       log_file_stack=cursor_${cursor}_log_file_stack \
       log_file_pos_stack=cursor_${cursor}_log_file_pos_stack \
-
-    log_fork_id=${log_file_id#*:} \
-    log_job_id=${log_file_id%:*} \
-    log_array_size=${#log_array[*]} 
+    update_cursor_vars || return 1
   fi
 
   return 0
@@ -238,6 +241,8 @@ omni_change_cursor_log() {
 
       eval "declare -gn cursor_${cursor}_log_array=omni_log_array_$log_file_token"
 
+      update_cursor_vars || return 1
+
     fi
 
   end_function
@@ -259,7 +264,11 @@ omni_enter_sub_log() {
   return 0
 }
 
+# inputs:
+#   direction
 omni_exit_sub_log() {
+  local direction=${direction:-0}
+
   if (( ${#log_file_stack[*]} == 0 )); then
     log_fatal "Internal error: attempted omni_exit_sub_log when log_file_stack size is 0"
     return 1
@@ -273,7 +282,13 @@ omni_exit_sub_log() {
 
   new_log_file=$parent_log_file \
     omni_change_cursor_log || return 1
-  log_array_index=$parent_pos
+  (( log_array_index = parent_pos + direction ))
+
+  if (( ${#log_file_stack[*]} > 0 && \
+     ( log_array_index < 0 || log_array_index >= log_array_size ) \
+     )); then
+    omni_exit_sub_log || return 1
+  fi
 
   return 0
 }
@@ -387,10 +402,12 @@ omni_search_next() {
       omni_extract_vars || fail
     omni_enter_sub_log || return 1
   else
-    # TODO handle edge
     (( index += direction ))
     if [[ $direction == 1 ]]; then
       if (( index >= log_array_size )); then
+        if (( ${#log_file_stack[*]} > 0 )); then
+          omni_exit_sub_log || return 1
+        fi
       else
       fi
     else
@@ -439,6 +456,7 @@ omni_search() {
     local plane_id=$original_plane_id
 
     local entry_matches 
+    # TODO handle count
     begin_while true; doo
 
       omni_search_next || fail
