@@ -198,7 +198,7 @@ omni_select_cursor='
 #   cursor 
 #   new_log_file
 #   new_index
-# should be able to run even before omni_select_cursor
+# should always be followed by omni_select_cursor
 omni_change_cursor_log() {
   local log_vars='cursor new_log_file new_index'
   begin_function
@@ -495,6 +495,7 @@ omni_search() {
             new_log_file=$from_log \
               new_index=$saved_index \
               omni_change_cursor_log || fail
+            eval "$omni_select_cursor" || fail
           fi
         else
           log_error "Internal error: log points to non-existent file: $new_log_file"
@@ -789,6 +790,9 @@ omni_navigator() (
 omni_print_details() {
   local line=${log_array[$index]}
   if [[ "$line" == \=\ * ]]; then
+    echo "log file: $log_file"
+    echo "fork_id: $log_fork_id"
+    echo "line: $((index + 1))"
     local ts pid log_id depth level action function entries info
     entries=${line#= }
     eval "$entries" || return 1
@@ -796,7 +800,12 @@ omni_print_details() {
     local kvs=( ${entries} )
     local kv keys=
     for kv in "${kvs[@]}"; do
-      keys+="${kv%%=*}$NL"
+      if [[ "$kv" == *=* ]]; then
+        key="${kv%%=*}"
+        if [[ "$key" =~ ^[a-zA-Z0-9_]+$ ]]; then
+          keys+="$key$NL"
+        fi
+      fi
     done
 
     keys=$(echo "${keys[*]}" | sort)
