@@ -391,6 +391,7 @@ omni_extract_vars() {
 }
 
 # Move to the next log line to search
+# This is meant to be able to move past the boundaries if there are no other possibilities
 omni_search_next() {
   if [[ $deep == t && ${action_map[$index]} == log_to ]]; then
     local new_index=0
@@ -404,16 +405,50 @@ omni_search_next() {
   else
     (( index += direction ))
     if [[ $direction == 1 ]]; then
-      if (( index >= log_array_size )); then
-        if (( ${#log_file_stack[*]} > 0 )); then
-          omni_exit_sub_log || return 1
-        fi
-      else
+      if (( index >= log_array_size && ${#log_file_stack[*]} > 0 )); then
+        omni_exit_sub_log || return 1
+      fi
+    elif [[ $direction == -1 ]]; then
+      if (( index < 0 && ${#log_file_stack[*]} > 0 )); then
+        omni_exit_sub_log || return 1
       fi
     else
+      log_fatal "omni_search_next: invalid direction: $direction"
+      return 1
     fi
   fi
   return 0
+}
+
+omni_search_get_matches() {
+  if [[ $deep == f && $plane_id != $original_plane_id ]]; then
+    entry_matches=f
+  fi
+
+  if [[ $entry_matches == t && ( "$find_level" || "$find_action" ) ]]; then
+    entry_matches=f
+
+    if [[ "$find_level" ]]; then
+      level=
+      vars=level \
+        omni_extract_vars || fail
+      if [[ "${level:-}" && $level =~ $find_level ]]; then
+        zombie "level matches"
+        entry_matches=t
+      fi
+    fi
+
+    if [[ $entry_matches == f && "$find_action" ]]; then
+      action=
+      vars=action \
+        omni_extract_vars || fail
+      if [[ "${action:-}" && $action =~ $find_action ]]; then
+        zombie "action matches"
+        entry_matches=t
+      fi
+    fi
+
+  fi
 }
 
 # will move the cursor according to the parameters given
@@ -432,11 +467,7 @@ omni_search() {
       find_action=${find_action:-} \
       deep=${deep:-t} \
 
-    debug_start
-    # TODO: put in correct place
-    # use: omni_enter_sub_log and omni_exit_sub_log
-
-    found_index= found_log=
+    entry_matches=f
 
     zombie "Starting omni_search: from_log=$from_log from_index=$from_index move_cursor=$move_cursor"
 
@@ -445,7 +476,8 @@ omni_search() {
         omni_change_cursor_log || fail
     fi
 
-    omni_select_cursor || fail
+    new_cursor=$move_cursor \
+      omni_select_cursor || fail
 
     local -n index=log_array_index
     if [[ "$from_index" ]]; then
@@ -455,79 +487,26 @@ omni_search() {
     local original_plane_id=${plane_map[$index]}
     local plane_id=$original_plane_id
 
-    local entry_matches 
-    # TODO handle count
     begin_while true; doo
 
-      omni_search_next || fail
-
-      (( index < log_array_size && index >= 0 ))
-      zombie "Checking index $index / $log_array_size of $log_file"
-      entry_matches=t
-      if [[ $deep == f && $plane_id != $original_plane_id ]]; then
-        entry_matches=f
-      fi
-
-      if [[ $entry_matches == t && ( "$find_level" || "$find_action" ) ]]; then
-        entry_matches=f
-
-        if [[ "$find_level" ]]; then
-          level=
-          vars=level \
-            omni_extract_vars || fail
-          if [[ "${level:-}" && $level =~ $find_level ]]; then
-            zombie "level matches"
-            entry_matches=t
-          fi
-        fi
-
-        if [[ $entry_matches == f && "$find_action" ]]; then
-          action=
-          vars=action \
-            omni_extract_vars || fail
-          if [[ "${action:-}" && $action =~ $find_action ]]; then
-            zombie "action matches"
-            entry_matches=t
-          fi
-        fi
-
-      fi
-
-      if [[ $entry_matches == t ]]; then
-        found_log=$from_log
-        found_index=$index
+      if [[ $count ]] && (( count-- <= 0 )); then
         break
-      elif [[ $deep == t && ${action_map[$index]} == log_to ]]; then
+      fi
+      
+      omni_search_next || fail
+      zombie "Checking index $index / $log_array_size of $log_file"
 
-        vars=new_log_file \
-          omni_extract_vars || fail
-
-        if [[ -e "$new_log_file" ]]; then
-          zombie "Found log_to, going to $new_log_file"
-          # recursive
-          local saved_index=$index
-          from_log=$new_log_file \
-            from_index=0 \
-            skip_first=f \
-            omni_search || fail
-          if [[ "$found_index" ]]; then
-            zombie "After omni_search sub: found error at $found_log $found_index"
-            break
-          else
-            zombie "After omni_search sub: did not find error, switching back to original log and index: $from_log $saved_index"
-            new_log_file=$from_log \
-              new_index=$saved_index \
-              omni_change_cursor_log || fail
-            eval "$omni_select_cursor" || fail
-          fi
-        else
-          log_error "Internal error: log points to non-existent file: $new_log_file"
-        fi
-
+      if (( index >= log_array_size || index < 0 )); then
+        break
       fi
 
-      new_index=$((index + direction)) \
-        omni_change_index || fail
+      entry_matches=t
+      omni_search_get_matches || fail
+      
+      if [[ $entry_matches == t ]]; then
+        break
+      fi
+
     end_while
 
     # restore original cursor
