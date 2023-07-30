@@ -449,12 +449,18 @@ omni_search_next() {
 omni_search_get_matches() {
 
   local plane_id=${plane_map[$index]} 
-  if [[ $deep == f && $plane_id != $original_plane_id ]]; then
+  if [[ $deep == f && $plane_id -gt $original_plane_id ]]; then
     entry_matches=f
   fi
 
   if [[ $entry_matches == t && ( "$find_level" || "$find_action" ) ]]; then
     entry_matches=f
+
+    if [[ $go_out_of == function \
+       && $plane_id -lt $original_plane_id \
+       ]]; then
+       entry_matches=t
+    fi
 
     if [[ "$find_level" ]]; then
       level=
@@ -513,8 +519,6 @@ omni_search() {
   begin_function
 
     local \
-      from_log=${from_log:-} \
-      from_index=${from_index:-} \
       from_cursor=${from_cursor:-} \
       original_cursor=${cursor:-} \
       move_cursor=${move_cursor:-s} \
@@ -522,15 +526,11 @@ omni_search() {
       find_level=${find_level:-} \
       find_action=${find_action:-} \
       deep=${deep:-t} \
+      go_out_of=${go_out_of:-} \
 
     entry_matches=f
 
-    zombie "Starting omni_search: from_log=$from_log from_index=$from_index move_cursor=$move_cursor"
-
-    if [[ "$from_log" ]]; then
-      new_log_file=$from_log \
-        omni_change_cursor_log || fail
-    fi
+    zombie "Starting omni_search: from_cursor=$from_cursor move_cursor=$move_cursor"
 
     if [[ "$from_cursor" ]]; then
       omni_copy_cursor $from_cursor $move_cursor || fail
@@ -540,12 +540,8 @@ omni_search() {
       omni_select_cursor || fail
 
     local -n index=log_array_index
-    if [[ "$from_index" ]]; then
-      index=$from_index
-    fi
 
-    local original_log=$log_file \
-      original_index=$index
+    omni_copy_cursor $cursor backup || fail
 
     local original_plane_id=${plane_map[$index]}
     local plane_id=$original_plane_id
@@ -568,10 +564,7 @@ omni_search() {
 
     end_while
 
-    # restore position of this cursor
-    new_log_file=$original_log \
-      omni_change_cursor_log || fail
-    index=$original_index
+    omni_copy_cursor backup $cursor || fail
 
     # restore original cursor
     if [[ "$original_cursor" ]]; then
@@ -593,7 +586,7 @@ omni_show_log() {
 
     # display lines until end
     local remaining_lines=$max_count
-    local offset=next_log_start
+    local offset=$next_log_start
 
     omni_copy_cursor $cursor s || fail
 
@@ -641,17 +634,13 @@ omni_next_error() {
 
   local entry_matches
 
-  from_log=$log_file \
-    from_index=$index \
+  move_cursor=$cursor \
     direction=1 \
     find_level='(error|fatal)' \
     find_action='return\([^0].*\)' \
     omni_search || return 1
 
-  if [[ $entry_matches == t ]]; then
-    omni_copy_cursor s $cursor || return 1
-    new_cursor=$cursor omni_select_cursor || return 1
-  else
+  if [[ $entry_matches == f ]]; then
     echo "No errors found." >&$fd_original_err
   fi
 
@@ -748,15 +737,10 @@ omni_navigator() (
       case "$debug_c" in
         b)
           echo "# Step back, until next function call" >&$fd_original_err
-          local p=$index
-          var=index offset=-1 match_action=call omni_offset_index || fail
-          if [[ $p == $index ]]; then
-            (( index-- ))
-            if (( index < 0 )); then
-              index=0
-            fi
-            plane_id=${plane_map[$index]}
-          fi
+          move_cursor=$cursor \
+            direction=-1 \
+            deep=f \
+            omni_search || fail
           omni_show_context || fail
           no_follow_once=t
           ;;
@@ -780,35 +764,23 @@ omni_navigator() (
           ;;
         L)
           echo -n "$CLEAR_SCREEN" >&$fd_original_err
-          local offset=$(( next_log_start - omni_list_radius * 4 - 2 )) 
-          next_log_start=$offset \
-            omni_show_log || fail
+          (( next_log_start -= omni_list_radius * 4 - 2 )) 
+          omni_show_log || fail
           no_follow_once=t
           ;;
         n)
           echo "# Step over, until function call" >&$fd_original_err
-          local p=$index
-          var=index offset=1 match_action=call omni_offset_index || fail
-          if [[ $p == $index ]]; then
-            (( index++ ))
-            if (( index >= log_array_size )); then
-              (( index = log_array_size - 1 ))
-            fi
-            plane_id=${plane_map[$index]}
-          fi
+          move_cursor=$cursor \
+            deep=f \
+            omni_search || fail
           omni_show_context || fail
           no_follow_once=t
           ;;
         o)
           echo "# Step out" >&$fd_original_err
-          local i=$index base_depth=${plane_depth_map[$index]}
-          begin_while (( ++i < log_array_size )); doo
-            if (( ${plane_depth_map[$i]} < base_depth )); then
-              index=$i
-              plane_id=${plane_map[$index]}
-              break
-            fi
-          end_while
+          move_cursor=$cursor \
+            go_out_of=function \
+            omni_search || fail
           omni_show_context || fail
           no_follow_once=t
           ;;
@@ -823,15 +795,9 @@ omni_navigator() (
           ;;
         s)
           echo "# Step over, until next entry" >&$fd_original_err
-          local p=$index
-          var=index offset=1 omni_offset_index || fail
-          if [[ $p == $index ]]; then
-            (( index++ ))
-            if (( index >= log_array_size )); then
-              (( index = log_array_size - 1 ))
-            fi
-            plane_id=${plane_map[$index]}
-          fi
+          move_cursor=$cursor \
+            deep=f \
+            omni_search || fail
           omni_show_context || fail
           no_follow_once=t
           ;;
