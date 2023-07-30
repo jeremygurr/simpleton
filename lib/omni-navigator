@@ -651,33 +651,16 @@ omni_next_error() {
 omni_show_call_stack() {
   local i=$index line \
     ts pid log_id depth level action function entries info
-  local -A return_map
-  local functions=
-  begin_while (( i-- > 0 )); doo
-    line=${log_array[$i]}
-    if [[ "$line" == \=\ * ]]; then
-      entries=${line#= }
-      eval "$entries" || return 1
-      if [[ "${action:-}" == call ]]; then
-        if [[ ${return_map[$function]:-0} == 0 ]]; then
-          functions+="$function$NL"
-        else
-          (( return_map[$function]-- ))
-        fi
-      elif [[ "${action:-}" == return\(* ]]; then
-        if [[ "${return_map[$function]:-}" ]]; then
-          (( return_map[$function]++ ))
-        else
-          return_map[$function]=1
-        fi
-      fi
-    fi
-  end_while
-  if [[ "$functions" ]]; then
-    echo "${functions%$NL}" | tac >&$fd_original_err
-  else
+	local stack_size=${#function_call_stack[*]}
+
+	if (( stack_size > 0 )); then
+		for (( i = 0; i < stack_size; i++ )); do
+			echo " ${function_call_stack[$i]}" >&$fd_original_err
+		done
+	else
     echo "Not inside of a function" >&$fd_original_err
   fi
+
   return 0
 }
 
@@ -713,10 +696,10 @@ omni_navigator() (
 
     new_log_file=$log_file \
       omni_change_cursor_log || fail
-    eval "$omni_select_cursor" || fail
+		new_cursor=$cursor \ 
+			omni_select_cursor || fail
     (( next_log_start = -omni_list_radius ))
-    new_index=$index \
-      omni_change_index || fail
+    log_array_index=0
 
     local debug_r=-1 no_follow_once max_log_lines
     (( max_log_lines = omni_list_radius * 2 + 1 ))
@@ -730,7 +713,8 @@ omni_navigator() (
           omni_show_log || fail
       fi
 
-      echo -n "${NL}${YELLOW}job_id=$log_job_id log_id=$log_fork_id:$((index+1)) ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
+      echo "${NL}${LIGHT_BLUE}current log: $log_file" >&$fd_original_err
+      echo -n "${YELLOW}job_id=$log_job_id log_id=$log_fork_id:$((index+1)) ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
       local debug_c
       read -rs -n1 debug_c <&$fd_original_in
 
@@ -887,9 +871,7 @@ omni_print_details() {
 }
 
 omni_show_context() {
-  local offset=(( -omni_list_radius ))
-  next_log_start=$offset \
-    omni_show_log || return 1
-  return 0
+  next_log_start=(( -omni_list_radius ))
+	omni_show_log
 }
 
