@@ -300,20 +300,19 @@ omni_exit_sub_log() {
   return 0
 }
 
-# inputs: {index}
+# inputs: 
 #   cursor
 #   reverse_index
 omni_show_line() {
   local reverse_index=$reverse_index \
     cursor=$cursor \
-    index=$1
 
   local -n \
-    log_array_index=cursor_${cursor}_log_array_index \
     output_array=cursor_${cursor}_output_array \
+    index=cursor_${cursor}_log_array_index \
 
   local reverse=f
-  if (( reverse_index == log_array_index )); then
+  if (( reverse_index == index )); then
     reverse=t
   fi
 
@@ -376,6 +375,8 @@ omni_extract_vars() {
 omni_search_next() {
   begin_function_flat
 
+    failed_to_move=f
+
     if [[ $deep == t && ${action_map[$index]} == log_to ]]; then
 
       local new_index=0
@@ -404,6 +405,7 @@ omni_search_next() {
         if [[ "$pre_action" == call ]]; then
           function=
           vars=function \
+          index=$((index - 1)) \
             omni_extract_vars || fail
           if [[ ! "$function" ]]; then
             log_error "Bad log file: has call action without function"
@@ -411,7 +413,7 @@ omni_search_next() {
           function_call_stack+=( $function )
         fi
 
-        if [[ "$post_action" == return\(* ]]; then
+        if [[ "$post_action" == return\(* && -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
           unset function_call_stack[-1]
         fi
 
@@ -419,13 +421,14 @@ omni_search_next() {
 
       if [[ $direction == -1 ]]; then
 
-        if [[ "$post_action" == call ]]; then
+        if [[ "$post_action" == call && -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
           unset function_call_stack[-1]
         fi
 
         if [[ "$pre_action" == return\(* ]]; then
           function=
           vars=function \
+          index=$((index - 1)) \
             omni_extract_vars || fail
           if [[ ! "$function" ]]; then
             log_error "Bad log file: has call action without function"
@@ -438,18 +441,25 @@ omni_search_next() {
       if (( index >= log_array_size || index < 0 )); then
         # out of bounds
         if [[ $direction == 1 ]]; then
-          if (( index >= log_array_size && ${#log_file_stack[*]} > 0 )); then
+          if (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
+          else
+            (( index = log_array_size - 1 ))
+            failed_to_move=t
           fi
         elif [[ $direction == -1 ]]; then
-          if (( index < 0 && ${#log_file_stack[*]} > 0 )); then
+          if (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
+          else
+            index=0
+            failed_to_move=t
           fi
         else
           log_fatal "omni_search_next: invalid direction: $direction"
           fail1
         fi
       fi
+
     fi
   end_function_flat
   handle_return
@@ -459,16 +469,16 @@ omni_search_get_matches() {
 
   local plane_id=${plane_map[$index]} 
   if [[ $deep == f && $plane_id -gt $original_plane_id ]]; then
-    entry_matches=f
+    found_matching_line=f
   fi
 
-  if [[ $entry_matches == t && ( "$find_level" || "$find_action" ) ]]; then
-    entry_matches=f
+  if [[ $found_matching_line == t && ( "$find_level" || "$find_action" ) ]]; then
+    found_matching_line=f
 
     if [[ $go_out_of == function \
        && $plane_id -lt $original_plane_id \
        ]]; then
-       entry_matches=t
+       found_matching_line=t
     fi
 
     if [[ "$find_level" ]]; then
@@ -476,18 +486,18 @@ omni_search_get_matches() {
       vars=level \
         omni_extract_vars || fail
       if [[ "${level:-}" && $level =~ $find_level ]]; then
-        zombie "level matches"
-        entry_matches=t
+        #zombie "level matches"
+        found_matching_line=t
       fi
     fi
 
-    if [[ $entry_matches == f && "$find_action" ]]; then
+    if [[ $found_matching_line == f && "$find_action" ]]; then
       action=
       vars=action \
         omni_extract_vars || fail
       if [[ "${action:-}" && $action =~ $find_action ]]; then
-        zombie "action matches"
-        entry_matches=t
+        #zombie "action matches"
+        found_matching_line=t
       fi
     fi
 
@@ -525,23 +535,31 @@ omni_copy_cursor() {
 
 # will move the cursor according to the parameters given
 omni_search() {
-  local log_vars='from_log from_index move_cursor direction deep'
-  debug_start
+  local log_vars='from_log from_index move_cursor count deep'
   begin_function
 
     local \
       from_cursor=${from_cursor:-} \
       original_cursor=${cursor:-} \
       move_cursor=${move_cursor:-s} \
-      direction=${direction:-1} \
       find_level=${find_level:-} \
       find_action=${find_action:-} \
       deep=${deep:-t} \
       go_out_of=${go_out_of:-} \
+      count=${count:-1} \
 
-    entry_matches=f
+    local direction
+    if (( count < 0 )); then
+      direction=-1
+    elif (( count > 0 )); then
+      direction=1
+    else
+      log_fatal "Invalid count=$count"
+    fi
 
-    zombie "Starting omni_search: from_cursor=$from_cursor move_cursor=$move_cursor direction=$direction deep=$deep"
+    cursor_moved=0
+
+    #zombie "Starting omni_search: from_cursor=$from_cursor move_cursor=$move_cursor count=$count deep=$deep"
 
     if [[ "$from_cursor" ]]; then
       omni_copy_cursor $from_cursor $move_cursor || fail
@@ -552,30 +570,38 @@ omni_search() {
 
     local -n index=log_array_index
 
-    omni_copy_cursor $cursor backup || fail
-
     local original_plane_id=${plane_map[$index]}
     local plane_id=$original_plane_id
+    local found_matching_line=t
 
     begin_loop
 
-      omni_search_next || fail
-      zombie "Checking index $index / $log_array_size of $log_file"
-
-      if (( index >= log_array_size || index < 0 )); then
-        break
+      if [[ $found_matching_line == t ]]; then
+        omni_copy_cursor $cursor backup
       fi
 
-      entry_matches=t
+      omni_search_next || fail
+      #zombie "Checking index $index / $log_array_size of $log_file"
+
+      found_matching_line=t
       omni_search_get_matches || fail
       
-      if [[ $entry_matches == t ]]; then
+      if [[ $failed_to_move == t ]]; then
         break
+      fi
+      if [[ $found_matching_line == t ]]; then
+        (( cursor_moved += direction ))
+        (( count -= direction ))
+        if [[ $count == 0 ]]; then
+          break
+        fi
       fi
 
     end_loop
 
-    omni_copy_cursor backup $cursor || fail
+    if [[ $failed_to_move == f && $found_matching_line == f ]]; then
+      omni_copy_cursor backup $cursor || fail
+    fi
 
     # restore original cursor
     if [[ "$original_cursor" ]]; then
@@ -602,37 +628,24 @@ omni_show_log() {
     omni_copy_cursor $cursor s || fail
 
     # get cursor to correct starting point
-    if [[ $offset < 0 ]]; then
-      begin_while (( offset++ < 0 )); doo
-        deep=f \
-          direction=-1 \
-          omni_search || fail
-        if [[ $entry_matches == f ]]; then
-          break
-        fi
-      end_while
-    elif [[ $offset > 0 ]]; then
-      begin_while (( offset-- > 0 )); doo
-        deep=f \
-          direction=1 \
-          omni_search || fail
-        if [[ $entry_matches == f ]]; then
-          break
-        fi
-      end_while
-    fi
+    local cursor_moved=0 deep=f
+
+    count=$offset \
+      omni_search || fail
+
+    next_log_start=$cursor_moved
 
     begin_while (( remaining_lines-- > 0 )); doo
-
-      deep=f \
-        omni_search || fail
-      if [[ $entry_matches == f ]]; then
-        break
-      fi
 
       cursor=s \
         reverse_index=$log_array_index \
         omni_show_line $i || fail
+
+      omni_search || fail
+      if [[ $cursor_moved == 0 ]]; then
+        break
+      fi
+
       (( next_log_start++ ))
         
     end_while
@@ -643,15 +656,14 @@ omni_show_log() {
 
 omni_next_error() {
 
-  local entry_matches
+  local cursor_moved=0
 
   move_cursor=$cursor \
-    direction=1 \
     find_level='(error|fatal)' \
     find_action='return\([^0].*\)' \
     omni_search || return 1
 
-  if [[ $entry_matches == f ]]; then
+  if (( $cursor_moved > 0 )); then
     echo "No errors found." >&$fd_original_err
   fi
 
@@ -660,14 +672,17 @@ omni_next_error() {
 }
 
 omni_show_call_stack() {
-  local i=$index line \
-    ts pid log_id depth level action function entries info
-  local stack_size=${#function_call_stack[*]}
+  if [[ -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
+    local i=$index
+    local stack_size=${#function_call_stack[*]}
 
-  if (( stack_size > 0 )); then
-    for (( i = 0; i < stack_size; i++ )); do
-      echo " ${function_call_stack[$i]}" >&$fd_original_err
-    done
+    if (( stack_size > 0 )); then
+      for (( i = 0; i < stack_size; i++ )); do
+        echo " ${function_call_stack[$i]}" >&$fd_original_err
+      done
+    else
+      echo "Not inside of a function" >&$fd_original_err
+    fi
   else
     echo "Not inside of a function" >&$fd_original_err
   fi
@@ -725,7 +740,7 @@ omni_navigator() (
       fi
 
       echo "${NL}${LIGHT_BLUE}current log: $log_file" >&$fd_original_err
-      echo -n "${YELLOW}job_id=$log_job_id log_id=$log_fork_id:$((index+1)) ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
+      echo -n "${YELLOW}job_id=$log_job_id log_id=$log_fork_id:$((log_array_index+1)) ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
       local debug_c
       read -rs -n1 debug_c <&$fd_original_in
 
@@ -733,7 +748,7 @@ omni_navigator() (
         b)
           echo "# Step back, until next function call" >&$fd_original_err
           move_cursor=$cursor \
-            direction=-1 \
+            count=-1 \
             deep=f \
             omni_search || fail
           omni_show_context || fail
@@ -754,13 +769,15 @@ omni_navigator() (
         l)
           echo -n "$CLEAR_LINE" >&$fd_original_err
           echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
-          omni_show_log || fail
+          max_count=$max_log_lines \
+            omni_show_log || fail
           no_follow_once=t
           ;;
         L)
           echo -n "$CLEAR_SCREEN" >&$fd_original_err
           (( next_log_start -= omni_list_radius * 4 - 2 )) 
-          omni_show_log || fail
+          max_count=$max_log_lines \
+            omni_show_log || fail
           no_follow_once=t
           ;;
         n)
@@ -850,11 +867,11 @@ omni_navigator() (
 )
 
 omni_print_details() {
-  local line=${log_array[$index]}
+  local line=${log_array[$log_array_index]}
   if [[ "$line" == \=\ * ]]; then
     echo "log file: $log_file"
     echo "fork_id: $log_fork_id"
-    echo "line: $((index + 1))"
+    echo "line: $((log_array_index + 1))"
     local ts pid log_id depth level action function entries info
     entries=${line#= }
     eval "$entries" || return 1
@@ -883,6 +900,7 @@ omni_print_details() {
 
 omni_show_context() {
   (( next_log_start = -omni_list_radius ))
-  omni_show_log
+  max_count=$max_log_lines \
+    omni_show_log
 }
 
