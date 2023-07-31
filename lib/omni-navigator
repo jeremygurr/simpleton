@@ -166,13 +166,17 @@ omni_load_log_array() {
 
     end_for
 
-    log_array_size=${#log_array[*]}
+    log_array_size=${#array[*]}
   
   end_function
   handle_return
 }
 
 update_cursor_vars() {
+  local -n \
+    log_file_id=cursor_${cursor}_log_file_id \
+    log_array=cursor_${cursor}_log_array \
+
   log_fork_id=${log_file_id#*:} \
   log_job_id=${log_file_id%:*} \
   log_array_size=${#log_array[*]} 
@@ -301,7 +305,8 @@ omni_exit_sub_log() {
 #   reverse_index
 omni_show_line() {
   local reverse_index=$reverse_index \
-    cursor=$cursor
+    cursor=$cursor \
+    index=$1
 
   local -n \
     log_array_index=cursor_${cursor}_log_array_index \
@@ -384,15 +389,19 @@ omni_search_next() {
 
     else
 
-      local pre_action post_action
+      local pre_action= post_action=
 
-      pre_action=${action_map[$index]}
+      if (( index >= 0 && index < log_array_size )); then
+        pre_action=${action_map[$index]}
+      fi
       (( index += direction ))
-      post_action=${action_map[$index]}
+      if (( index >= 0 && index < log_array_size )); then
+        post_action=${action_map[$index]}
+      fi
 
       if [[ $direction == 1 ]]; then
 
-        if [[ $pre_action == call ]]; then
+        if [[ "$pre_action" == call ]]; then
           function=
           vars=function \
             omni_extract_vars || fail
@@ -402,7 +411,7 @@ omni_search_next() {
           function_call_stack+=( $function )
         fi
 
-        if [[ $post_action == return\(* ]]; then
+        if [[ "$post_action" == return\(* ]]; then
           unset function_call_stack[-1]
         fi
 
@@ -410,11 +419,11 @@ omni_search_next() {
 
       if [[ $direction == -1 ]]; then
 
-        if [[ $post_action == call ]]; then
+        if [[ "$post_action" == call ]]; then
           unset function_call_stack[-1]
         fi
 
-        if [[ $pre_action == return\(* ]]; then
+        if [[ "$pre_action" == return\(* ]]; then
           function=
           vars=function \
             omni_extract_vars || fail
@@ -492,6 +501,7 @@ omni_copy_cursor() {
     local -n \
       from_log_file=cursor_${from}_log_file \
       to_log_index=cursor_${to}_log_array_index \
+      from_log_index=cursor_${from}_log_array_index \
       from_log_file_stack=cursor_${from}_log_file_stack \
       from_log_file_pos_stack=cursor_${from}_log_file_pos_stack \
       from_function_call_stack=cursor_${from}_function_call_stack \
@@ -503,7 +513,7 @@ omni_copy_cursor() {
       cursor=$to \
       omni_change_cursor_log || return 1
 
-    to_log_index=from_log_index
+    to_log_index=$from_log_index
 
     to_log_file_stack=( "${from_log_file_stack[@]}" )
     to_log_file_pos_stack=( "${from_log_file_pos_stack[@]}" )
@@ -516,6 +526,7 @@ omni_copy_cursor() {
 # will move the cursor according to the parameters given
 omni_search() {
   local log_vars='from_log from_index move_cursor direction deep'
+  debug_start
   begin_function
 
     local \
@@ -530,7 +541,7 @@ omni_search() {
 
     entry_matches=f
 
-    zombie "Starting omni_search: from_cursor=$from_cursor move_cursor=$move_cursor"
+    zombie "Starting omni_search: from_cursor=$from_cursor move_cursor=$move_cursor direction=$direction deep=$deep"
 
     if [[ "$from_cursor" ]]; then
       omni_copy_cursor $from_cursor $move_cursor || fail
@@ -546,7 +557,7 @@ omni_search() {
     local original_plane_id=${plane_map[$index]}
     local plane_id=$original_plane_id
 
-    begin_while true; doo
+    begin_loop
 
       omni_search_next || fail
       zombie "Checking index $index / $log_array_size of $log_file"
@@ -562,7 +573,7 @@ omni_search() {
         break
       fi
 
-    end_while
+    end_loop
 
     omni_copy_cursor backup $cursor || fail
 
@@ -651,13 +662,13 @@ omni_next_error() {
 omni_show_call_stack() {
   local i=$index line \
     ts pid log_id depth level action function entries info
-	local stack_size=${#function_call_stack[*]}
+  local stack_size=${#function_call_stack[*]}
 
-	if (( stack_size > 0 )); then
-		for (( i = 0; i < stack_size; i++ )); do
-			echo " ${function_call_stack[$i]}" >&$fd_original_err
-		done
-	else
+  if (( stack_size > 0 )); then
+    for (( i = 0; i < stack_size; i++ )); do
+      echo " ${function_call_stack[$i]}" >&$fd_original_err
+    done
+  else
     echo "Not inside of a function" >&$fd_original_err
   fi
 
@@ -696,8 +707,8 @@ omni_navigator() (
 
     new_log_file=$log_file \
       omni_change_cursor_log || fail
-		new_cursor=$cursor \ 
-			omni_select_cursor || fail
+    new_cursor=$cursor \
+      omni_select_cursor || fail
     (( next_log_start = -omni_list_radius ))
     log_array_index=0
 
@@ -871,7 +882,7 @@ omni_print_details() {
 }
 
 omni_show_context() {
-  next_log_start=(( -omni_list_radius ))
-	omni_show_log
+  (( next_log_start = -omni_list_radius ))
+  omni_show_log
 }
 
