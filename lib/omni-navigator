@@ -127,6 +127,7 @@ omni_load_log_array() {
 
     eval "
       declare -ga \
+        omni_log_id_array_$log_file_token \
         omni_plane_map_$log_file_token \
         omni_plane_depth_map_$log_file_token \
         omni_action_map_$log_file_token
@@ -134,6 +135,7 @@ omni_load_log_array() {
       "
 
     local -n \
+      log_id_array=omni_log_id_array_$log_file_token \
       plane_map=omni_plane_map_$log_file_token \
       plane_depth_map=omni_plane_depth_map_$log_file_token \
       action_map=omni_action_map_$log_file_token \
@@ -141,19 +143,23 @@ omni_load_log_array() {
 
     local i array_size=${#log_array[*]} \
       plane_stack next_plane_id=1 plane_id=0 \
-      processed_line line \
+      processed_line line last_log_id= \
       log_fork_id=${log_file_id#*:} \
-      action function info old_log_file new_log_file
+      action function info old_log_file new_log_file log_id
 
     begin_for (( i = 0; i < array_size; i++ )); doo
 
-      line=${log_array[$i]} action=none processed_line=$line
-      function= info= old_log_file= new_log_file= log_show_vars=
+      line=${log_array[$i]} action=none processed_line=
+      function= info= old_log_file= new_log_file= log_show_vars= log_id=
       if [[ "$line" == \=\ * ]]; then
 
         index=$i \
-          vars='action function info old_log_file new_log_file log_show_vars' \
+          vars='log_id action function info old_log_file new_log_file log_show_vars' \
           omni_extract_vars || fail
+
+        if [[ "$log_id" ]]; then
+          last_log_id=$log_id
+        fi
 
         if [[ "${log_show_vars:-}" ]]; then
           eval "local $log_show_vars"
@@ -169,14 +175,20 @@ omni_load_log_array() {
 
         action_map[$i]=$action
 
-        line_id=$log_fork_id:$((i+1)) omni_get_processed_line "$line" || {
+        line_id=$last_log_id omni_get_processed_line "$line" || {
           log_fatal "Bad log line: $line"
           fail1
           }
-      elif [[ "$line" == +* ]]; then
+      else
+        if [[ "$line" == +* ]]; then
+          line=${line#*(+) }
+          line="+ $line"
+        fi
         action_map[$i]=debug
+        processed_line="$last_log_id $line"
       fi 
 
+      log_id_array[$i]=$last_log_id
       output_array[$i]=$processed_line
 
       case $action in
@@ -243,6 +255,7 @@ omni_select_cursor() {
       action_map=cursor_${cursor}_action_map \
       log_array_index=cursor_${cursor}_log_array_index \
       log_array=cursor_${cursor}_log_array \
+      log_id_array=cursor_${cursor}_log_id_array \
       log_file=cursor_${cursor}_log_file \
       log_file_id=cursor_${cursor}_log_file_id \
       output_array=cursor_${cursor}_output_array \
@@ -290,6 +303,7 @@ omni_change_cursor_log() {
       "
       eval "
         declare -gn \
+          cursor_${cursor}_log_id_array=omni_log_id_array_$log_file_token \
           cursor_${cursor}_action_map=omni_action_map_$log_file_token \
           cursor_${cursor}_output_array=omni_log_output_array_$log_file_token \
           cursor_${cursor}_plane_depth_map=omni_plane_depth_map_$log_file_token \
@@ -802,7 +816,8 @@ omni_navigator() (
       fi
 
       echo "${NL}${LIGHT_BLUE}current log: $log_file" >&$fd_original_err
-      echo -n "${YELLOW}job_id=$log_job_id log_id=$log_fork_id:$((log_array_index+1)) ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
+      local log_id=${log_id_array[$log_array_index]}
+      echo -n "${YELLOW}job_id=$log_job_id log_id=$log_id line=$((log_array_index+1)) ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
       local debug_c
       read -rs -n1 debug_c <&$fd_original_in
 

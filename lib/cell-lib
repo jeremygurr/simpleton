@@ -21,6 +21,8 @@ show_branches=${show_branches:-f}
 
 downstream_cell_stack=( ) 
 
+disable_log=${disable_log:-f}
+
 # This is run if cell hasn't been initialized = missing .cyto folder
 make_cyto() {
   local cell=$1 new_cyto=$cell/.cyto.new
@@ -1324,7 +1326,7 @@ fi
 }
 
 cell_change_log_file() {
-  if [[ "${omni_log_job_id:-}" ]]; then
+  if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
     local previous_fork_id=$omni_log_fork_id
     get_fork_id || return 1
     local new_log_file=$log_path/$omni_log_job_id:$omni_log_fork_id.olog
@@ -1403,6 +1405,11 @@ local log_vars='cell short_cell current_command' \
   log_show_vars='short_cell current_command' 
 begin_function
 
+  if [[ $current_command == log ]]; then
+    disable_log=t
+  else
+    disable_log=f
+  fi
 
   if [[ $current_command != edit ]]; then
 
@@ -1417,7 +1424,7 @@ begin_function
     fi
 
     local omni_log_job_id=${omni_log_job_id:-}
-    if [[ $current_command != log && ! "${omni_log_job_id:-}" ]]; then
+    if [[ $disable_log == f && ! "${omni_log_job_id:-}" ]]; then
       command_to_log="${original_cmd#* }" \
         get_job_id || fail
     fi
@@ -1427,7 +1434,7 @@ begin_function
       fail1
       }
 
-    if [[ "${log_path:-}" ]]; then
+    if [[ $disable_log == f && "${log_path:-}" ]]; then
       local new_log_folder=$log_path
       cell_change_log_file || fail
       force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
