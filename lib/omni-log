@@ -103,23 +103,28 @@ omni_log_init() {
     ;;
   esac
 
-  var_stack=( )
-  logging_to_file=
+  var_stack=( ) \
+    var_stack2=( ) \
+    logging_to_file= \
+    log_vars= \
+    show_vars= 
 }
 
 alias begin_function='
   local return_value=0 break_out=f
   write_to_log trace call
-  let log_depth_current++ || true
+  (( log_depth_current++ ))
   var_stack+=( "$log_vars" ) 
-  log_vars=
+  var_stack2+=( "$show_vars" ) 
+  log_vars= show_vars=
   while true; do
 '
 
 alias end_function='
-  break; done; let log_depth_current-- || true
+  break; done; (( log_depth_current-- ))
   log_vars=${var_stack[-1]}
-  unset var_stack[-1]
+  show_vars=${var_stack2[-1]}
+  unset var_stack[-1] var_stack2[-1]
   write_to_log trace "return($return_value)"
 '
 
@@ -128,9 +133,11 @@ write_to_log() {
 begin_no_tracing_zone
 
 local level=$1 action=${2:-${1:-}} message=${3:-} \
-  var_name var value new_vars= trace_vars=
+  var_name var value new_vars= trace_vars= show_vars2=${show_vars:-$log_vars}
 
-for var in ${log_vars:-} $trace_var; do
+show_vars=
+
+for var in log_vars ${log_vars:-} $trace_var; do
 
   if [[ $var == *=* ]]; then
     var_name=${var%%=*}
@@ -163,7 +170,9 @@ for var in ${log_vars:-} $trace_var; do
     fi
 
   else
-    new_vars+=" $var_name=$value"
+    if [[ "$value" ]]; then
+      new_vars+=" $var_name=$value"
+    fi
   fi
 
 done
@@ -186,8 +195,13 @@ if [[ "$action" ]]; then
 fi
 local function=${log_function:-${FUNCNAME[1]}}
 if [[ "${function:-}" ]]; then
-  to_log+=" function=$function$new_vars"
+  to_log+=" function=$function"
 fi
+if [[ "${show_vars2:-}" ]]; then
+  get_shell_quoted_value "$show_vars2"
+  to_log+=" show_vars=$quoted_value"
+fi
+to_log+="$new_vars$trace_vars"
 if [[ "$message" ]]; then
   get_shell_quoted_value "$message"
   to_log+=" info=$quoted_value"
@@ -277,11 +291,13 @@ end_no_tracing_zone
 # Usage:
 #   new_log_file=... change_log_file  point to new log file
 #   new_log_file= change_log_file     stop logging
+# should also include previous_fork_id
 change_log_file() {
 begin_function_flat
 
   local new_log_file=$new_log_file old_log_file \
-    log_function=${log_function:-${FUNCNAME[1]}} 
+    log_function=${log_function:-${FUNCNAME[1]}} \
+    previous_fork_id=${previous_fork_id:-0} \
 
   if [[ "${logging_to_file:-}" == "$new_log_file" ]]; then
     succeed

@@ -49,9 +49,16 @@ omni_get_processed_line() {
   case $action in
     call)
       processed_line="[$action] $function"
+      local var
+      for var in ${show_vars:-}; do
+        processed_line+=" $var=${!var}"
+      done
     ;;
     return\(*)
       processed_line="[$action] from $function"
+      for var in ${show_vars:-}; do
+        processed_line+=" $var=${!var}"
+      done
     ;;
     log_from)
       processed_line="[$action] $old_log_file"
@@ -124,6 +131,8 @@ omni_load_log_array() {
           log_fatal "Bad log line: $line"
           return 1
           }
+      elif [[ "$line" == +* ]]; then
+        action_map[$i]=debug
       fi 
 
       output_array[$i]=$processed_line
@@ -332,10 +341,11 @@ omni_show_line() {
   local pad_size line_length=${#line}
   (( pad_size = COLUMNS - line_length ))
 
+  if (( ${#line} > $COLUMNS )); then
+    line=${line:0:$((COLUMNS-3))}..
+  fi
+  
   if [[ $reverse == t ]]; then
-    if (( ${#line} > $COLUMNS )); then
-      line=${line:0:$((COLUMNS-3))}..
-    fi
     echo -n "$line" >&$fd_original_err
     if (( pad_size > 0 )); then
       printf %${pad_size}s >&$fd_original_err
@@ -393,11 +403,13 @@ omni_search_next() {
 
       local pre_action= post_action=
 
-      if (( index >= 0 && index < log_array_size )); then
+      if (( index >= 0 && index < log_array_size )) \
+         && [[ -v action_map[$index] ]]; then
         pre_action=${action_map[$index]}
       fi
       (( index += direction ))
-      if (( index >= 0 && index < log_array_size )); then
+      if (( index >= 0 && index < log_array_size )) \
+         && [[ -v action_map[$index] ]]; then
         post_action=${action_map[$index]}
       fi
 
@@ -675,7 +687,7 @@ omni_next_error() {
     find_action='return\([^0].*\)' \
     omni_search || return 1
 
-  if (( $cursor_moved > 0 )); then
+  if (( cursor_moved == 0 )); then
     echo "No errors found." >&$fd_original_err
   fi
 

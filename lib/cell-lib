@@ -361,9 +361,9 @@ end_function_flat
 
 if succeeded; then
   local level=log_debug
-  if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
-    level=log_info
-  fi
+  # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
+  #   level=log_info
+  # fi
   action=update_check $level "$log_message ($short_cell)"
 else
   action=update_check log_fatal "Failed to check update need"
@@ -1203,6 +1203,66 @@ gather_leaf_cells() {
 leaf_cells+=( $leaf_path )
 }
 
+# executes a step of the folder language
+# folder language
+#   {cell}                update the given cell with the current coordinates
+#   choose-{n}-{name}     multi-path, stopping after {n} choices are successful. {name} is optional
+#   each-{var}-in-{vars}  loop over {vars} storing current value in {var}
+#                         can be file or folder
+#                         executes each element in parallel
+#   each-{var}            loop over {vars} (adds 's' to index var)
+#   loop-{var}-in-{vars}  same as each, except executes sequentially
+#   {file}.go             execute go code
+#                         should define a single method named after the file which will be executed
+#   {file}.py             execute python script
+#   {file}.js             execute js code
+#   {file}.java           execute java code
+#   {file}.bash           execute bash code
+#   {folder}              go through each item in folder and execute according to folder language
+execute_command_step() {
+local step=$1
+
+debug_start
+local short_step=${step%/*/*} \
+  log_vars='step short_step' show_vars=short_step
+short_step=${step#$short_step/}
+begin_function
+  local step_name=${step##*/} prefix= base
+
+  if [[ $step_name =~ [0-9]+-([^/]*)$ ]]; then
+    base=${BASH_REMATCH[1]}
+  else
+    base=$step_name
+  fi
+  
+  if [[ -d $step/.dna ]]; then
+    # recursive
+    fork execute_command $step update || fail
+    safe_link $step $source_path/$base || fail
+  elif [[ -d $step ]]; then
+    if [[ $base =~ ^choose-.* ]]; then
+      # TODO ...
+      incomplete
+      safe_link $choice $source_path/$last_part || fail
+    elif [[ $base =~ ^loop-.* ]]; then
+      serial=t execute_command_step_loop || fail
+    elif [[ $base =~ ^each-.* ]]; then
+      serial=f execute_command_step_loop || fail
+    else
+      execute_command_step_folder || fail
+    fi
+  elif [[ -f $step ]]; then
+    execute_command_step_file $step || fail
+  else 
+    log_fatal "I don't know how to process this step: $step"
+    fail1
+  fi
+
+debug_start
+end_function
+handle_return
+}
+
 trace_step_execution=${trace_step_execution:-f}
 trace_op=${trace_op:-}
 
@@ -1282,6 +1342,7 @@ cell_change_log_file() {
 cell_close_log_file() {
   if [[ $current_command != log ]]; then
     local new_log_file=
+    local previous_fork_id=$omni_log_fork_id
     log_function=${FUNCNAME[1]} \
       change_log_file
   fi
@@ -1445,61 +1506,6 @@ elif [[ $parent != $cell ]]; then
   cell=$parent get_dna_command || return 1
 fi
 return 0
-}
-
-# executes a step of the folder language
-# folder language
-#   {cell}                update the given cell with the current coordinates
-#   choose-{n}-{name}     multi-path, stopping after {n} choices are successful. {name} is optional
-#   each-{var}-in-{vars}  loop over {vars} storing current value in {var}
-#                         can be file or folder
-#                         executes each element in parallel
-#   each-{var}            loop over {vars} (adds 's' to index var)
-#   loop-{var}-in-{vars}  same as each, except executes sequentially
-#   {file}.go             execute go code
-#                         should define a single method named after the file which will be executed
-#   {file}.py             execute python script
-#   {file}.js             execute js code
-#   {file}.java           execute java code
-#   {file}.bash           execute bash code
-#   {folder}              go through each item in folder and execute according to folder language
-execute_command_step() {
-local step=$1
-
-local log_vars=step
-begin_function
-  local step_name=${step##*/} prefix= base
-
-  if [[ $step_name =~ [0-9]+-([^/]*)$ ]]; then
-    base=${BASH_REMATCH[1]}
-  else
-    base=$step_name
-  fi
-  
-  if [[ -d $step/.dna ]]; then
-    # recursive
-    fork execute_command $step update || fail
-    safe_link $step $source_path/$base || fail
-  elif [[ -d $step ]]; then
-    if [[ $base =~ ^choose-.* ]]; then
-      # TODO ...
-      incomplete
-      safe_link $choice $source_path/$last_part || fail
-    elif [[ $base =~ ^loop-.* ]]; then
-      serial=t execute_command_step_loop || fail
-    elif [[ $base =~ ^each-.* ]]; then
-      serial=f execute_command_step_loop || fail
-    else
-      execute_command_step_folder || fail
-    fi
-  elif [[ -f $step ]]; then
-    execute_command_step_file $step || fail
-  else 
-    log_fatal "I don't know how to process this step: $step"
-    fail1
-  fi
-end_function
-handle_return
 }
 
 execute_command_step_file() {
