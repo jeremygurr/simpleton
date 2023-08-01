@@ -409,7 +409,7 @@ omni_search_next() {
 
     failed_to_move=f
 
-    if [[ $deep == t && ${action_map[$index]} == log_to ]]; then
+    if [[ $deep == t && ${action_map[$index]} == log_to && ! "$go_out_of" ]]; then
 
       local new_index=0
       if [[ $direction == -1 ]]; then
@@ -443,7 +443,7 @@ omni_search_next() {
           if [[ ! "$function" ]]; then
             log_error "Bad log file: has call action without function"
           fi
-          function_call_stack+=( $function )
+          function_call_stack+=( "$function" )
         fi
 
         if [[ "$post_action" == return\(* && -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
@@ -464,9 +464,10 @@ omni_search_next() {
           index=$((index - 1)) \
             omni_extract_vars || fail
           if [[ ! "$function" ]]; then
-            log_error "Bad log file: has call action without function"
+            log_error "Bad log file: has return action without function"
+            debug_start
           fi
-          function_call_stack+=( $function )
+          function_call_stack+=( "$function" )
         fi
 
       fi
@@ -501,6 +502,7 @@ omni_search_next() {
 omni_search_get_matches() {
 
   local plane_id=${plane_map[$index]} 
+  local plane_depth=${plane_depth_map[$index]}
   if [[ $deep == f ]]; then
     if [[ $direction == 1 && $plane_id -gt $original_plane_id ]]; then
       found_matching_line=f
@@ -512,12 +514,15 @@ omni_search_get_matches() {
   fi
 
   if [[ $found_matching_line == t \
-     && ( "$find_level" || "$find_action" || "$find_log_id" || "$find_function" ) \
+     && ( "$find_level" || "$find_action" \
+        || "$find_log_id" || "$find_function" \
+        || "$go_out_of" ) \
      ]]; then
+    local level action log_id function
     found_matching_line=f
 
-    if [[ $go_out_of == function \
-       && $plane_id -lt $original_plane_id \
+    if [[ "$go_out_of" == function \
+       && $plane_depth -lt $original_plane_depth \
        ]]; then
        found_matching_line=t
     elif [[ "$find_level" ]]; then
@@ -528,9 +533,7 @@ omni_search_get_matches() {
         found_matching_line=t
       fi
     elif [[ "$find_action" ]]; then
-      action=
-      vars=action \
-        omni_extract_vars || fail
+      action=${action_map[$index]}
       if [[ "${action:-}" && $action =~ $find_action ]]; then
         found_matching_line=t
       fi
@@ -622,7 +625,9 @@ omni_search() {
 
     local -n index=log_array_index
 
-    local original_plane_id=${plane_map[$index]}
+    local original_plane_id=${plane_map[$index]} \
+      original_plane_depth=${plane_depth_map[$index]} \
+
     local plane_id=$original_plane_id \
       found_matching_line=t \
       restore_backup=f \
@@ -729,7 +734,7 @@ omni_next_error() {
 
 omni_show_call_stack() {
   if [[ -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
-    local i=$index
+    local i=$log_array_index
     local stack_size=${#function_call_stack[*]}
 
     if (( stack_size > 0 )); then
@@ -863,6 +868,7 @@ omni_navigator() (
           move_cursor=$cursor \
             deep=f \
             same_plane=t \
+            find_action=call \
             omni_search || fail
           omni_show_context || fail
           no_follow_once=t
@@ -888,6 +894,7 @@ omni_navigator() (
           echo "# Step over, until next entry" >&$fd_original_err
           move_cursor=$cursor \
             deep=f \
+            same_plane=t \
             omni_search || fail
           omni_show_context || fail
           no_follow_once=t
