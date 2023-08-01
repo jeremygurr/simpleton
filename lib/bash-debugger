@@ -234,6 +234,17 @@ debug_trap() {
     debug_max_depth=$debug_current_depth
     ok_to_debug=t
 
+  elif [[ "$debug_condition" ]]; then
+    local condition=$debug_condition
+    if [[ "$condition" != \[* && "$condition" != \(* ]]; then
+      condition="[[ $condition ]]"
+    fi
+    condition+=" && ok_to_debug=t"
+    eval "$condition"
+    if [[ $ok_to_debug == t ]]; then
+      debug_condition=
+    fi
+
   elif [[ "$debug_function" \
           && $debug_function == $debug_current_function \
           || "$debug_search" \
@@ -872,6 +883,31 @@ debug_trap() {
         debug_step_to_next_line=f
         debug_save_state
         ;;
+      \[)
+        echo >&$fd_original_err
+        read -e -p "Condition (brackets optional): " debug_condition <&$fd_original_in >&$fd_original_err
+        if [[ "${debug_condition:-}" ]]; then
+          debug_condition_old=$debug_condition
+          debug_search_deep=t
+          debug_r=0
+          debug_long_command=t
+          debug_subshell=t
+          debug_save_state
+        fi
+        ;;
+      \{)
+        if [[ "${debug_condition_old:-}" ]]; then
+          echo "# Repeating search for $debug_condition_old" >&$fd_original_err
+          debug_condition=${debug_condition_old:-}
+          debug_search_deep=t
+          debug_r=0
+          debug_long_command=t
+          debug_subshell=t
+          debug_save_state
+        else
+          echo "# No previous condition." >&$fd_original_err
+        fi
+        ;;
       \])
         echo "# Running until a new function is reached" >&$fd_original_err
         let debug_max_depth++
@@ -977,6 +1013,7 @@ debug_trap() {
         echo "@  show full path of file containing source being executed" >&$fd_original_err
         echo "%  toggle source following (displays source context after every command)" >&$fd_original_err
         echo "=  continue until the current line is reached again" >&$fd_original_err
+        echo "[  continue until a given [[ ]] or (( )) condition is met" >&$fd_original_err
         echo "]  continue until we reach a different function" >&$fd_original_err
         echo "}  continue until we reach a different file" >&$fd_original_err
         echo "\  add current function to jump ignore list, so using ] will not hit this function again" >&$fd_original_err
@@ -1011,6 +1048,8 @@ debug_save_state() {
 if [[ $BASH_SUBSHELL -gt 0 || ${force_save:-f} == t ]]; then
 [[ $debug_debug == t ]] && echo "${CYAN}Saving debug_state_file${RESET}" >&$fd_original_err
 echo "
+debug_condition='$debug_condition'
+debug_condition_old='$debug_condition_old'
 debug_display='$debug_display'
 debug_exit='$debug_exit'
 debug_expanded_search='$debug_expanded_search'
@@ -1116,6 +1155,8 @@ fi
 if [[ $debugging == f ]]; then
   export debugging=t
   export debug
+  export debug_condition=${debug_condition:-}
+  export debug_condition_old=${debug_condition_old:-}
   export debug_debug=${debug_debug:-f}
   export debug_dir=$PWD
   export debug_display=${debug_display:-none}
