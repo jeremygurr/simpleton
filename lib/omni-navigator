@@ -426,7 +426,7 @@ omni_search_next() {
 
     failed_to_move=f
 
-    if [[ $deep == t && ${action_map[$index]} == log_to && ! "$go_out_of" ]]; then
+    if [[ ${action_map[$index]} == log_to && $allow_in_log == t ]]; then
 
       local new_index=0
       if [[ $direction == -1 ]]; then
@@ -492,14 +492,14 @@ omni_search_next() {
       if (( index >= log_array_size || index < 0 )); then
         # out of bounds
         if [[ $direction == 1 ]]; then
-          if [[ $same_plane == f && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
+          if [[ $allow_out_log == t && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
           else
             (( index = log_array_size - 1 ))
             failed_to_move=t
           fi
         elif [[ $direction == -1 ]]; then
-          if [[ $same_plane == f && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
+          if [[ $allow_out_log == t && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
           else
             index=0
@@ -520,29 +520,33 @@ omni_search_get_matches() {
 
   local plane_id=${plane_map[$index]} 
   local plane_depth=${plane_depth_map[$index]}
-  if [[ $deep == f ]]; then
-    if [[ $direction == 1 && $plane_id -gt $original_plane_id ]]; then
-      found_matching_line=f
-    fi
-  fi
 
-  if [[ $same_plane == t && $plane_id != $original_plane_id ]]; then
+  if [[ $allow_in == f ]] \
+     && (( plane_depth > original_plane_depth )); then
+    found_matching_line=f
+  elif [[ $allow_out == f ]] \
+     && (( plane_depth < original_plane_depth )); then
+    found_matching_line=f
+  elif [[ $allow_flat == f ]] \
+     && (( plane_depth == original_plane_depth )); then
+    found_matching_line=f
+  elif [[ $allow_same_plane == f ]] \
+     && (( plane_id == original_plane_id )); then
+    found_matching_line=f
+  elif [[ $allow_diff_plane == f ]] \
+     && (( plane_id != original_plane_id )); then
     found_matching_line=f
   fi
 
   if [[ $found_matching_line == t \
      && ( "$find_level" || "$find_action" \
         || "$find_log_id" || "$find_function" \
-        || "$go_out_of" ) \
+        ) \
      ]]; then
     local level action log_id function
     found_matching_line=f
 
-    if [[ "$go_out_of" == function \
-       && $plane_depth -lt $original_plane_depth \
-       ]]; then
-       found_matching_line=t
-    elif [[ "$find_level" ]]; then
+    if [[ "$find_level" ]]; then
       level=
       vars=level \
         omni_extract_vars || fail
@@ -615,10 +619,18 @@ omni_search() {
       find_action=${find_action:-} \
       find_log_id=${find_log_id:-} \
       find_function=${find_function:-} \
-      deep=${deep:-t} \
-      same_plane=${same_plane:-f} \
-      go_out_of=${go_out_of:-} \
+      allow_in=${allow_in:-f} \
+      allow_out=${allow_out:-f} \
+      allow_in_log=${allow_in_log:-f} \
+      allow_out_log=${allow_out_log:-f} \
+      allow_flat=${allow_flat:-f} \
+      allow_same_plane=${allow_same_plane:-f} \
+      allow_diff_plane=${allow_diff_plane:-f} \
       count=${count:-1} \
+
+    if [[ $allow_same_plane == t ]]; then
+      allow_flat=t
+    fi
 
     local direction
     if (( count < 0 )); then
@@ -630,8 +642,6 @@ omni_search() {
     fi
 
     cursor_moved=0
-
-    #zombie "Starting omni_search: from_cursor=$from_cursor move_cursor=$move_cursor count=$count deep=$deep"
 
     if [[ "$from_cursor" ]]; then
       omni_copy_cursor $from_cursor $move_cursor || fail
@@ -657,7 +667,6 @@ omni_search() {
       fi
 
       omni_search_next || fail
-      #zombie "Checking index $index / $log_array_size of $log_file"
 
       found_matching_line=t
       omni_search_get_matches || fail
@@ -705,10 +714,11 @@ omni_show_log() {
     local offset=$next_log_start
 
     # get cursor to correct starting point
-    local cursor_moved=0 deep=f same_plane=t
+    local cursor_moved=0
 
     count=$offset \
       from_cursor=$cursor \
+      allow_same_plane=t \
       omni_search || fail
 
     next_log_start=$cursor_moved
@@ -719,7 +729,8 @@ omni_show_log() {
         reverse_index=$log_array_index \
         omni_show_line || fail
 
-      omni_search || fail
+      allow_same_plane=t \
+        omni_search || fail
       if [[ $cursor_moved == 0 ]]; then
         break
       fi
