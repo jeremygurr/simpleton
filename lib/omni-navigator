@@ -468,7 +468,13 @@ omni_search_next() {
 omni_search_get_matches() {
 
   local plane_id=${plane_map[$index]} 
-  if [[ $deep == f && $plane_id -gt $original_plane_id ]]; then
+  if [[ $deep == f ]]; then
+    if [[ $direction == 1 && $plane_id -gt $original_plane_id ]]; then
+      found_matching_line=f
+    fi
+  fi
+
+  if [[ $same_plane == t && $plane_id != $original_plane_id ]]; then
     found_matching_line=f
   fi
 
@@ -545,6 +551,7 @@ omni_search() {
       find_level=${find_level:-} \
       find_action=${find_action:-} \
       deep=${deep:-t} \
+      same_plane=${same_plane:-f} \
       go_out_of=${go_out_of:-} \
       count=${count:-1} \
 
@@ -571,8 +578,10 @@ omni_search() {
     local -n index=log_array_index
 
     local original_plane_id=${plane_map[$index]}
-    local plane_id=$original_plane_id
-    local found_matching_line=t
+    local plane_id=$original_plane_id \
+      found_matching_line=t \
+      restore_backup=f \
+      failed_to_move=f \
 
     begin_loop
 
@@ -592,14 +601,17 @@ omni_search() {
       if [[ $found_matching_line == t ]]; then
         (( cursor_moved += direction ))
         (( count -= direction ))
+        restore_backup=f
         if [[ $count == 0 ]]; then
           break
         fi
+      else
+        restore_backup=t
       fi
 
     end_loop
 
-    if [[ $failed_to_move == f && $found_matching_line == f ]]; then
+    if [[ $restore_backup == t ]]; then
       omni_copy_cursor backup $cursor || fail
     fi
 
@@ -625,12 +637,11 @@ omni_show_log() {
     local remaining_lines=$max_count
     local offset=$next_log_start
 
-    omni_copy_cursor $cursor s || fail
-
     # get cursor to correct starting point
-    local cursor_moved=0 deep=f
+    local cursor_moved=0 deep=f same_plane=t
 
     count=$offset \
+      from_cursor=$cursor \
       omni_search || fail
 
     next_log_start=$cursor_moved
@@ -639,7 +650,7 @@ omni_show_log() {
 
       cursor=s \
         reverse_index=$log_array_index \
-        omni_show_line $i || fail
+        omni_show_line || fail
 
       omni_search || fail
       if [[ $cursor_moved == 0 ]]; then
@@ -761,7 +772,9 @@ omni_navigator() (
           ;;
         i)
           echo "# Step in, forwards" >&$fd_original_err
+          debug_start
           move_cursor=$cursor \
+            deep=t \
             omni_search || fail
           omni_show_context || fail
           no_follow_once=t
