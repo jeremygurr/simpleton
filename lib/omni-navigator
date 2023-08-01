@@ -51,13 +51,17 @@ omni_get_processed_line() {
       processed_line="[$action] $function"
       local var
       for var in ${log_show_vars:-}; do
-        processed_line+=" $var=${!var}"
+        if [[ -v $var ]]; then
+          processed_line+=" ${!var}"
+        fi
       done
     ;;
     return\(*)
       processed_line="[$action] from $function"
       for var in ${log_show_vars:-}; do
-        processed_line+=" $var=${!var}"
+        if [[ -v $var ]]; then
+          processed_line+=" ${!var}"
+        fi
       done
     ;;
     log_from)
@@ -144,12 +148,19 @@ omni_load_log_array() {
     begin_for (( i = 0; i < array_size; i++ )); doo
 
       line=${log_array[$i]} action=none processed_line=$line
-      function= info= old_log_file= new_log_file=
+      function= info= old_log_file= new_log_file= log_show_vars=
       if [[ "$line" == \=\ * ]]; then
 
         index=$i \
-          vars='action function info old_log_file new_log_file' \
+          vars='action function info old_log_file new_log_file log_show_vars' \
           omni_extract_vars || fail
+
+        if [[ "${log_show_vars:-}" ]]; then
+          eval "local $log_show_vars"
+          index=$i \
+            vars="$log_show_vars" \
+            omni_extract_vars || fail
+        fi
 
         if [[ $action == none ]]; then
           log_fatal "Log line is missing action key: $line"
@@ -368,6 +379,8 @@ omni_show_line() {
   fi
 
   local line=${output_array[$index]}
+  line=${line//$NL/ }
+  line=${line//$TAB/ }
 
   local pad_size line_length=${#line}
   (( pad_size = COLUMNS - line_length ))
@@ -461,14 +474,14 @@ omni_search_next() {
       if (( index >= log_array_size || index < 0 )); then
         # out of bounds
         if [[ $direction == 1 ]]; then
-          if [[ $same_plane == f ]] && (( ${#log_file_stack[*]} > 0 )); then
+          if [[ $same_plane == f && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
           else
             (( index = log_array_size - 1 ))
             failed_to_move=t
           fi
         elif [[ $direction == -1 ]]; then
-          if [[ $same_plane == f ]] && (( ${#log_file_stack[*]} > 0 )); then
+          if [[ $same_plane == f && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
           else
             index=0
@@ -498,31 +511,41 @@ omni_search_get_matches() {
     found_matching_line=f
   fi
 
-  if [[ $found_matching_line == t && ( "$find_level" || "$find_action" ) ]]; then
+  if [[ $found_matching_line == t \
+     && ( "$find_level" || "$find_action" || "$find_log_id" || "$find_function" ) \
+     ]]; then
     found_matching_line=f
 
     if [[ $go_out_of == function \
        && $plane_id -lt $original_plane_id \
        ]]; then
        found_matching_line=t
-    fi
-
-    if [[ "$find_level" ]]; then
+    elif [[ "$find_level" ]]; then
       level=
       vars=level \
         omni_extract_vars || fail
       if [[ "${level:-}" && $level =~ $find_level ]]; then
-        #zombie "level matches"
         found_matching_line=t
       fi
-    fi
-
-    if [[ $found_matching_line == f && "$find_action" ]]; then
+    elif [[ "$find_action" ]]; then
       action=
       vars=action \
         omni_extract_vars || fail
       if [[ "${action:-}" && $action =~ $find_action ]]; then
-        #zombie "action matches"
+        found_matching_line=t
+      fi
+    elif [[ "$find_log_id" ]]; then
+      log_id=
+      vars=log_id \
+        omni_extract_vars || fail
+      if [[ "${log_id:-}" && $log_id =~ $find_log_id ]]; then
+        found_matching_line=t
+      fi
+    elif [[ "$find_function" ]]; then
+      function=
+      vars=function \
+        omni_extract_vars || fail
+      if [[ "${function:-}" && $function =~ $find_function ]]; then
         found_matching_line=t
       fi
     fi
@@ -570,6 +593,8 @@ omni_search() {
       move_cursor=${move_cursor:-s} \
       find_level=${find_level:-} \
       find_action=${find_action:-} \
+      find_log_id=${find_log_id:-} \
+      find_function=${find_function:-} \
       deep=${deep:-t} \
       same_plane=${same_plane:-f} \
       go_out_of=${go_out_of:-} \
@@ -651,7 +676,6 @@ omni_search() {
 #   plane_map
 #   output_array
 omni_show_log() {
-          debug_start
   begin_function_flat
 
     # display lines until end
@@ -793,6 +817,24 @@ omni_navigator() (
           omni_show_context || fail
           no_follow_once=t
           ;;
+        g)
+          echo >&$fd_original_err
+          local go_until= find_log_id= find_function=
+          read -e -p "Go until function / log_id: " go_until <&$fd_original_in >&$fd_original_err
+          if [[ "${go_until:-}" ]]; then
+            if [[ "$go_until" =~ ^[0-9:]+$ ]]; then
+              find_log_id=$go_until
+            else
+              find_function=$go_until
+            fi
+            move_cursor=$cursor \
+              deep=t \
+              same_plane=f \
+              omni_search || fail
+            omni_show_context || fail
+            no_follow_once=t
+          fi
+          ;;
         i)
           echo "# Step in, forwards" >&$fd_original_err
           move_cursor=$cursor \
@@ -878,6 +920,7 @@ omni_navigator() (
           echo "b  back: go to the previous log line of the same depth or shallower" >&$fd_original_err
           echo "c  list a few lines of logs before and after current line" >&$fd_original_err
           echo "i  step in: go to the next log line of the same depth or deeper" >&$fd_original_err
+          echo "g  go to the given function or log_id" >&$fd_original_err
           echo "l  list next few log lines" >&$fd_original_err
           echo "L  list previous log lines" >&$fd_original_err
           echo "n  next: (step over) go to the next log line with a function call of the same depth or shallower" >&$fd_original_err
@@ -929,7 +972,8 @@ omni_print_details() (
       echo "$key: ${!key}" >&$fd_original_err
     done
   else
-    echo "No further details available." >&$fd_original_err
+    echo "Raw text, bytes ${#line}" >&$fd_original_err
+    echo "$line" >&$fd_original_err
   fi
   return 0
 )
