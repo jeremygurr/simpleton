@@ -79,6 +79,35 @@ omni_get_processed_line() {
   return 0
 }
 
+# inputs:
+#   index: where in the current log to extract the vars from
+#   vars: space separated list of vars to extract from the given log line
+# warning: if you localize a variable before calling this, that variable can't be set
+#   by this function. Only global variables can be successfully set by this function.
+#   This is because this function localizes all variables it uses, and then globalizes
+#   the selected variable, which won't actually change an outer local version of the
+#   variable, only the shared global version.
+omni_extract_vars() {
+  local line=${log_array[$index]} \
+    entries \
+    entry \
+    var \
+    value
+  if [[ "$line" == \=\ * ]]; then
+    eval "entries=( ${line#= } )"
+    for entry in "${entries[@]}"; do
+      var=${entry%%=*}
+      if [[ " $vars " == *\ $var\ * ]]; then
+        value=${entry#*=}
+        local quoted_value
+        get_shell_quoted_value "$value"
+        eval "$var=$quoted_value"
+      fi
+    done
+  fi
+  return 0
+}
+
 # inputs: 
 #   log_file 
 #   log_file_id 
@@ -89,8 +118,8 @@ omni_load_log_array() {
   begin_function
 
     eval "declare -ga omni_log_array_$log_file_token"
-    local -n array=omni_log_array_$log_file_token
-    mapfile array < <(cat $log_file) || fail
+    local -n log_array=omni_log_array_$log_file_token
+    mapfile log_array < <(cat $log_file) || fail
 
     eval "
       declare -ga \
@@ -106,30 +135,32 @@ omni_load_log_array() {
       action_map=omni_action_map_$log_file_token \
       output_array=omni_log_output_array_$log_file_token \
 
-    local i array_size=${#array[*]} \
+    local i array_size=${#log_array[*]} \
       plane_stack next_plane_id=1 plane_id=0 \
       processed_line line \
       log_fork_id=${log_file_id#*:} \
-      ts pid log_id depth level action function entries info old_log_file new_log_file
+      action function info old_log_file new_log_file
 
     begin_for (( i = 0; i < array_size; i++ )); doo
 
-      line=${array[$i]} action=none processed_line=$line
-      ts= pid= log_id= depth= level= function= info= old_log_file= new_log_file=
+      line=${log_array[$i]} action=none processed_line=$line
+      function= info= old_log_file= new_log_file=
       if [[ "$line" == \=\ * ]]; then
-        entries=${line#= }
-        eval "$entries" || return 1
+
+        index=$i \
+          vars='action function info old_log_file new_log_file' \
+          omni_extract_vars || fail
 
         if [[ $action == none ]]; then
           log_fatal "Log line is missing action key: $line"
-          return 1
+          fail1
         fi
 
         action_map[$i]=$action
 
         line_id=$log_fork_id:$((i+1)) omni_get_processed_line "$line" || {
           log_fatal "Bad log line: $line"
-          return 1
+          fail1
           }
       elif [[ "$line" == +* ]]; then
         action_map[$i]=debug
@@ -175,7 +206,7 @@ omni_load_log_array() {
 
     end_for
 
-    log_array_size=${#array[*]}
+    log_array_size=${#log_array[*]}
   
   end_function
   handle_return
@@ -355,30 +386,6 @@ omni_show_line() {
     echo "$line" >&$fd_original_err
   fi
 
-  return 0
-}
-
-# inputs:
-#   index: where in the current log to extract the vars from
-#   vars: space separated list of vars to extract from the given log line
-# warning: if you localize a variable before calling this, that variable can't be set
-#   by this function. Only global variables can be successfully set by this function.
-#   This is because this function localizes all variables it uses, and then globalizes
-#   the selected variable, which won't actually change an outer local version of the
-#   variable, only the shared global version.
-omni_extract_vars() {
-  local line=${log_array[$index]} \
-    ts pid log_id depth level action function entries info old_log_file new_log_file \
-    var entries
-  if [[ "$line" == \=\ * ]]; then
-    entries=${line#= }
-    eval "$entries" || return 1
-    for var in $vars; do
-      if [[ -v $var ]]; then
-        eval "declare -g $var=\$$var"
-      fi
-    done
-  fi
   return 0
 }
 
@@ -644,6 +651,7 @@ omni_search() {
 #   plane_map
 #   output_array
 omni_show_log() {
+          debug_start
   begin_function_flat
 
     # display lines until end
@@ -894,13 +902,13 @@ omni_navigator() (
   handle_return
 )
 
-omni_print_details() {
+# run in a subshell to isolate random fields that may be set by entry evaluation
+omni_print_details() (
   local line=${log_array[$log_array_index]}
   if [[ "$line" == \=\ * ]]; then
     echo "log file: $log_file"
     echo "fork_id: $log_fork_id"
     echo "line: $((log_array_index + 1))"
-    local ts pid log_id depth level action function entries info
     entries=${line#= }
     eval "$entries" || return 1
 
@@ -924,7 +932,7 @@ omni_print_details() {
     echo "No further details available." >&$fd_original_err
   fi
   return 0
-}
+)
 
 omni_show_context() {
   (( next_log_start = -omni_list_radius ))
