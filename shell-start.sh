@@ -12,23 +12,31 @@ alias ls='ls --color=auto'
 alias l='ls --color=auto -l'
 alias ll='ls --color=auto -la'
 alias rmr='rm -rf'
-alias u='cd ..'
-alias uu='cd ../..'
-alias uuu='cd ../../..'
+alias u='builtin cd ..'
+alias uu='builtin cd ../..'
+alias uuu='builtin cd ../../..'
 alias vi=vim
 
 # saves existing dir before changing to the given dir
-to() {
+cd() {
 local target=$1
 if [[ ! "$target" ]]; then
   target=$PWD
 fi
-if [[ ! -d "$target" ]]; then
+if [[ -f "$target" ]]; then
+  vim "$target"
+elif [[ ! -d "$target" ]]; then
   echo "Error: target doesn't exist or is not a folder: $target" >&2
   return 1
+else
+  pushd $PWD >/dev/null || return 1
+  local d=$(dirs)
+  if (( ${#d} > 2000 )); then
+    # remove bottom of stack so we don't grow too big
+    popd -n -0
+  fi
+  builtin cd "$target" || return 1
 fi
-pushd $PWD >/dev/null || return 1
-cd "$target" || return 1
 return 0
 }
 
@@ -126,7 +134,7 @@ localize() {
 for file in $* ; do
   dirOfFile=`dirname $file`
   fileName=`basename $file`
-  cd "$dirOfFile"
+  builtin cd "$dirOfFile"
   description=`file $fileName`
   target=`echo $description | grep "symbolic link" | sed "s/.*symbolic link to \(.*\)/\1/" | sed "s/'//g" | sed "s/\\\`//g"`
 # echo "Target: $target"
