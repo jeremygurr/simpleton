@@ -10,6 +10,9 @@ omni_navigator_init() {
     exec {fd_original_err}>&2
     exec {fd_original_trace}>&${fd_trace:-2}
   fi
+  apad_min[log_id]=8 apad_max[log_id]=12
+  apad_min[action]=16 apad_max[action]=20
+  apad_min[function]=20 apad_max[function]=30
 }
 
 # input:
@@ -44,11 +47,13 @@ get_log_file_token() {
 # input: {line}
 #   line_id
 omni_get_processed_line() {
-  local line=$1 line_id=$line_id
+  local line=$1 log_id=$log_id
 
+  processed_line=
+  apad processed_line log_id $log_id action "[$action] "
   case $action in
     call)
-      processed_line="[$action] $function"
+      apad processed_line function "$function "
       local var
       for var in ${log_show_vars:-}; do
         if [[ -v $var ]]; then
@@ -57,7 +62,7 @@ omni_get_processed_line() {
       done
     ;;
     return\(*)
-      processed_line="[$action] from $function"
+      apad processed_line function "$function "
       for var in ${log_show_vars:-}; do
         if [[ -v $var ]]; then
           processed_line+=" ${!var}"
@@ -65,24 +70,23 @@ omni_get_processed_line() {
       done
     ;;
     log_from)
-      processed_line="[$action] $old_log_file"
+      processed_line+="$old_log_file"
     ;;
     log_to)
-      processed_line="[$action] $new_log_file"
+      processed_line+="$new_log_file"
     ;;
     log_close)
-      processed_line="[$action]"
+      :
     ;;
     *)
       if [[ "${info:-}" ]]; then
-        processed_line="[$action] $info"
+        processed_line+="$info"
       else
-        processed_line=${line%$NL}
+        processed_line+=${line%$NL}
       fi
     ;;
   esac
 
-  processed_line="$line_id $processed_line"
   return 0
 }
 
@@ -178,7 +182,7 @@ omni_load_log_array() {
 
         action_map[$i]=$action
 
-        line_id=$last_log_id omni_get_processed_line "$line" || {
+        log_id=$last_log_id omni_get_processed_line "$line" || {
           log_fatal "Bad log line: $line"
           fail1
           }
@@ -376,6 +380,9 @@ omni_exit_sub_log() {
 omni_show_line() {
   local reverse_index=$reverse_index \
     cursor=$cursor \
+    out_to_var=${out_to_var:-} \
+    result= \
+    pad \
 
   local -n \
     output_array=cursor_${cursor}_output_array \
@@ -392,7 +399,7 @@ omni_show_line() {
   fi
 
   if [[ $reverse == t ]]; then
-    echo -n "$REVERSE" >&$fd_original_err
+    result+="$REVERSE"
   fi
 
   local line=${output_array[$index]}
@@ -407,13 +414,20 @@ omni_show_line() {
   fi
   
   if [[ $reverse == t ]]; then
-    echo -n "$line" >&$fd_original_err
+    result+="$line"
     if (( pad_size > 0 )); then
-      printf %${pad_size}s >&$fd_original_err
+      printf -v pad %${pad_size}s
+      result+="$pad"
     fi
-    echo "$RESET" >&$fd_original_err
+    result+="$RESET$NL"
   else
-    echo "$line" >&$fd_original_err
+    result+="$line$NL"
+  fi
+
+  if [[ "$out_to_var" ]]; then
+    eval "$out_to_var=\$result"
+  else
+    echo "$result" >&$fd_original_err
   fi
 
   return 0
@@ -732,12 +746,15 @@ omni_show_log() {
       omni_search || fail
 
     next_log_start=$cursor_moved
+    local entries= buf=
 
     begin_while (( remaining_lines-- > 0 )); doo
 
       cursor=s \
         reverse_index=$log_array_index \
+        out_to_var=buf \
         omni_show_line || fail
+      entries+=$buf
 
       allow_same_plane=t \
         omni_search || fail
@@ -748,6 +765,8 @@ omni_show_log() {
       (( next_log_start++ ))
         
     end_while
+
+    echo -n "$entries" >&$fd_original_err
 
   end_function_flat
   handle_return

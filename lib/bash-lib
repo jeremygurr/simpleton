@@ -227,13 +227,13 @@ escape_regex() {
 }
 
 get_shell_quoted_value() {
-local value=$1
-quoted_value=$value
-if [[ "$quoted_value" =~ \(|\)|\"|\'|\\|\  ]]; then
-  value=${value//\\/\\\\}
-  value=${value//\"/\\\"}
-  quoted_value="$DQ$value$DQ"
-fi
+  local value=$1
+  quoted_value=$value
+  if [[ "$quoted_value" =~ \(|\)|\"|\'|\\|\  ]]; then
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    quoted_value="$DQ$value$DQ"
+  fi
 }
 
 # usage: echo -e "\n\n blah  \n\n" | trim_newlines
@@ -253,6 +253,59 @@ trim_stream_nl() {
 # will trim whitespace from beginning and end of each line in the given input
 trim_stream() {
   sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'
+}
+
+declare -A apad_size apad_min apad_max
+# append a string to another string + padding according to the class of item being added
+# Usage: apad {base var name} [{class of append string} {append string}]...
+# The base var will be directly appended to with the append string and maybe padding
+# You should include spaces in the append string itself if you want to guarantee a minimum
+#   amount of space.
+# You may define explicit min/maxes for various classes by adding entries to the apad_min and
+#   apad_max maps, and can setup initial sizes with the apad_size map
+apad() {
+  local -n base=$1; shift
+  local class append append_size class_size class_min class_max pad pad_size
+  while (( $# > 1 )); do
+
+    class=$1 append=$2; shift 2
+    append_size=${#append}
+
+    if [[ ! -v apad_min[$class] ]]; then
+      apad_min[$class]=0
+    fi
+    class_min=${apad_min[$class]}
+
+    if [[ ! -v apad_size[$class] ]]; then
+      apad_size[$class]=$class_min
+    fi
+    class_size=${apad_size[$class]}
+
+    if [[ ! -v apad_max[$class] ]]; then
+      apad_max[$class]=1000
+    fi
+    class_max=${apad_max[$class]} 
+
+    if (( append_size > class_size && class_size < class_max )); then
+      apad_size[$class]=$append_size
+      if (( class_size > class_max )); then
+        apad_size[$class]=$class_max
+      fi
+    fi
+
+    pad_size=0
+    if (( class_size > append_size )); then
+      (( pad_size = class_size - append_size ))
+    fi
+
+    base+=$append
+
+    if (( pad_size > 0 )); then
+      printf -v pad %${pad_size}s
+      base+=$pad
+    fi
+
+  done
 }
 
 upper_first_char() {
@@ -296,175 +349,6 @@ convert_to_seconds() {
     ;;
   esac
   return 0
-}
-
-# echo_align behaves much like echo, except that it aligns columns based on the maximum size of previous lines
-# echo_align_reset # will reset the column sizes
-# echo_align -n "somestring" # will print the string but not end the line yet
-# you can't combine the flags like -rn
-# echo_align "string1" "string2" "string3" # the three strings will be in separate columns, possibly padded with spaces to make them align with the preceeding lines
-#
-# global vars
-#   echo_current_column
-#   echo_columns
-#   echo_previous_column_size
-#
-# you can preset column widths like this:
-#   echo_columns=( 20 10 40 )
-
-echo_align() {
-begin_no_tracing_zone
-local output=()
-local no_new_line no_new_column silent block=
-local append
-local rigid=f
-
-while [[ $# -gt 0 ]]; do
-  local key="$1"; shift
-
-  case $key in
-    -b|--block)
-      silent=t
-      block=t
-    ;;
-    -r|--rigid)
-      rigid=t
-    ;;
-    -s|--silent)
-      silent=t
-    ;;
-    -n|--no-new-line)
-      no_new_line=t
-    ;;
-    -N|--no-new-column)
-      no_new_column=t
-    ;;
-    *)
-      output+=("$key")
-    ;;
-  esac
-done
-
-if [ ${tracing_tiny:-f} == t ]; then
-  tracing_tiny=f
-  echo
-fi
-
-if [ "$block" ]; then
-  echo_block+=( "${output[*]}" )
-fi
-
-local column_text column_text_size column_max pad_size pad output_column_count echo_columns_count current_column
-
-echo_current_column=${echo_current_column:-0}
-echo_previous_column_size=${echo_previous_column_size:-0}
-echo_min_pad=${echo_min_pad:-1}
-
-output_column_count=${#output[*]}
-let output_column_count+=echo_current_column
-
-if [ "${echo_columns:-}" ]; then
-  echo_columns_count=${#echo_columns[*]}
-else
-  echo_columns_count=0
-fi
-
-[ $echo_columns_count -gt $output_column_count ] && output_column_count=$echo_columns_count
-
-current_column=0
-for column_text in "${output[@]:-}"; do
-  let current_column++ || true
-  # only pad if we aren't the last column
-  if [ $current_column -lt $output_column_count -o "$no_new_line" ]; then
-    column_max=${echo_columns[$echo_current_column]:-0}
-    column_text_size=${#column_text}
-    let column_text_size+=echo_previous_column_size || true
-
-    if [[ $column_text_size -gt $column_max ]]; then
-      column_max=$column_text_size
-      pad_size=$echo_min_pad
-
-      if [ $rigid == f ]; then
-        echo_columns[$echo_current_column]=$column_max
-      fi
-      [ "${echo_debug:-}" ] && echo_debug
-    else
-      let pad_size=column_max-column_text_size+echo_min_pad || true
-    fi
-
-    if [ ! "$no_new_column" ]; then
-      [ "$pad_size" -le 0 ] && pad_size=$echo_min_pad
-      printf -v pad %${pad_size}s
-      column_text="${column_text}${pad}"
-    fi
-  fi
-  let echo_current_column++ || true
-
-  [ ! "$silent" ] && echo -n "$column_text"
-done
-
-if [ ! "$no_new_line" ]; then
-  [ ! "$silent" ] && echo
-  echo_current_column=0
-fi
-
-if [ "$no_new_column" ]; then
-  echo_previous_column_size=$column_text_size
-else
-  echo_previous_column_size=0
-fi
-
-end_no_tracing_zone
-return 0
-}
-
-echo_align_reset() {
-unset echo_columns
-echo_block=( )
-echo_current_column=0
-}
-
-echo_debug() {
-echo
-echo "echo_columns=( ${echo_columns[*]:-} )"
-echo "echo_current_column=${echo_current_column:-0}"
-}
-
-# example: {complex command} | echo_align_stream 
-echo_align_stream() {
-begin_no_tracing_zone
-local line line_array
-while IFS= read -r line || [ "${line:-}" ]; do
-  line_array=( $line )
-  echo_align "${line_array[@]}"
-  unset line
-done
-end_no_tracing_zone
-return 0
-}
-
-# example: {complex command} | echo_align_block
-# will read the whole input at once, and determine alignment, then output it
-# this is the opposite of echo_align_stream
-echo_align_block() {
-begin_no_tracing_zone
-local line line_array block=()
-while IFS= read -r line || [ "${line:-}" ]; do
-  line_array=( $line )
-  echo_align -b "${line_array[@]:-}"
-  unset line
-done
-
-echo_align_dump
-end_no_tracing_zone
-return 0
-}
-
-echo_align_dump() {
-for line in "${echo_block[@]:-}"; do
-  line_array=( $line )
-  echo_align "${line_array[@]:-}"
-done
 }
 
 get_overlap() {
