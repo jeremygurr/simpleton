@@ -419,6 +419,14 @@ omni_show_line() {
   return 0
 }
 
+push_to_function_stack() {
+  local entry=${output_array[$1]} \
+    lid
+  lid=${entry%% *}
+  entry=${entry#* * }
+  function_call_stack+=( "$lid $entry" )
+}
+
 # Move to the next log line to search
 # This is meant to be able to move past the boundaries if there are no other possibilities
 omni_search_next() {
@@ -453,14 +461,7 @@ omni_search_next() {
       if [[ $direction == 1 ]]; then
 
         if [[ "$pre_action" == call ]]; then
-          function=
-          vars=function \
-          index=$((index - 1)) \
-            omni_extract_vars || fail
-          if [[ ! "$function" ]]; then
-            log_error "Bad log file: has call action without function"
-          fi
-          function_call_stack+=( "$function" )
+          push_to_function_stack $((index - 1 )) || fail
         fi
 
         if [[ "$post_action" == return\(* && -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
@@ -476,15 +477,7 @@ omni_search_next() {
         fi
 
         if [[ "$pre_action" == return\(* ]]; then
-          function=
-          vars=function \
-          index=$((index + 1)) \
-            omni_extract_vars || fail
-          if [[ ! "$function" ]]; then
-            log_error "Bad log file: has return action without function"
-            debug_start
-          fi
-          function_call_stack+=( "$function" )
+          push_to_function_stack $((index + 1 )) || fail
         fi
 
       fi
@@ -888,7 +881,7 @@ omni_navigator() (
             allow_out=t \
             allow_out_log=t \
             allow_same_plane=t \
-            find_action=call \
+            find_action='(call|log_to)' \
             omni_search || fail
           omni_show_context || fail
           no_follow_once=t
@@ -941,7 +934,7 @@ omni_navigator() (
         n)
           echo "# Step over, until function call" >&$fd_original_err
           move_cursor=$cursor \
-            find_action=call \
+            find_action='(call|log_to)' \
             allow_out=t \
             allow_out_log=t \
             allow_same_plane=t \
