@@ -525,6 +525,14 @@ omni_search_next() {
 
 omni_search_get_matches() {
 
+
+  # DEBUGGING
+  # local a=${action_map[$index]}
+  # if [[ "$a" =~ return\([^0] ]]; then
+  #   debug_start
+  # fi
+
+
   local plane_id=${plane_map[$index]} 
   local plane_depth=${plane_depth_map[$index]}
 
@@ -900,7 +908,7 @@ omni_navigator() (
             allow_out=t \
             allow_out_log=t \
             allow_same_plane=t \
-            find_action='(call|log_to)' \
+            find_level=trace \
             omni_search || fail
           omni_show_context || fail
           no_follow_once=t
@@ -936,6 +944,15 @@ omni_navigator() (
           omni_show_context || fail
           no_follow_once=t
           ;;
+        I)
+          echo "# Step in, backwards" >&$fd_original_err
+          move_cursor=$cursor \
+            allow_all=t \
+            count=-1 \
+            omni_search || fail
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
         l)
           echo -n "$CLEAR_LINE" >&$fd_original_err
           echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
@@ -953,7 +970,7 @@ omni_navigator() (
         n)
           echo "# Step over, until function call" >&$fd_original_err
           move_cursor=$cursor \
-            find_action='(call|log_to)' \
+            find_level=trace \
             allow_out=t \
             allow_out_log=t \
             allow_same_plane=t \
@@ -964,6 +981,16 @@ omni_navigator() (
         o)
           echo "# Step out" >&$fd_original_err
           move_cursor=$cursor \
+            allow_out=t \
+            allow_out_log=t \
+            omni_search || fail
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
+        O)
+          echo "# Backwards step out" >&$fd_original_err
+          move_cursor=$cursor \
+            count=-1 \
             allow_out=t \
             allow_out_log=t \
             omni_search || fail
@@ -990,10 +1017,14 @@ omni_navigator() (
           no_follow_once=t
           ;;
         S)
-          echo "# Entering debug shell" >&$fd_original_err
-          set +u
-          debug_shell
-          set -u
+          echo "# Step over backwards, until next entry" >&$fd_original_err
+          move_cursor=$cursor \
+            allow_out=t \
+            allow_out_log=t \
+            allow_same_plane=t \
+            count=-1 \
+            omni_search || fail
+          omni_show_context || fail
           no_follow_once=t
           ;;
         t)
@@ -1012,9 +1043,16 @@ omni_navigator() (
           omni_show_context || fail
           no_follow_once=t
           ;;
-        \$)
+        @)
           echo "# Show debug command" >&$fd_original_err
           omni_show_debug_command || fail
+          no_follow_once=t
+          ;;
+        \$)
+          echo "# Entering debug shell" >&$fd_original_err
+          set +u
+          debug_shell
+          set -u
           no_follow_once=t
           ;;
         \?)
@@ -1022,20 +1060,23 @@ omni_navigator() (
           echo >&$fd_original_err
           echo "b  back: go to the previous log line of the same depth or shallower" >&$fd_original_err
           echo "c  list a few lines of logs before and after current line" >&$fd_original_err
-          echo "D  list a few lines of logs before and after current line" >&$fd_original_err
           echo "i  step in: go to the next log line of the same depth or deeper" >&$fd_original_err
+          echo "I  backward step in: go to the previous log line of the same depth or deeper" >&$fd_original_err
           echo "g  go to the given function or log_id" >&$fd_original_err
           echo "l  list next few log lines" >&$fd_original_err
           echo "L  list previous log lines" >&$fd_original_err
           echo "n  next: (step over) go to the next log line with a function call of the same depth or shallower" >&$fd_original_err
           echo "o  out: (step out) go to the next log line that is shallower" >&$fd_original_err
+          echo "O  backward out: (step out) go to the previous log line that is shallower" >&$fd_original_err
           echo "p  print: show all details of current log line" >&$fd_original_err
           echo "q  quit: leave the omni navigator" >&$fd_original_err
           echo "s  step: step to the next log line even if it's not a function call" >&$fd_original_err
+          echo "S  backward step: step to the previous log line even if it's not a function call" >&$fd_original_err
           echo "t  stack: show call stack" >&$fd_original_err
           echo "T  stack: show log stack" >&$fd_original_err
           echo "!  go to next error" >&$fd_original_err
-          echo "$  show debug command to get to current log position" >&$fd_original_err
+          echo "@  show debug command to get to current log position" >&$fd_original_err
+          echo "$  enter debug shell" >&$fd_original_err
           no_follow_once=t
           ;;
         *)

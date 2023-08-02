@@ -11,7 +11,7 @@ begin_function
   # This may be overridden by upstream prep file to customize how failure of this upstream is handled
   handle_upstream_result() {
     if [[ "$update_successful" == f ]]; then
-      error "Failed to update upstream cell $upstream"
+      log_error "Failed to update upstream cell $upstream"
     else 
       update_successful=
     fi
