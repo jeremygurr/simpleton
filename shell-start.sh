@@ -19,21 +19,30 @@ alias vi=vim
 
 # saves existing dir before changing to the given dir
 cd() {
-local target=$1
+local target=$1 old=$PWD
 if [[ ! "$target" ]]; then
-  target=$PWD
+  target=$HOME
 fi
+target=$(unrealpath "$target") || return 1
 if [[ -f "$target" ]]; then
   vim "$target"
 elif [[ ! -d "$target" ]]; then
   echo "Error: target doesn't exist or is not a folder: $target" >&2
   return 1
 else
-  pushd $PWD >/dev/null || return 1
-  local d=$(dirs)
-  if (( ${#d} > 2000 )); then
-    # remove bottom of stack so we don't grow too big
-    popd -n -0
+  if [[ "$old" == "$target" \
+     || "${old%/*}" == "$target" \
+     || "$old" == "${target%/*}" \
+     ]]; then
+    # don't need to record, since the change is small
+    :
+  else
+    pushd $PWD >/dev/null || return 1
+    local d=$(dirs)
+    if (( ${#d} > 2000 )); then
+      # remove bottom of stack so we don't grow too big
+      popd -n -0
+    fi
   fi
   builtin cd "$target" || return 1
 fi
@@ -67,6 +76,21 @@ alias gbs='git bisect start'
 alias gbg='git bisect good'
 alias gbb='git bisect bad'
 alias gr='git remote'
+
+# resolves relative paths but does not resolve symlinks
+# should run in a subprocess so dir change doesn't affect caller
+# normal usage: x=$(unrealpath "$some_path")
+unrealpath() {
+local p=$PWD x=$1
+if [[ "$x" != /* ]]; then
+  x="$p/$x"
+fi
+realpath -s "$x" || {
+  log_fatal "Internal error: could not resolve $x"
+  return 1 
+  }
+return 0
+}
 
 # usage: cat file | hydrate >output
 #   will replace bash variables and expressions
