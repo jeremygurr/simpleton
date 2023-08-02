@@ -626,10 +626,27 @@ omni_search() {
       allow_flat=${allow_flat:-f} \
       allow_same_plane=${allow_same_plane:-f} \
       allow_diff_plane=${allow_diff_plane:-f} \
+      allow_all=${allow_all:-f} \
       count=${count:-1} \
 
-    if [[ $allow_same_plane == t ]]; then
-      allow_flat=t
+    # implications
+    if [[ $allow_all == t ]]; then
+      allow_in=t \
+      allow_out=t \
+      allow_in_log=t \
+      allow_out_log=t \
+      allow_flat=t \
+      allow_same_plane=t \
+      allow_diff_plane=t 
+    else 
+      if [[ $allow_same_plane == t ]]; then
+        allow_flat=t
+      fi
+      if [[ $allow_out     == t || $allow_in     == t \
+         || $allow_out_log == t || $allow_in_log == t \
+         ]]; then
+        allow_diff_plane=t
+      fi
     fi
 
     local direction
@@ -750,6 +767,7 @@ omni_next_error() {
   move_cursor=$cursor \
     find_level='(error|fatal)' \
     find_action='return\([^0].*\)' \
+    allow_all=t \
     omni_search || return 1
 
   if (( cursor_moved == 0 )); then
@@ -840,8 +858,10 @@ omni_navigator() (
           echo "# Step back, until next function call" >&$fd_original_err
           move_cursor=$cursor \
             count=-1 \
-            deep=f \
-            same_plane=t \
+            allow_out=t \
+            allow_out_log=t \
+            allow_same_plane=t \
+            find_action=call \
             omni_search || fail
           omni_show_context || fail
           no_follow_once=t
@@ -862,8 +882,7 @@ omni_navigator() (
               find_function=$go_until
             fi
             move_cursor=$cursor \
-              deep=t \
-              same_plane=f \
+              allow_all=t \
               omni_search || fail
             find_log_id= find_function=
             omni_show_context || fail
