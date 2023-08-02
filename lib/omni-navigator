@@ -631,11 +631,11 @@ omni_search() {
 
     # implications
     if [[ $allow_all == t ]]; then
-      allow_in=t \
-      allow_out=t \
-      allow_in_log=t \
-      allow_out_log=t \
-      allow_flat=t \
+      allow_in=t         \
+      allow_out=t        \
+      allow_in_log=t     \
+      allow_out_log=t    \
+      allow_flat=t       \
       allow_same_plane=t \
       allow_diff_plane=t 
     else 
@@ -811,6 +811,33 @@ omni_show_log_stack() {
   return 0
 }
 
+omni_show_debug_command() {
+  local record folder 
+
+  if [[ ! -v log_job_id ]]; then
+    log_fatal "Missing log_job_id"
+    return 1
+  fi
+  if [[ -v job_id_log ]]; then
+    if [[ -f $job_id_log ]]; then
+      record=$(cat $job_id_log | grep "^$log_job_id ")
+      record=${record#* }
+      folder=${record%% *}
+      echo "  cell=$folder" >&$fd_original_err
+      record=${record#* }
+      echo "  cell $record log_id=$log_id" >&$fd_original_err
+    else
+      log_fatal "file doesn't exist for job_id_log: $job_id_log"
+      return 1
+    fi
+  else
+    log_fatal "Missing job_id_log"
+    return 1
+  fi
+
+  return 0
+}
+
 # inputs: 
 #   log_file
 omni_navigator() (
@@ -892,7 +919,7 @@ omni_navigator() (
         i)
           echo "# Step in, forwards" >&$fd_original_err
           move_cursor=$cursor \
-						allow_all=t \
+            allow_all=t \
             omni_search || fail
           omni_show_context || fail
           no_follow_once=t
@@ -973,11 +1000,17 @@ omni_navigator() (
           omni_show_context || fail
           no_follow_once=t
           ;;
+        \$)
+          echo "# Show debug command" >&$fd_original_err
+          omni_show_debug_command || fail
+          no_follow_once=t
+          ;;
         \?)
           echo >&$fd_original_err
           echo >&$fd_original_err
           echo "b  back: go to the previous log line of the same depth or shallower" >&$fd_original_err
           echo "c  list a few lines of logs before and after current line" >&$fd_original_err
+          echo "D  list a few lines of logs before and after current line" >&$fd_original_err
           echo "i  step in: go to the next log line of the same depth or deeper" >&$fd_original_err
           echo "g  go to the given function or log_id" >&$fd_original_err
           echo "l  list next few log lines" >&$fd_original_err
@@ -990,6 +1023,7 @@ omni_navigator() (
           echo "t  stack: show call stack" >&$fd_original_err
           echo "T  stack: show log stack" >&$fd_original_err
           echo "!  go to next error" >&$fd_original_err
+          echo "$  show debug command to get to current log position" >&$fd_original_err
           no_follow_once=t
           ;;
         *)
