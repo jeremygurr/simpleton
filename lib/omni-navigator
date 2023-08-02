@@ -642,6 +642,7 @@ omni_search() {
       allow_same_plane=${allow_same_plane:-f} \
       allow_diff_plane=${allow_diff_plane:-f} \
       allow_all=${allow_all:-f} \
+      allow_all_in_same_log=${allow_all_in_same_log:-f} \
       count=${count:-1} \
 
     # implications
@@ -650,6 +651,12 @@ omni_search() {
       allow_out=t        \
       allow_in_log=t     \
       allow_out_log=t    \
+      allow_flat=t       \
+      allow_same_plane=t \
+      allow_diff_plane=t 
+    elif [[ $allow_all_in_same_log == t ]]; then
+      allow_in=t         \
+      allow_out=t        \
       allow_flat=t       \
       allow_same_plane=t \
       allow_diff_plane=t 
@@ -664,8 +671,14 @@ omni_search() {
       fi
     fi
 
-    local direction
-    if (( count < 0 )); then
+    local direction count_is_infinite=f
+    if [[ "$count" == inf ]]; then
+      direction=1 \
+      count_is_infinite=t
+    elif [[ "$count" == -inf ]]; then
+      direction=-1 \
+      count_is_infinite=t
+    elif (( count < 0 )); then
       direction=-1
     elif (( count > 0 )); then
       direction=1
@@ -708,7 +721,9 @@ omni_search() {
       fi
       if [[ $found_matching_line == t ]]; then
         (( cursor_moved += direction ))
-        (( count -= direction ))
+        if [[ $count_is_infinite == f ]]; then
+          (( count -= direction ))
+        fi
         restore_backup=f
         if [[ $count == 0 ]]; then
           break
@@ -1055,6 +1070,42 @@ omni_navigator() (
           set -u
           no_follow_once=t
           ;;
+        \[)
+          echo "# Go to the first line in same plane" >&$fd_original_err
+          move_cursor=$cursor \
+            count=-inf \
+            allow_same_plane=t \
+            omni_search || fail
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
+        \])
+          echo "# Go to the last line in same plane" >&$fd_original_err
+          move_cursor=$cursor \
+            count=inf \
+            allow_same_plane=t \
+            omni_search || fail
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
+        \{)
+          echo "# Go to the first line in the log" >&$fd_original_err
+          move_cursor=$cursor \
+            count=-inf \
+            allow_all_in_same_log=t \
+            omni_search || fail
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
+        \})
+          echo "# Go to the last line in the log" >&$fd_original_err
+          move_cursor=$cursor \
+            count=inf \
+            allow_all_in_same_log=t \
+            omni_search || fail
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
         \?)
           echo >&$fd_original_err
           echo >&$fd_original_err
@@ -1077,6 +1128,10 @@ omni_navigator() (
           echo "!  go to next error" >&$fd_original_err
           echo "@  show debug command to get to current log position" >&$fd_original_err
           echo "$  enter debug shell" >&$fd_original_err
+          echo "[  go to first log line within the same plane" >&$fd_original_err
+          echo "]  go to last log line within the same plane" >&$fd_original_err
+          echo "{  go to first log line within the log file" >&$fd_original_err
+          echo "}  go to last log line within the log file" >&$fd_original_err
           no_follow_once=t
           ;;
         *)
