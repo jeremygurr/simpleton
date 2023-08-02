@@ -1239,7 +1239,7 @@ begin_function
   
   if [[ -d $step/.dna ]]; then
     # recursive
-    fork execute_command $step update || fail
+    execute_command $step update || fail
     safe_link $step $source_path/$base || fail
   elif [[ -d $step ]]; then
     if [[ $base =~ ^choose-.* ]]; then
@@ -1327,6 +1327,11 @@ fi
 
 # inputs: fork_id_log 
 get_fork_id() {
+  if [[ ! "${fork_id_log:-}" ]]; then
+    log_fatal "Missing fork_id_log"
+    stack_trace
+    return 1
+  fi
   timeout=5 lock_path=$fork_id_log fd_write_lock || {
     echo "Failed to get lock on $fork_id_log" >&2
     return 1
@@ -1338,7 +1343,7 @@ get_fork_id() {
   return 0
 }
 
-cell_change_log_file() {
+cell_open_log_file() {
   if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
     local previous_fork_id=$omni_log_fork_id
     get_fork_id || return 1
@@ -1354,12 +1359,7 @@ cell_change_log_file() {
 }
 
 cell_close_log_file() {
-  if [[ $current_command != log ]]; then
-    local new_log_file=
-    local previous_fork_id=$omni_log_fork_id
-    log_function=${FUNCNAME[1]} \
-      change_log_file
-  fi
+  : 
 }
 
 get_job_id() {
@@ -1395,25 +1395,22 @@ get_job_id() {
   handle_return
 }
 
-# should be run in a subshell since it loads the context
 execute_command() {
-local cell=$(realpath $1) current_command=$2 \
-  short_cell
-get_short_cell $cell
+  begin_function_flat
 
-local log_vars='cell short_cell current_command' \
-  log_show_vars='short_cell current_command' 
-begin_function
+    local starting_point=$(realpath $1) current_command=$2 \
+      short_cell disable_log=f cell_path
 
-  if [[ $current_command == log ]]; then
-    disable_log=t
-  else
-    disable_log=f
-  fi
+    get_cell_path $starting_point
+    get_short_cell $cell_path
 
-  if [[ $current_command != edit ]]; then
+    case $current_command in log|edit)
+      disable_log=t
+    esac
 
-    if [[ $cell == */.dna/sub/* ]]; then
+    if [[ $current_command != edit \
+       && $cell == */.dna/sub/* 
+       ]]; then
       local new_cell=${cell//\/.dna\/sub\//\/}
       if [[ -d $new_cell ]]; then
         cell=$new_cell
@@ -1424,29 +1421,51 @@ begin_function
     fi
 
     local omni_log_job_id=${omni_log_job_id:-}
-    if [[ $disable_log == f && ! "${omni_log_job_id:-}" ]]; then
-      command_to_log="${original_cmd#* }" \
-        get_job_id || fail
+    if [[ $disable_log == f ]]; then
+      if [[ ! "${omni_log_job_id:-}" ]]; then
+        command_to_log="${original_cmd#* }" \
+          get_job_id || fail
+      fi
+
+      local job_path=$cell_path/.job
+      local current_job_path=$job_path/$omni_log_job_id
+      local log_path=$current_job_path/log
+
+      if [[ ! -d $log_path ]]; then
+        mkdir -p $log_path || fail
+      fi
+
+      force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
     fi
+
+    cell_open_log_file || fail
+    ( execute_command_internal ) || fail
+    cell_close_log_file || fail
+
+  end_function_flat
+  handle_return
+}
+
+# is run in a subshell since it loads the context
+execute_command_internal() {
+
+local log_vars='cell_path short_cell current_command' \
+  log_show_vars='short_cell current_command' 
+begin_function
+
+  if [[ $current_command != edit ]]; then
 
     cell_context_load || {
       log_fatal "Context failed to load for $cell"
       fail1
       }
 
-    if [[ $disable_log == f && "${log_path:-}" ]]; then
-      local new_log_folder=$log_path
-      cell_change_log_file || fail
-      force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
-    fi
-
     if [[ "$localize_dim_vars" != local ]]; then
       eval "$localize_dim_vars" || fail
     fi
 
   else # current_command == edit
-    local cell_path=
-    get_cell_path $cell || fail
+
     if [[ ! "$cell_path" ]]; then
       log_fatal "You must execute this command from within a cell"
       fail1
@@ -1457,6 +1476,7 @@ begin_function
     if [[ ! -e $key_path ]]; then
       mkdir $key_path || fail
     fi
+
   fi
 
   local command_path=$cell/.cyto/command/$current_command
@@ -2910,7 +2930,7 @@ defer "rm $reply_file"
 (
 begin_fork || exit 1
 eval "$command"; return_code=$?
-#end_fork || exit 1
+end_fork || exit 1
 exit $return_code
 )
 
@@ -2921,12 +2941,13 @@ return $return_code
 
 # run within the subshell at the beginning
 begin_fork() {
-  cell_change_log_file || return 1
+  cell_open_log_file || return 1
   return 0
 }
 
 # run within the subshell at the beginning
 end_fork() {
+  cell_close_log_file || return 1
 #if [[ "$reply_file" ]]; then
   #log_debug "Recording log_id=$log_id to $reply_file"
   #echo "log_id=${log_id:-} debug_id_current=${debug_id_current:-}" >>$reply_file || return 1

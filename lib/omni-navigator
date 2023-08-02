@@ -168,19 +168,19 @@ omni_load_log_array() {
           last_log_id=$log_id
         fi
 
-        if [[ "${log_show_vars:-}" ]]; then
-          eval "local $log_show_vars"
-          index=$i \
-            vars="$log_show_vars" \
-            omni_extract_vars || fail
-        fi
-
         if [[ $action == none ]]; then
           log_fatal "Log line is missing action key: $line"
           fail1
         fi
 
         action_map[$i]=$action
+
+        if [[ "${log_show_vars:-}" ]]; then
+          eval "local $log_show_vars"
+          index=$i \
+            vars="$log_show_vars" \
+            omni_extract_vars || fail
+        fi
 
         log_id=$last_log_id omni_get_processed_line "$line" || {
           log_fatal "Bad log line: $line"
@@ -561,26 +561,32 @@ omni_search_get_matches() {
     local level action log_id function
     found_matching_line=f
 
-    if [[ "$find_level" ]]; then
+    if [[ $found_matching_line == f && "$find_level" ]]; then
       level=
       vars=level \
         omni_extract_vars || fail
       if [[ "${level:-}" && $level =~ $find_level ]]; then
         found_matching_line=t
       fi
-    elif [[ "$find_action" ]]; then
+    fi
+
+    if [[ $found_matching_line == f && "$find_action" ]]; then
       action=${action_map[$index]}
       if [[ "${action:-}" && $action =~ $find_action ]]; then
         found_matching_line=t
       fi
-    elif [[ "$find_log_id" ]]; then
+    fi
+
+    if [[ $found_matching_line == f && "$find_log_id" ]]; then
       log_id=
       vars=log_id \
         omni_extract_vars || fail
       if [[ "${log_id:-}" && $log_id =~ $find_log_id ]]; then
         found_matching_line=t
       fi
-    elif [[ "$find_function" ]]; then
+    fi
+
+    if [[ $found_matching_line == f && "$find_function" ]]; then
       function=
       vars=function \
         omni_extract_vars || fail
@@ -873,6 +879,38 @@ omni_show_debug_command() {
   return 0
 }
 
+# run in a subshell to isolate random fields that may be set by entry evaluation
+omni_print_details() (
+  local line=${log_array[$log_array_index]}
+
+  echo "log file: $log_file" >&$fd_original_err
+  echo "fork_id: $log_fork_id" >&$fd_original_err
+  echo "line: $((log_array_index + 1))" >&$fd_original_err
+
+  if [[ "$line" == \=\ * ]]; then
+    local entries kv key keys=
+    eval "entries=( ${line#= } )"
+    for kv in "${entries[@]}"; do
+      if [[ "$kv" == *=* ]]; then
+        key="${kv%%=*}"
+        if [[ "$key" =~ ^[a-zA-Z0-9_]+$ ]]; then
+          keys+="$key$NL"
+        fi
+      fi
+    done
+
+    keys=$(echo "${keys[*]}" | sort -u)
+    eval "${line#= }"
+    for key in $keys; do
+      echo "$key: ${!key}" >&$fd_original_err
+    done
+  else
+    echo "Raw text, bytes ${#line}" >&$fd_original_err
+    echo "$line" >&$fd_original_err
+  fi
+  return 0
+)
+
 # inputs: 
 #   log_file
 omni_navigator() (
@@ -1144,39 +1182,6 @@ omni_navigator() (
   end_function_flat
 
   handle_return
-)
-
-# run in a subshell to isolate random fields that may be set by entry evaluation
-omni_print_details() (
-  local line=${log_array[$log_array_index]}
-  if [[ "$line" == \=\ * ]]; then
-    echo "log file: $log_file"
-    echo "fork_id: $log_fork_id"
-    echo "line: $((log_array_index + 1))"
-    entries=${line#= }
-    eval "$entries" || return 1
-
-    local kvs=( ${entries} )
-    local kv keys=
-    for kv in "${kvs[@]}"; do
-      if [[ "$kv" == *=* ]]; then
-        key="${kv%%=*}"
-        if [[ "$key" =~ ^[a-zA-Z0-9_]+$ ]]; then
-          keys+="$key$NL"
-        fi
-      fi
-    done
-
-    keys=$(echo "${keys[*]}" | sort)
-    local key
-    for key in $keys; do
-      echo "$key: ${!key}" >&$fd_original_err
-    done
-  else
-    echo "Raw text, bytes ${#line}" >&$fd_original_err
-    echo "$line" >&$fd_original_err
-  fi
-  return 0
 )
 
 omni_show_context() {
