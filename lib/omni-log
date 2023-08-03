@@ -112,22 +112,54 @@ omni_log_init() {
     log_show_vars= 
 }
 
+save_log_vars() {
+  local entry entries= var value quoted_value
+  for var in $log_vars; do
+    value=
+    if [[ -v $var && "$var" ]]; then
+      value=${!var}
+      get_shell_quoted_value "$value"
+      value=$quoted_value
+    fi
+    entries+=" $var=$value"
+  done
+  log_var_entries_stack+=( "$entries" ) 
+  log_var_show_vars_stack+=( "$log_show_vars" ) 
+}
+
+load_log_vars_and_write_to_log() {
+  local \
+    var entry log_vars \
+    entries=${log_var_entries_stack[-1]} \
+    log_show_vars=${log_var_show_vars_stack[-1]} \
+
+  eval "entries=( ${entries} )"
+
+  for entry in "${entries[@]}"; do
+    var=${entry%%=*}
+    value=${entry#*=}
+    local quoted_value
+    get_shell_quoted_value "$value"
+    eval "local $var=$quoted_value"
+    log_vars+=" $var"
+  done
+
+  unset log_var_entries_stack[-1] log_var_show_vars_stack[-1]
+  write_to_log trace "return($return_value)"
+}
+
 alias begin_function='
   local return_value=0 break_out=f
   write_to_log trace call
   (( log_depth_current++ ))
-  var_stack+=( "$log_vars" ) 
-  var_stack2+=( "$log_show_vars" ) 
+  save_log_vars
   log_vars= log_show_vars=
   while true; do
 '
 
 alias end_function='
   break; done; (( log_depth_current-- ))
-  log_vars=${var_stack[-1]}
-  log_show_vars=${var_stack2[-1]}
-  unset var_stack[-1] var_stack2[-1]
-  write_to_log trace "return($return_value)"
+  load_log_vars_and_write_to_log
   log_vars= log_show_vars=
 '
 

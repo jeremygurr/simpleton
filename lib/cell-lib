@@ -453,6 +453,26 @@ end_function_flat
 handle_return
 }
 
+wait_for_low_load() {
+local cell_max_load=${cell_max_load:-10}
+local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
+local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
+if [[ $current_load -gt $cell_max_load ]]; then
+  log_warn "Load average is too high ($current_load > $cell_max_load)," \
+    "waiting until things cool down first."
+  local time_waited=0
+  while [[ $current_load -gt $cell_max_load ]]; do
+    current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
+    sleep 5; let time_waited+=5
+    if [[ "$cell_load_wait_timeout" -gt 0 && $time_waited -ge $cell_load_wait_timeout ]]; then
+      log_fatal "Timed out waiting for cpu load to be low enough. Aborting"
+      return 1
+    fi
+  done
+fi
+return 0
+}
+
 # 'value' is the loop var
 parallel_loop() {
 local loop_over_var2=$loop_over_var head2=${head:-} \
@@ -482,6 +502,15 @@ begin_function
 
   local processes= value
   leave_loop=0
+
+  local extra
+  if [[ $parallel == t ]]; then
+    extra=" in parallel"
+  else
+    extra=" sequentially"
+  fi
+  log_debug "looping over ${#array[*]} values$extra. body: $body2"
+
   begin_for value in "${array[@]}"; doo
 
     log_debug "Current iteration value=$value"
@@ -2714,26 +2743,6 @@ if [[ "$processes" ]]; then
     return $last_err_code
   fi
   processes=
-fi
-return 0
-}
-
-wait_for_low_load() {
-local cell_max_load=${cell_max_load:-10}
-local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
-local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
-if [[ $current_load -gt $cell_max_load ]]; then
-  log_warn "Load average is too high ($current_load > $cell_max_load)," \
-    "waiting until things cool down first."
-  local time_waited=0
-  while [[ $current_load -gt $cell_max_load ]]; do
-    current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
-    sleep 5; let time_waited+=5
-    if [[ "$cell_load_wait_timeout" -gt 0 && $time_waited -ge $cell_load_wait_timeout ]]; then
-      log_fatal "Timed out waiting for cpu load to be low enough. Aborting"
-      return 1
-    fi
-  done
 fi
 return 0
 }
