@@ -35,16 +35,16 @@ omni_log_init() {
   log=${log:-file}
   log_to_file=t
   log_to_out=f
-  log_action=${log_action:-}
-  log_depth=${log_depth:-}
-  log_function=${log_function:-}
-  log_level=${log_level:-info}
+  log_action_filter=${log_action:-}
+  log_depth_filter=${log_depth:-}
+  log_function_filter=${log_function:-}
+  log_level_filter=${log_level:-info}
   log_format=${log_format:-default}
   cooked_stack=( ${cooked_stack[*]:-} )
 
   case $log in
     off|fatal|error|warn|info|debug|trace|all)
-      log_level=$log
+      log_level_filter=$log
       log=file
       ;;
     file)
@@ -52,7 +52,7 @@ omni_log_init() {
       ;;
     out)
       log_to_out=t
-      log_level=warn
+      log_level_filter=warn
       if [[ "$log_format" == default ]]; then
         log_format='$level_color$message$RESET'
       fi
@@ -64,11 +64,11 @@ omni_log_init() {
     *)
       log_to_file=t
       log_to_out=t
-      log_action=$log
+      log_action_filter=$log
       ;;
   esac
 
-  case $log_level in
+  case $log_level_filter in
     none)
       log_format=
     ;;
@@ -136,7 +136,7 @@ write_to_log() {
 begin_no_tracing_zone
 
 local level=$1 action=${2:-${1:-}} message=${3:-} \
-  var_name var value new_vars= trace_vars= show_vars2=${log_show_vars:-$log_vars}
+  var_name var value new_vars= trace_vars= show_vars2=${log_show_vars:-}
 
 for var in log_vars ${log_vars:-} $trace_var; do
 
@@ -148,14 +148,9 @@ for var in log_vars ${log_vars:-} $trace_var; do
   fi
 
   eval "value=\${$var:-}"
-  if [[ $value =~ \  ]]; then
-    value=${value//\\/\\\\}
-    #   double quoted
-    value="\"${value//\"/\\\"}\""
-    #   escaped spaces
-    # value=${value//\\/\\\\}
-    # value=${value// /\\ }
-  fi
+  local quoted_value=
+  get_shell_quoted_value "$value"
+  value=$quoted_value
 
   if [[ " $trace_var " =~ \ $var\  ]]; then
 
@@ -187,16 +182,16 @@ local to_log="= ts=$time pid=$pid"
 # fi
 
 local log_id=$omni_log_fork_id:$omni_log_pos
-to_log+=" log_id=$log_id depth=$log_depth_current level=$level"
+to_log+=" log_id=$log_id log_level=$level"
 
 local quoted_value
 if [[ "$action" ]]; then
   get_shell_quoted_value "$action"
-  to_log+=" action=$quoted_value"
+  to_log+=" log_action=$quoted_value"
 fi
 local function=${log_function:-${FUNCNAME[1]}}
 if [[ "${function:-}" ]]; then
-  to_log+=" function=$function"
+  to_log+=" log_function=$function"
 fi
 if [[ "${show_vars2:-}" ]]; then
   get_shell_quoted_value "$show_vars2"
@@ -205,7 +200,7 @@ fi
 to_log+="$new_vars$trace_vars"
 if [[ "$message" ]]; then
   get_shell_quoted_value "$message"
-  to_log+=" info=$quoted_value"
+  to_log+=" log_message=$quoted_value"
 fi
 
 if [[ $disable_log == f && $log_to_file == t && "${logging_to_file:-}" ]]; then
@@ -231,21 +226,21 @@ else
 
   local hide=f
 
-  if [[ "$log_action" && ! $action =~ "$log_action" ]]; then
+  if [[ "$log_action_filter" && ! $action =~ "$log_action_filter" ]]; then
     hide=t
   fi
 
-  if [[ "$log_function" && ! $function =~ "$log_function" ]]; then
+  if [[ "$log_function_filter" && ! $function =~ "$log_function_filter" ]]; then
     hide=t
   fi
 
-  if [[ "$log_depth" && $log_depth_current -gt $log_depth ]]; then
+  if [[ "$log_depth_filter" && $log_depth_current -gt $log_depth_filter ]]; then
     hide=t
   fi
 
   local level_num=${log_level_num_map[$level]}
-  local log_level_num=${log_level_num_map[$log_level]}
-  if [[ "$log_level" && $level_num -lt $log_level_num ]]; then
+  local log_level_num=${log_level_num_map[$log_level_filter]}
+  if [[ "$log_level_filter" && $level_num -lt $log_level_num ]]; then
     hide=t
   fi
 

@@ -13,6 +13,8 @@ omni_navigator_init() {
   apad_min[log_id]=8 apad_max[log_id]=12
   apad_min[action]=16 apad_max[action]=20
   apad_min[function]=30 apad_max[function]=30
+
+  go_until=${go_until:-}
 }
 
 # input:
@@ -50,10 +52,10 @@ omni_get_processed_line() {
   local line=$1 log_id=$log_id
 
   processed_line=
-  apad processed_line log_id $log_id action "[$action] "
-  case $action in
+  apad processed_line log_id $log_id action "[$log_action] "
+  case $log_action in
     call)
-      apad processed_line function "$function "
+      apad processed_line function "$log_function "
       local var
       for var in ${log_show_vars:-}; do
         if [[ -v $var ]]; then
@@ -62,7 +64,7 @@ omni_get_processed_line() {
       done
     ;;
     return\(*)
-      apad processed_line function "$function "
+      apad processed_line function "$log_function "
       for var in ${log_show_vars:-}; do
         if [[ -v $var ]]; then
           processed_line+=" ${!var}"
@@ -79,8 +81,8 @@ omni_get_processed_line() {
       :
     ;;
     *)
-      if [[ "${info:-}" ]]; then
-        processed_line+="$info"
+      if [[ "${log_message:-}" ]]; then
+        processed_line+="$log_message"
       else
         processed_line+=${line%$NL}
       fi
@@ -156,28 +158,28 @@ omni_load_log_array() {
       plane_stack next_plane_id=1 plane_id=0 \
       processed_line line last_log_id= \
       log_fork_id=${log_file_id#*:} \
-      action function info old_log_file new_log_file log_id
+      log_action log_function log_message old_log_file new_log_file log_id
 
     begin_for (( i = 0; i < array_size; i++ )); doo
 
-      line=${log_array[$i]} action=none processed_line=
-      function= info= old_log_file= new_log_file= log_show_vars= log_id=
+      line=${log_array[$i]} log_action=none processed_line=
+      log_function= log_message= old_log_file= new_log_file= log_show_vars= log_id=
       if [[ "$line" == \=\ * ]]; then
 
         index=$i \
-          vars='log_id action function info old_log_file new_log_file log_show_vars' \
+          vars='log_id log_action log_function log_message old_log_file new_log_file log_show_vars' \
           omni_extract_vars || fail
 
         if [[ "$log_id" ]]; then
           last_log_id=$log_id
         fi
 
-        if [[ $action == none ]]; then
+        if [[ $log_action == none ]]; then
           log_fatal "Log line is missing action key: $line"
           fail1
         fi
 
-        action_map[$i]=$action
+        action_map[$i]=$log_action
 
         if [[ "${log_show_vars:-}" ]]; then
           eval "local $log_show_vars"
@@ -202,7 +204,7 @@ omni_load_log_array() {
       log_id_array[$i]=$last_log_id
       output_array[$i]=$processed_line
 
-      case $action in
+      case $log_action in
         call)
           plane_map[$i]=$plane_id
           if [[ -v plane_stack ]]; then
@@ -260,8 +262,9 @@ update_cursor_vars() {
 #   new_cursor
 # should be evaluated after omni_change_cursor_log has selected a log for this cursor
 omni_select_cursor() {
-  if [[ "$new_cursor" != "$cursor" ]]; then
+  if [[ "$new_cursor" != "${last_cursor_selected:-}" ]]; then
     cursor=$new_cursor
+    last_cursor_selected=$new_cursor
     declare -gn \
       action_map=cursor_${cursor}_action_map \
       log_array_index=cursor_${cursor}_log_array_index \
@@ -290,6 +293,16 @@ omni_select_cursor() {
 #   you'll need to either manually update these or use the omni_enter_sub_log / omni_exit_sub_log
 #   functions to manage it automatically. 
 omni_change_cursor_log() {
+  if [[ ! "${cursor:-}" ]]; then
+    log_fatal "Missing cursor"
+    return 1
+  fi
+
+  if [[ ! "${new_log_file:-}" ]]; then
+    log_fatal "Missing new_log_file"
+    return 1
+  fi
+
   local log_vars='cursor new_log_file'
   begin_function
 
@@ -529,14 +542,6 @@ omni_search_next() {
 
 omni_search_get_matches() {
 
-
-  # DEBUGGING
-  # local a=${action_map[$index]}
-  # if [[ "$a" =~ return\([^0] ]]; then
-  #   debug_start
-  # fi
-
-
   local plane_id=${plane_map[$index]} 
   local plane_depth=${plane_depth_map[$index]}
 
@@ -562,21 +567,21 @@ omni_search_get_matches() {
         || "$find_log_id" || "$find_function" \
         ) \
      ]]; then
-    local level action log_id function
+    local log_level log_action log_id log_function
     found_matching_line=f
 
     if [[ $found_matching_line == f && "$find_level" ]]; then
-      level=
-      vars=level \
+      log_level=
+      vars=log_level \
         omni_extract_vars || fail
-      if [[ "${level:-}" && $level =~ $find_level ]]; then
+      if [[ "${log_level:-}" && $log_level =~ $find_level ]]; then
         found_matching_line=t
       fi
     fi
 
     if [[ $found_matching_line == f && "$find_action" ]]; then
-      action=${action_map[$index]}
-      if [[ "${action:-}" && $action =~ $find_action ]]; then
+      log_action=${action_map[$index]}
+      if [[ "${log_action:-}" && $log_action =~ $find_action ]]; then
         found_matching_line=t
       fi
     fi
@@ -592,9 +597,9 @@ omni_search_get_matches() {
 
     if [[ $found_matching_line == f && "$find_function" ]]; then
       function=
-      vars=function \
+      vars=log_function \
         omni_extract_vars || fail
-      if [[ "${function:-}" && $function =~ $find_function ]]; then
+      if [[ "${log_function:-}" && $log_function =~ $find_function ]]; then
         found_matching_line=t
       fi
     fi
@@ -921,6 +926,19 @@ omni_print_details() {
   return 0
 }
 
+omni_go_until() {
+  local find_log_id find_function
+  if [[ "$go_until" =~ ^[0-9:]+$ ]]; then
+    find_log_id=$go_until
+  else
+    find_function=$go_until
+  fi
+  move_cursor=$cursor \
+    allow_all=t \
+    omni_search || return 1
+  return 0
+}
+
 # inputs: 
 #   log_file
 omni_navigator() (
@@ -935,11 +953,12 @@ omni_navigator() (
 
   begin_function_flat
 
-    local cursor=a
+    local cursor=
 
     new_log_file=$log_file \
+      cursor=a \
       omni_change_cursor_log || fail
-    new_cursor=$cursor \
+    new_cursor=a \
       omni_select_cursor || fail
     (( next_log_start = -omni_list_radius ))
     log_array_index=0
@@ -947,6 +966,10 @@ omni_navigator() (
 
     local debug_r=-1 no_follow_once max_log_lines
     (( max_log_lines = omni_list_radius * 2 + 1 ))
+
+    if [[ "${go_until:-}" ]]; then
+      omni_go_until "$go_until" 
+    fi
 
     begin_while [[ $debug_r == -1 ]]; doo
 
@@ -986,15 +1009,7 @@ omni_navigator() (
           local go_until= find_log_id= find_function=
           read -e -p "Go until function / log_id: " go_until <&$fd_original_in >&$fd_original_err
           if [[ "${go_until:-}" ]]; then
-            if [[ "$go_until" =~ ^[0-9:]+$ ]]; then
-              find_log_id=$go_until
-            else
-              find_function=$go_until
-            fi
-            move_cursor=$cursor \
-              allow_all=t \
-              omni_search || fail
-            find_log_id= find_function=
+            omni_go_until "$go_until" || fail
             omni_show_context || fail
             no_follow_once=t
           fi
