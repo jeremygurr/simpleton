@@ -49,25 +49,16 @@ get_log_file_token() {
 # input: {line}
 #   line_id
 omni_get_processed_line() {
-  local line=$1 log_id=$log_id
+  local line=$1 log_id=$log_id var
 
   processed_line=
   apad processed_line log_id $log_id action "[$log_action] "
   case $log_action in
-    call)
-      apad processed_line function "$log_function "
-      local var
-      for var in ${log_show_vars:-}; do
-        if [[ -v $var ]]; then
-          processed_line+=" ${!var}"
-        fi
-      done
-    ;;
-    return\(*)
+    call|return\(*)
       apad processed_line function "$log_function "
       for var in ${log_show_vars:-}; do
         if [[ -v $var ]]; then
-          processed_line+=" ${!var}"
+          processed_line+=" $var=${!var}"
         fi
       done
     ;;
@@ -890,6 +881,12 @@ omni_show_debug_command() {
   return 0
 }
 
+format_ts() {
+  value=$1
+  local nice_date=$(date -d @$value)
+  value="$value ($nice_date)"
+}
+
 omni_print_details() {
   local line=${log_array[$log_array_index]}
 
@@ -915,6 +912,11 @@ omni_print_details() {
         else
           count[$key]=1
           extra=
+        fi
+
+        local format_function=format_$key
+        if type -t $format_function &>/dev/null; then
+          $format_function "$value"
         fi
 
         echo "$key$extra: $value" >&$fd_original_err
