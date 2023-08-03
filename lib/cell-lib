@@ -258,10 +258,11 @@ local status_path=$cell_path/.cyto/status \
   log_message="No update needed" \
   check_upstream_depth=${check_upstream_depth:-1}
 
-begin_function_flat
+local short_cell
+get_short_cell $cell_path
 
-  local short_cell
-  get_short_cell $cell_path
+local log_vars='cell_path short_cell' log_show_vars='short_cell'
+begin_function
 
   if [[ "$needs_update" ]]; then
     # needs_update is already known, don't need to compute it again
@@ -274,7 +275,6 @@ begin_function_flat
   fi
 
   needs_update=
-  log_debug "Need update? ($short_cell)"
 
   if [[ ${last_cell_dims_loaded:-} != $cell_path ]]; then
     local dims localize_dim_vars=${localize_dim_vars:-local} leaf_dims
@@ -331,7 +331,7 @@ begin_function_flat
 
   fi
 
-end_function_flat
+end_function
 
 if succeeded; then
   local level=log_debug
@@ -450,6 +450,66 @@ begin_function_flat
     fi
   fi
 end_function_flat
+handle_return
+}
+
+# 'value' is the loop var
+parallel_loop() {
+local loop_over_var2=$loop_over_var head2=${head:-} \
+  body2=$body tail2=${tail:-} \
+  par2=$par fork2=$fork \
+  array 
+
+# Make sure these variables don't get passed into inner loops
+local loop_over_var= head= body= tail= par= fork=
+
+local log_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2' \
+  log_show_vars='loop_over_var par fork'
+begin_function
+
+  if [[ ! -v $loop_over_var2 ]]; then
+    log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
+    stack_trace
+    fail
+  fi
+
+  eval "array=( \"\${$loop_over_var2[@]}\" )"
+  local parallel=f
+  if [[ ${#array[*]} -gt 1 && $parallel_execution == t && $par2 == t ]]; then
+    parallel=t
+    wait_for_low_load || fail
+  fi
+
+  local processes= value
+  leave_loop=0
+  begin_for value in "${array[@]}"; doo
+
+    log_debug "Current iteration value=$value"
+
+    if [[ "$head2" ]]; then
+      eval "$head2" || fail
+    fi
+
+    if [[ $parallel == t ]]; then
+      { begin_fork; eval "$body2"; } &
+      processes+=" $!"
+    else
+      if [[ $fork2 == t ]]; then
+        fork "$body2" || fail
+      else
+        eval "$body2" || fail
+      fi
+    fi
+
+    if [[ "$tail2" ]]; then
+      eval "$tail2" || fail
+    fi
+
+  end_for
+
+  wait_for_sub_processes || fail
+
+end_function
 handle_return
 }
 
@@ -2322,7 +2382,8 @@ local dim=$1 multi_cell=f \
   fork=${fork:-t} \
   par=${par:-t}
 
-local log_vars='dim fork par function'
+local log_vars='dim fork par function' \
+  log_show_vars='dim function'
 begin_function
 
   expand_values || fail
@@ -2624,63 +2685,6 @@ else
   sane_value=${hash:0:8}
 fi
 return 0
-}
-
-# 'value' is the loop var
-parallel_loop() {
-local loop_over_var2=$loop_over_var head2=${head:-} \
-  body2=$body tail2=${tail:-} \
-  par2=$par fork2=$fork \
-  array 
-
-# Make sure these variables don't get passed into inner loops
-local loop_over_var= head= body= tail= par= fork=
-
-local log_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
-begin_function_flat
-
-  if [[ ! -v $loop_over_var2 ]]; then
-    log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
-    stack_trace
-    fail
-  fi
-
-  eval "array=( \"\${$loop_over_var2[@]}\" )"
-  local parallel=f
-  if [[ ${#array[*]} -gt 1 && $parallel_execution == t && $par2 == t ]]; then
-    parallel=t
-    wait_for_low_load || fail
-  fi
-
-  local processes= value
-  leave_loop=0
-  begin_for value in "${array[@]}"; doo
-
-    if [[ "$head2" ]]; then
-      eval "$head2" || fail
-    fi
-
-    if [[ $parallel == t ]]; then
-      { begin_fork; eval "$body2"; } &
-      processes+=" $!"
-    else
-      if [[ $fork2 == t ]]; then
-        fork "$body2" || fail
-      else
-        eval "$body2" || fail
-      fi
-    fi
-
-    if [[ "$tail2" ]]; then
-      eval "$tail2" || fail
-    fi
-
-  end_for
-
-  wait_for_sub_processes || fail
-
-end_function_flat
-handle_return
 }
 
 # input: parallel processes
