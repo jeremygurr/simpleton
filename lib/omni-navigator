@@ -103,16 +103,20 @@ omni_extract_vars() {
     entries \
     entry \
     var \
-    value
+    vars=$vars \
+    value \
+
+  vars=" $vars "
   if [[ "$line" == \=\ * ]]; then
     eval "entries=( ${line#= } )"
     for entry in "${entries[@]}"; do
       var=${entry%%=*}
-      if [[ " $vars " == *\ $var\ * ]]; then
+      if [[ "$vars" == *\ $var\ * ]]; then
         value=${entry#*=}
         local quoted_value
         get_shell_quoted_value "$value"
         eval "$var=$quoted_value"
+        vars=${vars/$var /}
       fi
     done
   fi
@@ -879,8 +883,7 @@ omni_show_debug_command() {
   return 0
 }
 
-# run in a subshell to isolate random fields that may be set by entry evaluation
-omni_print_details() (
+omni_print_details() {
   local line=${log_array[$log_array_index]}
 
   echo "log file: $log_file" >&$fd_original_err
@@ -888,28 +891,35 @@ omni_print_details() (
   echo "line: $((log_array_index + 1))" >&$fd_original_err
 
   if [[ "$line" == \=\ * ]]; then
-    local entries kv key keys=
+    local entries kv key value extra quoted_value
+    local -A count
     eval "entries=( ${line#= } )"
+
     for kv in "${entries[@]}"; do
       if [[ "$kv" == *=* ]]; then
         key="${kv%%=*}"
-        if [[ "$key" =~ ^[a-zA-Z0-9_]+$ ]]; then
-          keys+="$key$NL"
+        value="${kv#*=}"
+        get_shell_quoted_value "$value"
+        eval "value=$quoted_value"
+
+        if [[ -v count[$key] ]]; then
+          (( count[$key]++ ))
+          extra=" (${count[$key]})"
+        else
+          count[$key]=1
+          extra=
         fi
+
+        echo "$key$extra: $value" >&$fd_original_err
       fi
     done
 
-    keys=$(echo "${keys[*]}" | sort -u)
-    eval "${line#= }"
-    for key in $keys; do
-      echo "$key: ${!key}" >&$fd_original_err
-    done
   else
     echo "Raw text, bytes ${#line}" >&$fd_original_err
     echo "$line" >&$fd_original_err
   fi
   return 0
-)
+}
 
 # inputs: 
 #   log_file

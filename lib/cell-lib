@@ -167,34 +167,6 @@ begin_function_flat
     req_path=
   fi
 
-  job_path=$cyto_path/job
-  if [[ ! -d $job_path ]]; then
-    mkdir $job_path || fail
-  fi
-
-  if [[ "${omni_log_job_id:-}" ]]; then
-
-    current_job_path=$job_path/$omni_log_job_id
-    running_job_path=$job_path/running
-
-    if [[ ! -d $current_job_path ]]; then
-      mkdir $current_job_path || fail
-    fi
-
-    log_path=$current_job_path/log
-
-    if [[ ! -d $log_path ]]; then
-      mkdir $log_path || fail
-    fi
-
-    # only set this for the first cell in the job, all other cells should 
-    #   use the same fork_id log so that they all have unique ids across the job
-    if [[ ! "${fork_id_log:-}" ]]; then
-      fork_id_log=$current_job_path/fork-id-log
-    fi
-
-  fi
-
   source_path=$cyto_path/source
   if [[ ! -d $source_path ]]; then
     mkdir $source_path || fail
@@ -1403,6 +1375,7 @@ execute_command() {
 
     get_cell_path $starting_point
     get_short_cell $cell_path
+    local job_path=$cell_path/.job
 
     case $current_command in log|edit)
       disable_log=t
@@ -1427,8 +1400,8 @@ execute_command() {
           get_job_id || fail
       fi
 
-      local job_path=$cell_path/.job
       local current_job_path=$job_path/$omni_log_job_id
+      local running_job_path=$job_path/running
       local log_path=$current_job_path/log
 
       if [[ ! -d $log_path ]]; then
@@ -1436,6 +1409,13 @@ execute_command() {
       fi
 
       force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
+
+      # only set this for the first cell in the job, all other cells should 
+      #   use the same fork_id log so that they all have unique ids across the job
+      if [[ ! "${fork_id_log:-}" ]]; then
+        fork_id_log=$current_job_path/fork-id-log
+      fi
+
     fi
 
     cell_open_log_file || fail
@@ -2292,6 +2272,45 @@ handle_return
 
 }
 
+# input: dim
+# output: values 
+expand_values() {
+begin_function_flat
+
+  local dims=${dim}s 
+  local ddims=d_$dims \
+        ddim=d_$dim \
+        new_value_list= new_values= value \
+        has_member_expand_function=f
+
+  values=( ${!ddim:-} )
+  type -t ${dim}_member_expand >/dev/null && has_member_expand_function=t
+
+  local problem= failed=f
+  if [[ ! "${values:-}" ]]; then
+    expand_values_plural || failed=t
+  else
+    expand_values_single || failed=t
+  fi
+  if [[ "$problem" ]]; then
+    log_fatal "$problem"
+    fail1
+  elif [[ $failed == t ]]; then
+    if [[ ! "$values" ]]; then
+      log_fatal "Missing required dimension: $dim"
+      fail1
+    else
+      log_fatal "Error expanding values for dimension: $dim"
+      fail1
+    fi
+  fi
+
+  values=( $new_value_list )
+
+end_function_flat
+handle_return
+}
+
 # input: 
 #   $1=dim
 #   function=function to execute for each member
@@ -2510,45 +2529,6 @@ begin_function_flat
       fi
       ' \
     parallel_loop || fail
-
-end_function_flat
-handle_return
-}
-
-# input: dim
-# output: values 
-expand_values() {
-begin_function_flat
-
-  local dims=${dim}s 
-  local ddims=d_$dims \
-        ddim=d_$dim \
-        new_value_list= new_values= value \
-        has_member_expand_function=f
-
-  values=( ${!ddim:-} )
-  type -t ${dim}_member_expand >/dev/null && has_member_expand_function=t
-
-  local problem= failed=f
-  if [[ ! "${values:-}" ]]; then
-    expand_values_plural || failed=t
-  else
-    expand_values_single || failed=t
-  fi
-  if [[ "$problem" ]]; then
-    log_fatal "$problem"
-    fail1
-  elif [[ $failed == t ]]; then
-    if [[ ! "$values" ]]; then
-      log_fatal "Missing required dimension: $dim"
-      fail1
-    else
-      log_fatal "Error expanding values for dimension: $dim"
-      fail1
-    fi
-  fi
-
-  values=( $new_value_list )
 
 end_function_flat
 handle_return
