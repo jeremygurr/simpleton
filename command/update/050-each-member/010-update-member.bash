@@ -1,6 +1,6 @@
 update_member() {
 local sane_value member_path
-local log_vars=member 
+local log_vars=member log_show_vars=member
 begin_function
   get_sane_value "$member" || fail
   member_path=$cell_path/.dim/$sane_value
