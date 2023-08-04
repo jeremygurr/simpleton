@@ -519,7 +519,7 @@ begin_function_flat
     fi
 
     if [[ $parallel == t ]]; then
-      { begin_fork; eval "$body2"; } &
+      { begin_background_fork; eval "$body2"; end_background_fork; } &
       processes+=" $!"
     else
       if [[ $fork2 == t ]]; then
@@ -1511,7 +1511,7 @@ execute_command() {
     fi
 
     cell_open_log_file || fail
-    ( execute_command_internal ) || fail
+    fork execute_command_internal || fail
     cell_close_log_file || fail
 
   end_function
@@ -2897,19 +2897,6 @@ parameter_defaults+=( "$default" )
 
 reply_file=
 
-# not functional yet
-# fork_async() {
-# local reply_file command=$* return_code=0
-# reply_file=
-# (
-# begin_fork
-# eval "$command"; return_code=$?
-# end_fork
-# ) &
-# after_fork || return 1
-# return $return_code
-# }
-
 current_reply_id=0
 get_new_reply_file() {
 reply_file=$tmp_folder/reply.$$.$current_reply_id
@@ -2919,31 +2906,47 @@ return 0
 }
 
 fork() {
-local reply_file command=$* return_code=0
-get_new_reply_file
-defer "rm $reply_file"
+  local reply_file command=$* return_code=0
+  get_new_reply_file
+  defer "rm $reply_file"
 
-(
-begin_fork || exit 1
-eval "$command"; return_code=$?
-end_fork || exit 1
-exit $return_code
-)
+  (
+    begin_fork || exit 1
+    eval "$command"; return_code=$?
+    end_fork || exit 1
+    exit $return_code
+  )
 
-return_code=$?
-after_fork || { let return_code++ || true; }
-return $return_code
+  return_code=$?
+  after_fork || { let return_code++ || true; }
+  return $return_code
 }
 
 # run within the subshell at the beginning
-begin_fork() {
+begin_background_fork() {
   cell_open_log_file || return 1
   return 0
 }
 
 # run within the subshell at the beginning
-end_fork() {
+end_background_fork() {
   cell_close_log_file || return 1
+  #if [[ "$reply_file" ]]; then
+    #log_debug "Recording log_id=$log_id to $reply_file"
+    #echo "log_id=${log_id:-} debug_id_current=${debug_id_current:-}" >>$reply_file || return 1
+  #fi
+  return 0
+}
+
+# run within the subshell at the beginning
+begin_fork() {
+  # cell_open_log_file || return 1
+  return 0
+}
+
+# run within the subshell at the beginning
+end_fork() {
+  # cell_close_log_file || return 1
 #if [[ "$reply_file" ]]; then
   #log_debug "Recording log_id=$log_id to $reply_file"
   #echo "log_id=${log_id:-} debug_id_current=${debug_id_current:-}" >>$reply_file || return 1
