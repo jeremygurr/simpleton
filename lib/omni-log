@@ -123,13 +123,14 @@ save_log_vars() {
     fi
     entries+=" $var=$value"
   done
+  entries=${entries# }
   log_var_entries_stack+=( "$entries" ) 
   log_var_show_vars_stack+=( "$log_show_vars" ) 
 }
 
 load_log_vars_and_write_to_log() {
   local \
-    var entry log_vars \
+    var entry log_vars= \
     entries=${log_var_entries_stack[-1]} \
     _log_show_vars=${log_var_show_vars_stack[-1]} \
 
@@ -143,10 +144,10 @@ load_log_vars_and_write_to_log() {
     eval "local $var=$quoted_value"
     log_vars+=" $var"
   done
+  log_vars=${log_vars# }
 
   local $snapshot_source_location_locals
-  offset=2 \
-    snapshot_source_location
+  snapshot_source_location
   unset log_var_entries_stack[-1] log_var_show_vars_stack[-1]
   log_show_vars=$_log_show_vars \
     write_to_log trace "return($return_value)"
@@ -217,6 +218,19 @@ for var in $log_vars $show_vars2 $trace_var; do
 
 done
 
+if [[ "$show_vars2" ]]; then
+  local new_show_vars=
+  for var in $show_vars2; do
+    if [[ $var == *=* ]]; then
+      var_name=${var%%=*}
+    else
+      var_name=$var
+    fi
+    new_show_vars+=" $var_name"
+  done
+  show_vars2=${new_show_vars# }
+fi
+
 local time="$EPOCHREALTIME"
 local pid="$BASHPID"
 local to_log="= ts=$time pid=$pid"
@@ -233,8 +247,8 @@ if [[ "$action" ]]; then
   get_shell_quoted_value "$action"
   to_log+=" log_action=$quoted_value"
 fi
-local $snapshot_source_location_locals
 if [[ ! "${log_function:-}" ]]; then
+  local $snapshot_source_location_locals
   offset=1 snapshot_source_location
 fi
 local function=$log_function
