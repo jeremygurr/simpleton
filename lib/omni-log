@@ -144,6 +144,8 @@ load_log_vars_and_write_to_log() {
     log_vars+=" $var"
   done
 
+  local $snapshot_source_location_locals
+  snapshot_source_location
   unset log_var_entries_stack[-1] log_var_show_vars_stack[-1]
   log_show_vars=$_log_show_vars \
     write_to_log trace "return($return_value)"
@@ -162,6 +164,14 @@ alias end_function='
   break; done; (( log_depth_current-- ))
   load_log_vars_and_write_to_log
 '
+
+snapshot_source_location_locals="log_function log_source_file log_source_line"
+snapshot_source_location() {
+local offset=${offset:-1}
+log_function=${FUNCNAME[$((offset+1))]}
+log_source_file=${BASH_SOURCE[$(($offset+1))]}
+log_source_line=${BASH_LINENO[$offset]}
+}
 
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
@@ -221,9 +231,19 @@ if [[ "$action" ]]; then
   get_shell_quoted_value "$action"
   to_log+=" log_action=$quoted_value"
 fi
-local function=${log_function:-${FUNCNAME[1]}}
-if [[ "${function:-}" ]]; then
-  to_log+=" log_function=$function"
+local $snapshot_source_location_locals
+if [[ ! "${log_function:-}" ]]; then
+  offset=1 snapshot_source_location
+fi
+local function=$log_function
+if [[ "${log_function:-}" ]]; then
+  to_log+=" log_function=$log_function"
+fi
+if [[ "${log_source_file:-}" ]]; then
+  to_log+=" log_source_file=$log_source_file"
+fi
+if [[ "${log_source_line:-}" ]]; then
+  to_log+=" log_source_line=$log_source_line"
 fi
 if [[ "${show_vars2:-}" ]]; then
   get_shell_quoted_value "$show_vars2"
@@ -327,6 +347,9 @@ begin_function_flat
     log_function=${log_function:-${FUNCNAME[1]}} \
     previous_fork_id=${previous_fork_id:-0} \
 
+  local $snapshot_source_location_locals
+  offset=2 snapshot_source_location
+
   if [[ "${logging_to_file:-}" == "$new_log_file" || $disable_log == t ]]; then
     succeed
   fi
@@ -360,55 +383,67 @@ handle_return
 }
 
 log_trace() {
-begin_no_tracing_zone
-local message="$*"
-log_function=${FUNCNAME[1]} write_to_log trace "${action:-}" "$message"
-end_no_tracing_zone
-return 0
+  begin_no_tracing_zone
+  local message="$*"
+  local $snapshot_source_location_locals
+  snapshot_source_location
+  write_to_log trace "${action:-}" "$message"
+  end_no_tracing_zone
+  return 0
 }
 
 log_debug() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log debug "${action:-}" "$*"
-end_no_tracing_zone
-return 0
+  begin_no_tracing_zone
+  local $snapshot_source_location_locals
+  snapshot_source_location
+  write_to_log debug "${action:-}" "$*"
+  end_no_tracing_zone
+  return 0
 }
 
 log_info() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log info "${action:-}" "$*"
-end_no_tracing_zone
-return 0
+  begin_no_tracing_zone
+  local $snapshot_source_location_locals
+  snapshot_source_location
+  write_to_log info "${action:-}" "$*"
+  end_no_tracing_zone
+  return 0
 }
 
 log_warn() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log warn "${action:-}" "$*"
-end_no_tracing_zone
-return 0
+  begin_no_tracing_zone
+  local $snapshot_source_location_locals
+  snapshot_source_location
+  write_to_log warn "${action:-}" "$*"
+  end_no_tracing_zone
+  return 0
 }
 
 log_error() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log error "${action:-}" "$*"
-end_no_tracing_zone
-return 0
+  begin_no_tracing_zone
+  local $snapshot_source_location_locals
+  snapshot_source_location
+  write_to_log error "${action:-}" "$*"
+  end_no_tracing_zone
+  return 0
 }
 
 log_fatal() {
-begin_no_tracing_zone
-log_function=${FUNCNAME[1]} write_to_log fatal "${action:-}" "$*"
-end_no_tracing_zone
-return 0
+  begin_no_tracing_zone
+  local $snapshot_source_location_locals
+  snapshot_source_location
+  write_to_log fatal "${action:-}" "$*"
+  end_no_tracing_zone
+  return 0
 }
 
 # zombie logs are used to output temporary debugging logs
 # they should be removed from the code after the issue is resolved
 log_zombie() {
-begin_no_tracing_zone
-echo "$CYAN$*$RESET" >&$fd_original_err
-end_no_tracing_zone
-return 0
+  begin_no_tracing_zone
+  echo "$CYAN$*$RESET" >&$fd_original_err
+  end_no_tracing_zone
+  return 0
 }
 
 incomplete() {
@@ -432,7 +467,9 @@ local prefix= command=$* out_to_file=${out_to_file:-}
 if [[ $pretend == t ]]; then
   prefix="PRETEND: "
 fi
-log_function=${FUNCNAME[1]} write_to_log debug command "$prefix$command"
+local $snapshot_source_location_locals
+snapshot_source_location
+write_to_log debug command "$prefix$command"
 if [[ $pretend == f ]]; then
   if [[ "$out_to_file" ]]; then
     eval "$command" >$out_to_file || return 1
