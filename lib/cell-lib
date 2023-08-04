@@ -783,6 +783,49 @@ create_sub_cell_with_seed $seed $sub_cell || return 1
 return 0
 }
 
+create_sub_branch_or_leaf() {
+  local seed=$seed cell=$cell 
+  local log_vars=cell log_show_vars=short_cell
+  begin_function
+    if [[ -d $cell ]]; then
+      log_fatal "Cell already exists $cell"
+      fail1
+    fi
+    mkdir -p $cell || fail
+    if [[ "$seed" ]]; then
+      local seed_dna
+      find_seed_dna $seed ${cell#$seed/} || fail
+    fi
+    if [[ "$seed_dna" ]]; then
+      safe_link $(realpath $seed_dna) $cell/ || fail
+    else
+      local branch_dims=( ${branch_dims[*]} )
+      if (( branch_dim_count >= trunk_dim_count )); then
+        log_fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
+        fail1
+      fi
+      branch_dims+=( ${trunk_dims[$branch_dim_count]} )
+      
+      local sub_dna_path=$cell/.dna 
+      mkdir $sub_dna_path || fail
+      local -r super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
+      local -r super_dim_count=${#super_dims[*]}
+      if [[ "$super_dims" ]]; then
+        local is_branch=f
+        if (( super_dim_count > 1 )); then
+          is_branch=t
+          create_sub_branch || fail
+        else
+          create_sub_leaf || fail
+        fi
+        append_dim_var_to_context ${super_dims[0]} || fail
+        migrate_deps || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 create_sub_cell_with_seed() {
 # seed is allowed to be empty, meaning no seed exists at this location
 local seed=$1 sub_cell=$2
@@ -815,7 +858,9 @@ begin_function
 
     local parent_part=${parent##*/}
     if [[ "$parent_part" == .dim ]]; then
-      seed=$seed cell=$sub_cell.new create_sub_branch_or_leaf || fail
+      seed=$seed \
+        cell=$sub_cell.new \
+        create_sub_branch_or_leaf || fail
     else
       mkdir -p $sub_cell.new || fail
       seed=${seed:-$parent}
@@ -827,48 +872,6 @@ begin_function
     mv $sub_cell.new $sub_cell || fail
   fi
 end_function
-handle_return
-}
-
-create_sub_branch_or_leaf() {
-local seed=$seed cell=$cell 
-begin_function_flat
-  if [[ -d $cell ]]; then
-    log_fatal "Cell already exists $cell"
-    fail1
-  fi
-  mkdir -p $cell || fail
-  if [[ "$seed" ]]; then
-    local seed_dna
-    find_seed_dna $seed ${cell#$seed/} || fail
-  fi
-  if [[ "$seed_dna" ]]; then
-    safe_link $(realpath $seed_dna) $cell/ || fail
-  else
-    local branch_dims=( ${branch_dims[*]} )
-    if (( branch_dim_count >= trunk_dim_count )); then
-      log_fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
-      fail1
-    fi
-    branch_dims+=( ${trunk_dims[$branch_dim_count]} )
-    
-    local sub_dna_path=$cell/.dna 
-    mkdir $sub_dna_path || fail
-    local -r super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
-    local -r super_dim_count=${#super_dims[*]}
-    if [[ "$super_dims" ]]; then
-      local is_branch=f
-      if (( super_dim_count > 1 )); then
-        is_branch=t
-        create_sub_branch || fail
-      else
-        create_sub_leaf || fail
-      fi
-      append_dim_var_to_context ${super_dims[0]} || fail
-      migrate_deps || fail
-    fi
-  fi
-end_function_flat
 handle_return
 }
 
@@ -938,72 +941,92 @@ handle_return
 }
 
 migrate_deps() {
-begin_function_flat
+  begin_function
 
-  migrate_dep $dna_path/up $sub_dna_path/up || fail
-  migrate_dep $dna_path/down $sub_dna_path/down || fail
-  migrate_out $dna_path/out $sub_dna_path/out || fail
+    migrate_dep $dna_path/up $sub_dna_path/up || fail
+    migrate_dep $dna_path/down $sub_dna_path/down || fail
+    migrate_out $dna_path/out $sub_dna_path/out || fail
 
-  if [[ $is_branch == t ]]; then
-    migrate_dep $dna_path/leaf/up $sub_dna_path/leaf/up || fail
-    migrate_dep $dna_path/leaf/down $sub_dna_path/leaf/down || fail
-    migrate_out $dna_path/leaf/out $sub_dna_path/leaf/out || fail
-  else
-    migrate_dep $dna_path/leaf/up $sub_dna_path/up || fail
-    migrate_dep $dna_path/leaf/down $sub_dna_path/down || fail
-    migrate_out $dna_path/leaf/out $sub_dna_path/out || fail
-  fi
+    if [[ $is_branch == t ]]; then
+      migrate_dep $dna_path/leaf/up $sub_dna_path/leaf/up || fail
+      migrate_dep $dna_path/leaf/down $sub_dna_path/leaf/down || fail
+      migrate_out $dna_path/leaf/out $sub_dna_path/leaf/out || fail
+    else
+      migrate_dep $dna_path/leaf/up $sub_dna_path/up || fail
+      migrate_dep $dna_path/leaf/down $sub_dna_path/down || fail
+      migrate_out $dna_path/leaf/out $sub_dna_path/out || fail
+    fi
 
-end_function_flat
-handle_return
+  end_function
+  handle_return
 }
 
 migrate_out() {
-local from=$1
-local -r to=$2
-if [[ -d $from ]]; then
-  local -r dim_var=d_${leaf_dims}
-  local -r value=${!dim_var}
-  local sane_value
-  get_sane_value "$values" || return 1
-  from+=/$sane_value
-  from=$(realpath $from)
-  if [[ ! -d $from ]]; then
-    log_fatal "dna out dim path is missing: $from"
-    return 1
-  fi
-  safe_link $from $to || return 1
-fi
-return 0
+  local from=$1
+  local -r to=$2
+
+  local short_from=${from%/*/*/*}
+  short_from=${from#$short_from/}
+
+  local short_to=${to%/*/*/*}
+  short_to=${to#$short_to/}
+
+  local log_vars='from to' log_show_vars='short_from short_to'
+  begin_function
+
+    if [[ -d $from ]]; then
+      local -r dim_var=d_${leaf_dims}
+      local -r value=${!dim_var}
+      local sane_value
+      get_sane_value "$values" || fail
+      from+=/$sane_value
+      from=$(realpath $from)
+      if [[ ! -d $from ]]; then
+        log_fatal "dna out dim path is missing: $from"
+        fail1
+      fi
+      safe_link $from $to || fail
+    fi
+
+  end_function
+  handle_return
 }
 
 migrate_dep() {
-local -r from=$1 to=$2
-begin_function_flat
-  if [[ -e $from ]]; then
+  local -r from=$1 to=$2
 
-    if [[ -f $from || -f $from/.dna ]]; then
-      safe_link $(realpath $from) $to || fail
-    elif [[ -d $from/.dna ]]; then
-      fork "migrate_cell $from $to" || fail
-    elif [[ -d $from ]]; then
-      if [[ ! -d $to ]]; then
-        mkdir $to || fail
+  local short_from=${from%/*/*/*}
+  short_from=${from#$short_from/}
+
+  local short_to=${to%/*/*/*}
+  short_to=${to#$short_to/}
+
+  local log_vars='from to' log_show_vars='short_from short_to'
+  begin_function
+    if [[ -e $from ]]; then
+
+      if [[ -f $from || -f $from/.dna ]]; then
+        safe_link $(realpath $from) $to || fail
+      elif [[ -d $from/.dna ]]; then
+        fork "migrate_cell $from $to" || fail
+      elif [[ -d $from ]]; then
+        if [[ ! -d $to ]]; then
+          mkdir $to || fail
+        fi
+        local item item_name \
+          items=$(find1 $from \
+          -not -name '.*' \
+          | sort -g) || fail
+        begin_for item in $items; doo
+          item_name=${item##*/}
+          # recursive
+          migrate_dep $item $to/$item_name || fail
+        end_for
       fi
-      local item item_name \
-        items=$(find1 $from \
-        -not -name '.*' \
-        | sort -g) || fail
-      begin_for item in $items; doo
-        item_name=${item##*/}
-        # recursive
-        migrate_dep $item $to/$item_name || fail
-      end_for
-    fi
 
-  fi
-end_function_flat
-handle_return
+    fi
+  end_function
+  handle_return
 }
 
 # should be forked because dims will be altered
@@ -1184,30 +1207,30 @@ end_for
 }
 
 append_dim_var_to_context() {
-local dim=$1
-begin_function_flat
-  dim=${dim##*/}
-  dim=${dim#*-}
+  local dim=$1
+  begin_function_flat
+    dim=${dim##*/}
+    dim=${dim#*-}
 
-  local plural
-  get_plural $dim
-  local dims=$plural
-  local ddim=d_$dim ddims=d_$dims
+    local plural
+    get_plural $dim
+    local dims=$plural
+    local ddim=d_$dim ddims=d_$dims
 
-  if [[ ! -v $ddim ]]; then
-    log_fatal "Internal error: While trying to create a branch sub cell, required dim value $dim is missing."
-    fail1
-  fi
-  local value=${!ddim}
-  if [[ "$value" == $empty_member ]]; then
-    value=
-  fi
-  echo "# Generated by create_sub_branch from $cell_path
-$ddim='$value'
-localize_dim_vars+=' $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}'" >$sub_dna_path/context-before || fail
-  log_debug "Appending dim $ddim=$value to $sub_dna_path/context-before"
-end_function_flat
-handle_return
+    if [[ ! -v $ddim ]]; then
+      log_fatal "Internal error: While trying to create a branch sub cell, required dim value $dim is missing."
+      fail1
+    fi
+    local value=${!ddim}
+    if [[ "$value" == $empty_member ]]; then
+      value=
+    fi
+    echo "# Generated by create_sub_branch from $cell_path
+  $ddim='$value'
+  localize_dim_vars+=' $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}'" >$sub_dna_path/context-before || fail
+    log_debug "Appending dim $ddim=$value to $sub_dna_path/context-before"
+  end_function_flat
+  handle_return
 }
 
 # given a cell, find the nearest seed searching it's ancestors
