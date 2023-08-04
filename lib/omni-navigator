@@ -92,7 +92,7 @@ omni_get_processed_line() {
 #   the selected variable, which won't actually change an outer local version of the
 #   variable, only the shared global version.
 omni_extract_vars() {
-  local log_vars='index vars'
+  local log_vars='log_array_index vars'
   begin_function
 
     local line=${log_array[$index]} \
@@ -608,7 +608,7 @@ omni_search_get_matches() {
     fi
 
     if [[ $found_matching_line == f && "$find_function" ]]; then
-      function=
+      log_function=
       vars=log_function \
         omni_extract_vars || fail
       if [[ "${log_function:-}" && $log_function =~ $find_function ]]; then
@@ -872,6 +872,22 @@ omni_show_log_stack() {
     done
   fi
   echo " $log_file" >&$fd_original_err
+  return 0
+}
+
+omni_show_source() {
+  local log_function log_source_file log_source_line
+  index=$log_array_index \
+  vars='log_function log_source_file log_source_line' \
+    omni_extract_vars || return 1
+
+  local debug_list_window=10
+  debug_path_to_source_file=$log_source_file \
+    raw_debug_path_to_source_file=$log_source_file \
+    debug_list_offset=$((-debug_list_window/2+1)) \
+    debug_line_num=$log_source_line \
+    debug_display_source
+
   return 0
 }
 
@@ -1151,6 +1167,11 @@ omni_navigator() (
           omni_show_debug_command || fail
           no_follow_once=t
           ;;
+        \#)
+          echo "# Show source" >&$fd_original_err
+          omni_show_source || fail
+          no_follow_once=t
+          ;;
         \$)
           echo "# Entering debug shell" >&$fd_original_err
           set +u
@@ -1215,6 +1236,7 @@ omni_navigator() (
           echo "T  stack: show log stack" >&$fd_original_err
           echo "!  go to next error" >&$fd_original_err
           echo "@  show debug command to get to current log position" >&$fd_original_err
+          echo "#  show source code that logged this line" >&$fd_original_err
           echo "$  enter debug shell" >&$fd_original_err
           echo "[  go to first log line within the same plane" >&$fd_original_err
           echo "]  go to last log line within the same plane" >&$fd_original_err
