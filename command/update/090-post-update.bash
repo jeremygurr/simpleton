@@ -46,9 +46,9 @@ begin_function_flat
     echo "update_successful=${update_successful:-}" >>$reply_file || fail
   fi
 
-  if [[ "$log_path" ]]; then
-    cell_close_log_file || fail
-  fi
+  # if [[ "$log_path" ]]; then
+  #   cell_close_log_file || fail
+  # fi
 
   to=$running_job_path \
     link_unlock 

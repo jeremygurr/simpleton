@@ -25,11 +25,12 @@ disable_log=${disable_log:-f}
 
 # This is run if cell hasn't been initialized = missing .cyto folder
 make_cyto() {
-  local cell=$1 new_cyto=$cell/.cyto.new
-  begin_function_flat
+  local new_cyto=$cell_path/.cyto.new \
+	  log_vars=cell_path log_show_vars=short_cell
+  begin_function
 
-    if [[ -e $cell/.cyto ]]; then
-      log_fatal "$cell/.cyto already exists. make_cyto should not be called unless it doesn't."
+    if [[ -e $cell_path/.cyto ]]; then
+      log_fatal "$cell_path/.cyto already exists. make_cyto should not be called unless it doesn't."
       stack_trace
       fail1
     fi
@@ -39,9 +40,9 @@ make_cyto() {
     fi
     mkdir -p $new_cyto || fail
 
-    record_context $cell || fail
+    record_context $cell_path || fail
 
-    get_top_cell $cell || fail
+    get_top_cell $cell_path || fail
     if [[ -d $top_cell/.dna/command ]]; then
       safe_link $top_cell/.dna/command $new_cyto/command || fail
     else
@@ -55,14 +56,14 @@ make_cyto() {
     #   older more powerful, but more fragile way
     # mkdir -p $new_cyto/command || fail
     # mkdir -p $new_cyto/lib || fail
-    # inherit_lib $cell || fail
+    # inherit_lib $cell_path || fail
 
     local context_path=$new_cyto/context
     if [[ -f "$context_path" ]]; then
       source $context_path || fail
     fi
 
-    local dna_path=$cell/.dna
+    local dna_path=$cell_path/.dna
     if [[ -d $dna_path/up ]]; then
       rsync -a $dna_path/up/ $new_cyto/up/ || fail
     fi
@@ -73,7 +74,7 @@ make_cyto() {
 
     if [[ -d $dna_path/out && "$out_path" ]]; then
       local item
-      local out_path=$cell/$out_path
+      local out_path=$cell_path/$out_path
       if [[ ! -d $out_path  ]]; then
         mkdir $out_path || fail
       fi
@@ -82,9 +83,9 @@ make_cyto() {
       setup_cyto_out $dna_path/out $out_path || fail
     fi
 
-    mv $new_cyto $cell/.cyto || fail
+    mv $new_cyto $cell_path/.cyto || fail
 
-  end_function_flat
+  end_function
   handle_return
 }
 
@@ -179,6 +180,33 @@ end_function_flat
 handle_return
 }
 
+setup_dims() {
+
+	local cell_path=$1
+
+	load_dims $cell_path/.dna/dim || return 1
+	leaf_dims=( ${dims[*]:-} )
+	if [[ "${leaf_dims:-}" ]]; then
+	  log_debug "Leaf dims found: ${leaf_dims[*]}"
+	fi
+
+	last_cell_dims_loaded=$cell_path
+
+	load_dims $cell_path/.dna/sub-dim || return 1
+	sub_dims=( ${dims[*]:-} )
+	if [[ "${sub_dims:-}" ]]; then
+	  log_debug "Sub dims found: ${sub_dims[*]}"
+	fi
+
+	props=()
+	load_props $cell_path/.dna/prop || return 1
+	load_props $cell_path/.dna/leaf/prop || return 1
+	if [[ "${props:-}" ]]; then
+	  log_debug "Props found: ${props[*]}"
+	fi
+
+}
+
 cell_context_load() {
 
 	get_short_cell $cell_path
@@ -208,9 +236,10 @@ cell_context_load() {
       local context_path=$cyto_path/context
       if [[ ! -e $cyto_path ]]; then
         if [[ -d $sub_path ]]; then
+					log_debug "Planting seeds"
           plant_seed $sub_path $cell_path || fail
         fi
-        make_cyto $cell_path || fail
+        make_cyto || fail
       elif [[ -f "$context_path" ]]; then
         source $context_path || fail
       fi
@@ -1442,13 +1471,24 @@ cell_open_log_file() {
       from_must_exist=f \
         safe_link $new_log_file $first_log_path || return 1
     fi
+		if [[ "${logging_to_file:-}" ]]; then
+		  cell_log_file_stack+=( "$logging_to_file" )
+		fi
     log_function=${FUNCNAME[1]} \
       change_log_file
   fi
 }
 
 cell_close_log_file() {
-  : 
+  if [[ "${cell_log_file_stack:-}" ]]; then
+	  local previous_log=${cell_log_file_stack[-1]}
+		unset cell_log_file_stack[-1]
+    log_function=${FUNCNAME[1]} \
+			new_log_file=$previous_log \
+			resume_existing_log=t \
+			logging_to_file= \
+      change_log_file
+	fi
 }
 
 get_job_id() {
@@ -1482,80 +1522,6 @@ get_job_id() {
 
   end_function_flat
   handle_return
-}
-
-execute_command() {
-
-  local starting_point=$(realpath $1) current_command=$2 \
-    short_cell disable_log=f cell_path
-
-  get_cell_path $starting_point
-  get_short_cell $cell_path
-
-  local log_vars='cell_path' \
-    log_show_vars='short_cell current_command' 
-  begin_function
-
-    local job_path=$cell_path/.job
-
-    case $current_command in log|edit)
-      disable_log=t
-    esac
-
-    if [[ $current_command != edit \
-       && $cell_path == */.dna/sub/* 
-       ]]; then
-      local new_cell=${cell_path//\/.dna\/sub\//\/}
-      if [[ -d $new_cell ]]; then
-        cell=$new_cell
-      else
-        log_fatal "You can't run this command within a seed."
-        fail1
-      fi
-    fi
-
-    local omni_log_job_id=${omni_log_job_id:-}
-    if [[ $disable_log == f ]]; then
-      if [[ ! "${omni_log_job_id:-}" ]]; then
-        command_to_log="${original_cmd#* }" \
-          get_job_id || fail
-      fi
-
-      local current_job_path=$job_path/$omni_log_job_id
-      local running_job_path=$job_path/running
-      local log_path=$current_job_path/log
-
-      if [[ ! -d $log_path ]]; then
-        mkdir -p $log_path || fail
-      fi
-
-      force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
-
-      # only set this for the first cell in the job, all other cells should 
-      #   use the same fork_id log so that they all have unique ids across the job
-      if [[ ! "${fork_id_log:-}" ]]; then
-        fork_id_log=$current_job_path/fork-id-log
-      fi
-
-    fi
-
-    cell_open_log_file || fail
-    fork execute_command_internal || fail
-    cell_close_log_file || fail
-
-  end_function
-  handle_return
-}
-
-get_dna_command() {
-local cell_path=$cell_path command=$command
-local parent=${cell_path%/*}
-if [[ -e $cell_path/.dna/command/$command ]]; then
-  dna_command=$cell_path/.dna/command/$command
-elif [[ $parent != $cell_path ]]; then
-  cell=$parent get_dna_command || return 1
-fi
-return 0
 }
 
 # is run in a subshell since it loads the context
@@ -1630,11 +1596,86 @@ begin_function
   if type -t command_$current_command &>/dev/null; then
     command_$current_command || fail
   else
+		# recursive
     execute_command_step $command_path || fail
   fi
 
 end_function
 handle_return
+}
+
+execute_command() {
+
+  local starting_point=$(realpath $1) current_command=$2 \
+    short_cell disable_log=f cell_path
+
+  get_cell_path $starting_point
+  get_short_cell $cell_path
+
+  local log_vars='cell_path' \
+    log_show_vars='short_cell current_command' 
+  begin_function_flat
+
+    local job_path=$cell_path/.job
+
+    case $current_command in log|edit)
+      disable_log=t
+    esac
+
+    if [[ $current_command != edit \
+       && $cell_path == */.dna/sub/* 
+       ]]; then
+      local new_cell=${cell_path//\/.dna\/sub\//\/}
+      if [[ -d $new_cell ]]; then
+        cell=$new_cell
+      else
+        log_fatal "You can't run this command within a seed."
+        fail1
+      fi
+    fi
+
+    local omni_log_job_id=${omni_log_job_id:-}
+    if [[ $disable_log == f ]]; then
+      if [[ ! "${omni_log_job_id:-}" ]]; then
+        command_to_log="${original_cmd#* }" \
+          get_job_id || fail
+      fi
+
+      local current_job_path=$job_path/$omni_log_job_id
+      local running_job_path=$job_path/running
+      local log_path=$current_job_path/log
+
+      if [[ ! -d $log_path ]]; then
+        mkdir -p $log_path || fail
+      fi
+
+      force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
+
+      # only set this for the first cell in the job, all other cells should 
+      #   use the same fork_id log so that they all have unique ids across the job
+      if [[ ! "${fork_id_log:-}" ]]; then
+        fork_id_log=$current_job_path/fork-id-log
+      fi
+
+    fi
+
+    cell_open_log_file || fail
+    fork execute_command_internal || fail
+    cell_close_log_file || fail
+
+  end_function_flat
+  handle_return
+}
+
+get_dna_command() {
+local cell_path=$cell_path command=$command
+local parent=${cell_path%/*}
+if [[ -e $cell_path/.dna/command/$command ]]; then
+  dna_command=$cell_path/.dna/command/$command
+elif [[ $parent != $cell_path ]]; then
+  cell=$parent get_dna_command || return 1
+fi
+return 0
 }
 
 execute_command_step_file() {
@@ -2123,6 +2164,9 @@ for dim in ${dims[*]}; do
   fi
 done
 branch_dim_count=${#branch_dims[*]}
+if [[ "${branch_dims:-}" ]]; then
+	log_debug "Branch dims found: ${branch_dims[*]}"
+fi
 
 return 0
 }
@@ -2803,23 +2847,6 @@ fi
 return 1
 }
 
-setup_dims() {
-
-local cell=$1
-
-load_dims $cell/.dna/dim || return 1
-leaf_dims=( ${dims[*]:-} )
-last_cell_dims_loaded=$cell
-
-load_dims $cell/.dna/sub-dim || return 1
-sub_dims=( ${dims[*]:-} )
-
-props=()
-load_props $cell/.dna/prop || return 1
-load_props $cell/.dna/leaf/prop || return 1
-
-}
-
 load_dims() {
 local dims_path=$1 dim_path dim 
 dim_array=()
@@ -2969,40 +2996,23 @@ end_background_fork() {
 
 # run within the subshell at the beginning
 begin_fork() {
-  # cell_open_log_file || return 1
   return 0
 }
 
 # run within the subshell at the beginning
 end_fork() {
-  # cell_close_log_file || return 1
-#if [[ "$reply_file" ]]; then
-  #log_debug "Recording log_id=$log_id to $reply_file"
-  #echo "log_id=${log_id:-} debug_id_current=${debug_id_current:-}" >>$reply_file || return 1
-#fi
-return 0
+  return 0
 }
 
 # run outside of the subshell afterwards
 after_fork() {
-if [[ -f "$reply_file" ]]; then
-  source $reply_file || return 1
-  #log_debug "Loaded reply_file $reply_file"
-  rm $reply_file
-  reply_file=
-#else  # Should not be needed any more
-#  #log_debug "No reply_file set"
-#  let log_id+=100 || true
-#  if [[ "${debug_id:-}" && "$debug_id" != t ]]; then
-#    let debug_id_current+=1000 || true
-#  fi
-fi
-return 0
-}
-
-dir_is_empty() {
-local content=( "$1"/* )
-[[ ! -e $content ]]
+	if [[ -f "$reply_file" ]]; then
+		source $reply_file || return 1
+		#log_debug "Loaded reply_file $reply_file"
+		rm $reply_file
+		reply_file=
+	fi
+	return 0
 }
 
 tee_files=( )
