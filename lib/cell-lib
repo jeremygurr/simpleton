@@ -181,6 +181,7 @@ handle_return
 
 cell_context_load() {
 
+	get_short_cell $cell_path
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
 
@@ -1475,7 +1476,7 @@ get_job_id() {
       fail1
     fi
 
-    echo "$omni_log_job_id $cell $command_to_log" >>$job_id_log || fail
+    echo "$omni_log_job_id $cell_path $command_to_log" >>$job_id_log || fail
 
     fd_unlock
 
@@ -1546,6 +1547,17 @@ execute_command() {
   handle_return
 }
 
+get_dna_command() {
+local cell_path=$cell_path command=$command
+local parent=${cell_path%/*}
+if [[ -e $cell_path/.dna/command/$command ]]; then
+  dna_command=$cell_path/.dna/command/$command
+elif [[ $parent != $cell_path ]]; then
+  cell=$parent get_dna_command || return 1
+fi
+return 0
+}
+
 # is run in a subshell since it loads the context
 execute_command_internal() {
 
@@ -1556,7 +1568,7 @@ begin_function
   if [[ $current_command != edit ]]; then
 
     cell_context_load || {
-      log_fatal "Context failed to load for $cell"
+      log_fatal "Context failed to load for $cell_path"
       fail1
       }
 
@@ -1579,11 +1591,11 @@ begin_function
 
   fi
 
-  local command_path=$cell/.cyto/command/$current_command
+  local command_path=$cell_path/.cyto/command/$current_command
 
-  if [[ ! -e $command_path && ! -e $cell/.cyto ]]; then
+  if [[ ! -e $command_path && ! -e $cell_path/.cyto ]]; then
     local dna_command=
-    cell=$cell command=$current_command get_dna_command || fail
+    command=$current_command get_dna_command || fail
     if [[ "$dna_command" ]]; then
       command_path=$dna_command
     fi
@@ -1623,17 +1635,6 @@ begin_function
 
 end_function
 handle_return
-}
-
-get_dna_command() {
-local cell=$cell command=$command
-local parent=${cell%/*}
-if [[ -e $cell/.dna/command/$command ]]; then
-  dna_command=$cell/.dna/command/$command
-elif [[ $parent != $cell ]]; then
-  cell=$parent get_dna_command || return 1
-fi
-return 0
 }
 
 execute_command_step_file() {
