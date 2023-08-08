@@ -26,7 +26,7 @@ disable_log=${disable_log:-f}
 # This is run if cell hasn't been initialized = missing .cyto folder
 make_cyto() {
   local new_cyto=$cell_path/.cyto.new \
-	  log_vars=cell_path log_show_vars=short_cell
+    log_vars=cell_path log_show_vars=short_cell
   begin_function
 
     if [[ -e $cell_path/.cyto ]]; then
@@ -204,34 +204,34 @@ dims=( ${dim_array[*]} )
 
 setup_dims() {
 
-	local cell_path=$1
+  local cell_path=$1
 
-	load_dims $cell_path/.dna/dim || return 1
-	leaf_dims=( ${dims[*]:-} )
-	if [[ "${leaf_dims:-}" ]]; then
-	  log_debug "Leaf dims found: ${leaf_dims[*]}"
-	fi
+  load_dims $cell_path/.dna/dim || return 1
+  leaf_dims=( ${dims[*]:-} )
+  if [[ "${leaf_dims:-}" ]]; then
+    log_debug "Leaf dims found: ${leaf_dims[*]}"
+  fi
 
-	last_cell_dims_loaded=$cell_path
+  last_cell_dims_loaded=$cell_path
 
-	load_dims $cell_path/.dna/sub-dim || return 1
-	sub_dims=( ${dims[*]:-} )
-	if [[ "${sub_dims:-}" ]]; then
-	  log_debug "Sub dims found: ${sub_dims[*]}"
-	fi
+  load_dims $cell_path/.dna/sub-dim || return 1
+  sub_dims=( ${dims[*]:-} )
+  if [[ "${sub_dims:-}" ]]; then
+    log_debug "Sub dims found: ${sub_dims[*]}"
+  fi
 
-	props=()
-	load_props $cell_path/.dna/prop || return 1
-	load_props $cell_path/.dna/leaf/prop || return 1
-	if [[ "${props:-}" ]]; then
-	  log_debug "Props found: ${props[*]}"
-	fi
+  props=()
+  load_props $cell_path/.dna/prop || return 1
+  load_props $cell_path/.dna/leaf/prop || return 1
+  if [[ "${props:-}" ]]; then
+    log_debug "Props found: ${props[*]}"
+  fi
 
 }
 
 cell_context_load() {
 
-	get_short_cell $cell_path
+  get_short_cell $cell_path
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
 
@@ -258,7 +258,7 @@ cell_context_load() {
       local context_path=$cyto_path/context
       if [[ ! -e $cyto_path ]]; then
         if [[ -d $sub_path ]]; then
-					log_debug "Planting seeds"
+          log_debug "Planting seeds"
           plant_seed $sub_path $cell_path || fail
         fi
         make_cyto || fail
@@ -366,7 +366,7 @@ begin_function
 
   if [[ "$needs_update" ]]; then
     # needs_update is already known, don't need to compute it again
-		log_message="needs_update is already set."
+    log_message="needs_update is already set."
     succeed
   fi
 
@@ -562,39 +562,42 @@ return 0
 
 # run within the subshell at the beginning
 begin_fork() {
+  side_log "[$BASHPID] begin_fork fork=$omni_log_fork_id pos=$omni_log_pos"
   return 0
 }
 
 reply_to_caller() {
 if [[ "${reply_file:-}" ]]; then
   echo "$*" >>$reply_file || return 1
-	side_log "[$BASHPID] To reply_file: $*"
+  side_log "[$BASHPID] to reply_file $reply_file: $* fork=$omni_log_fork_id pos=$omni_log_pos"
 else
-	side_log "reply_to_caller: No reply_file omni_log_pos=$omni_log_pos"
+  side_log "[$BASHPID] reply_to_caller: No reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
 fi
 return 0
 }
 # run within the subshell at the beginning
 end_fork() {
-	reply_to_caller "omni_log_pos=${omni_log_pos:-}" || return 1
+  side_log "[$BASHPID] end_fork fork=$omni_log_fork_id pos=$omni_log_pos"
+  reply_to_caller "omni_log_pos=${omni_log_pos:-}" || return 1
   return 0
 }
 
 # run outside of the subshell afterwards
 after_fork() {
-	if [[ -f "${reply_file:-}" ]]; then
-		side_log "[$BASHPID] From reply_file: $(<$reply_file)"
-		source $reply_file || return 1
-		rm $reply_file
-		reply_file=
-	else
-		side_log "after_fork: No reply_file omni_log_pos=$omni_log_pos"
-	fi
-	return 0
+  if [[ -f "${reply_file:-}" ]]; then
+    side_log "[$BASHPID] from reply_file $reply_file: $(<$reply_file) fork=$omni_log_fork_id pos=$omni_log_pos"
+    source $reply_file || return 1
+    rm $reply_file
+    reply_file=
+  else
+    side_log "[$BASHPID] after_fork: no reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
+  fi
+  return 0
 }
 
 cell_open_log_file() {
   if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
+    side_log "[$BASHPID] cell_open_log_file: fork=$omni_log_fork_id pos=$omni_log_pos"
     local previous_fork_id=$omni_log_fork_id
     get_fork_id || return 1
     local new_log_file=$log_path/$omni_log_job_id:$omni_log_fork_id.olog
@@ -603,9 +606,10 @@ cell_open_log_file() {
       from_must_exist=f \
         safe_link $new_log_file $first_log_path || return 1
     fi
-		if [[ "${logging_to_file:-}" ]]; then
-		  cell_log_file_stack+=( "$logging_to_file" )
-		fi
+    if [[ "${logging_to_file:-}" ]]; then
+      cell_log_file_stack+=( "$logging_to_file" )
+      cell_log_pos_stack+=( "$((omni_log_pos + 1))" )
+    fi
     log_function=${FUNCNAME[1]} \
       change_log_file
   fi
@@ -613,54 +617,60 @@ cell_open_log_file() {
 
 cell_close_log_file() {
   if [[ "${cell_log_file_stack:-}" ]]; then
-	  local previous_log=${cell_log_file_stack[-1]}
-		unset cell_log_file_stack[-1]
+    side_log "[$BASHPID] cell_close_log_file: fork=$omni_log_fork_id pos=$omni_log_pos"
+    local previous_log=${cell_log_file_stack[-1]}
+    unset cell_log_file_stack[-1]
     log_function=${FUNCNAME[1]} \
-			new_log_file=$previous_log \
-			resume_existing_log=t \
-			logging_to_file= \
+      new_log_file=$previous_log \
+      resume_existing_log=t \
+      logging_to_file= \
       change_log_file
-	fi
+    omni_log_pos=${cell_log_pos_stack[-1]}
+    unset cell_log_pos_stack[-1]
+  fi
 }
 
 # run within the subshell at the beginning
 begin_background_fork() {
+  side_log "[$BASHPID] begin_background_fork: fork=$omni_log_fork_id pos=$omni_log_pos"
   cell_open_log_file || return 1
   return 0
 }
 
 # run within the subshell at the beginning
 end_background_fork() {
+  side_log "[$BASHPID] end_background_fork: fork=$omni_log_fork_id pos=$omni_log_pos"
   cell_close_log_file || return 1
   return 0
 }
 
 reply_file=
 
-current_reply_id=0
 get_new_reply_file() {
-reply_file=$tmp_folder/reply.$$.$current_reply_id
-side_log "New reply_file: $reply_file omni_log_pos=$omni_log_pos"
-(( current_reply_id++ ))
-#reply_file=$(mktemp $tmp_folder/reply.$$.XXXXXX)
+reply_file=$tmp_folder/reply.$BASHPID
+if [[ -f $reply_file ]]; then
+  log_fatal "reply_file already exists: $reply_file"
+  return 1
+fi
+side_log "[$BASHPID] new reply_file: $reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
 return 0
 }
 
 fork() {
   local reply_file command=$* return_code=0
-  get_new_reply_file
+  get_new_reply_file || return 1
   defer "rm $reply_file"
 
   (
-		side_log "top of fork, reply_file=$reply_file omni_log_pos=$omni_log_pos"
+    side_log "[$BASHPID] top of fork, reply_file=$reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
     begin_fork || exit 1
     eval "$command"; return_code=$?
     end_fork || exit 1
-		side_log "bottom of fork, reply_file=$reply_file omni_log_pos=$omni_log_pos"
+    side_log "[$BASHPID] bottom of fork, reply_file=$reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
     exit $return_code
   )
 
-	side_log "after fork, reply_file=$reply_file omni_log_pos=$omni_log_pos"
+  side_log "[$BASHPID] after fork, reply_file=$reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
   return_code=$?
   after_fork || { let return_code++ || true; }
   return $return_code
@@ -702,10 +712,10 @@ begin_function_flat
     extra=" sequentially"
   fi
 
-	local size=${#array[*]}
-	if (( size > 1 )); then
-		log_debug "looping over $size values$extra. body: $body2"
-	fi
+  local size=${#array[*]}
+  if (( size > 1 )); then
+    log_debug "looping over $size values$extra. body: $body2"
+  fi
 
   begin_for value in "${array[@]}"; doo
 
@@ -1342,27 +1352,27 @@ handle_return
 
 # should be forked because dims will be altered
 migrate_cell() {
-	local -r dep_link=$1 to=$2
-	local from=$(realpath $dep_link) 
-	begin_function_flat
+  local -r dep_link=$1 to=$2
+  local from=$(realpath $dep_link) 
+  begin_function_flat
 
-		if [[ "$from" == */.dna/sub/* ]]; then
-			local fixed_from=${from//.dna\/sub\//}
-			if [[ -d $fixed_from ]]; then
-				rm $dep_link || fail
-				safe_link $fixed_from $dep_link || fail
-				from=$fixed_from
-			else
-				log_fatal "Dependencies must link to planted cells, not seeds: $from"
-				fail1
-			fi
-		fi
+    if [[ "$from" == */.dna/sub/* ]]; then
+      local fixed_from=${from//.dna\/sub\//}
+      if [[ -d $fixed_from ]]; then
+        rm $dep_link || fail
+        safe_link $fixed_from $dep_link || fail
+        from=$fixed_from
+      else
+        log_fatal "Dependencies must link to planted cells, not seeds: $from"
+        fail1
+      fi
+    fi
 
-		promote_dep_cell || fail
-		safe_link $from $to || fail
+    promote_dep_cell || fail
+    safe_link $from $to || fail
 
-	end_function
-	handle_return
+  end_function
+  handle_return
 }
 
 # seed must not be empty here
@@ -1727,7 +1737,7 @@ begin_function
   if type -t command_$current_command &>/dev/null; then
     command_$current_command || fail
   else
-		# recursive
+    # recursive
     execute_command_step $command_path || fail
   fi
 
@@ -2288,7 +2298,7 @@ for dim in ${dims[*]}; do
 done
 branch_dim_count=${#branch_dims[*]}
 if [[ "${branch_dims:-}" ]]; then
-	log_debug "Branch dims found: ${branch_dims[*]}"
+  log_debug "Branch dims found: ${branch_dims[*]}"
 fi
 
 return 0
