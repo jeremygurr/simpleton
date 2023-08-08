@@ -182,6 +182,20 @@ log_source_file=${BASH_SOURCE[$(($offset+1))]}
 log_source_line=${BASH_LINENO[$offset]}
 }
 
+auto_shorten() {
+  local -n shorten_var=$1
+  local extra length
+  if [[ "$shorten_var" =~ /.*/.*/.*/.*/ ]]; then
+    extra=${shorten_var%/*/*/*/*}
+    shorten_var=${shorten_var#$extra/}
+  fi
+
+  length="${#shorten_var}"
+  if (( length > 80 )); then
+    shorten_var=${shorten_var:0:78}..
+  fi
+}
+
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
 begin_no_tracing_zone
@@ -199,7 +213,19 @@ for var in $log_vars $show_vars2 $trace_var; do
     var_name=$var
   fi
 
+  local shorten=f
+  if [[ "$var" == ^* ]]; then
+    var=${var#^}
+    var_name=${var_name#^}
+    shorten=t
+  fi
+
   eval "value=\${$var:-}"
+
+  if [[ $shorten == t ]]; then
+    auto_shorten value
+  fi
+
   local quoted_value=
   get_shell_quoted_value "$value"
   value=$quoted_value

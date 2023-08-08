@@ -89,6 +89,33 @@ make_cyto() {
   handle_return
 }
 
+get_short_cell() {
+local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string=
+if [[ "$trunk_cell" =~ .dim ]]; then
+  x=${trunk_cell//\/.dim\// }
+  dim_string=" ${x#* }"
+  dim_string=${dim_string/ /:}
+  dim_string=${dim_string// /\/}
+  trunk_cell=${x%% *}
+fi
+if x=${trunk_cell#$PWD/}
+   [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+  trunk_cell=$x
+elif y=${trunk_cell%/*/*/*} 
+     x=${trunk_cell#$y/}
+     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+  trunk_cell=$x
+elif y=${trunk_cell%/*/*} 
+     x=${trunk_cell#$y/}
+     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+  trunk_cell=$x
+elif x=${trunk_cell##*/} 
+     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+  trunk_cell=$x
+fi
+short_cell="$trunk_cell$dim_string"
+}
+
 # input must be a folder
 setup_cell_path_vars() {
 cell_path=$1
@@ -198,6 +225,9 @@ if [[ -d $dims_path ]]; then
     dim_array+=( $dim )
     localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
   done
+  if [[ "$dim_array" ]]; then
+    log_debug "Found dims: ${dim_array[*]}"
+  fi
 fi
 dims=( ${dim_array[*]} )
 }
@@ -361,7 +391,7 @@ local status_path=$cell_path/.cyto/status \
 local short_cell
 get_short_cell $cell_path
 
-local log_vars='cell_path' log_show_vars='short_cell'
+local log_vars=cell_path log_show_vars=short_cell
 begin_function
 
   if [[ "$needs_update" ]]; then
@@ -1059,16 +1089,113 @@ append_dim_var_to_context() {
   handle_return
 }
 
+promote_dep_cell() {
+local log_show_vars=^from
+begin_function
+
+  local trunk_cell=
+  get_trunk_cell $from || fail
+
+  local dims= 
+  load_dims $trunk_cell/.dna/dim || fail
+
+  prep_upstream $dep_link || fail
+
+  local dep_dim already_promoted_path=$from
+
+  # We don't need to promote all dims in target, but only the dims in the source
+  # e1 -> e1, not e1 -> e1/ods
+  # only promote what is in source + provided by prep
+  #   can't just promote because a var exists, only if it's actually used at that point
+
+  begin_for dep_dim in ${dims[*]}; doo
+
+    # is this dim already promoted?
+    if [[ $already_promoted_path == */.dim/* ]]; then
+      already_promoted_path=${already_promoted_path%/.dim/*}
+      continue
+    fi
+
+    local branch_dim found_branch_dim=f
+    # upstream prep script can add extra_dims as needed
+    begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
+      if [[ $branch_dim == $dep_dim ]]; then
+        found_branch_dim=t
+        break
+      fi
+    end_for
+
+    if [[ $found_branch_dim == f ]]; then
+      # can't promote if dep dim doesn't exist on the branch 
+      break
+    fi
+
+    local dep_dim_var=d_$dep_dim
+    local values=
+
+    if [[ -v $dep_dim_var ]]; then
+      values=${!dep_dim_var}
+    fi
+
+    if type -t ${dep_dim}_member_expand >/dev/null; then
+      eval "value=\$values ${dep_dim}_member_expand" &>/dev/null || is_required=t
+    fi
+
+    values=( $values )
+
+    if [[ "${#values[*]}" -gt 1 ]]; then
+      log_fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
+      fail1
+    fi
+
+    if [[ "${values:-}" ]]; then
+      local sane_value
+      get_sane_value "$values" || fail
+      local old_from=$from
+      from=$from/.dim/$sane_value
+      if [[ ! -d $from ]]; then
+        eval "$dep_dim_var=\"$values\""
+        fork "load_context_and_create_sub $old_from $from" || fail
+      fi
+    else
+      break
+    fi
+
+  end_for
+end_function
+handle_return
+}
+
+# should be forked because dims will be altered
+migrate_cell() {
+  local -r dep_link=$1 to=$2
+  local from=$(realpath $dep_link) 
+  local log_vars=from log_show_vars="^dep_link ^to"
+  begin_function
+
+    if [[ "$from" == */.dna/sub/* ]]; then
+      local fixed_from=${from//.dna\/sub\//}
+      if [[ -d $fixed_from ]]; then
+        rm $dep_link || fail
+        safe_link $fixed_from $dep_link || fail
+        from=$fixed_from
+      else
+        log_fatal "Dependencies must link to planted cells, not seeds: $from"
+        fail1
+      fi
+    fi
+
+    promote_dep_cell || fail
+    safe_link $from $to || fail
+
+  end_function
+  handle_return
+}
+
 migrate_dep() {
   local -r from=$1 to=$2
 
-  local short_from=${from%/*/*/*}
-  short_from=${from#$short_from/}
-
-  local short_to=${to%/*/*/*}
-  short_to=${to#$short_to/}
-
-  local log_vars='from to' log_show_vars='short_from short_to'
+  local log_show_vars='^from ^to'
   begin_function
     if [[ -e $from ]]; then
 
@@ -1100,13 +1227,7 @@ migrate_out() {
   local from=$1
   local -r to=$2
 
-  local short_from=${from%/*/*/*}
-  short_from=${from#$short_from/}
-
-  local short_to=${to%/*/*/*}
-  short_to=${to#$short_to/}
-
-  local log_vars='from to' log_show_vars='short_from short_to'
+  local log_show_vars='^from ^to'
   begin_function
 
     if [[ -d $from ]]; then
@@ -1258,107 +1379,6 @@ create_sub_cell $sub_cell || return 1
 return 0
 }
 
-promote_dep_cell() {
-begin_function_flat
-
-  local trunk_cell=
-  get_trunk_cell $from || fail
-
-  local dims= 
-  load_dims $trunk_cell/.dna/dim || fail
-
-  prep_upstream $dep_link || fail
-
-  local dep_dim already_promoted_path=$from
-
-  # We don't need to promote all dims in target, but only the dims in the source
-  # e1 -> e1, not e1 -> e1/ods
-  # only promote what is in source + provided by prep
-  #   can't just promote because a var exists, only if it's actually used at that point
-
-  begin_for dep_dim in ${dims[*]}; doo
-
-    # is this dim already promoted?
-    if [[ $already_promoted_path == */.dim/* ]]; then
-      already_promoted_path=${already_promoted_path%/.dim/*}
-      continue
-    fi
-
-    local branch_dim found_branch_dim=f
-    # upstream prep script can add extra_dims as needed
-    begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
-      if [[ $branch_dim == $dep_dim ]]; then
-        found_branch_dim=t
-        break
-      fi
-    end_for
-
-    if [[ $found_branch_dim == f ]]; then
-      # can't promote if dep dim doesn't exist on the branch 
-      break
-    fi
-
-    local dep_dim_var=d_$dep_dim
-    local values=
-
-    if [[ -v $dep_dim_var ]]; then
-      values=${!dep_dim_var}
-    fi
-
-    if type -t ${dep_dim}_member_expand >/dev/null; then
-      eval "value=\$values ${dep_dim}_member_expand" &>/dev/null || is_required=t
-    fi
-
-    values=( $values )
-
-    if [[ "${#values[*]}" -gt 1 ]]; then
-      log_fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
-      fail1
-    fi
-
-    if [[ "${values:-}" ]]; then
-      local sane_value
-      get_sane_value "$values" || fail
-      local old_from=$from
-      from=$from/.dim/$sane_value
-      if [[ ! -d $from ]]; then
-        eval "$dep_dim_var=\"$values\""
-        fork "load_context_and_create_sub $old_from $from" || fail
-      fi
-    else
-      break
-    fi
-
-  end_for
-end_function
-handle_return
-}
-
-# should be forked because dims will be altered
-migrate_cell() {
-  local -r dep_link=$1 to=$2
-  local from=$(realpath $dep_link) 
-  begin_function_flat
-
-    if [[ "$from" == */.dna/sub/* ]]; then
-      local fixed_from=${from//.dna\/sub\//}
-      if [[ -d $fixed_from ]]; then
-        rm $dep_link || fail
-        safe_link $fixed_from $dep_link || fail
-        from=$fixed_from
-      else
-        log_fatal "Dependencies must link to planted cells, not seeds: $from"
-        fail1
-      fi
-    fi
-
-    promote_dep_cell || fail
-    safe_link $from $to || fail
-
-  end_function
-  handle_return
-}
-
 # seed must not be empty here
 create_sub_cells2() {
 local seed=$1 relative_path=$2 sub_full sub 
@@ -1497,10 +1517,7 @@ leaf_cells+=( $leaf_path )
 execute_command_step() {
 local step=$1
 
-local short_step=${step%/*/*} \
-  log_vars=step \
-  log_show_vars=short_step
-short_step=${step#$short_step/}
+local log_show_vars=^step
 begin_function
   local step_name=${step##*/} prefix= base
 
@@ -3077,33 +3094,6 @@ local short_cell
 get_short_cell $cell_path || fail
 cell_name=${short_cell//\//_}
 cell_name=${cell_name// /:}
-}
-
-get_short_cell() {
-local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string=
-if [[ "$trunk_cell" =~ .dim ]]; then
-  x=${trunk_cell//\/.dim\// }
-  dim_string=" ${x#* }"
-  dim_string=${dim_string/ /:}
-  dim_string=${dim_string// /\/}
-  trunk_cell=${x%% *}
-fi
-if x=${trunk_cell#$PWD/}
-   [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-  trunk_cell=$x
-elif y=${trunk_cell%/*/*/*} 
-     x=${trunk_cell#$y/}
-     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-  trunk_cell=$x
-elif y=${trunk_cell%/*/*} 
-     x=${trunk_cell#$y/}
-     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-  trunk_cell=$x
-elif x=${trunk_cell##*/} 
-     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-  trunk_cell=$x
-fi
-short_cell="$trunk_cell$dim_string"
 }
 
 cd_to_leaf() {

@@ -46,6 +46,20 @@ get_log_file_token() {
   return 0
 }
 
+auto_shorten() {
+  local -n shorten_var=$1
+  local extra length
+  if [[ "$shorten_var" =~ /.*/.*/.*/.*/ ]]; then
+    extra=${shorten_var%/*/*/*/*}
+    shorten_var=${shorten_var#$extra/}
+  fi
+
+  length="${#shorten_var}"
+  if (( length > 40 )); then
+    shorten_var=${shorten_var:0:38}..
+  fi
+}
+
 # input: {line}
 #   line_id
 omni_get_processed_line() {
@@ -57,8 +71,17 @@ omni_get_processed_line() {
     call|return\(*)
       apad processed_line function "$log_function "
       for var in ${log_show_vars:-}; do
+        local shorten=f
+        if [[ "$var" == ^* ]]; then
+          var=${var#^}
+          shorten=t
+        fi
         if [[ -v $var ]]; then
-          processed_line+=" $var=${!var}"
+          local value=${!var}
+          if [[ $shorten == t ]]; then
+            auto_shorten value
+          fi
+          processed_line+=" $var=$value"
         fi
       done
     ;;
@@ -186,7 +209,7 @@ omni_load_log_array() {
         action_map[$i]=$log_action
 
         if [[ "${log_show_vars_2:-}" ]]; then
-          eval "local $log_show_vars_2"
+          eval "local ${log_show_vars_2//^/}"
           index=$i \
             vars="$log_show_vars_2" \
             omni_extract_vars || fail
