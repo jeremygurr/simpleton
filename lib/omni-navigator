@@ -546,7 +546,7 @@ omni_search_next() {
       fi
 
     fi
-  end_function_flat
+  end_function
   handle_return
 }
 
@@ -773,7 +773,7 @@ omni_search() {
         omni_select_cursor || fail
     fi
 
-  end_function_flat
+  end_function
   handle_return
 }
 
@@ -820,26 +820,8 @@ omni_show_log() {
 
     echo -n "$entries" >&$fd_original_err
 
-  end_function_flat
+  end_function
   handle_return
-}
-
-omni_next_error() {
-
-  local cursor_moved=0
-
-  move_cursor=$cursor \
-    find_level='(error|fatal)' \
-    find_action='return\([^0].*\)' \
-    allow_all=t \
-    omni_search || return 1
-
-  if (( cursor_moved == 0 )); then
-    echo "No errors found." >&$fd_original_err
-  fi
-
-  return 0
-
 }
 
 omni_show_call_stack() {
@@ -1158,7 +1140,15 @@ omni_navigator() (
           ;;
         \!)
           echo "# Jump to next error" >&$fd_original_err
-          omni_next_error || fail
+          local cursor_moved=0
+          move_cursor=$cursor \
+            find_level='(error|fatal)' \
+            find_action='return\([^0].*\)' \
+            allow_all=t \
+            omni_search || return 1
+          if (( cursor_moved == 0 )); then
+            echo "No errors found." >&$fd_original_err
+          fi
           omni_show_context || fail
           no_follow_once=t
           ;;
@@ -1177,6 +1167,19 @@ omni_navigator() (
           set +u
           debug_shell
           set -u
+          no_follow_once=t
+          ;;
+        ^)
+          echo "# Jump to next log file change" >&$fd_original_err
+          local cursor_moved=0
+          move_cursor=$cursor \
+            find_action=log_to \
+            allow_all=t \
+            omni_search || return 1
+          if (( cursor_moved == 0 )); then
+            echo "No log changes found." >&$fd_original_err
+          fi
+          omni_show_context || fail
           no_follow_once=t
           ;;
         \[)
@@ -1238,6 +1241,7 @@ omni_navigator() (
           echo "@  show debug command to get to current log position" >&$fd_original_err
           echo "#  show source code that logged this line" >&$fd_original_err
           echo "$  enter debug shell" >&$fd_original_err
+          echo "^  go to next log file change" >&$fd_original_err
           echo "[  go to first log line within the same plane" >&$fd_original_err
           echo "]  go to last log line within the same plane" >&$fd_original_err
           echo "{  go to first log line within the log file" >&$fd_original_err
@@ -1251,7 +1255,7 @@ omni_navigator() (
           ;;
       esac
     end_while
-  end_function_flat
+  end_function
 
   handle_return
 )
