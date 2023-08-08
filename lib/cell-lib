@@ -562,22 +562,17 @@ return 0
 
 # run within the subshell at the beginning
 begin_fork() {
-  side_log "[$BASHPID] begin_fork fork=$omni_log_fork_id pos=$omni_log_pos"
   return 0
 }
 
 reply_to_caller() {
 if [[ "${reply_file:-}" ]]; then
   echo "$*" >>$reply_file || return 1
-  side_log "[$BASHPID] to reply_file $reply_file: $* fork=$omni_log_fork_id pos=$omni_log_pos"
-else
-  side_log "[$BASHPID] reply_to_caller: No reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
 fi
 return 0
 }
 # run within the subshell at the beginning
 end_fork() {
-  side_log "[$BASHPID] end_fork fork=$omni_log_fork_id pos=$omni_log_pos"
   reply_to_caller "omni_log_pos=${omni_log_pos:-}" || return 1
   return 0
 }
@@ -585,19 +580,15 @@ end_fork() {
 # run outside of the subshell afterwards
 after_fork() {
   if [[ -f "${reply_file:-}" ]]; then
-    side_log "[$BASHPID] from reply_file $reply_file: $(<$reply_file) fork=$omni_log_fork_id pos=$omni_log_pos"
     source $reply_file || return 1
     rm $reply_file
     reply_file=
-  else
-    side_log "[$BASHPID] after_fork: no reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
   fi
   return 0
 }
 
 cell_open_log_file() {
   if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
-    side_log "[$BASHPID] cell_open_log_file: fork=$omni_log_fork_id pos=$omni_log_pos"
     local previous_fork_id=$omni_log_fork_id
     get_fork_id || return 1
     local new_log_file=$log_path/$omni_log_job_id:$omni_log_fork_id.olog
@@ -617,7 +608,6 @@ cell_open_log_file() {
 
 cell_close_log_file() {
   if [[ "${cell_log_file_stack:-}" ]]; then
-    side_log "[$BASHPID] cell_close_log_file: fork=$omni_log_fork_id pos=$omni_log_pos"
     local previous_log=${cell_log_file_stack[-1]}
     unset cell_log_file_stack[-1]
     log_function=${FUNCNAME[1]} \
@@ -632,14 +622,12 @@ cell_close_log_file() {
 
 # run within the subshell at the beginning
 begin_background_fork() {
-  side_log "[$BASHPID] begin_background_fork: fork=$omni_log_fork_id pos=$omni_log_pos"
   cell_open_log_file || return 1
   return 0
 }
 
 # run within the subshell at the beginning
 end_background_fork() {
-  side_log "[$BASHPID] end_background_fork: fork=$omni_log_fork_id pos=$omni_log_pos"
   cell_close_log_file || return 1
   return 0
 }
@@ -652,7 +640,6 @@ if [[ -f $reply_file ]]; then
   log_fatal "reply_file already exists: $reply_file"
   return 1
 fi
-side_log "[$BASHPID] new reply_file: $reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
 return 0
 }
 
@@ -662,15 +649,12 @@ fork() {
   defer "rm $reply_file"
 
   (
-    side_log "[$BASHPID] top of fork, reply_file=$reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
     begin_fork || exit 1
     eval "$command"; return_code=$?
     end_fork || exit 1
-    side_log "[$BASHPID] bottom of fork, reply_file=$reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
     exit $return_code
   )
 
-  side_log "[$BASHPID] after fork, reply_file=$reply_file fork=$omni_log_fork_id pos=$omni_log_pos"
   return_code=$?
   after_fork || { let return_code++ || true; }
   return $return_code
