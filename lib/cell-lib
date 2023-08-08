@@ -120,17 +120,17 @@ begin_function_flat
 
   dna_up_path=$dna_path/up
   if [[ ! -d $dna_up_path ]]; then
-    dna_up_path=
+    unset dna_up_path
   fi
 
   up_path=$cyto_path/up
   if [[ ! -d $up_path ]]; then
-    up_path=
+    unset up_path
   fi
 
   dna_down_path=$dna_path/down
   if [[ ! -d $dna_down_path ]]; then
-    dna_down_path=
+    unset dna_down_path
   fi
 
   # create this folder as needed
@@ -138,7 +138,7 @@ begin_function_flat
 
   sub_path=$dna_path/sub
   if [[ ! -d $sub_path ]]; then
-    sub_path=
+    unset sub_path
   fi
 
   # context can override these as needed
@@ -160,12 +160,12 @@ begin_function_flat
 
   debug_path=$cyto_path/debug
   if [[ ! -d $debug_path ]]; then
-    debug_path=
+    unset debug_path
   fi
 
   req_path=$cyto_path/req
   if [[ ! -d $req_path ]]; then
-    req_path=
+    unset req_path
   fi
 
   source_path=$cyto_path/source
@@ -178,6 +178,28 @@ begin_function_flat
 
 end_function
 handle_return
+}
+
+load_dims() {
+local dims_path=$1 dim_path dim 
+dim_array=()
+if [[ -d $dims_path ]]; then
+  log_debug "Loading dims from $dims_path"
+  local contents=$(find1 $dims_path -not -name ".*" | sort -g) || return 1
+  for dim_path in $contents; do
+    source $dim_path || return 1
+    dim=${dim_path##*/}
+    if [[ $dim =~ [0-9]+-(.*) ]]; then
+      dim=${BASH_REMATCH[1]}
+    fi
+    get_plural $dim
+    dims=$plural
+    local ddim=d_$dim ddims=d_$dims
+    dim_array+=( $dim )
+    localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
+  done
+fi
+dims=( ${dim_array[*]} )
 }
 
 setup_dims() {
@@ -272,6 +294,54 @@ begin_function_flat
   end_for
 end_function
 handle_return
+}
+
+prep_upstream() {
+local upstream=$1
+
+# down_fresh may be used by prep script to propagate freshness requirements to upstream
+down_fresh=$required_freshness
+
+# Don't inherit parent's freshness requirements, 
+#   only what upstream prep explicitly states
+# extra_dims includes dimensions that need to be promoted in upstream that don't
+#   exist in branch_dims
+fresh=$down_fresh required_freshness= default_freshness= extra_dims=
+
+unset prep
+if [[ -f $upstream.prep ]]; then
+  source $upstream.prep || return 1
+  if ! type -t prep &>/dev/null; then
+    log_fatal "$upstream.prep must have a function named prep"
+    return 1
+  fi
+  prep || return 1
+  setup_dep_defaults || return 1
+fi
+
+return 0
+}
+
+get_upstream_needs_update() {
+local cell_path=$1
+local up_path=$cell_path/.cyto/up
+if (( check_upstream_depth > 0 )); then
+  let check_upstream_depth-- || true
+  log_debug "Checking upstream of $short_cell"
+  local -r upstream_cells=( 
+    $(find1 $up_path -not -name '.*' -not -name '*.prep' | sort -g) 
+    ) || return 1
+  local up
+  for up in ${upstream_cells[*]}; do
+    prep_upstream $up || return 1
+    # recursive
+    get_needs_update $up || return 1
+    if [[ $needs_update == t ]]; then
+      break
+    fi
+  done
+fi
+return 0
 }
 
 # returns needs_update
@@ -389,63 +459,6 @@ fresh=
 return 0
 }
 
-prep_upstream() {
-local upstream=$1 with_update=${with_update:-f}
-
-# down_fresh may be used by prep script to propagate freshness requirements to upstream
-down_fresh=$required_freshness
-
-# Don't inherit parent's freshness requirements, 
-#   only what upstream prep explicitly states
-# extra_dims includes dimensions that need to be promoted in upstream that don't
-#   exist in branch_dims
-fresh=$down_fresh required_freshness= default_freshness= extra_dims=
-
-unset prep
-if [[ -f $upstream.prep ]]; then
-  source $upstream.prep || return 1
-  if ! type -t prep &>/dev/null; then
-    log_fatal "$upstream.prep must have a function named prep"
-    return 1
-  fi
-  prep || return 1
-  setup_dep_defaults || return 1
-fi
-
-if [[ $with_update == t && -f $upstream.prep-update ]]; then
-  source $upstream.prep-update || return 1
-  if ! type -t prep &>/dev/null; then
-    log_fatal "$upstream.prep-update must have a function named prep"
-    return 1
-  fi
-  prep || return 1
-fi
-
-return 0
-}
-
-get_upstream_needs_update() {
-local cell_path=$1
-local up_path=$cell_path/.cyto/up
-if (( check_upstream_depth > 0 )); then
-  let check_upstream_depth-- || true
-  log_debug "Checking upstream of $short_cell"
-  local -r upstream_cells=( 
-    $(find1 $up_path -not -name '.*' -not -name '*.prep' | sort -g) 
-    ) || return 1
-  local up
-  for up in ${upstream_cells[*]}; do
-    # recursive
-    prep_upstream $up || return 1
-    get_needs_update $up || return 1
-    if [[ $needs_update == t ]]; then
-      break
-    fi
-  done
-fi
-return 0
-}
-
 get_leaf_needs_update() {
 needs_update=f
 if [[ ! "${leaf_path:-}" ]]; then
@@ -547,6 +560,112 @@ fi
 return 0
 }
 
+# run within the subshell at the beginning
+begin_fork() {
+  return 0
+}
+
+reply_to_caller() {
+if [[ "${reply_file:-}" ]]; then
+  echo "$*" >>$reply_file || return 1
+	side_log "[$BASHPID] To reply_file: $*"
+else
+	side_log "reply_to_caller: No reply_file omni_log_pos=$omni_log_pos"
+fi
+return 0
+}
+# run within the subshell at the beginning
+end_fork() {
+	reply_to_caller "omni_log_pos=${omni_log_pos:-}" || return 1
+  return 0
+}
+
+# run outside of the subshell afterwards
+after_fork() {
+	if [[ -f "${reply_file:-}" ]]; then
+		side_log "[$BASHPID] From reply_file: $(<$reply_file)"
+		source $reply_file || return 1
+		rm $reply_file
+		reply_file=
+	else
+		side_log "after_fork: No reply_file omni_log_pos=$omni_log_pos"
+	fi
+	return 0
+}
+
+cell_open_log_file() {
+  if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
+    local previous_fork_id=$omni_log_fork_id
+    get_fork_id || return 1
+    local new_log_file=$log_path/$omni_log_job_id:$omni_log_fork_id.olog
+    local first_log_path=${new_log_file%/*}/first.olog
+    if [[ ! -f $first_log_path ]]; then
+      from_must_exist=f \
+        safe_link $new_log_file $first_log_path || return 1
+    fi
+		if [[ "${logging_to_file:-}" ]]; then
+		  cell_log_file_stack+=( "$logging_to_file" )
+		fi
+    log_function=${FUNCNAME[1]} \
+      change_log_file
+  fi
+}
+
+cell_close_log_file() {
+  if [[ "${cell_log_file_stack:-}" ]]; then
+	  local previous_log=${cell_log_file_stack[-1]}
+		unset cell_log_file_stack[-1]
+    log_function=${FUNCNAME[1]} \
+			new_log_file=$previous_log \
+			resume_existing_log=t \
+			logging_to_file= \
+      change_log_file
+	fi
+}
+
+# run within the subshell at the beginning
+begin_background_fork() {
+  cell_open_log_file || return 1
+  return 0
+}
+
+# run within the subshell at the beginning
+end_background_fork() {
+  cell_close_log_file || return 1
+  return 0
+}
+
+reply_file=
+
+current_reply_id=0
+get_new_reply_file() {
+reply_file=$tmp_folder/reply.$$.$current_reply_id
+side_log "New reply_file: $reply_file omni_log_pos=$omni_log_pos"
+(( current_reply_id++ ))
+#reply_file=$(mktemp $tmp_folder/reply.$$.XXXXXX)
+return 0
+}
+
+fork() {
+  local reply_file command=$* return_code=0
+  get_new_reply_file
+  defer "rm $reply_file"
+
+  (
+		side_log "top of fork, reply_file=$reply_file omni_log_pos=$omni_log_pos"
+    begin_fork || exit 1
+    eval "$command"; return_code=$?
+    end_fork || exit 1
+		side_log "bottom of fork, reply_file=$reply_file omni_log_pos=$omni_log_pos"
+    exit $return_code
+  )
+
+	side_log "after fork, reply_file=$reply_file omni_log_pos=$omni_log_pos"
+  return_code=$?
+  after_fork || { let return_code++ || true; }
+  return $return_code
+}
+
 # 'value' is the loop var
 parallel_loop() {
 local loop_over_var2=$loop_over_var head2=${head:-} \
@@ -636,6 +755,31 @@ fi
 
 end_function
 handle_return
+}
+
+get_trunk_cell() {
+local cell=$1
+local parent=${cell%/*}
+local parent_part=${parent##*/}
+if [[ $parent_part == .dim ]]; then
+  local grandparent=${parent%/*}
+  if [[ "$grandparent" != "$parent" ]]; then
+    # recursive
+    get_trunk_cell $grandparent || return 1
+  else
+    return 1
+  fi
+elif [[ ! -e $cell/.dna ]]; then
+  if [[ "$parent" != "$cell" ]]; then
+    # recursive
+    get_trunk_cell $parent || return 1
+  else
+    return 1
+  fi
+else
+  trunk_cell=$cell
+fi
+return 0
 }
 
 propagate_change_to_downstream2() {
@@ -894,6 +1038,33 @@ end_function
 handle_return
 }
 
+append_dim_var_to_context() {
+  local dim=$1
+  begin_function_flat
+    dim=${dim##*/}
+    dim=${dim#*-}
+
+    local plural
+    get_plural $dim
+    local dims=$plural
+    local ddim=d_$dim ddims=d_$dims
+
+    if [[ ! -v $ddim ]]; then
+      log_fatal "Internal error: While trying to create a branch sub cell, required dim value $dim is missing."
+      fail1
+    fi
+    local value=${!ddim}
+    if [[ "$value" == $empty_member ]]; then
+      value=
+    fi
+    echo "# Generated by create_sub_branch from $cell_path
+  $ddim='$value'
+  localize_dim_vars+=' $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}'" >$sub_dna_path/context-before || fail
+    log_debug "Appending dim $ddim=$value to $sub_dna_path/context-before"
+  end_function
+  handle_return
+}
+
 migrate_dep() {
   local -r from=$1 to=$2
 
@@ -929,31 +1100,6 @@ migrate_dep() {
     fi
   end_function
   handle_return
-}
-
-# should be forked because dims will be altered
-migrate_cell() {
-	local -r dep_link=$1 to=$2
-	local from=$(realpath $dep_link) 
-	begin_function_flat
-
-		if [[ "$from" == */.dna/sub/* ]]; then
-			local fixed_from=${from//.dna\/sub\//}
-			if [[ -d $fixed_from ]]; then
-				rm $dep_link || fail
-				safe_link $fixed_from $dep_link || fail
-				from=$fixed_from
-			else
-				log_fatal "Dependencies must link to planted cells, not seeds: $from"
-				fail1
-			fi
-		fi
-
-		promote_dep_cell || fail
-		safe_link $from $to || fail
-
-	end_function
-	handle_return
 }
 
 migrate_out() {
@@ -1100,31 +1246,6 @@ end_function
 handle_return
 }
 
-# seed must not be empty here
-create_sub_cells2() {
-local seed=$1 relative_path=$2 sub_full sub 
-[[ "$relative_path" ]] && relative_path=/$relative_path
-local sub_path=$seed/.dna/sub$relative_path
-local subs=$(find1 $sub_path -not -name ".*" -not -name "$wild_sub_path" | sort -g) || return 1
-for sub_full in $subs; do
-  sub=${sub_full##*/}
-  if [[ -f $sub_full ]]; then
-    safe_link $(realpath $sub_full) $seed$relative_path/$sub || return 1
-  elif [[ -L $sub_full ]]; then
-    cp $sub_full $seed$relative_path/$sub || return 1
-  elif [[ -d $sub_full ]]; then
-    create_sub_cell_with_seed $seed $seed$relative_path/$sub || return 1
-    if [[ "$relative_path" ]]; then
-      # recursive
-      create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
-    else
-      # recursive
-      create_sub_cells2 $seed $sub || return 1
-    fi
-  fi
-done
-}
-
 create_sub_cell() {
 local sub_cell=$1
 find_seed $sub_cell || return 1
@@ -1132,9 +1253,15 @@ create_sub_cell_with_seed $seed $sub_cell || return 1
 return 0
 }
 
-is_leaf_cell() {
-local cell_path=$1
-[[ ! -d $cell_path/.dna/dim ]]
+load_context_and_create_sub() {
+local parent_cell=$1 sub_cell=$2
+# recursive
+cell_path=$parent_cell cell_context_load || return 1
+if [[ "$localize_dim_vars" != local ]]; then
+  eval "$localize_dim_vars" || return 1
+fi
+create_sub_cell $sub_cell || return 1
+return 0
 }
 
 promote_dep_cell() {
@@ -1213,15 +1340,59 @@ end_function
 handle_return
 }
 
-load_context_and_create_sub() {
-local parent_cell=$1 sub_cell=$2
-# recursive
-cell_path=$parent_cell cell_context_load || return 1
-if [[ "$localize_dim_vars" != local ]]; then
-  eval "$localize_dim_vars" || return 1
-fi
-create_sub_cell $sub_cell || return 1
-return 0
+# should be forked because dims will be altered
+migrate_cell() {
+	local -r dep_link=$1 to=$2
+	local from=$(realpath $dep_link) 
+	begin_function_flat
+
+		if [[ "$from" == */.dna/sub/* ]]; then
+			local fixed_from=${from//.dna\/sub\//}
+			if [[ -d $fixed_from ]]; then
+				rm $dep_link || fail
+				safe_link $fixed_from $dep_link || fail
+				from=$fixed_from
+			else
+				log_fatal "Dependencies must link to planted cells, not seeds: $from"
+				fail1
+			fi
+		fi
+
+		promote_dep_cell || fail
+		safe_link $from $to || fail
+
+	end_function
+	handle_return
+}
+
+# seed must not be empty here
+create_sub_cells2() {
+local seed=$1 relative_path=$2 sub_full sub 
+[[ "$relative_path" ]] && relative_path=/$relative_path
+local sub_path=$seed/.dna/sub$relative_path
+local subs=$(find1 $sub_path -not -name ".*" -not -name "$wild_sub_path" | sort -g) || return 1
+for sub_full in $subs; do
+  sub=${sub_full##*/}
+  if [[ -f $sub_full ]]; then
+    safe_link $(realpath $sub_full) $seed$relative_path/$sub || return 1
+  elif [[ -L $sub_full ]]; then
+    cp $sub_full $seed$relative_path/$sub || return 1
+  elif [[ -d $sub_full ]]; then
+    create_sub_cell_with_seed $seed $seed$relative_path/$sub || return 1
+    if [[ "$relative_path" ]]; then
+      # recursive
+      create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
+    else
+      # recursive
+      create_sub_cells2 $seed $sub || return 1
+    fi
+  fi
+done
+}
+
+is_leaf_cell() {
+local cell_path=$1
+[[ ! -d $cell_path/.dna/dim ]]
 }
 
 get_dep_member() {
@@ -1256,33 +1427,6 @@ begin_for leaf_cell in ${leaf_cells[*]}; doo
   done
   safe_link $(realpath $leaf_cell) $target-$i || fail
 end_for
-}
-
-append_dim_var_to_context() {
-  local dim=$1
-  begin_function_flat
-    dim=${dim##*/}
-    dim=${dim#*-}
-
-    local plural
-    get_plural $dim
-    local dims=$plural
-    local ddim=d_$dim ddims=d_$dims
-
-    if [[ ! -v $ddim ]]; then
-      log_fatal "Internal error: While trying to create a branch sub cell, required dim value $dim is missing."
-      fail1
-    fi
-    local value=${!ddim}
-    if [[ "$value" == $empty_member ]]; then
-      value=
-    fi
-    echo "# Generated by create_sub_branch from $cell_path
-  $ddim='$value'
-  localize_dim_vars+=' $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}'" >$sub_dna_path/context-before || fail
-    log_debug "Appending dim $ddim=$value to $sub_dna_path/context-before"
-  end_function
-  handle_return
 }
 
 # given a cell, find the nearest seed searching it's ancestors
@@ -1476,36 +1620,6 @@ get_fork_id() {
   echo $omni_log_fork_id >>$fork_id_log || return 1
   fd_unlock
   return 0
-}
-
-cell_open_log_file() {
-  if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
-    local previous_fork_id=$omni_log_fork_id
-    get_fork_id || return 1
-    local new_log_file=$log_path/$omni_log_job_id:$omni_log_fork_id.olog
-    local first_log_path=${new_log_file%/*}/first.olog
-    if [[ ! -f $first_log_path ]]; then
-      from_must_exist=f \
-        safe_link $new_log_file $first_log_path || return 1
-    fi
-		if [[ "${logging_to_file:-}" ]]; then
-		  cell_log_file_stack+=( "$logging_to_file" )
-		fi
-    log_function=${FUNCNAME[1]} \
-      change_log_file
-  fi
-}
-
-cell_close_log_file() {
-  if [[ "${cell_log_file_stack:-}" ]]; then
-	  local previous_log=${cell_log_file_stack[-1]}
-		unset cell_log_file_stack[-1]
-    log_function=${FUNCNAME[1]} \
-			new_log_file=$previous_log \
-			resume_existing_log=t \
-			logging_to_file= \
-      change_log_file
-	fi
 }
 
 get_job_id() {
@@ -2197,31 +2311,6 @@ fi
 return 0
 }
 
-get_trunk_cell() {
-local cell=$1
-local parent=${cell%/*}
-local parent_part=${parent##*/}
-if [[ $parent_part == .dim ]]; then
-  local grandparent=${parent%/*}
-  if [[ "$grandparent" != "$parent" ]]; then
-    # recursive
-    get_trunk_cell $grandparent || return 1
-  else
-    return 1
-  fi
-elif [[ ! -e $cell/.dna ]]; then
-  if [[ "$parent" != "$cell" ]]; then
-    # recursive
-    get_trunk_cell $parent || return 1
-  else
-    return 1
-  fi
-else
-  trunk_cell=$cell
-fi
-return 0
-}
-
 
 update_cell_value_file() {
 begin_function_flat
@@ -2856,28 +2945,6 @@ fi
 return 1
 }
 
-load_dims() {
-local dims_path=$1 dim_path dim 
-dim_array=()
-if [[ -d $dims_path ]]; then
-  log_debug "Loading dims from $dims_path"
-  local contents=$(find1 $dims_path -not -name ".*" | sort -g) || return 1
-  for dim_path in $contents; do
-    source $dim_path || return 1
-    dim=${dim_path##*/}
-    if [[ $dim =~ [0-9]+-(.*) ]]; then
-      dim=${BASH_REMATCH[1]}
-    fi
-    get_plural $dim
-    dims=$plural
-    local ddim=d_$dim ddims=d_$dims
-    dim_array+=( $dim )
-    localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
-  done
-fi
-dims=( ${dim_array[*]} )
-}
-
 load_props() {
 local prop_path=$1 dim_path dim
 if [[ -d $prop_path ]]; then
@@ -2958,67 +3025,6 @@ local name=$name description=$description default=${default:-}
 parameter_names+=( "$name" ) 
 parameter_descriptions+=( "$description" ) 
 parameter_defaults+=( "$default" ) 
-}
-
-reply_file=
-
-current_reply_id=0
-get_new_reply_file() {
-reply_file=$tmp_folder/reply.$$.$current_reply_id
-let current_reply_id++ || true
-#reply_file=$(mktemp $tmp_folder/reply.$$.XXXXXX)
-return 0
-}
-
-# run within the subshell at the beginning
-begin_fork() {
-  return 0
-}
-
-# run within the subshell at the beginning
-end_fork() {
-	reply_to_caller "omni_log_pos=${omni_log_pos:-}" || return 1
-  return 0
-}
-
-# run outside of the subshell afterwards
-after_fork() {
-	if [[ -f "$reply_file" ]]; then
-		source $reply_file || return 1
-		#log_debug "Loaded reply_file $reply_file"
-		rm $reply_file
-		reply_file=
-	fi
-	return 0
-}
-
-fork() {
-  local reply_file command=$* return_code=0
-  get_new_reply_file
-  defer "rm $reply_file"
-
-  (
-    begin_fork || exit 1
-    eval "$command"; return_code=$?
-    end_fork || exit 1
-    exit $return_code
-  )
-
-  return_code=$?
-  after_fork || { let return_code++ || true; }
-  return $return_code
-}
-
-# run within the subshell at the beginning
-begin_background_fork() {
-  cell_open_log_file || return 1
-  return 0
-}
-
-# run within the subshell at the beginning
-end_background_fork() {
-  cell_close_log_file || return 1
-  return 0
 }
 
 tee_files=( )
@@ -3177,9 +3183,3 @@ fi
 return 0
 }
 
-reply_to_caller() {
-if [[ -f "${reply_file:-}" ]]; then
-  echo "$*" >>$reply_file || return 1
-fi
-return 0
-}

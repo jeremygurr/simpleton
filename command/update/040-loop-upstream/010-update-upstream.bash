@@ -18,8 +18,7 @@ begin_function
   }
 
   local needs_update=
-  with_update=t \
-    prep_upstream $upstream || fail
+  prep_upstream $upstream || fail
 
   get_needs_update $upstream || fail
 
