@@ -381,6 +381,49 @@ fi
 handle_return
 }
 
+setup_dep_defaults() {
+required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
+# Make this go back to default for any further contexts loaded
+# fresh passed in by user should only apply to top level cell, not to deps or subs
+fresh=
+return 0
+}
+
+prep_upstream() {
+local upstream=$1 with_update=${with_update:-f}
+
+# down_fresh may be used by prep script to propagate freshness requirements to upstream
+down_fresh=$required_freshness
+
+# Don't inherit parent's freshness requirements, 
+#   only what upstream prep explicitly states
+# extra_dims includes dimensions that need to be promoted in upstream that don't
+#   exist in branch_dims
+fresh=$down_fresh required_freshness= default_freshness= extra_dims=
+
+unset prep
+if [[ -f $upstream.prep ]]; then
+  source $upstream.prep || return 1
+  if ! type -t prep &>/dev/null; then
+    log_fatal "$upstream.prep must have a function named prep"
+    return 1
+  fi
+  prep || return 1
+  setup_dep_defaults || return 1
+fi
+
+if [[ $with_update == t && -f $upstream.prep-update ]]; then
+  source $upstream.prep-update || return 1
+  if ! type -t prep &>/dev/null; then
+    log_fatal "$upstream.prep-update must have a function named prep"
+    return 1
+  fi
+  prep || return 1
+fi
+
+return 0
+}
+
 get_upstream_needs_update() {
 local cell_path=$1
 local up_path=$cell_path/.cyto/up
@@ -786,36 +829,183 @@ fi
 return 0
 }
 
-# seed must not be empty here
-create_sub_cells2() {
-local seed=$1 relative_path=$2 sub_full sub 
-[[ "$relative_path" ]] && relative_path=/$relative_path
-local sub_path=$seed/.dna/sub$relative_path
-local subs=$(find1 $sub_path -not -name ".*" -not -name "$wild_sub_path" | sort -g) || return 1
-for sub_full in $subs; do
-  sub=${sub_full##*/}
-  if [[ -f $sub_full ]]; then
-    safe_link $(realpath $sub_full) $seed$relative_path/$sub || return 1
-  elif [[ -L $sub_full ]]; then
-    cp $sub_full $seed$relative_path/$sub || return 1
-  elif [[ -d $sub_full ]]; then
-    create_sub_cell_with_seed $seed $seed$relative_path/$sub || return 1
-    if [[ "$relative_path" ]]; then
-      # recursive
-      create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
-    else
-      # recursive
-      create_sub_cells2 $seed $sub || return 1
+create_sub_branch() {
+begin_function_flat
+
+  mkdir $sub_dna_path/dim || fail
+
+  begin_for ((i = 1; i < super_dim_count; i++)); doo
+    local from_dim=${super_dims[$i]}
+    local to_dim=$sub_dna_path/dim/${from_dim##*/}
+    safe_link $(realpath $from_dim) $to_dim || fail
+  end_for
+
+  local contents=$(find1 $dna_path -not -name '.*') || fail
+  begin_for part in $contents; doo
+    if [[ "$part" == */dim \
+       || "$part" == */context* \
+       || "$part" == */up \
+       || "$part" == */down \
+       || "$part" == */leaf \
+       ]]; then
+      continue
     fi
+    safe_link $(realpath $part) $sub_dna_path/ || fail
+  end_for 
+
+  if [[ -d $dna_path/leaf ]]; then
+    local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
+    mkdir $sub_dna_path/leaf || fail
+    begin_for part in $contents; doo
+      if [[ "$part" == */up \
+         || "$part" == */down \
+         ]]; then
+        continue
+      fi
+      safe_link $(realpath $part) $sub_dna_path/leaf || fail
+    end_for 
   fi
-done
+
+end_function
+handle_return
 }
 
-create_sub_cell() {
-local sub_cell=$1
-find_seed $sub_cell || return 1
-create_sub_cell_with_seed $seed $sub_cell || return 1
-return 0
+create_sub_leaf() {
+begin_function_flat
+
+  if [[ -d $dna_path/leaf ]]; then
+    local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
+    local part
+    begin_for part in $contents; doo
+      if [[ "$part" == */up \
+         || "$part" == */down \
+         ]]; then
+        continue
+      fi
+      safe_link $(realpath $part) $sub_dna_path/ || fail
+    end_for 
+  fi
+
+  if [[ -d $dna_path/key ]]; then
+    safe_link $(realpath $dna_path/key) $sub_dna_path/ || fail
+  fi
+
+end_function
+handle_return
+}
+
+migrate_dep() {
+  local -r from=$1 to=$2
+
+  local short_from=${from%/*/*/*}
+  short_from=${from#$short_from/}
+
+  local short_to=${to%/*/*/*}
+  short_to=${to#$short_to/}
+
+  local log_vars='from to' log_show_vars='short_from short_to'
+  begin_function
+    if [[ -e $from ]]; then
+
+      if [[ -f $from || -f $from/.dna ]]; then
+        safe_link $(realpath $from) $to || fail
+      elif [[ -d $from/.dna ]]; then
+        fork "migrate_cell $from $to" || fail
+      elif [[ -d $from ]]; then
+        if [[ ! -d $to ]]; then
+          mkdir $to || fail
+        fi
+        local item item_name \
+          items=$(find1 $from \
+          -not -name '.*' \
+          | sort -g) || fail
+        begin_for item in $items; doo
+          item_name=${item##*/}
+          # recursive
+          migrate_dep $item $to/$item_name || fail
+        end_for
+      fi
+
+    fi
+  end_function
+  handle_return
+}
+
+# should be forked because dims will be altered
+migrate_cell() {
+	local -r dep_link=$1 to=$2
+	local from=$(realpath $dep_link) 
+	begin_function_flat
+
+		if [[ "$from" == */.dna/sub/* ]]; then
+			local fixed_from=${from//.dna\/sub\//}
+			if [[ -d $fixed_from ]]; then
+				rm $dep_link || fail
+				safe_link $fixed_from $dep_link || fail
+				from=$fixed_from
+			else
+				log_fatal "Dependencies must link to planted cells, not seeds: $from"
+				fail1
+			fi
+		fi
+
+		promote_dep_cell || fail
+		safe_link $from $to || fail
+
+	end_function
+	handle_return
+}
+
+migrate_out() {
+  local from=$1
+  local -r to=$2
+
+  local short_from=${from%/*/*/*}
+  short_from=${from#$short_from/}
+
+  local short_to=${to%/*/*/*}
+  short_to=${to#$short_to/}
+
+  local log_vars='from to' log_show_vars='short_from short_to'
+  begin_function
+
+    if [[ -d $from ]]; then
+      local -r dim_var=d_${leaf_dims}
+      local -r value=${!dim_var}
+      local sane_value
+      get_sane_value "$values" || fail
+      from+=/$sane_value
+      from=$(realpath $from)
+      if [[ ! -d $from ]]; then
+        log_fatal "dna out dim path is missing: $from"
+        fail1
+      fi
+      safe_link $from $to || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+migrate_deps() {
+  begin_function
+
+    migrate_dep $dna_path/up $sub_dna_path/up || fail
+    migrate_dep $dna_path/down $sub_dna_path/down || fail
+    migrate_out $dna_path/out $sub_dna_path/out || fail
+
+    if [[ $is_branch == t ]]; then
+      migrate_dep $dna_path/leaf/up $sub_dna_path/leaf/up || fail
+      migrate_dep $dna_path/leaf/down $sub_dna_path/leaf/down || fail
+      migrate_out $dna_path/leaf/out $sub_dna_path/leaf/out || fail
+    else
+      migrate_dep $dna_path/leaf/up $sub_dna_path/up || fail
+      migrate_dep $dna_path/leaf/down $sub_dna_path/down || fail
+      migrate_out $dna_path/leaf/out $sub_dna_path/out || fail
+    fi
+
+  end_function
+  handle_return
 }
 
 create_sub_branch_or_leaf() {
@@ -910,183 +1100,36 @@ end_function
 handle_return
 }
 
-create_sub_branch() {
-begin_function_flat
-
-  mkdir $sub_dna_path/dim || fail
-
-  begin_for ((i = 1; i < super_dim_count; i++)); doo
-    local from_dim=${super_dims[$i]}
-    local to_dim=$sub_dna_path/dim/${from_dim##*/}
-    safe_link $(realpath $from_dim) $to_dim || fail
-  end_for
-
-  local contents=$(find1 $dna_path -not -name '.*') || fail
-  begin_for part in $contents; doo
-    if [[ "$part" == */dim \
-       || "$part" == */context* \
-       || "$part" == */up \
-       || "$part" == */down \
-       || "$part" == */leaf \
-       ]]; then
-      continue
-    fi
-    safe_link $(realpath $part) $sub_dna_path/ || fail
-  end_for 
-
-  if [[ -d $dna_path/leaf ]]; then
-    local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
-    mkdir $sub_dna_path/leaf || fail
-    begin_for part in $contents; doo
-      if [[ "$part" == */up \
-         || "$part" == */down \
-         ]]; then
-        continue
-      fi
-      safe_link $(realpath $part) $sub_dna_path/leaf || fail
-    end_for 
-  fi
-
-end_function
-handle_return
-}
-
-create_sub_leaf() {
-begin_function_flat
-
-  if [[ -d $dna_path/leaf ]]; then
-    local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
-    local part
-    begin_for part in $contents; doo
-      if [[ "$part" == */up \
-         || "$part" == */down \
-         ]]; then
-        continue
-      fi
-      safe_link $(realpath $part) $sub_dna_path/ || fail
-    end_for 
-  fi
-
-  if [[ -d $dna_path/key ]]; then
-    safe_link $(realpath $dna_path/key) $sub_dna_path/ || fail
-  fi
-
-end_function
-handle_return
-}
-
-migrate_deps() {
-  begin_function
-
-    migrate_dep $dna_path/up $sub_dna_path/up || fail
-    migrate_dep $dna_path/down $sub_dna_path/down || fail
-    migrate_out $dna_path/out $sub_dna_path/out || fail
-
-    if [[ $is_branch == t ]]; then
-      migrate_dep $dna_path/leaf/up $sub_dna_path/leaf/up || fail
-      migrate_dep $dna_path/leaf/down $sub_dna_path/leaf/down || fail
-      migrate_out $dna_path/leaf/out $sub_dna_path/leaf/out || fail
+# seed must not be empty here
+create_sub_cells2() {
+local seed=$1 relative_path=$2 sub_full sub 
+[[ "$relative_path" ]] && relative_path=/$relative_path
+local sub_path=$seed/.dna/sub$relative_path
+local subs=$(find1 $sub_path -not -name ".*" -not -name "$wild_sub_path" | sort -g) || return 1
+for sub_full in $subs; do
+  sub=${sub_full##*/}
+  if [[ -f $sub_full ]]; then
+    safe_link $(realpath $sub_full) $seed$relative_path/$sub || return 1
+  elif [[ -L $sub_full ]]; then
+    cp $sub_full $seed$relative_path/$sub || return 1
+  elif [[ -d $sub_full ]]; then
+    create_sub_cell_with_seed $seed $seed$relative_path/$sub || return 1
+    if [[ "$relative_path" ]]; then
+      # recursive
+      create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
     else
-      migrate_dep $dna_path/leaf/up $sub_dna_path/up || fail
-      migrate_dep $dna_path/leaf/down $sub_dna_path/down || fail
-      migrate_out $dna_path/leaf/out $sub_dna_path/out || fail
-    fi
-
-  end_function
-  handle_return
-}
-
-migrate_out() {
-  local from=$1
-  local -r to=$2
-
-  local short_from=${from%/*/*/*}
-  short_from=${from#$short_from/}
-
-  local short_to=${to%/*/*/*}
-  short_to=${to#$short_to/}
-
-  local log_vars='from to' log_show_vars='short_from short_to'
-  begin_function
-
-    if [[ -d $from ]]; then
-      local -r dim_var=d_${leaf_dims}
-      local -r value=${!dim_var}
-      local sane_value
-      get_sane_value "$values" || fail
-      from+=/$sane_value
-      from=$(realpath $from)
-      if [[ ! -d $from ]]; then
-        log_fatal "dna out dim path is missing: $from"
-        fail1
-      fi
-      safe_link $from $to || fail
-    fi
-
-  end_function
-  handle_return
-}
-
-migrate_dep() {
-  local -r from=$1 to=$2
-
-  local short_from=${from%/*/*/*}
-  short_from=${from#$short_from/}
-
-  local short_to=${to%/*/*/*}
-  short_to=${to#$short_to/}
-
-  local log_vars='from to' log_show_vars='short_from short_to'
-  begin_function
-    if [[ -e $from ]]; then
-
-      if [[ -f $from || -f $from/.dna ]]; then
-        safe_link $(realpath $from) $to || fail
-      elif [[ -d $from/.dna ]]; then
-        fork "migrate_cell $from $to" || fail
-      elif [[ -d $from ]]; then
-        if [[ ! -d $to ]]; then
-          mkdir $to || fail
-        fi
-        local item item_name \
-          items=$(find1 $from \
-          -not -name '.*' \
-          | sort -g) || fail
-        begin_for item in $items; doo
-          item_name=${item##*/}
-          # recursive
-          migrate_dep $item $to/$item_name || fail
-        end_for
-      fi
-
-    fi
-  end_function
-  handle_return
-}
-
-# should be forked because dims will be altered
-migrate_cell() {
-local -r dep_link=$1 to=$2
-local from=$(realpath $dep_link) 
-begin_function_flat
-
-  if [[ "$from" == */.dna/sub/* ]]; then
-    local fixed_from=${from//.dna\/sub\//}
-    if [[ -d $fixed_from ]]; then
-      rm $dep_link || fail
-      safe_link $fixed_from $dep_link || fail
-      from=$fixed_from
-    else
-      log_fatal "Dependencies must link to planted cells, not seeds: $from"
-      fail1
+      # recursive
+      create_sub_cells2 $seed $sub || return 1
     fi
   fi
+done
+}
 
-  promote_dep_cell || fail
-  safe_link $from $to || fail
-
-end_function
-handle_return
+create_sub_cell() {
+local sub_cell=$1
+find_seed $sub_cell || return 1
+create_sub_cell_with_seed $seed $sub_cell || return 1
+return 0
 }
 
 is_leaf_cell() {
@@ -1168,32 +1211,6 @@ begin_function_flat
   end_for
 end_function
 handle_return
-}
-
-prep_upstream() {
-local upstream=$1
-
-# down_fresh may be used by prep script to propagate freshness requirements to upstream
-down_fresh=$required_freshness
-
-# Don't inherit parent's freshness requirements, 
-#   only what upstream prep explicitly states
-# extra_dims includes dimensions that need to be promoted in upstream that don't
-#   exist in branch_dims
-fresh=$down_fresh required_freshness= default_freshness= extra_dims=
-
-unset prep
-if [[ -f $upstream.prep ]]; then
-  source $upstream.prep || return 1
-  if ! type -t prep &>/dev/null; then
-    log_fatal "$upstream.prep must have a function named prep"
-    return 1
-  fi
-  prep || return 1
-  setup_dep_defaults || return 1
-fi
-
-return 0
 }
 
 load_context_and_create_sub() {
@@ -2131,14 +2148,6 @@ out_path=out
 return 0
 }
 
-setup_dep_defaults() {
-required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
-# Make this go back to default for any further contexts loaded
-# fresh passed in by user should only apply to top level cell, not to deps or subs
-fresh=
-return 0
-}
-
 # returns:
 #   branch_dims
 #   branch_dim_count
@@ -2968,9 +2977,7 @@ begin_fork() {
 
 # run within the subshell at the beginning
 end_fork() {
-  if [[ "$reply_file" ]]; then
-    echo "omni_log_pos=${omni_log_pos:-}" >>$reply_file || return 1
-  fi
+	reply_to_caller "omni_log_pos=${omni_log_pos:-}" || return 1
   return 0
 }
 
