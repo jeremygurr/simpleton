@@ -91,6 +91,32 @@ omni_get_processed_line() {
     ;;
   esac
 
+  for var in ${trace_vars:-}; do
+    local shorten=f real_var
+    if [[ "$var" == ^* ]]; then
+      real_var=${var#^}
+      shorten=t
+    else
+      real_var=$var
+    fi
+    if [[ -v $real_var ]]; then
+      local value=${!real_var} changed=f adjusted
+      if [[ "$value" != "${trace_var_value[$real_var]:-}" ]]; then
+        changed=t
+        processed_line+="$CYAN"
+      fi
+      adjusted=$value
+      if [[ $shorten == t ]]; then
+        auto_shorten adjusted
+      fi
+      processed_line+=" $var=$adjusted"
+      if [[ $changed == t ]]; then
+        processed_line+="$RESET"
+        trace_var_value[$real_var]=$value
+      fi
+    fi
+  done
+
   return 0
 }
 
@@ -172,7 +198,8 @@ omni_load_log_array() {
     begin_for (( i = 0; i < array_size; i++ )); doo
 
       line=${log_array[$i]} log_action=none processed_line=
-      log_function= log_message= old_log_file= new_log_file= log_show_vars= log_show_vars_2= log_id=
+      log_function= log_message= old_log_file= new_log_file= log_show_vars= \
+        log_show_vars_2= log_id= trace_vars=
       if [[ "$line" =~ $ESC ]]; then
         ansi_filter_var line
         log_array[$i]=$line
@@ -181,7 +208,7 @@ omni_load_log_array() {
       if [[ "$line" =~ ^\=\  ]]; then
 
         index=$i \
-          vars='log_id log_action log_function log_message old_log_file new_log_file log_show_vars' \
+          vars='log_id log_action log_function log_message old_log_file new_log_file log_show_vars trace_vars' \
           omni_extract_vars || fail
         log_show_vars_2=$log_show_vars
 
@@ -204,8 +231,17 @@ omni_load_log_array() {
             omni_extract_vars || fail
         fi
 
+        if [[ "${trace_vars:-}" ]]; then
+          local adjusted_vars=${trace_vars//^/}
+          eval "local $adjusted_vars"
+          index=$i \
+            vars="$adjusted_vars" \
+            omni_extract_vars || fail
+        fi
+
         log_id=$last_log_id \
           log_show_vars=$log_show_vars_2 \
+          trace_vars=$trace_vars \
           omni_get_processed_line "$line" || {
             log_fatal "Bad log line: $line"
             fail1
@@ -1049,6 +1085,17 @@ omni_navigator() (
           local go_until= find_log_id= find_function=
           read -e -p "Go until function / log_id: " go_until <&$fd_original_in >&$fd_original_err
           if [[ "${go_until:-}" ]]; then
+            omni_prev_go_until=$go_until
+            omni_go_until "$go_until" || fail
+            omni_show_context || fail
+            no_follow_once=t
+          fi
+          ;;
+        G)
+          echo >&$fd_original_err
+          local go_until= find_log_id= find_function=
+          if [[ "${omni_prev_go_until:-}" ]]; then
+            go_until=omni_prev_go_until
             omni_go_until "$go_until" || fail
             omni_show_context || fail
             no_follow_once=t
@@ -1243,6 +1290,7 @@ omni_navigator() (
           echo "i  step in: go to the next log line of the same depth or deeper" >&$fd_original_err
           echo "I  backward step in: go to the previous log line of the same depth or deeper" >&$fd_original_err
           echo "g  go to the given function or log_id" >&$fd_original_err
+          echo "G  repeat previous g command" >&$fd_original_err
           echo "l  list next few log lines" >&$fd_original_err
           echo "L  list previous log lines" >&$fd_original_err
           echo "n  next: (step over) go to the next log line with a function call of the same depth or shallower" >&$fd_original_err

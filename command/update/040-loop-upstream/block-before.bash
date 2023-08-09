@@ -1,8 +1,8 @@
 #!/bin/bash
 
 block_before() {
-if [[ "${up_path:-}" && ! "$update_successful" ]]; then
-  upstreams=( $(find1 $up_path \
+if [[ -d "${dna_up_path:-}" && ! "$update_successful" ]]; then
+  upstreams=( $(find1 $dna_up_path \
     -not -name '.*' \
     -not -name '*.prep' \
     -not -regex '.*/\([0-9]+-\)?\(before\|choose\)-.*' \

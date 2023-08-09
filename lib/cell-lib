@@ -207,30 +207,36 @@ handle_return
 
 load_dims() {
   local dims_path=$1 dim_path dim 
-  if [[ ${last_cell_dims_loaded:-} != $cell_path ]]; then
-    dim_array=()
-    if [[ -d $dims_path ]]; then
-      log_debug "Loading dims from $dims_path"
-      local contents=$(find1 $dims_path -not -name ".*" | sort -g) || return 1
-      for dim_path in $contents; do
-        source $dim_path || return 1
-        dim=${dim_path##*/}
-        if [[ $dim =~ [0-9]+-(.*) ]]; then
-          dim=${BASH_REMATCH[1]}
+  local log_show_vars=^dims_path
+  begin_function
+    if [[ ${last_cell_dims_loaded:-} != $dims_path ]]; then
+      log_debug "Loading dims"
+      dim_array=()
+      if [[ -d $dims_path ]]; then
+        local contents=$(find1 $dims_path -not -name ".*" | sort -g) || return 1
+        for dim_path in $contents; do
+          source $dim_path || return 1
+          dim=${dim_path##*/}
+          if [[ $dim =~ [0-9]+-(.*) ]]; then
+            dim=${BASH_REMATCH[1]}
+          fi
+          get_plural $dim
+          dims=$plural
+          local ddim=d_$dim ddims=d_$dims
+          dim_array+=( $dim )
+          localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
+        done
+        if [[ "$dim_array" ]]; then
+          log_debug "Found dims: ${dim_array[*]}"
         fi
-        get_plural $dim
-        dims=$plural
-        local ddim=d_$dim ddims=d_$dims
-        dim_array+=( $dim )
-        localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
-      done
-      if [[ "$dim_array" ]]; then
-        log_debug "Found dims: ${dim_array[*]}"
       fi
+      dims=( ${dim_array[*]} )
+      last_cell_dims_loaded=$dims_path
+    else
+      log_debug "Already loaded dims: ${dims[*]}"
     fi
-    dims=( ${dim_array[*]} )
-    last_cell_dims_loaded=$cell_path
-  fi
+  end_function
+  handle_return
 }
 
 setup_dims() {
@@ -242,8 +248,6 @@ setup_dims() {
   if [[ "${leaf_dims:-}" ]]; then
     log_debug "Leaf dims found: ${leaf_dims[*]}"
   fi
-
-  last_cell_dims_loaded=$cell_path
 
   load_dims $cell_path/.dna/sub-dim || return 1
   sub_dims=( ${dims[*]:-} )
@@ -351,6 +355,37 @@ if [[ -f $upstream.prep ]]; then
 fi
 
 return 0
+}
+
+migrate_dep() {
+  local -r from=$1 to=$2
+
+  local log_show_vars='^from ^to'
+  begin_function
+    if [[ -e $from ]]; then
+
+      if [[ -f $from || -f $from/.dna ]]; then
+        safe_link $(realpath $from) $to || fail
+      elif [[ -d $from/.dna ]]; then
+        fork "migrate_cell $from $to" || fail
+      elif [[ -d $from ]]; then
+        if [[ ! -d $to ]]; then
+          mkdir $to || fail
+        fi
+        local item item_name \
+          items=$(find1 $from \
+          -not -name '.*' \
+          | sort -g) || fail
+        begin_for item in $items; doo
+          item_name=${item##*/}
+          # recursive
+          migrate_dep $item $to/$item_name || fail
+        end_for
+      fi
+
+    fi
+  end_function
+  handle_return
 }
 
 setup_cyto_upstream() {
@@ -1002,7 +1037,7 @@ create_sub_cells() {
 if [[ -f "$status_path/subs-up-to-date" ]]; then
   return 0
 fi
-if [[ "$sub_path" ]]; then
+if [[ "${sub_path:-}" ]]; then
   create_sub_cells2 $cell_path '' || return 1
 fi
 if [[ "$status_path" ]]; then
@@ -1012,7 +1047,8 @@ return 0
 }
 
 create_sub_branch() {
-begin_function_flat
+local log_show_vars=^sub_dna_path
+begin_function
 
   mkdir $sub_dna_path/dim || fail
 
@@ -1053,7 +1089,8 @@ handle_return
 }
 
 create_sub_leaf() {
-begin_function_flat
+local log_show_vars=^sub_dna_path
+begin_function
 
   if [[ -d $dna_path/leaf ]]; then
     local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
@@ -1204,37 +1241,6 @@ migrate_cell() {
   handle_return
 }
 
-migrate_dep() {
-  local -r from=$1 to=$2
-
-  local log_show_vars='^from ^to'
-  begin_function
-    if [[ -e $from ]]; then
-
-      if [[ -f $from || -f $from/.dna ]]; then
-        safe_link $(realpath $from) $to || fail
-      elif [[ -d $from/.dna ]]; then
-        fork "migrate_cell $from $to" || fail
-      elif [[ -d $from ]]; then
-        if [[ ! -d $to ]]; then
-          mkdir $to || fail
-        fi
-        local item item_name \
-          items=$(find1 $from \
-          -not -name '.*' \
-          | sort -g) || fail
-        begin_for item in $items; doo
-          item_name=${item##*/}
-          # recursive
-          migrate_dep $item $to/$item_name || fail
-        end_for
-      fi
-
-    fi
-  end_function
-  handle_return
-}
-
 migrate_out() {
   local from=$1
   local -r to=$2
@@ -1261,6 +1267,7 @@ migrate_out() {
 }
 
 migrate_deps() {
+  local log_show_vars='^dna_path ^sub_dna_path'
   begin_function
 
     migrate_dep $dna_path/up $sub_dna_path/up || fail
