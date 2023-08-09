@@ -1177,84 +1177,89 @@ load_context_and_create_sub() {
 }
 
 promote_dep_cell() {
-local log_show_vars=^from
-begin_function
+  local log_show_vars=^from
+  begin_function
 
-  local trunk_cell=
-  get_trunk_cell $from || fail
+    local trunk_cell=
+    get_trunk_cell $from || fail
 
-  local dims= last_cell_dims_loaded
-  load_dims $trunk_cell/.dna/dim || fail
+    local dims= last_cell_dims_loaded
+    load_dims $trunk_cell/.dna/dim || fail
 
-  local dep_dim already_promoted_path=$from
+    local dep_dim already_promoted_path=$from
 
-  # We don't need to promote all dims in target, but only the dims in the source
-  # e1 -> e1, not e1 -> e1/ods
-  # only promote what is in source + provided by prep
-  #   can't just promote because a var exists, only if it's actually used at that point
+    # We don't need to promote all dims in target, but only the dims in the source
+    # e1 -> e1, not e1 -> e1/ods
+    # only promote what is in source + provided by prep
+    #   can't just promote because a var exists, only if it's actually used at that point
 
-  begin_for dep_dim in ${dims[*]}; doo
+    begin_for dep_dim in ${dims[*]}; doo
 
-    log_debug "Promoting $dep_dim"
+      log_debug "Promoting $dep_dim"
 
-    # is this dim already promoted?
-    if [[ $already_promoted_path == */.dim/* ]]; then
-      already_promoted_path=${already_promoted_path%/.dim/*}
-      log_debug "Already promoted"
-      continue
-    fi
+      # is this dim already promoted?
+      if [[ $already_promoted_path == */.dim/* ]]; then
+        already_promoted_path=${already_promoted_path%/.dim/*}
+        log_debug "Already promoted: $dep_dim"
+        continue
+      fi
 
-    local branch_dim found_branch_dim=f
-    # upstream prep script can add extra_dims as needed
-    begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
-      if [[ $branch_dim == $dep_dim ]]; then
-        log_debug "Found branch dim for $dep_dim"
-        found_branch_dim=t
+      local branch_dim found_branch_dim=f
+      # upstream prep script can add extra_dims as needed
+      begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
+        if [[ $branch_dim == $dep_dim ]]; then
+          log_debug "Found branch dim for $dep_dim"
+          found_branch_dim=t
+          break
+        fi
+      end_for
+
+      if [[ $found_branch_dim == f ]]; then
+        debug_start
+        if [[ $cell_is_leaf == t ]]; then
+
+        fi
+
+        # can't promote if dep dim doesn't exist on the branch 
+        log_debug "Dim not found on branch: $dep_dim"
         break
       fi
-    end_for
 
-    if [[ $found_branch_dim == f ]]; then
-      # can't promote if dep dim doesn't exist on the branch 
-      log_debug "Dim not found on branch"
-      break
-    fi
+      local dep_dim_var=d_$dep_dim
+      local values=
 
-    local dep_dim_var=d_$dep_dim
-    local values=
-
-    if [[ -v $dep_dim_var ]]; then
-      values=${!dep_dim_var}
-    fi
-
-    if type -t ${dep_dim}_member_expand >/dev/null; then
-      eval "value=\$values ${dep_dim}_member_expand" &>/dev/null || is_required=t
-    fi
-
-    values=( $values )
-
-    if [[ "${#values[*]}" -gt 1 ]]; then
-      log_fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
-      fail1
-    fi
-
-    if [[ "${values:-}" ]]; then
-      local sane_value
-      get_sane_value "$values" || fail
-      local old_from=$from
-      from=$from/.dim/$sane_value
-      if [[ ! -d $from ]]; then
-        eval "$dep_dim_var=\"$values\""
-        log_debug "Creating sub for $from"
-        fork "load_context_and_create_sub $old_from $from" || fail
+      if [[ -v $dep_dim_var ]]; then
+        values=${!dep_dim_var}
       fi
-    else
-      break
-    fi
 
-  end_for
-end_function
-handle_return
+      if type -t ${dep_dim}_member_expand >/dev/null; then
+        eval "value=\$values ${dep_dim}_member_expand" &>/dev/null || is_required=t
+      fi
+
+      values=( $values )
+
+      if [[ "${#values[*]}" -gt 1 ]]; then
+        log_fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
+        fail1
+      fi
+
+      if [[ "${values:-}" ]]; then
+        local sane_value
+        get_sane_value "$values" || fail
+        local old_from=$from
+        from=$from/.dim/$sane_value
+        if [[ ! -d $from ]]; then
+          eval "$dep_dim_var=\"$values\""
+          log_debug "Creating sub for $from"
+          fork "load_context_and_create_sub $old_from $from" || fail
+        fi
+      else
+        break
+      fi
+
+    end_for
+  end_function
+  handle_return
 }
 
 # should be forked because dims will be altered
@@ -1374,167 +1379,167 @@ create_sub_branch_or_leaf() {
 }
 
 create_sub_cell_with_seed() {
-# seed is allowed to be empty, meaning no seed exists at this location
-local seed=$1 sub_cell=$2
+  # seed is allowed to be empty, meaning no seed exists at this location
+  local seed=$1 sub_cell=$2
 
-local log_show_vars='^seed ^sub_cell'
-begin_function
+  local log_show_vars='^seed ^sub_cell'
+  begin_function
 
-  if [[ "$sub_cell" =~ .dna ]]; then
-    log_fatal "Internal error: Invalid sub_cell $sub_cell."
-    log_fatal "We should not be creating a sub cell inside of a dna folder"
-    fail1
-  fi
-
-  if [[ ! -d $sub_cell ]]; then
-
-    local short_cell
-    get_short_cell $sub_cell 
-    log_debug "Creating sub cell $short_cell"
-
-    if [[ -d $sub_cell.new ]]; then
-      rm -rf $sub_cell.new || fail
-    fi
-
-    local parent=${sub_cell%/*}
-    if [[ "$parent" == "$sub_cell" ]]; then
-      log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
-      stack_trace
+    if [[ "$sub_cell" =~ .dna ]]; then
+      log_fatal "Internal error: Invalid sub_cell $sub_cell."
+      log_fatal "We should not be creating a sub cell inside of a dna folder"
       fail1
     fi
 
-    local parent_part=${parent##*/}
-    if [[ "$parent_part" == .dim ]]; then
-      seed=$seed \
-        cell=$sub_cell.new \
-        create_sub_branch_or_leaf || fail
-    else
-      mkdir -p $sub_cell.new || fail
-      seed=${seed:-$parent}
-      find_seed_dna $seed ${sub_cell#$seed/} || fail
-      if [[ "$seed_dna" ]]; then
-        safe_link $(realpath $seed_dna) $sub_cell.new/.dna || fail
+    if [[ ! -d $sub_cell ]]; then
+
+      local short_cell
+      get_short_cell $sub_cell 
+      log_debug "Creating sub cell $short_cell"
+
+      if [[ -d $sub_cell.new ]]; then
+        rm -rf $sub_cell.new || fail
       fi
+
+      local parent=${sub_cell%/*}
+      if [[ "$parent" == "$sub_cell" ]]; then
+        log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
+        stack_trace
+        fail1
+      fi
+
+      local parent_part=${parent##*/}
+      if [[ "$parent_part" == .dim ]]; then
+        seed=$seed \
+          cell=$sub_cell.new \
+          create_sub_branch_or_leaf || fail
+      else
+        mkdir -p $sub_cell.new || fail
+        seed=${seed:-$parent}
+        find_seed_dna $seed ${sub_cell#$seed/} || fail
+        if [[ "$seed_dna" ]]; then
+          safe_link $(realpath $seed_dna) $sub_cell.new/.dna || fail
+        fi
+      fi
+      mv $sub_cell.new $sub_cell || fail
     fi
-    mv $sub_cell.new $sub_cell || fail
-  fi
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 # seed must not be empty here
 create_sub_cells2() {
-local seed=$1 relative_path=$2 sub_full sub 
-[[ "$relative_path" ]] && relative_path=/$relative_path
-local sub_path=$seed/.dna/sub$relative_path
-local subs=$(find1 $sub_path -not -name ".*" -not -name "$wild_sub_path" | sort -g) || return 1
-for sub_full in $subs; do
-  sub=${sub_full##*/}
-  if [[ -f $sub_full ]]; then
-    safe_link $(realpath $sub_full) $seed$relative_path/$sub || return 1
-  elif [[ -L $sub_full ]]; then
-    cp $sub_full $seed$relative_path/$sub || return 1
-  elif [[ -d $sub_full ]]; then
-    create_sub_cell_with_seed $seed $seed$relative_path/$sub || return 1
-    if [[ "$relative_path" ]]; then
-      # recursive
-      create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
-    else
-      # recursive
-      create_sub_cells2 $seed $sub || return 1
+  local seed=$1 relative_path=$2 sub_full sub 
+  [[ "$relative_path" ]] && relative_path=/$relative_path
+  local sub_path=$seed/.dna/sub$relative_path
+  local subs=$(find1 $sub_path -not -name ".*" -not -name "$wild_sub_path" | sort -g) || return 1
+  for sub_full in $subs; do
+    sub=${sub_full##*/}
+    if [[ -f $sub_full ]]; then
+      safe_link $(realpath $sub_full) $seed$relative_path/$sub || return 1
+    elif [[ -L $sub_full ]]; then
+      cp $sub_full $seed$relative_path/$sub || return 1
+    elif [[ -d $sub_full ]]; then
+      create_sub_cell_with_seed $seed $seed$relative_path/$sub || return 1
+      if [[ "$relative_path" ]]; then
+        # recursive
+        create_sub_cells2 $seed ${relative_path#/}/$sub || return 1
+      else
+        # recursive
+        create_sub_cells2 $seed $sub || return 1
+      fi
     fi
-  fi
-done
+  done
 }
 
 is_leaf_cell() {
-local cell_path=$1
-[[ ! -d $cell_path/.dna/dim ]]
+  local cell_path=$1
+  [[ ! -d $cell_path/.dna/dim ]]
 }
 
 get_dep_member() {
 
-if [[ -f $dep_cell/.dna/context-before ]]; then
-  source $dep_cell/.dna/context-before || return 1
-else
-  log_fatal "Missing context-before in $dep_cell/.dna."
-  log_fatal "Should have been generated by update of it's trunk."
-  log_fatal "Maybe try to run a clean on it and update again."
-  return 1
-fi
+  if [[ -f $dep_cell/.dna/context-before ]]; then
+    source $dep_cell/.dna/context-before || return 1
+  else
+    log_fatal "Missing context-before in $dep_cell/.dna."
+    log_fatal "Should have been generated by update of it's trunk."
+    log_fatal "Maybe try to run a clean on it and update again."
+    return 1
+  fi
 
-if [[ ! -v $dep_dim ]]; then
-  log_fatal "Missing member for $dep_dim."
-  log_fatal "This should have been defined in $dep_cell/.dna/context-before"
-  return 1
-fi
+  if [[ ! -v $dep_dim ]]; then
+    log_fatal "Missing member for $dep_dim."
+    log_fatal "This should have been defined in $dep_cell/.dna/context-before"
+    return 1
+  fi
 
-dep_member=${!dep_dim}
-return 0
+  dep_member=${!dep_dim}
+  return 0
 }
 
 # ??
 migrate_member() {
-local -r from_cell=$from to_cell=$to member=$member
-local -r dep_name=${upstream_branch_cell##*/} \
-  target=$sub_dna_path/up/$dep_name
-begin_for leaf_cell in ${leaf_cells[*]}; doo
-  while [[ -f $target-$i ]]; do
-    let i++ || true
-  done
-  safe_link $(realpath $leaf_cell) $target-$i || fail
-end_for
+  local -r from_cell=$from to_cell=$to member=$member
+  local -r dep_name=${upstream_branch_cell##*/} \
+    target=$sub_dna_path/up/$dep_name
+  begin_for leaf_cell in ${leaf_cells[*]}; doo
+    while [[ -f $target-$i ]]; do
+      let i++ || true
+    done
+    safe_link $(realpath $leaf_cell) $target-$i || fail
+  end_for
 }
 
 # given a cell, find the nearest seed searching it's ancestors
 # returns: seed
 find_seed() {
-local cell=$1
-seed=
-if [[ -d $cell/.dna/sub ]]; then
-  seed=$cell
-else
-  local parent=${cell%/*}
-  if [[ "${#parent}" -gt 1 && "$parent" != $cell ]]; then
-    find_seed $parent || return 1
+  local cell=$1
+  seed=
+  if [[ -d $cell/.dna/sub ]]; then
+    seed=$cell
+  else
+    local parent=${cell%/*}
+    if [[ "${#parent}" -gt 1 && "$parent" != $cell ]]; then
+      find_seed $parent || return 1
+    fi
   fi
-fi
-return 0
+  return 0
 }
 
 # returns seed_dna
 find_seed_dna() {
-local seed=$1
-local parent=${seed%/*}
-local path_to_cell=$2
-path_to_cell=${path_to_cell%.new}
-seed_dna=$seed/.dna/sub/$path_to_cell/.dna
-if [[ ! -e $seed_dna ]]; then
-  seed_dna=
-  if [[ -d $seed/.dna/sub ]]; then
-    seed_dna=$seed/.dna/sub
-    local path_array=( ${path_to_cell//\// } ) \
-      failed=f
-    for path_part in "${path_array[@]}"; do
-      if [[ -d $seed_dna/$path_part ]]; then
-        seed_dna+=/$path_part
-      elif [[ -d $seed_dna/$wild_sub_path ]]; then
-        seed_dna+=/$wild_sub_path
-      else
-        failed=t
-        break
+  local seed=$1
+  local parent=${seed%/*}
+  local path_to_cell=$2
+  path_to_cell=${path_to_cell%.new}
+  seed_dna=$seed/.dna/sub/$path_to_cell/.dna
+  if [[ ! -e $seed_dna ]]; then
+    seed_dna=
+    if [[ -d $seed/.dna/sub ]]; then
+      seed_dna=$seed/.dna/sub
+      local path_array=( ${path_to_cell//\// } ) \
+        failed=f
+      for path_part in "${path_array[@]}"; do
+        if [[ -d $seed_dna/$path_part ]]; then
+          seed_dna+=/$path_part
+        elif [[ -d $seed_dna/$wild_sub_path ]]; then
+          seed_dna+=/$wild_sub_path
+        else
+          failed=t
+          break
+        fi
+      done
+      seed_dna+=/.dna
+      if [[ $failed == t || ! -d $seed_dna ]]; then
+        seed_dna=
       fi
-    done
-    seed_dna+=/.dna
-    if [[ $failed == t || ! -d $seed_dna ]]; then
-      seed_dna=
+    elif [[ ${#parent} -gt 1 ]]; then
+      # recursive
+      find_seed_dna $parent ${seed#$parent/}/$path_to_cell || return 1
     fi
-  elif [[ ${#parent} -gt 1 ]]; then
-    # recursive
-    find_seed_dna $parent ${seed#$parent/}/$path_to_cell || return 1
   fi
-fi
-return 0
+  return 0
 }
 
 gather_leaf_cells() {
@@ -1558,43 +1563,43 @@ leaf_cells+=( $leaf_path )
 #   {file}.bash           execute bash code
 #   {folder}              go through each item in folder and execute according to folder language
 execute_command_step() {
-local step=$1
+  local step=$1
 
-local log_show_vars=^step log_vars=
-begin_function
-  local step_name=${step##*/} prefix= base
+  local log_show_vars=^step log_vars=
+  begin_function
+    local step_name=${step##*/} prefix= base
 
-  if [[ $step_name =~ [0-9]+-([^/]*)$ ]]; then
-    base=${BASH_REMATCH[1]}
-  else
-    base=$step_name
-  fi
-  
-  if [[ -d $step/.dna ]]; then
-    # recursive
-    execute_command $step update || fail
-    safe_link $step $source_path/$base || fail
-  elif [[ -d $step ]]; then
-    if [[ $base =~ ^choose-.* ]]; then
-      # TODO ...
-      incomplete
-      safe_link $choice $source_path/$last_part || fail
-    elif [[ $base =~ ^loop-.* ]]; then
-      serial=t execute_command_step_loop || fail
-    elif [[ $base =~ ^each-.* ]]; then
-      serial=f execute_command_step_loop || fail
+    if [[ $step_name =~ [0-9]+-([^/]*)$ ]]; then
+      base=${BASH_REMATCH[1]}
     else
-      execute_command_step_folder || fail
+      base=$step_name
     fi
-  elif [[ -f $step ]]; then
-    execute_command_step_file $step || fail
-  else 
-    log_fatal "I don't know how to process this step: $step"
-    fail1
-  fi
+    
+    if [[ -d $step/.dna ]]; then
+      # recursive
+      execute_command $step update || fail
+      safe_link $step $source_path/$base || fail
+    elif [[ -d $step ]]; then
+      if [[ $base =~ ^choose-.* ]]; then
+        # TODO ...
+        incomplete
+        safe_link $choice $source_path/$last_part || fail
+      elif [[ $base =~ ^loop-.* ]]; then
+        serial=t execute_command_step_loop || fail
+      elif [[ $base =~ ^each-.* ]]; then
+        serial=f execute_command_step_loop || fail
+      else
+        execute_command_step_folder || fail
+      fi
+    elif [[ -f $step ]]; then
+      execute_command_step_file $step || fail
+    else 
+      log_fatal "I don't know how to process this step: $step"
+      fail1
+    fi
 
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 trace_step_execution=${trace_step_execution:-f}
@@ -1603,59 +1608,59 @@ trace_op=${trace_op:-}
 # Usage: execute_op {op name}
 # returns 1 if no op found
 execute_op() {
-local op_name=$1 op ignore_missing=${ignore_missing:-f} \
-  found_op= found_op_function=
+  local op_name=$1 op ignore_missing=${ignore_missing:-f} \
+    found_op= found_op_function=
 
-local log_vars='cell_path op_name'
-begin_function
+  local log_vars='cell_path op_name'
+  begin_function
 
-  find_op_or_function $op_name || fail
+    find_op_or_function $op_name || fail
 
-  if [[ "$found_op" || "$found_op_function" ]]; then
+    if [[ "$found_op" || "$found_op_function" ]]; then
 
-    if [[ $trace_op == $op_name ]]; then
-      trace_step_execution=t
-    fi
+      if [[ $trace_op == $op_name ]]; then
+        trace_step_execution=t
+      fi
 
-    if [[ "$found_op_function" ]]; then
-      $found_op_function || fail
+      if [[ "$found_op_function" ]]; then
+        $found_op_function || fail
+      else
+        execute_command_step $op || fail
+      fi
+
+      if [[ $trace_op == $op_name ]]; then
+        trace_step_execution=f
+      fi
+
     else
-      execute_command_step $op || fail
+
+      if [[ $ignore_missing == t ]]; then
+        log_debug "No $op_name operation found in $op_path, ignoring"
+      else
+        log_fatal "No $op_name operation found in $op_path"
+        fail1
+      fi
+
     fi
 
-    if [[ $trace_op == $op_name ]]; then
-      trace_step_execution=f
-    fi
-
-  else
-
-    if [[ $ignore_missing == t ]]; then
-      log_debug "No $op_name operation found in $op_path, ignoring"
-    else
-      log_fatal "No $op_name operation found in $op_path"
-      fail1
-    fi
-
-  fi
-
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 # returns either found_op_function or found_op
 find_op_or_function() {
-local op_name=$1 
-found_op_function= found_op=
-if type -t op_$op_name &>/dev/null; then
-  found_op_function=op_$op_name
-else
-  for op in $op_path/$op_name $op_path/$op_name.*; do
-    if [[ -e $op ]]; then
-      found_op=$op
-      break
-    fi
-  done
-fi
+  local op_name=$1 
+  found_op_function= found_op=
+  if type -t op_$op_name &>/dev/null; then
+    found_op_function=op_$op_name
+  else
+    for op in $op_path/$op_name $op_path/$op_name.*; do
+      if [[ -e $op ]]; then
+        found_op=$op
+        break
+      fi
+    done
+  fi
 }
 
 # inputs: fork_id_log 
@@ -1712,81 +1717,81 @@ get_job_id() {
 # is run in a subshell since it loads the context
 execute_command_internal() {
 
-local log_vars='cell_path' \
-  log_show_vars='short_cell current_command' 
-begin_function
+  local log_vars='cell_path' \
+    log_show_vars='short_cell current_command' 
+  begin_function
 
-  if [[ $current_command != edit ]]; then
+    if [[ $current_command != edit ]]; then
 
-    cell_context_load || {
-      log_fatal "Context failed to load for $cell_path"
-      fail1
-      }
+      cell_context_load || {
+        log_fatal "Context failed to load for $cell_path"
+        fail1
+        }
 
-    if [[ "$localize_dim_vars" != local ]]; then
-      eval "$localize_dim_vars" || fail
+      if [[ "$localize_dim_vars" != local ]]; then
+        eval "$localize_dim_vars" || fail
+      fi
+
+    else # current_command == edit
+
+      if [[ ! "$cell_path" ]]; then
+        log_fatal "You must execute this command from within a cell"
+        fail1
+      fi
+      dna_path=$cell_path/.dna
+      key_path=$dna_path/key
+      status_path=
+      if [[ ! -e $key_path ]]; then
+        mkdir $key_path || fail
+      fi
+
     fi
 
-  else # current_command == edit
+    local command_path=$cell_path/.cyto/command/$current_command
 
-    if [[ ! "$cell_path" ]]; then
-      log_fatal "You must execute this command from within a cell"
-      fail1
-    fi
-    dna_path=$cell_path/.dna
-    key_path=$dna_path/key
-    status_path=
-    if [[ ! -e $key_path ]]; then
-      mkdir $key_path || fail
+    if [[ ! -e $command_path && ! -e $cell_path/.cyto ]]; then
+      local dna_command=
+      command=$current_command get_dna_command || fail
+      if [[ "$dna_command" ]]; then
+        command_path=$dna_command
+      fi
     fi
 
-  fi
-
-  local command_path=$cell_path/.cyto/command/$current_command
-
-  if [[ ! -e $command_path && ! -e $cell_path/.cyto ]]; then
-    local dna_command=
-    command=$current_command get_dna_command || fail
-    if [[ "$dna_command" ]]; then
-      command_path=$dna_command
-    fi
-  fi
-
-  if [[ ! -e $command_path ]]; then
-    log_fatal "Command $current_command doesn't exist in $command_path or as a function"
-    fail1
-  fi
-
-  if type -t command_${current_command}_prep &>/dev/null; then
-    command_${current_command}_prep || fail
-  elif [[ -f $command_path.prep ]]; then
-    source $command_path.prep || fail
-    if ! type -t ${current_command}_prep &>/dev/null; then
-      log_fatal "$command_path.prep must contain a function named ${current_command}_prep"
+    if [[ ! -e $command_path ]]; then
+      log_fatal "Command $current_command doesn't exist in $command_path or as a function"
       fail1
     fi
-    ${current_command}_prep || fail
-  fi
 
-  if [[ ${skip_dim_validation:-f} == f ]]; then
-    validate_dims || fail
-  fi
+    if type -t command_${current_command}_prep &>/dev/null; then
+      command_${current_command}_prep || fail
+    elif [[ -f $command_path.prep ]]; then
+      source $command_path.prep || fail
+      if ! type -t ${current_command}_prep &>/dev/null; then
+        log_fatal "$command_path.prep must contain a function named ${current_command}_prep"
+        fail1
+      fi
+      ${current_command}_prep || fail
+    fi
 
-  if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
-    log_info "Executing command: $current_command $short_cell"
-  # else
-  #   log_debug "Executing command: $current_command $short_cell"
-  fi
+    if [[ ${skip_dim_validation:-f} == f ]]; then
+      validate_dims || fail
+    fi
 
-  if type -t command_$current_command &>/dev/null; then
-    command_$current_command || fail
-  else
-    # recursive
-    execute_command_step $command_path || fail
-  fi
+    if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
+      log_info "Executing command: $current_command $short_cell"
+    # else
+    #   log_debug "Executing command: $current_command $short_cell"
+    fi
 
-end_function
-handle_return
+    if type -t command_$current_command &>/dev/null; then
+      command_$current_command || fail
+    else
+      # recursive
+      execute_command_step $command_path || fail
+    fi
+
+  end_function
+  handle_return
 }
 
 execute_command() {
@@ -1853,109 +1858,109 @@ execute_command() {
 }
 
 get_dna_command() {
-local cell_path=$cell_path command=$command
-local parent=${cell_path%/*}
-if [[ -e $cell_path/.dna/command/$command ]]; then
-  dna_command=$cell_path/.dna/command/$command
-elif [[ $parent != $cell_path ]]; then
-  cell=$parent get_dna_command || return 1
-fi
-return 0
+  local cell_path=$cell_path command=$command
+  local parent=${cell_path%/*}
+  if [[ -e $cell_path/.dna/command/$command ]]; then
+    dna_command=$cell_path/.dna/command/$command
+  elif [[ $parent != $cell_path ]]; then
+    cell=$parent get_dna_command || return 1
+  fi
+  return 0
 }
 
 execute_command_step_file() {
 
-local log_vars=step
-begin_function_flat
-  case $base in
-    *.py)
-      log_fatal "Python steps not implemented yet"
-      fail1
-    ;;
-    *.js)
-      log_fatal "JavaScript steps not implemented yet"
-      fail1
-    ;;
-    *.go)
-      log_fatal "GoLang steps not implemented yet"
-      fail1
-    ;;
-    *.java)
-      log_fatal "Java steps not implemented yet"
-      fail1
-    ;;
-    *)
-      source $step || fail
-      local function_name=${base%.bash}
-      function_name=${function_name##*/}
-      function_name=${function_name//-/_}
-      local function_exists=$(type -t $function_name &>/dev/null && echo true)
-      if [[ "$function_exists" ]]; then
-        $function_name || fail
-      else
-        log_fatal "Step $step requires that a function named $function_name be defined in that file."
+  local log_vars=step
+  begin_function_flat
+    case $base in
+      *.py)
+        log_fatal "Python steps not implemented yet"
         fail1
-      fi
-    ;;
-#    *)
-#      log_fatal "Unknown file format for $step. Can't execute."
-#      fail1
-#    ;;
-  esac
-end_function
-handle_return
+      ;;
+      *.js)
+        log_fatal "JavaScript steps not implemented yet"
+        fail1
+      ;;
+      *.go)
+        log_fatal "GoLang steps not implemented yet"
+        fail1
+      ;;
+      *.java)
+        log_fatal "Java steps not implemented yet"
+        fail1
+      ;;
+      *)
+        source $step || fail
+        local function_name=${base%.bash}
+        function_name=${function_name##*/}
+        function_name=${function_name//-/_}
+        local function_exists=$(type -t $function_name &>/dev/null && echo true)
+        if [[ "$function_exists" ]]; then
+          $function_name || fail
+        else
+          log_fatal "Step $step requires that a function named $function_name be defined in that file."
+          fail1
+        fi
+      ;;
+  #    *)
+  #      log_fatal "Unknown file format for $step. Can't execute."
+  #      fail1
+  #    ;;
+    esac
+  end_function
+  handle_return
 }
 
 execute_command_step_loop() {
-local serial=$serial
-begin_function_flat
+  local serial=$serial
+  begin_function_flat
 
-  # leave early if the folder of instructions is empty
-  dir_is_empty $step && succeed
+    # leave early if the folder of instructions is empty
+    dir_is_empty $step && succeed
 
-  local ref= ref_group=
+    local ref= ref_group=
 
-  setup_default_each_handler || fail
-  local before_block_files=( $(find1 $step -regex '.*/block-before.*' | sort -g) ) || fail
-  local before_block_file
-  begin_for before_block_file in "${before_block_files[@]}"; doo
-    # recursive
-    execute_command_step "$before_block_file" || fail
-  end_for
+    setup_default_each_handler || fail
+    local before_block_files=( $(find1 $step -regex '.*/block-before.*' | sort -g) ) || fail
+    local before_block_file
+    begin_for before_block_file in "${before_block_files[@]}"; doo
+      # recursive
+      execute_command_step "$before_block_file" || fail
+    end_for
 
-  if [[ ! "$ref_group" ]]; then
+    if [[ ! "$ref_group" ]]; then
 
-    if [[ $base =~ (each|loop)-([^-]+)-in-([^-]+) ]]; then
-      ref=${BASH_REMATCH[2]}
-      ref_group=${BASH_REMATCH[3]}
-    elif [[ $base =~ (each|loop)-([^-]+) ]]; then
-      ref=${BASH_REMATCH[2]}
-      ref_group=${ref}s
-      if [[ ! "${!ref_group:-}" ]]; then
-        ref_group=${ref}es
+      if [[ $base =~ (each|loop)-([^-]+)-in-([^-]+) ]]; then
+        ref=${BASH_REMATCH[2]}
+        ref_group=${BASH_REMATCH[3]}
+      elif [[ $base =~ (each|loop)-([^-]+) ]]; then
+        ref=${BASH_REMATCH[2]}
+        ref_group=${ref}s
+        if [[ ! "${!ref_group:-}" ]]; then
+          ref_group=${ref}es
+        fi
+        if [[ ! "${!ref_group:-}" ]]; then
+          ref_group=${ref%?}ies
+        fi
+        if [[ ! "${!ref_group:-}" ]]; then
+          ref_group=
+        fi
       fi
-      if [[ ! "${!ref_group:-}" ]]; then
-        ref_group=${ref%?}ies
-      fi
-      if [[ ! "${!ref_group:-}" ]]; then
-        ref_group=
-      fi
+
     fi
 
-  fi
+    # This can be overridden in a block-before file to provide custom looping
+    handle_step_loop || fail
 
-  # This can be overridden in a block-before file to provide custom looping
-  handle_step_loop || fail
+    local after_block_files=( $(find1 $step -regex '.*/block-after.*' | sort -g) ) || fail
+    local after_block_file
+    begin_for after_block_file in "${after_block_files[@]}"; doo
+      # recursive
+      execute_command_step "$after_block_file" || fail
+    end_for
 
-  local after_block_files=( $(find1 $step -regex '.*/block-after.*' | sort -g) ) || fail
-  local after_block_file
-  begin_for after_block_file in "${after_block_files[@]}"; doo
-    # recursive
-    execute_command_step "$after_block_file" || fail
-  end_for
-
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 setup_default_each_handler() {
@@ -2003,185 +2008,185 @@ setup_default_each_handler() {
 
 # may be run in a subshell
 execute_command_step_folder() {
-local step=$step
+  local step=$step
 
-local log_vars=step
-begin_function_flat
+  local log_vars=step
+  begin_function_flat
 
-  local contents=( $(find1 $step -not -name ".*" -not -name "*-before*" -not -name "after-block*" | sort -g) ) || fail 
-  local files i=0 file_index
-  [[ ! "${contents:-}" ]] && succeed
+    local contents=( $(find1 $step -not -name ".*" -not -name "*-before*" -not -name "after-block*" | sort -g) ) || fail 
+    local files i=0 file_index
+    [[ ! "${contents:-}" ]] && succeed
 
-  begin_loop
+    begin_loop
 
-    files=( ${contents[$i]} )
-    if [[ $files =~ ([0-9]+)-[^/]*$ ]]; then
-      file_index=${BASH_REMATCH[1]}
-    else
-      file_index=-1
-    fi
+      files=( ${contents[$i]} )
+      if [[ $files =~ ([0-9]+)-[^/]*$ ]]; then
+        file_index=${BASH_REMATCH[1]}
+      else
+        file_index=-1
+      fi
 
-    gather_files_with_same_index || fail
+      gather_files_with_same_index || fail
 
-    local leave_loop=0
-    loop_over_var=files \
-      fork=f
-      par=${par:-t}
-      body='execute_command_step $value' \
-      tail='
-        if [[ $leave_loop -gt 0 ]]; then
-          break
-        fi
-        ' \
-      parallel_loop || fail
+      local leave_loop=0
+      loop_over_var=files \
+        fork=f
+        par=${par:-t}
+        body='execute_command_step $value' \
+        tail='
+          if [[ $leave_loop -gt 0 ]]; then
+            break
+          fi
+          ' \
+        parallel_loop || fail
 
-    let i++ || true
-    [[ $i -ge ${#contents[*]} ]] && break
+      let i++ || true
+      [[ $i -ge ${#contents[*]} ]] && break
 
-    if [[ $leave_loop -gt 0 ]]; then
-      let leave_loop-- || true
-      break
-    fi
+      if [[ $leave_loop -gt 0 ]]; then
+        let leave_loop-- || true
+        break
+      fi
 
-  end_loop
+    end_loop
 
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 gather_files_with_same_index() {
-begin_function_flat
-  local next_file_index=$file_index next_file n=$i
-  begin_loop
-    let n++ || true
-    [[ $n -ge ${#contents[*]} ]] && break
-    next_file=${contents[$n]}
-    if [[ $next_file =~ ([0-9]+)-[^/]*$ ]]; then
-      next_file_index=${BASH_REMATCH[1]}
-    else
-      next_file_index=-1
-    fi
-    if [[ $next_file_index == $file_index ]]; then
-      files+=( $next_file )
-      let i++ || true
-    else
-      break
-    fi
-  end_loop
-end_function
-handle_return
+  begin_function_flat
+    local next_file_index=$file_index next_file n=$i
+    begin_loop
+      let n++ || true
+      [[ $n -ge ${#contents[*]} ]] && break
+      next_file=${contents[$n]}
+      if [[ $next_file =~ ([0-9]+)-[^/]*$ ]]; then
+        next_file_index=${BASH_REMATCH[1]}
+      else
+        next_file_index=-1
+      fi
+      if [[ $next_file_index == $file_index ]]; then
+        files+=( $next_file )
+        let i++ || true
+      else
+        break
+      fi
+    end_loop
+  end_function
+  handle_return
 }
 
 # input: $* = cell values in dim order
 # output: cell_node = string path to cell from cell path
 get_cell_node() {
-local v i=0 d
-cell_node=
-for v in "$@"; do
-  d=${cell_dims[$i]}
-  get_sane_value "$v"
-  v=$sane_value
-  cell_node+=/dim/$d/$v
-  let i++ || true
-done
+  local v i=0 d
+  cell_node=
+  for v in "$@"; do
+    d=${cell_dims[$i]}
+    get_sane_value "$v"
+    v=$sane_value
+    cell_node+=/dim/$d/$v
+    let i++ || true
+  done
 }
 
 # input: $* = cell values in dim order
 # output: cell_id = string cell id
 get_cell_id() {
-local v
-cell_id=
-for v in "$@"; do
-  get_sane_value "$v"
-  v=$sane_value
-  cell_id+=_$v
-done
-cell_id=${cell_id#_}
+  local v
+  cell_id=
+  for v in "$@"; do
+    get_sane_value "$v"
+    v=$sane_value
+    cell_id+=_$v
+  done
+  cell_id=${cell_id#_}
 }
 
 get_cell_path() {
-local subject=$1
-cell_path=
-if [[ -d $subject/.cyto || -d $subject/.dna ]]; then
-  cell_path=$subject
-else
-  subject=${subject%/*}
-  if [[ "$subject" =~ / ]]; then
-    get_cell_path $subject
+  local subject=$1
+  cell_path=
+  if [[ -d $subject/.cyto || -d $subject/.dna ]]; then
+    cell_path=$subject
+  else
+    subject=${subject%/*}
+    if [[ "$subject" =~ / ]]; then
+      get_cell_path $subject
+    fi
   fi
-fi
 }
 
 validate_dims() {
-local dim
-for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
-  if dim_is_required $dim; then
-    local plural
-    get_plural $dim
-    local value=
-    if [[ -v d_$dim ]]; then
-      eval "local d_value=\${d_$dim}"
-      if [[ "$d_value" ]]; then
-        eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim}}}}"
+  local dim
+  for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
+    if dim_is_required $dim; then
+      local plural
+      get_plural $dim
+      local value=
+      if [[ -v d_$dim ]]; then
+        eval "local d_value=\${d_$dim}"
+        if [[ "$d_value" ]]; then
+          eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim}}}}"
+        fi
+      fi
+      if [[ ! "$value" ]]; then
+        log_fatal "Missing require parameter: $dim"
+        return 1
       fi
     fi
-    if [[ ! "$value" ]]; then
-      log_fatal "Missing require parameter: $dim"
-      return 1
-    fi
-  fi
-done
-return 0
+  done
+  return 0
 }
 
 handle_secure_edit() {
 
-local log_vars= old_file=$file new_file=$file.new
-begin_function
+  local log_vars= old_file=$file new_file=$file.new
+  begin_function
 
-  setup_tmp_path || fail
-  local unsafe_file=${file%.safe}
-  local new_unsafe_file=$tmp_path/$unsafe_file.new
-  local old_unsafe_file=$tmp_path/$unsafe_file.old
+    setup_tmp_path || fail
+    local unsafe_file=${file%.safe}
+    local new_unsafe_file=$tmp_path/$unsafe_file.new
+    local old_unsafe_file=$tmp_path/$unsafe_file.old
 
-  if [[ -f $new_unsafe_file ]]; then
-    log_fatal "$new_unsafe_file already exists, delete that first if you want to edit $file"
-    fail1
-  fi
-
-  defer "rm $new_unsafe_file"
-  defer "rm $old_unsafe_file"
-
-  if [[ -f $old_file ]]; then
-    from=$old_file to=$old_unsafe_file decrypt_file || fail
-    cp $old_unsafe_file $new_unsafe_file || fail
-  fi
-
-  if [[ "${content:-}" ]]; then
-    echo "$content" >$new_unsafe_file || fail
-  else
-    $EDITOR $new_unsafe_file || fail
-  fi
-
-  if [[ -f $old_unsafe_file ]]; then
-    if files_are_different $old_unsafe_file $new_unsafe_file >/dev/null; then
-      changed=t
-    else
-      log_trace $log_trace "No change"
-      rm $new_unsafe_file || fail
+    if [[ -f $new_unsafe_file ]]; then
+      log_fatal "$new_unsafe_file already exists, delete that first if you want to edit $file"
+      fail1
     fi
-  else
-    changed=t
-  fi
 
-  if [[ $changed == t ]]; then
-    from=$new_unsafe_file to=$new_file encrypt_file || fail
-    mv $new_file $old_file || fail
-    update_modify_times $new_file || fail
-  fi
+    defer "rm $new_unsafe_file"
+    defer "rm $old_unsafe_file"
 
-end_function
-handle_return
+    if [[ -f $old_file ]]; then
+      from=$old_file to=$old_unsafe_file decrypt_file || fail
+      cp $old_unsafe_file $new_unsafe_file || fail
+    fi
+
+    if [[ "${content:-}" ]]; then
+      echo "$content" >$new_unsafe_file || fail
+    else
+      $EDITOR $new_unsafe_file || fail
+    fi
+
+    if [[ -f $old_unsafe_file ]]; then
+      if files_are_different $old_unsafe_file $new_unsafe_file >/dev/null; then
+        changed=t
+      else
+        log_trace $log_trace "No change"
+        rm $new_unsafe_file || fail
+      fi
+    else
+      changed=t
+    fi
+
+    if [[ $changed == t ]]; then
+      from=$new_unsafe_file to=$new_file encrypt_file || fail
+      mv $new_file $old_file || fail
+      update_modify_times $new_file || fail
+    fi
+
+  end_function
+  handle_return
 }
 
 handle_insecure_edit() {
@@ -2269,7 +2274,6 @@ return 0
 }
 
 setup_context_defaults() {
-
 setup_dep_defaults || return 1
 return 0
 }
