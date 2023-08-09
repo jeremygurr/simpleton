@@ -23,6 +23,30 @@ downstream_cell_stack=( )
 
 disable_log=${disable_log:-f}
 
+setup_cyto_out() {
+local from=$1 to=$2
+begin_function_flat
+  local contents=$(find1 $from) || fail
+  begin_for item in $contents; doo
+    if [[ -d $item ]]; then
+      local last_part=${item##*/}
+      if [[ ! -d $to/$last_part ]]; then
+        mkdir $to/$last_part || fail
+      fi
+      # recursive
+      setup_cyto_out $from/$last_part $to/$last_part || fail
+    elif [[ ${item%.safe} != $item ]]; then
+      local target_file=${item##*/}
+      target_file=${target_file%.safe}
+      from=$item to=$to/$target_file decrypt_file || fail
+    else
+      safe_link $item $to/ || fail
+    fi
+  end_for
+end_function
+handle_return
+}
+
 # This is run if cell hasn't been initialized = missing .cyto folder
 make_cyto() {
   local new_cyto=$cell_path/.cyto.new \
@@ -64,13 +88,13 @@ make_cyto() {
     fi
 
     local dna_path=$cell_path/.dna
-    if [[ -d $dna_path/up ]]; then
-      rsync -a $dna_path/up/ $new_cyto/up/ || fail
-    fi
+    # if [[ -d $dna_path/up ]]; then
+    #   rsync -a $dna_path/up/ $new_cyto/up/ || fail
+    # fi
 
-    if [[ -d $dna_path/down ]]; then
-      rsync -a $dna_path/down/ $new_cyto/down/ || fail
-    fi
+    # if [[ -d $dna_path/down ]]; then
+    #   rsync -a $dna_path/down/ $new_cyto/down/ || fail
+    # fi
 
     if [[ -d $dna_path/out && "$out_path" ]]; then
       local item
@@ -314,48 +338,51 @@ cell_context_load() {
 }
 
 plant_seed() {
-local from=$1 to=$2 contents x x_part
-begin_function_flat
-  contents=( $(find1 $from -not -name "$wild_sub_path") ) || fail
-  begin_for x in ${contents[*]}; doo
-    x_part=${x##*/}
-    if [[ ! -e $to/$x_part ]]; then
-      if [[ -f $x || $x == */.dna ]]; then
-        safe_link $(realpath $x) $to/ || fail
-      elif [[ -d $x ]]; then
-        mkdir $to/$x_part || fail
-        plant_seed $x $to/$x_part || fail
+  local from=$1 to=$2 contents x x_part
+  begin_function_flat
+    contents=( $(find1 $from -not -name "$wild_sub_path") ) || fail
+    begin_for x in ${contents[*]}; doo
+      x_part=${x##*/}
+      if [[ ! -e $to/$x_part ]]; then
+        if [[ -f $x || $x == */.dna ]]; then
+          safe_link $(realpath $x) $to/ || fail
+        elif [[ -d $x ]]; then
+          mkdir $to/$x_part || fail
+          plant_seed $x $to/$x_part || fail
+        fi
       fi
-    fi
-  end_for
-end_function
-handle_return
+    end_for
+  end_function
+  handle_return
 }
 
 prep_upstream() {
-local upstream=$1
+  local upstream=$1
 
-# down_fresh may be used by prep script to propagate freshness requirements to upstream
-down_fresh=$required_freshness
+  # down_fresh may be used by prep script to propagate freshness requirements to upstream
+  down_fresh=$required_freshness
 
-# Don't inherit parent's freshness requirements, 
-#   only what upstream prep explicitly states
-# extra_dims includes dimensions that need to be promoted in upstream that don't
-#   exist in branch_dims
-fresh=$down_fresh required_freshness= default_freshness= extra_dims=
+  # Don't inherit parent's freshness requirements, 
+  #   only what upstream prep explicitly states
+  # extra_dims includes dimensions that need to be promoted in upstream that don't
+  #   exist in branch_dims
+  fresh=$down_fresh required_freshness= default_freshness= extra_dims=
 
-unset prep
-if [[ -f $upstream.prep ]]; then
-  source $upstream.prep || return 1
-  if ! type -t prep &>/dev/null; then
-    log_fatal "$upstream.prep must have a function named prep"
-    return 1
+  local log_show_vars=^upstream
+  begin_function
+  unset prep
+  if [[ -f $upstream.prep ]]; then
+    source $upstream.prep || fail
+    if ! type -t prep &>/dev/null; then
+      log_fatal "$upstream.prep must have a function named prep"
+      fail1
+    fi
+    prep || fail
+    setup_dep_defaults || fail
   fi
-  prep || return 1
-  setup_dep_defaults || return 1
-fi
 
-return 0
+  end_function
+  handle_return
 }
 
 migrate_dep() {
@@ -368,6 +395,7 @@ migrate_dep() {
       if [[ -f $from || -f $from/.dna ]]; then
         safe_link $(realpath $from) $to || fail
       elif [[ -d $from/.dna ]]; then
+        # recursive
         fork "migrate_cell $from $to" || fail
       elif [[ -d $from ]]; then
         if [[ ! -d $to ]]; then
@@ -390,30 +418,37 @@ migrate_dep() {
 }
 
 setup_cyto_upstream() {
-  local up_part=${up##*/}
-  migrate_dep $dna_up_path/$up_part $up_path/$up_part || fail
+  local up_dna=$1 up_cyto=$2
+  log_debug "Setting up cyto upstream"
+  migrate_dep $up_dna $up_cyto || fail
 }
 
 get_upstream_needs_update() {
 
   local cell_path=$1
-  local short_cell
+  local short_cell \
+    up_path=$cell_path/.cyto/up \
+    dna_up_path=$cell_path/.dna/up 
   get_short_cell $cell_path
 
   local log_show_vars=short_cell log_vars=cell_path
   begin_function
-    local up_path=$cell_path/.cyto/up \
-      dna_up_path=$cell_path/.dna/up 
     if (( check_upstream_depth > 0 )); then
       let check_upstream_depth-- || true
       log_debug "Checking upstream of $short_cell"
       local -r upstream_cells=( 
         $(find1 $dna_up_path -not -name '.*' -not -name '*.prep' | sort -g) 
         ) || return 1
-      local up
+      local up up_part
       for up in ${upstream_cells[*]}; do
-        debug_start
-        setup_cyto_upstream $up || return 1
+        log_debug "Checking $up"
+        up_part=${up##*/}
+        up_cyto=$up_path/$up_part
+        if [[ ! -e $up_cyto ]]; then
+          log_debug "Cyto up is missing, needs update"
+          needs_update=t
+          break
+        fi
         prep_upstream $up || return 1
         # recursive
         get_needs_update $up || return 1
@@ -913,29 +948,6 @@ done
 return 1
 }
 
-setup_cyto_out() {
-local from=$1 to=$2
-begin_function_flat
-  local contents=$(find1 $from) || fail
-  begin_for item in $contents; doo
-    if [[ -d $item ]]; then
-      local last_part=${item##*/}
-      if [[ ! -d $to/$last_part ]]; then
-        mkdir $to/$last_part || fail
-      fi
-      setup_cyto_out $from/$last_part $to/$last_part || fail
-    elif [[ ${item%.safe} != $item ]]; then
-      local target_file=${item##*/}
-      target_file=${target_file%.safe}
-      from=$item to=$to/$target_file decrypt_file || fail
-    else
-      safe_link $item $to/ || fail
-    fi
-  end_for
-end_function
-handle_return
-}
-
 record_context() {
 local cell=$1
 local parent=${cell%/*}
@@ -1142,6 +1154,28 @@ append_dim_var_to_context() {
   handle_return
 }
 
+create_sub_cell() {
+  local sub_cell=$1
+  find_seed $sub_cell || return 1
+  # recursive
+  create_sub_cell_with_seed $seed $sub_cell || return 1
+  return 0
+}
+
+load_context_and_create_sub() {
+  local parent_cell=$1 sub_cell=$2
+  local log_show_vars='^parent_cell ^sub_cell'
+  begin_function
+    cell_path=$parent_cell cell_context_load || fail
+    if [[ "$localize_dim_vars" != local ]]; then
+      eval "$localize_dim_vars" || fail
+    fi
+    # recursive
+    create_sub_cell $sub_cell || fail
+  end_function
+  handle_return
+}
+
 promote_dep_cell() {
 local log_show_vars=^from
 begin_function
@@ -1161,9 +1195,12 @@ begin_function
 
   begin_for dep_dim in ${dims[*]}; doo
 
+    log_debug "Promoting $dep_dim"
+
     # is this dim already promoted?
     if [[ $already_promoted_path == */.dim/* ]]; then
       already_promoted_path=${already_promoted_path%/.dim/*}
+      log_debug "Already promoted"
       continue
     fi
 
@@ -1171,6 +1208,7 @@ begin_function
     # upstream prep script can add extra_dims as needed
     begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
       if [[ $branch_dim == $dep_dim ]]; then
+        log_debug "Found branch dim for $dep_dim"
         found_branch_dim=t
         break
       fi
@@ -1178,6 +1216,7 @@ begin_function
 
     if [[ $found_branch_dim == f ]]; then
       # can't promote if dep dim doesn't exist on the branch 
+      log_debug "Dim not found on branch"
       break
     fi
 
@@ -1206,6 +1245,7 @@ begin_function
       from=$from/.dim/$sane_value
       if [[ ! -d $from ]]; then
         eval "$dep_dim_var=\"$values\""
+        log_debug "Creating sub for $from"
         fork "load_context_and_create_sub $old_from $from" || fail
       fi
     else
@@ -1337,7 +1377,7 @@ create_sub_cell_with_seed() {
 # seed is allowed to be empty, meaning no seed exists at this location
 local seed=$1 sub_cell=$2
 
-local log_vars=sub_cell
+local log_show_vars='^seed ^sub_cell'
 begin_function
 
   if [[ "$sub_cell" =~ .dna ]]; then
@@ -1405,24 +1445,6 @@ for sub_full in $subs; do
     fi
   fi
 done
-}
-
-create_sub_cell() {
-local sub_cell=$1
-find_seed $sub_cell || return 1
-create_sub_cell_with_seed $seed $sub_cell || return 1
-return 0
-}
-
-load_context_and_create_sub() {
-local parent_cell=$1 sub_cell=$2
-# recursive
-cell_path=$parent_cell cell_context_load || return 1
-if [[ "$localize_dim_vars" != local ]]; then
-  eval "$localize_dim_vars" || return 1
-fi
-create_sub_cell $sub_cell || return 1
-return 0
 }
 
 is_leaf_cell() {

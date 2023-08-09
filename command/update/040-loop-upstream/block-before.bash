@@ -8,6 +8,7 @@ if [[ -d "${dna_up_path:-}" && ! "$update_successful" ]]; then
     -not -regex '.*/\([0-9]+-\)?\(before\|choose\)-.*' \
     | sort -g \
     ) )
+  previous_upstream_changed=f
 else
   upstreams=
 fi
