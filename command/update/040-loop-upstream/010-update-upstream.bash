@@ -17,9 +17,9 @@ begin_function
     fi
   }
 
+  debug_start
   local needs_update=
   prep_upstream $upstream || fail
-
   get_needs_update $upstream || fail
 
   if [[ $needs_update == t ]]; then

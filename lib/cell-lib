@@ -150,10 +150,8 @@ begin_function_flat
     unset dna_up_path
   fi
 
+  # create this folder as needed
   up_path=$cyto_path/up
-  if [[ ! -d $up_path ]]; then
-    unset up_path
-  fi
 
   dna_down_path=$dna_path/down
   if [[ ! -d $dna_down_path ]]; then
@@ -208,28 +206,31 @@ handle_return
 }
 
 load_dims() {
-local dims_path=$1 dim_path dim 
-dim_array=()
-if [[ -d $dims_path ]]; then
-  log_debug "Loading dims from $dims_path"
-  local contents=$(find1 $dims_path -not -name ".*" | sort -g) || return 1
-  for dim_path in $contents; do
-    source $dim_path || return 1
-    dim=${dim_path##*/}
-    if [[ $dim =~ [0-9]+-(.*) ]]; then
-      dim=${BASH_REMATCH[1]}
+  local dims_path=$1 dim_path dim 
+  if [[ ${last_cell_dims_loaded:-} != $cell_path ]]; then
+    dim_array=()
+    if [[ -d $dims_path ]]; then
+      log_debug "Loading dims from $dims_path"
+      local contents=$(find1 $dims_path -not -name ".*" | sort -g) || return 1
+      for dim_path in $contents; do
+        source $dim_path || return 1
+        dim=${dim_path##*/}
+        if [[ $dim =~ [0-9]+-(.*) ]]; then
+          dim=${BASH_REMATCH[1]}
+        fi
+        get_plural $dim
+        dims=$plural
+        local ddim=d_$dim ddims=d_$dims
+        dim_array+=( $dim )
+        localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
+      done
+      if [[ "$dim_array" ]]; then
+        log_debug "Found dims: ${dim_array[*]}"
+      fi
     fi
-    get_plural $dim
-    dims=$plural
-    local ddim=d_$dim ddims=d_$dims
-    dim_array+=( $dim )
-    localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
-  done
-  if [[ "$dim_array" ]]; then
-    log_debug "Found dims: ${dim_array[*]}"
+    dims=( ${dim_array[*]} )
+    last_cell_dims_loaded=$cell_path
   fi
-fi
-dims=( ${dim_array[*]} )
 }
 
 setup_dims() {
@@ -352,26 +353,42 @@ fi
 return 0
 }
 
+setup_cyto_upstream() {
+  local up_part=${up##*/}
+  migrate_dep $dna_up_path/$up_part $up_path/$up_part || fail
+}
+
 get_upstream_needs_update() {
-local cell_path=$1
-local up_path=$cell_path/.cyto/up
-if (( check_upstream_depth > 0 )); then
-  let check_upstream_depth-- || true
-  log_debug "Checking upstream of $short_cell"
-  local -r upstream_cells=( 
-    $(find1 $up_path -not -name '.*' -not -name '*.prep' | sort -g) 
-    ) || return 1
-  local up
-  for up in ${upstream_cells[*]}; do
-    prep_upstream $up || return 1
-    # recursive
-    get_needs_update $up || return 1
-    if [[ $needs_update == t ]]; then
-      break
+
+  local cell_path=$1
+  local short_cell
+  get_short_cell $cell_path
+
+  local log_show_vars=short_cell log_vars=cell_path
+  begin_function
+    local up_path=$cell_path/.cyto/up \
+      dna_up_path=$cell_path/.dna/up 
+    if (( check_upstream_depth > 0 )); then
+      let check_upstream_depth-- || true
+      log_debug "Checking upstream of $short_cell"
+      local -r upstream_cells=( 
+        $(find1 $dna_up_path -not -name '.*' -not -name '*.prep' | sort -g) 
+        ) || return 1
+      local up
+      for up in ${upstream_cells[*]}; do
+        debug_start
+        setup_cyto_upstream $up || return 1
+        prep_upstream $up || return 1
+        # recursive
+        get_needs_update $up || return 1
+        if [[ $needs_update == t ]]; then
+          break
+        fi
+      done
     fi
-  done
-fi
-return 0
+  end_function
+  handle_return
+
 }
 
 # returns needs_update
@@ -407,13 +424,10 @@ begin_function
 
   needs_update=
 
-  if [[ ${last_cell_dims_loaded:-} != $cell_path ]]; then
-    local dims localize_dim_vars=${localize_dim_vars:-local} leaf_dims
-    load_dims $cell_path/.dna/dim || fail
-    leaf_dims=( ${dims[*]:-} )
-    eval "$localize_dim_vars" || fail
-    last_cell_dims_loaded=$cell_path
-  fi
+  local dims localize_dim_vars=${localize_dim_vars:-local} leaf_dims
+  load_dims $cell_path/.dna/dim || fail
+  leaf_dims=( ${dims[*]:-} )
+  eval "$localize_dim_vars" || fail
 
   if [[ ! -e $status_path/last-good-update-end ]]
   then
@@ -441,14 +455,14 @@ begin_function
        && [[ $needs_update == t ]]
   then
     log_message="Needs update because at least one leaf cell is out of date"
-  elif [[ -d $up_path ]] \
+  elif [[ -v dna_up_path ]] \
        && { get_upstream_needs_update $cell_path || fail; } \
        && [[ $needs_update == t ]]
   then
     log_message="Needs update because at least one upstream cell is out of date"
   fi
 
-  if [[ $needs_update=t && ${pre_validate:-f} == t ]]; then
+  if [[ $needs_update == t && ${pre_validate:-f} == t ]]; then
 
     if execute_op check; then
       if [[ $check_successful == t ]]; then
@@ -1359,24 +1373,6 @@ end_function
 handle_return
 }
 
-create_sub_cell() {
-local sub_cell=$1
-find_seed $sub_cell || return 1
-create_sub_cell_with_seed $seed $sub_cell || return 1
-return 0
-}
-
-load_context_and_create_sub() {
-local parent_cell=$1 sub_cell=$2
-# recursive
-cell_path=$parent_cell cell_context_load || return 1
-if [[ "$localize_dim_vars" != local ]]; then
-  eval "$localize_dim_vars" || return 1
-fi
-create_sub_cell $sub_cell || return 1
-return 0
-}
-
 # seed must not be empty here
 create_sub_cells2() {
 local seed=$1 relative_path=$2 sub_full sub 
@@ -1400,6 +1396,24 @@ for sub_full in $subs; do
     fi
   fi
 done
+}
+
+create_sub_cell() {
+local sub_cell=$1
+find_seed $sub_cell || return 1
+create_sub_cell_with_seed $seed $sub_cell || return 1
+return 0
+}
+
+load_context_and_create_sub() {
+local parent_cell=$1 sub_cell=$2
+# recursive
+cell_path=$parent_cell cell_context_load || return 1
+if [[ "$localize_dim_vars" != local ]]; then
+  eval "$localize_dim_vars" || return 1
+fi
+create_sub_cell $sub_cell || return 1
+return 0
 }
 
 is_leaf_cell() {
