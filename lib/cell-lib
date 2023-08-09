@@ -24,27 +24,27 @@ downstream_cell_stack=( )
 disable_log=${disable_log:-f}
 
 setup_cyto_out() {
-local from=$1 to=$2
-begin_function_flat
-  local contents=$(find1 $from) || fail
-  begin_for item in $contents; doo
-    if [[ -d $item ]]; then
-      local last_part=${item##*/}
-      if [[ ! -d $to/$last_part ]]; then
-        mkdir $to/$last_part || fail
+  local from=$1 to=$2
+  begin_function_flat
+    local contents=$(find1 $from) || fail
+    begin_for item in $contents; doo
+      if [[ -d $item ]]; then
+        local last_part=${item##*/}
+        if [[ ! -d $to/$last_part ]]; then
+          mkdir $to/$last_part || fail
+        fi
+        # recursive
+        setup_cyto_out $from/$last_part $to/$last_part || fail
+      elif [[ ${item%.safe} != $item ]]; then
+        local target_file=${item##*/}
+        target_file=${target_file%.safe}
+        from=$item to=$to/$target_file decrypt_file || fail
+      else
+        safe_link $item $to/ || fail
       fi
-      # recursive
-      setup_cyto_out $from/$last_part $to/$last_part || fail
-    elif [[ ${item%.safe} != $item ]]; then
-      local target_file=${item##*/}
-      target_file=${target_file%.safe}
-      from=$item to=$to/$target_file decrypt_file || fail
-    else
-      safe_link $item $to/ || fail
-    fi
-  end_for
-end_function
-handle_return
+    end_for
+  end_function
+  handle_return
 }
 
 # This is run if cell hasn't been initialized = missing .cyto folder
@@ -114,30 +114,30 @@ make_cyto() {
 }
 
 get_short_cell() {
-local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string=
-if [[ "$trunk_cell" =~ .dim ]]; then
-  x=${trunk_cell//\/.dim\// }
-  dim_string=" ${x#* }"
-  dim_string=${dim_string/ /:}
-  dim_string=${dim_string// /\/}
-  trunk_cell=${x%% *}
-fi
-if x=${trunk_cell#$PWD/}
-   [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-  trunk_cell=$x
-elif y=${trunk_cell%/*/*/*} 
-     x=${trunk_cell#$y/}
+  local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string=
+  if [[ "$trunk_cell" =~ .dim ]]; then
+    x=${trunk_cell//\/.dim\// }
+    dim_string=" ${x#* }"
+    dim_string=${dim_string/ /:}
+    dim_string=${dim_string// /\/}
+    trunk_cell=${x%% *}
+  fi
+  if x=${trunk_cell#$PWD/}
      [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-  trunk_cell=$x
-elif y=${trunk_cell%/*/*} 
-     x=${trunk_cell#$y/}
-     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-  trunk_cell=$x
-elif x=${trunk_cell##*/} 
-     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-  trunk_cell=$x
-fi
-short_cell="$trunk_cell$dim_string"
+    trunk_cell=$x
+  elif y=${trunk_cell%/*/*/*} 
+       x=${trunk_cell#$y/}
+       [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+    trunk_cell=$x
+  elif y=${trunk_cell%/*/*} 
+       x=${trunk_cell#$y/}
+       [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+    trunk_cell=$x
+  elif x=${trunk_cell##*/} 
+       [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
+    trunk_cell=$x
+  fi
+  short_cell="$trunk_cell$dim_string"
 }
 
 # input must be a folder
@@ -464,216 +464,216 @@ get_upstream_needs_update() {
 
 # returns needs_update
 get_needs_update() {
-if [[ ! -e $1 ]]; then
-  log_fatal "Cell doesn't exist: $1"
-  stack_trace
-  return 1
-fi
-
-local cell_path=$(realpath $1)
-local status_path=$cell_path/.cyto/status \
-  up_path=$cell_path/.cyto/up \
-  log_message="No update needed" \
-  check_upstream_depth=${check_upstream_depth:-1}
-
-local short_cell
-get_short_cell $cell_path
-
-local log_vars=cell_path log_show_vars=short_cell
-begin_function
-
-  if [[ "$needs_update" ]]; then
-    # needs_update is already known, don't need to compute it again
-    log_message="needs_update is already set."
-    succeed
+  if [[ ! -e $1 ]]; then
+    log_fatal "Cell doesn't exist: $1"
+    stack_trace
+    return 1
   fi
 
-  if [[ ! -d $cell_path ]]; then
-    log_fatal "Attempted to run get_needs_update on a non-existent cell: $cell_path"
-    fail1
-  fi
+  local cell_path=$(realpath $1)
+  local status_path=$cell_path/.cyto/status \
+    up_path=$cell_path/.cyto/up \
+    log_message="No update needed" \
+    check_upstream_depth=${check_upstream_depth:-1}
 
-  needs_update=
+  local short_cell
+  get_short_cell $cell_path
 
-  local dims localize_dim_vars=${localize_dim_vars:-local} leaf_dims \
-    last_cell_dims_loaded
-  load_dims $cell_path/.dna/dim || fail
-  leaf_dims=( ${dims[*]:-} )
-  eval "$localize_dim_vars" || fail
+  local log_vars=cell_path log_show_vars=short_cell
+  begin_function
 
-  if [[ ! -e $status_path/last-good-update-end ]]
-  then
-    needs_update=t
-    log_message="Needs update because cell has never been updated successfully"
-  elif [[ ! -e $status_path/up-to-date ]]
-  then
-    needs_update=t
-    log_message="Needs update because something changed"
-  elif get_prop_changed $cell_path || fail
-       [[ $prop_changed == t ]]
-  then
-    needs_update=t
-    log_message="Needs update because properties have changed"
-  elif get_is_stale $status_path || fail
-       [[ $is_stale == t ]]
-  then
-    needs_update=t
-    log_message="Needs update because cell is stale"
-  elif [[ -v leaf_dims ]] \
-       && { 
-         function=get_leaf_needs_update \
-         for_each_leaf_flat ${leaf_dims[*]} || fail 
-       } \
-       && [[ $needs_update == t ]]
-  then
-    log_message="Needs update because at least one leaf cell is out of date"
-  elif [[ -v dna_up_path ]] \
-       && { get_upstream_needs_update $cell_path || fail; } \
-       && [[ $needs_update == t ]]
-  then
-    log_message="Needs update because at least one upstream cell is out of date"
-  fi
+    if [[ "$needs_update" ]]; then
+      # needs_update is already known, don't need to compute it again
+      log_message="needs_update is already set."
+      succeed
+    fi
 
-  if [[ $needs_update == t && ${pre_validate:-f} == t ]]; then
-
-    if execute_op check; then
-      if [[ $check_successful == t ]]; then
-        needs_update=f
-        log_message="No update needed because remote value already matches intended value"
-      fi
-    else
-      log_fatal "Failed to pre-validate. Something is wrong with the check operator."
+    if [[ ! -d $cell_path ]]; then
+      log_fatal "Attempted to run get_needs_update on a non-existent cell: $cell_path"
       fail1
     fi
 
+    needs_update=
+
+    local dims localize_dim_vars=${localize_dim_vars:-local} leaf_dims \
+      last_cell_dims_loaded
+    load_dims $cell_path/.dna/dim || fail
+    leaf_dims=( ${dims[*]:-} )
+    eval "$localize_dim_vars" || fail
+
+    if [[ ! -e $status_path/last-good-update-end ]]
+    then
+      needs_update=t
+      log_message="Needs update because cell has never been updated successfully"
+    elif [[ ! -e $status_path/up-to-date ]]
+    then
+      needs_update=t
+      log_message="Needs update because something changed"
+    elif get_prop_changed $cell_path || fail
+         [[ $prop_changed == t ]]
+    then
+      needs_update=t
+      log_message="Needs update because properties have changed"
+    elif get_is_stale $status_path || fail
+         [[ $is_stale == t ]]
+    then
+      needs_update=t
+      log_message="Needs update because cell is stale"
+    elif [[ -v leaf_dims ]] \
+         && { 
+           function=get_leaf_needs_update \
+           for_each_leaf_flat ${leaf_dims[*]} || fail 
+         } \
+         && [[ $needs_update == t ]]
+    then
+      log_message="Needs update because at least one leaf cell is out of date"
+    elif [[ -v dna_up_path ]] \
+         && { get_upstream_needs_update $cell_path || fail; } \
+         && [[ $needs_update == t ]]
+    then
+      log_message="Needs update because at least one upstream cell is out of date"
+    fi
+
+    if [[ $needs_update == t && ${pre_validate:-f} == t ]]; then
+
+      if execute_op check; then
+        if [[ $check_successful == t ]]; then
+          needs_update=f
+          log_message="No update needed because remote value already matches intended value"
+        fi
+      else
+        log_fatal "Failed to pre-validate. Something is wrong with the check operator."
+        fail1
+      fi
+
+    fi
+
+  end_function
+
+  if succeeded; then
+    local level=log_debug
+    # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
+    #   level=log_info
+    # fi
+    action=update_check $level "$log_message ($short_cell)"
+  else
+    action=update_check log_fatal "Failed to check update need"
   fi
 
-end_function
+  if [[ ! "$needs_update" ]]; then
+    needs_update=f
+  fi
 
-if succeeded; then
-  local level=log_debug
-  # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
-  #   level=log_info
-  # fi
-  action=update_check $level "$log_message ($short_cell)"
-else
-  action=update_check log_fatal "Failed to check update need"
-fi
-
-if [[ ! "$needs_update" ]]; then
-  needs_update=f
-fi
-
-handle_return
+  handle_return
 }
 
 setup_dep_defaults() {
-required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
-# Make this go back to default for any further contexts loaded
-# fresh passed in by user should only apply to top level cell, not to deps or subs
-fresh=
-return 0
+  required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
+  # Make this go back to default for any further contexts loaded
+  # fresh passed in by user should only apply to top level cell, not to deps or subs
+  fresh=
+  return 0
 }
 
 get_leaf_needs_update() {
-needs_update=f
-if [[ ! "${leaf_path:-}" ]]; then
-  log_fatal "leaf_path is missing"
-  return 1
-fi
-local leaf_cell_path=$cell_path$leaf_path
+  needs_update=f
+  if [[ ! "${leaf_path:-}" ]]; then
+    log_fatal "leaf_path is missing"
+    return 1
+  fi
+  local leaf_cell_path=$cell_path$leaf_path
 
-if [[ -d $leaf_cell_path ]]; then
-  # recursive
-  get_needs_update $leaf_cell_path || return 1
-else
-  needs_update=t
-fi
+  if [[ -d $leaf_cell_path ]]; then
+    # recursive
+    get_needs_update $leaf_cell_path || return 1
+  else
+    needs_update=t
+  fi
 
-if [[ $needs_update == t ]]; then
-  leave_loop=1
-fi
-return 0
+  if [[ $needs_update == t ]]; then
+    leave_loop=1
+  fi
+  return 0
 }
 
 get_prop_changed() {
-local cell_path=$1 \
-  status_path=$cell_path/.cyto/status \
-  prop_hash=0 \
-  value
-prop_changed=t
-if [[ ! "${props:-}" ]]; then
-  prop_changed=f
-elif [[ -d $status_path ]]; then
-  local -r status_file=$status_path/last_run_prop_hash
-  get_prop_hash || return 1
-  if [[ -f $status_file && "$prop_hash" == $(<$status_file) ]]; then
+  local cell_path=$1 \
+    status_path=$cell_path/.cyto/status \
+    prop_hash=0 \
+    value
+  prop_changed=t
+  if [[ ! "${props:-}" ]]; then
     prop_changed=f
+  elif [[ -d $status_path ]]; then
+    local -r status_file=$status_path/last_run_prop_hash
+    get_prop_hash || return 1
+    if [[ -f $status_file && "$prop_hash" == $(<$status_file) ]]; then
+      prop_changed=f
+    fi
   fi
-fi
-return 0
+  return 0
 }
 
 update_prop_hash() {
-local prop_hash
-get_prop_hash || return 1
-local -r status_file=$status_path/last_run_prop_hash
-echo "$prop_hash" >$status_file || return 1
-return 0
+  local prop_hash
+  get_prop_hash || return 1
+  local -r status_file=$status_path/last_run_prop_hash
+  echo "$prop_hash" >$status_file || return 1
+  return 0
 }
 
 get_prop_hash() {
-local prop=
-for prop in ${props[*]:-}; do
-  if [[ -v d_$prop ]]; then
-    eval "value=\$d_$prop"
-    prop_hash=$(echo "$prop=$value" | sha1sum) || return 1
-  fi
-done
-return 0
+  local prop=
+  for prop in ${props[*]:-}; do
+    if [[ -v d_$prop ]]; then
+      eval "value=\$d_$prop"
+      prop_hash=$(echo "$prop=$value" | sha1sum) || return 1
+    fi
+  done
+  return 0
 }
 
 get_is_stale() {
-local status_path=$status_path
-begin_function_flat
-  is_stale=t
-  if [[ ! "$required_freshness" || "$required_freshness" == inf ]]; then
-    is_stale=f
-  elif [[ $required_freshness != 0 ]]; then
-    local fresh_seconds
-    convert_to_seconds $required_freshness fresh_seconds || fail
-    local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds)) \
-      out_timestamp= 
-    is_stale=f
-    if [[ -f $status_path/last-good-update-end ]]; then
-      out_timestamp=$(date -r $status_path/last-good-update-end +%s)
+  local status_path=$status_path
+  begin_function_flat
+    is_stale=t
+    if [[ ! "$required_freshness" || "$required_freshness" == inf ]]; then
+      is_stale=f
+    elif [[ $required_freshness != 0 ]]; then
+      local fresh_seconds
+      convert_to_seconds $required_freshness fresh_seconds || fail
+      local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds)) \
+        out_timestamp= 
+      is_stale=f
+      if [[ -f $status_path/last-good-update-end ]]; then
+        out_timestamp=$(date -r $status_path/last-good-update-end +%s)
+      fi
+      if [[ "$out_timestamp" && $out_timestamp -lt $fresh_cutoff ]]; then
+        is_stale=t
+      fi
     fi
-    if [[ "$out_timestamp" && $out_timestamp -lt $fresh_cutoff ]]; then
-      is_stale=t
-    fi
-  fi
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 wait_for_low_load() {
-local cell_max_load=${cell_max_load:-10}
-local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
-local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
-if [[ $current_load -gt $cell_max_load ]]; then
-  log_warn "Load average is too high ($current_load > $cell_max_load)," \
-    "waiting until things cool down first."
-  local time_waited=0
-  while [[ $current_load -gt $cell_max_load ]]; do
-    current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
-    sleep 5; let time_waited+=5
-    if [[ "$cell_load_wait_timeout" -gt 0 && $time_waited -ge $cell_load_wait_timeout ]]; then
-      log_fatal "Timed out waiting for cpu load to be low enough. Aborting"
-      return 1
-    fi
-  done
-fi
-return 0
+  local cell_max_load=${cell_max_load:-10}
+  local cell_load_wait_timeout=${cell_load_wait_timeout:-600}
+  local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
+  if [[ $current_load -gt $cell_max_load ]]; then
+    log_warn "Load average is too high ($current_load > $cell_max_load)," \
+      "waiting until things cool down first."
+    local time_waited=0
+    while [[ $current_load -gt $cell_max_load ]]; do
+      current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
+      sleep 5; let time_waited+=5
+      if [[ "$cell_load_wait_timeout" -gt 0 && $time_waited -ge $cell_load_wait_timeout ]]; then
+        log_fatal "Timed out waiting for cpu load to be low enough. Aborting"
+        return 1
+      fi
+    done
+  fi
+  return 0
 }
 
 # run within the subshell at the beginning
@@ -682,10 +682,10 @@ begin_fork() {
 }
 
 reply_to_caller() {
-if [[ "${reply_file:-}" ]]; then
-  echo "$*" >>$reply_file || return 1
-fi
-return 0
+  if [[ "${reply_file:-}" ]]; then
+    echo "$*" >>$reply_file || return 1
+  fi
+  return 0
 }
 # run within the subshell at the beginning
 end_fork() {
@@ -751,12 +751,12 @@ end_background_fork() {
 reply_file=
 
 get_new_reply_file() {
-reply_file=$tmp_folder/reply.$BASHPID
-if [[ -f $reply_file ]]; then
-  log_fatal "reply_file already exists: $reply_file"
-  return 1
-fi
-return 0
+  reply_file=$tmp_folder/reply.$BASHPID
+  if [[ -f $reply_file ]]; then
+    log_fatal "reply_file already exists: $reply_file"
+    return 1
+  fi
+  return 0
 }
 
 fork() {
@@ -778,353 +778,353 @@ fork() {
 
 # 'value' is the loop var
 parallel_loop() {
-local loop_over_var2=$loop_over_var head2=${head:-} \
-  body2=$body tail2=${tail:-} \
-  par2=$par fork2=$fork \
-  array 
+  local loop_over_var2=$loop_over_var head2=${head:-} \
+    body2=$body tail2=${tail:-} \
+    par2=$par fork2=$fork \
+    array 
 
-# Make sure these variables don't get passed into inner loops
-local loop_over_var= head= body= tail= par= fork=
+  # Make sure these variables don't get passed into inner loops
+  local loop_over_var= head= body= tail= par= fork=
 
-local log_show_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
-begin_function_flat
+  local log_show_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
+  begin_function_flat
 
-  if [[ ! -v $loop_over_var2 ]]; then
-    log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
-    stack_trace
-    fail
-  fi
-
-  eval "array=( \"\${$loop_over_var2[@]}\" )"
-  local parallel=f
-  if [[ ${#array[*]} -gt 1 && $parallel_execution == t && $par2 == t ]]; then
-    parallel=t
-    wait_for_low_load || fail
-  fi
-
-  local processes= value
-  leave_loop=0
-
-  local extra
-  if [[ $parallel == t ]]; then
-    extra=" in parallel"
-  else
-    extra=" sequentially"
-  fi
-
-  local size=${#array[*]}
-  if (( size > 1 )); then
-    log_debug "looping over $size values$extra. body: $body2"
-  fi
-
-  begin_for value in "${array[@]}"; doo
-
-    log_debug "Current iteration value=$value"
-
-    if [[ "$head2" ]]; then
-      eval "$head2" || fail
+    if [[ ! -v $loop_over_var2 ]]; then
+      log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
+      stack_trace
+      fail
     fi
 
+    eval "array=( \"\${$loop_over_var2[@]}\" )"
+    local parallel=f
+    if [[ ${#array[*]} -gt 1 && $parallel_execution == t && $par2 == t ]]; then
+      parallel=t
+      wait_for_low_load || fail
+    fi
+
+    local processes= value
+    leave_loop=0
+
+    local extra
     if [[ $parallel == t ]]; then
-      { begin_background_fork; eval "$body2"; end_background_fork; } &
-      processes+=" $!"
+      extra=" in parallel"
     else
-      if [[ $fork2 == t ]]; then
-        fork "$body2" || fail
-      else
-        eval "$body2" || fail
+      extra=" sequentially"
+    fi
+
+    local size=${#array[*]}
+    if (( size > 1 )); then
+      log_debug "looping over $size values$extra. body: $body2"
+    fi
+
+    begin_for value in "${array[@]}"; doo
+
+      log_debug "Current iteration value=$value"
+
+      if [[ "$head2" ]]; then
+        eval "$head2" || fail
       fi
-    fi
 
-    if [[ "$tail2" ]]; then
-      eval "$tail2" || fail
-    fi
+      if [[ $parallel == t ]]; then
+        { begin_background_fork; eval "$body2"; end_background_fork; } &
+        processes+=" $!"
+      else
+        if [[ $fork2 == t ]]; then
+          fork "$body2" || fail
+        else
+          eval "$body2" || fail
+        fi
+      fi
 
-  end_for
+      if [[ "$tail2" ]]; then
+        eval "$tail2" || fail
+      fi
 
-  wait_for_sub_processes || fail
+    end_for
 
-end_function
-handle_return
+    wait_for_sub_processes || fail
+
+  end_function
+  handle_return
 }
 
 propagate_change_to_downstream() {
-begin_function_flat
+  begin_function_flat
 
-local from_cell=$from_cell \
-  down_path=$from_cell/.cyto/down down_folder folders
+  local from_cell=$from_cell \
+    down_path=$from_cell/.cyto/down down_folder folders
 
-if [[ -d $down_path ]]; then
-  local dep_stack=( ${downstream_cell_stack[*]} )
-  folders=( $(find1 $down_path -not -name '.*' -type d) ) || fail
-  loop_over_var=folders \
-    par=${par:-t} fork=f \
-    body=propagate_change_to_downstream2 \
-    parallel_loop || fail
-fi
+  if [[ -d $down_path ]]; then
+    local dep_stack=( ${downstream_cell_stack[*]} )
+    folders=( $(find1 $down_path -not -name '.*' -type d) ) || fail
+    loop_over_var=folders \
+      par=${par:-t} fork=f \
+      body=propagate_change_to_downstream2 \
+      parallel_loop || fail
+  fi
 
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 get_trunk_cell() {
-local cell=$1
-local parent=${cell%/*}
-local parent_part=${parent##*/}
-if [[ $parent_part == .dim ]]; then
-  local grandparent=${parent%/*}
-  if [[ "$grandparent" != "$parent" ]]; then
-    # recursive
-    get_trunk_cell $grandparent || return 1
+  local cell=$1
+  local parent=${cell%/*}
+  local parent_part=${parent##*/}
+  if [[ $parent_part == .dim ]]; then
+    local grandparent=${parent%/*}
+    if [[ "$grandparent" != "$parent" ]]; then
+      # recursive
+      get_trunk_cell $grandparent || return 1
+    else
+      return 1
+    fi
+  elif [[ ! -e $cell/.dna ]]; then
+    if [[ "$parent" != "$cell" ]]; then
+      # recursive
+      get_trunk_cell $parent || return 1
+    else
+      return 1
+    fi
   else
-    return 1
+    trunk_cell=$cell
   fi
-elif [[ ! -e $cell/.dna ]]; then
-  if [[ "$parent" != "$cell" ]]; then
-    # recursive
-    get_trunk_cell $parent || return 1
-  else
-    return 1
-  fi
-else
-  trunk_cell=$cell
-fi
-return 0
+  return 0
 }
 
 propagate_change_to_downstream2() {
-begin_function_flat
+  begin_function_flat
 
-  local cell=$(realpath $value)
+    local cell=$(realpath $value)
 
-  local short_cell
-  get_short_cell $cell || fail
+    local short_cell
+    get_short_cell $cell || fail
 
-  local t1 t2 trunk_cell
-  get_trunk_cell $cell
-  t1=$trunk_cell
-  get_trunk_cell $from_cell
-  t2=$trunk_cell
-  if [[ $t1 == $t2 ]]; then
-    log_fatal "Cell is propagating change to itself: $cell" 
-    fail1
-  fi
-  
-  local status_self=$cell/.cyto/status
-  
-  if already_in_dep_stack $cell; then
-    succeed
-  fi
-  dep_stack+=( $cell )
+    local t1 t2 trunk_cell
+    get_trunk_cell $cell
+    t1=$trunk_cell
+    get_trunk_cell $from_cell
+    t2=$trunk_cell
+    if [[ $t1 == $t2 ]]; then
+      log_fatal "Cell is propagating change to itself: $cell" 
+      fail1
+    fi
+    
+    local status_self=$cell/.cyto/status
+    
+    if already_in_dep_stack $cell; then
+      succeed
+    fi
+    dep_stack+=( $cell )
 
-  if [[ -d $cell ]]; then
-    if [[ -d $status_self ]]; then
-      # can't combine these if statements or it will alter the else condition
-      #   and break things
-      if [[ -f $status_self/up-to-date ]]; then
-        rm $status_self/up-to-date || fail
+    if [[ -d $cell ]]; then
+      if [[ -d $status_self ]]; then
+        # can't combine these if statements or it will alter the else condition
+        #   and break things
+        if [[ -f $status_self/up-to-date ]]; then
+          rm $status_self/up-to-date || fail
+          from_cell=$cell \
+            propagate_change_to_downstream || fail
+        fi
+      else
+        # recursive
         from_cell=$cell \
           propagate_change_to_downstream || fail
       fi
-    else
-      # recursive
-      from_cell=$cell \
-        propagate_change_to_downstream || fail
     fi
-  fi
 
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 already_in_dep_stack() {
-local find_dep=$1
-local dep
-for dep in ${dep_stack[*]}; do
-  if [[ $dep == $find_dep ]]; then
-    return 0
-  fi
-done
-return 1
+  local find_dep=$1
+  local dep
+  for dep in ${dep_stack[*]}; do
+    if [[ $dep == $find_dep ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 record_context() {
-local cell=$1
-local parent=${cell%/*}
-local new_context=$new_cyto/context
+  local cell=$1
+  local parent=${cell%/*}
+  local new_context=$new_cyto/context
 
-record_context_before $cell || return 1
+  record_context_before $cell || return 1
 
-local context_local_path=$cell/.dna/context-local
-local dna_path=$cell/.dna
+  local context_local_path=$cell/.dna/context-local
+  local dna_path=$cell/.dna
 
-if [[ -f $context_local_path ]]; then
-  echo "# generated from: $context_local_path" >>$new_context || return 1
-  echo | cat $context_local_path - >>$new_context || return 1
-elif [[ -f $dna_path ]]; then
-  echo "# generated from: $dna_path" >>$new_context || return 1
-  echo | cat $dna_path - >>$new_context || return 1
-fi
+  if [[ -f $context_local_path ]]; then
+    echo "# generated from: $context_local_path" >>$new_context || return 1
+    echo | cat $context_local_path - >>$new_context || return 1
+  elif [[ -f $dna_path ]]; then
+    echo "# generated from: $dna_path" >>$new_context || return 1
+    echo | cat $dna_path - >>$new_context || return 1
+  fi
 
-record_context_after $cell || return 1
+  record_context_after $cell || return 1
 
-return 0
+  return 0
 }
 
 record_context_before() {
-local cell=$1
-local parent=${cell%/*}
-if [[ ${#parent} -gt 1 ]]; then
-  record_context_before $parent || return 1
-fi
-local context_before_path=$cell/.dna/context-before
-if [[ -f $context_before_path ]]; then
-  echo "# generated from: $context_before_path" >>$new_context || return 1
-  echo | cat $context_before_path - >>$new_context || return 1
-fi
+  local cell=$1
+  local parent=${cell%/*}
+  if [[ ${#parent} -gt 1 ]]; then
+    record_context_before $parent || return 1
+  fi
+  local context_before_path=$cell/.dna/context-before
+  if [[ -f $context_before_path ]]; then
+    echo "# generated from: $context_before_path" >>$new_context || return 1
+    echo | cat $context_before_path - >>$new_context || return 1
+  fi
 }
 
 record_context_after() {
-local cell=$1
-local parent=${cell%/*}
-local context_after_path=$cell/.dna/context-after
-if [[ -f $context_after_path ]]; then
-  echo "# generated from: $context_after_path" >>$new_context || return 1
-  echo | cat $context_after_path - >>$new_context || return 1
-fi
-if [[ ${#parent} -gt 1 ]]; then
-  record_context_after $parent || return 1
-fi
+  local cell=$1
+  local parent=${cell%/*}
+  local context_after_path=$cell/.dna/context-after
+  if [[ -f $context_after_path ]]; then
+    echo "# generated from: $context_after_path" >>$new_context || return 1
+    echo | cat $context_after_path - >>$new_context || return 1
+  fi
+  if [[ ${#parent} -gt 1 ]]; then
+    record_context_after $parent || return 1
+  fi
 }
 
 inherit_lib() {
-local cell_from=$1
-local parent=${cell_from%/*}
-begin_function_flat
-  if [[ "${#parent}" -gt 1 ]]; then
-    # recursive
-    inherit_lib $parent || fail
-  fi
-  if [[ -d $cell_from/.dna ]]; then
-    local lib
-    if [[ -d $cell_from/.dna/lib ]]; then
-      inherit_lib_folder $cell_from/.dna/lib $new_cyto/lib || fail
+  local cell_from=$1
+  local parent=${cell_from%/*}
+  begin_function_flat
+    if [[ "${#parent}" -gt 1 ]]; then
+      # recursive
+      inherit_lib $parent || fail
     fi
-    if [[ -d $cell_from/.dna/command ]]; then
-      inherit_lib_folder $cell_from/.dna/command $new_cyto/command || fail
+    if [[ -d $cell_from/.dna ]]; then
+      local lib
+      if [[ -d $cell_from/.dna/lib ]]; then
+        inherit_lib_folder $cell_from/.dna/lib $new_cyto/lib || fail
+      fi
+      if [[ -d $cell_from/.dna/command ]]; then
+        inherit_lib_folder $cell_from/.dna/command $new_cyto/command || fail
+      fi
     fi
-  fi
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 inherit_lib_folder() {
-local from=$1 to=$2
-begin_function_flat
-  local folder_name lib
-  mkdir -p $to || fail
-  local from_contents=$(find1 $from -not -name '.*') || fail
-  begin_for lib in $from_contents; doo
-    if [[ -f $lib ]]; then
-      local source_path=${lib%/*} target_file=${lib##*/} base prefix
-      if [[ ! $target_file =~ ([0-9]+)-(.*) ]]; then
-        base=$target_file
-        found=( $(find1 $to -regex '[0-9]+-'$base'$' | sort -g) ) || fail
-        if [[ "${found:-}" ]]; then
-          target_file=$found
-          if [[ "${#found[*]}" -gt 1 ]]; then
-            log_warn "Found more than one match for $lib in $to. Will use $target_file."
+  local from=$1 to=$2
+  begin_function_flat
+    local folder_name lib
+    mkdir -p $to || fail
+    local from_contents=$(find1 $from -not -name '.*') || fail
+    begin_for lib in $from_contents; doo
+      if [[ -f $lib ]]; then
+        local source_path=${lib%/*} target_file=${lib##*/} base prefix
+        if [[ ! $target_file =~ ([0-9]+)-(.*) ]]; then
+          base=$target_file
+          found=( $(find1 $to -regex '[0-9]+-'$base'$' | sort -g) ) || fail
+          if [[ "${found:-}" ]]; then
+            target_file=$found
+            if [[ "${#found[*]}" -gt 1 ]]; then
+              log_warn "Found more than one match for $lib in $to. Will use $target_file."
+            fi
           fi
         fi
+        safe_link $lib $to/$target_file || fail
+      elif [[ -d $lib ]]; then
+        folder_name=${lib##*/}
+        inherit_lib_folder $lib $to/$folder_name || fail
       fi
-      safe_link $lib $to/$target_file || fail
-    elif [[ -d $lib ]]; then
-      folder_name=${lib##*/}
-      inherit_lib_folder $lib $to/$folder_name || fail
-    fi
-  end_for
-end_function
-handle_return
+    end_for
+  end_function
+  handle_return
 }
 
 create_sub_cells() {
-if [[ -f "$status_path/subs-up-to-date" ]]; then
+  if [[ -f "$status_path/subs-up-to-date" ]]; then
+    return 0
+  fi
+  if [[ "${sub_path:-}" ]]; then
+    create_sub_cells2 $cell_path '' || return 1
+  fi
+  if [[ "$status_path" ]]; then
+    touch $status_path/subs-up-to-date || return 1
+  fi
   return 0
-fi
-if [[ "${sub_path:-}" ]]; then
-  create_sub_cells2 $cell_path '' || return 1
-fi
-if [[ "$status_path" ]]; then
-  touch $status_path/subs-up-to-date || return 1
-fi
-return 0
 }
 
 create_sub_branch() {
-local log_show_vars=^sub_dna_path
-begin_function
+  local log_show_vars=^sub_dna_path
+  begin_function
 
-  mkdir $sub_dna_path/dim || fail
+    mkdir $sub_dna_path/dim || fail
 
-  begin_for ((i = 1; i < super_dim_count; i++)); doo
-    local from_dim=${super_dims[$i]}
-    local to_dim=$sub_dna_path/dim/${from_dim##*/}
-    safe_link $(realpath $from_dim) $to_dim || fail
-  end_for
+    begin_for ((i = 1; i < super_dim_count; i++)); doo
+      local from_dim=${super_dims[$i]}
+      local to_dim=$sub_dna_path/dim/${from_dim##*/}
+      safe_link $(realpath $from_dim) $to_dim || fail
+    end_for
 
-  local contents=$(find1 $dna_path -not -name '.*') || fail
-  begin_for part in $contents; doo
-    if [[ "$part" == */dim \
-       || "$part" == */context* \
-       || "$part" == */up \
-       || "$part" == */down \
-       || "$part" == */leaf \
-       ]]; then
-      continue
-    fi
-    safe_link $(realpath $part) $sub_dna_path/ || fail
-  end_for 
-
-  if [[ -d $dna_path/leaf ]]; then
-    local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
-    mkdir $sub_dna_path/leaf || fail
+    local contents=$(find1 $dna_path -not -name '.*') || fail
     begin_for part in $contents; doo
-      if [[ "$part" == */up \
+      if [[ "$part" == */dim \
+         || "$part" == */context* \
+         || "$part" == */up \
          || "$part" == */down \
-         ]]; then
-        continue
-      fi
-      safe_link $(realpath $part) $sub_dna_path/leaf || fail
-    end_for 
-  fi
-
-end_function
-handle_return
-}
-
-create_sub_leaf() {
-local log_show_vars=^sub_dna_path
-begin_function
-
-  if [[ -d $dna_path/leaf ]]; then
-    local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
-    local part
-    begin_for part in $contents; doo
-      if [[ "$part" == */up \
-         || "$part" == */down \
+         || "$part" == */leaf \
          ]]; then
         continue
       fi
       safe_link $(realpath $part) $sub_dna_path/ || fail
     end_for 
-  fi
 
-  if [[ -d $dna_path/key ]]; then
-    safe_link $(realpath $dna_path/key) $sub_dna_path/ || fail
-  fi
+    if [[ -d $dna_path/leaf ]]; then
+      local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
+      mkdir $sub_dna_path/leaf || fail
+      begin_for part in $contents; doo
+        if [[ "$part" == */up \
+           || "$part" == */down \
+           ]]; then
+          continue
+        fi
+        safe_link $(realpath $part) $sub_dna_path/leaf || fail
+      end_for 
+    fi
 
-end_function
-handle_return
+  end_function
+  handle_return
+}
+
+create_sub_leaf() {
+  local log_show_vars=^sub_dna_path
+  begin_function
+
+    if [[ -d $dna_path/leaf ]]; then
+      local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
+      local part
+      begin_for part in $contents; doo
+        if [[ "$part" == */up \
+           || "$part" == */down \
+           ]]; then
+          continue
+        fi
+        safe_link $(realpath $part) $sub_dna_path/ || fail
+      end_for 
+    fi
+
+    if [[ -d $dna_path/key ]]; then
+      safe_link $(realpath $dna_path/key) $sub_dna_path/ || fail
+    fi
+
+  end_function
+  handle_return
 }
 
 append_dim_var_to_context() {
@@ -1147,8 +1147,8 @@ append_dim_var_to_context() {
       value=
     fi
     echo "# Generated by create_sub_branch from $cell_path
-  $ddim='$value'
-  localize_dim_vars+=' $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}'" >$sub_dna_path/context-before || fail
+$ddim='$value'
+localize_dim_vars+=' $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}'" >$sub_dna_path/context-before || fail
     log_debug "Appending dim $ddim=$value to $sub_dna_path/context-before"
   end_function
   handle_return
@@ -1217,6 +1217,7 @@ promote_dep_cell() {
       if [[ $found_branch_dim == f ]]; then
         debug_start
         if [[ $cell_is_leaf == t ]]; then
+          value= ${dim}_member_expand || return 0
 
         fi
 
@@ -1543,7 +1544,7 @@ find_seed_dna() {
 }
 
 gather_leaf_cells() {
-leaf_cells+=( $leaf_path )
+  leaf_cells+=( $leaf_path )
 }
 
 # executes a step of the folder language
@@ -3042,175 +3043,175 @@ fi
 }
 
 get_plural() {
-local dim=$1
-if [[ ${dim%s} != $dim ]]; then
-  plural=${dim}es
-else
-  plural=${dim}s
-fi
-return 0
+  local dim=$1
+  if [[ ${dim%s} != $dim ]]; then
+    plural=${dim}es
+  else
+    plural=${dim}s
+  fi
+  return 0
 }
 
 dim_is_required() {
-local dim=$1 values= problem=
-value= ${dim}_member_expand || return 0
-return 1
+  local dim=$1 values= problem=
+  value= ${dim}_member_expand || return 0
+  return 1
 }
 
-load_parent_context() { 
-local cell=$1
-local parent=${cell%/*}
-if [[ ${#parent} -gt 1 ]]; then
-  load_parent_context $parent || return 1
-fi
-if [[ -f $cell/.dna/context ]]; then
-  source $cell/.dna/context || return 1
-fi
-return 0
+load_parent_context() {
+  local cell=$1
+  local parent=${cell%/*}
+  if [[ ${#parent} -gt 1 ]]; then
+    load_parent_context $parent || return 1
+  fi
+  if [[ -f $cell/.dna/context ]]; then
+    source $cell/.dna/context || return 1
+  fi
+  return 0
 }
 
 # Used by the help system to describe a command and it's parameters to the user
 new_command() {
-local name=$name description=$description
-command_description=$description
-parameter_names=( )
-parameter_descriptions=( )
-parameter_defaults=( )
+  local name=$name description=$description
+  command_description=$description
+  parameter_names=( )
+  parameter_descriptions=( )
+  parameter_defaults=( )
 }
 
 add_parameter() {
-local name=$name description=$description default=${default:-}
-parameter_names+=( "$name" ) 
-parameter_descriptions+=( "$description" ) 
-parameter_defaults+=( "$default" ) 
+  local name=$name description=$description default=${default:-}
+  parameter_names+=( "$name" ) 
+  parameter_descriptions+=( "$description" ) 
+  parameter_defaults+=( "$default" ) 
 }
 
 tee_files=( )
 paused_tee_file=
 
 tee_output_to_log() {
-if [[ "$log_to_file" && "$logging_to_file" && $debugging == f ]]; then
-  exec 1> >(tee -a "$logging_to_file") || return 1
-  exec 2> >(tee -a "$logging_to_file") || return 1
-  eval "exec $fd_trace>>$logging_to_file" || return 1
-  BASH_XTRACEFD=$fd_trace
-  tee_files+=( $logging_to_file )
-  #start_tracing
-fi
-return 0
+  if [[ "$log_to_file" && "$logging_to_file" && $debugging == f ]]; then
+    exec 1> >(tee -a "$logging_to_file") || return 1
+    exec 2> >(tee -a "$logging_to_file") || return 1
+    eval "exec $fd_trace>>$logging_to_file" || return 1
+    BASH_XTRACEFD=$fd_trace
+    tee_files+=( $logging_to_file )
+    #start_tracing
+  fi
+  return 0
 }
 
 untee_output() {
-if [[ "$log_to_file" && "$logging_to_file" && $debugging == f ]]; then
-  if [[ "${tee_files:-}" ]]; then
-    #stop_tracing
-    BASH_XTRACEFD=
-    exec 1>&$fd_original_out || return 1
-    exec 2>&$fd_original_err || return 1
-    eval "exec $fd_trace>&-" || return 1
-    #local tee_size=${#tee_files[*]}
-    #tee_files=( ${tee_files[*]:0:$((tee_size-1))} )
-    unset tee_files[-1]
-  else
-    # log_warn "untee was called when nothing was teed"
-    :
+  if [[ "$log_to_file" && "$logging_to_file" && $debugging == f ]]; then
+    if [[ "${tee_files:-}" ]]; then
+      #stop_tracing
+      BASH_XTRACEFD=
+      exec 1>&$fd_original_out || return 1
+      exec 2>&$fd_original_err || return 1
+      eval "exec $fd_trace>&-" || return 1
+      #local tee_size=${#tee_files[*]}
+      #tee_files=( ${tee_files[*]:0:$((tee_size-1))} )
+      unset tee_files[-1]
+    else
+      # log_warn "untee was called when nothing was teed"
+      :
+    fi
   fi
-fi
-return 0
+  return 0
 }
 
 pause_tee() {
-if [[ "${tee_files:-}" ]]; then
-  paused_tee_file=${tee_files[-1]}
-  untee_output || return 1
-fi
-return 0
+  if [[ "${tee_files:-}" ]]; then
+    paused_tee_file=${tee_files[-1]}
+    untee_output || return 1
+  fi
+  return 0
 }
 
 unpause_tee() {
-if [[ "$paused_tee_file" ]]; then
-  tee_output_to_log $paused_tee_file || return 1
-  paused_tee_file=
-fi
-return 0
+  if [[ "$paused_tee_file" ]]; then
+    tee_output_to_log $paused_tee_file || return 1
+    paused_tee_file=
+  fi
+  return 0
 }
 
 get_cell_name() {
-local cell_path=$1
-local short_cell
-get_short_cell $cell_path || fail
-cell_name=${short_cell//\//_}
-cell_name=${cell_name// /:}
+  local cell_path=$1
+  local short_cell
+  get_short_cell $cell_path || fail
+  cell_name=${short_cell//\//_}
+  cell_name=${cell_name// /:}
 }
 
 cd_to_leaf() {
-while true; do
-  local last_part=${PWD##*/}
-  if [[ -d .dim ]]; then
-    cd .dim || return 1
-  elif [[ "$last_part" == .dim ]]; then
-    if [[ "${1:-}" && -d "$1" ]]; then
-      cd "$1" || return 1
-      shift || true
-    else
-      local files=( $(find -mindepth 1 -maxdepth 1 -type d -not -name ".*") )
-      if [[ -d "$files/.dim" ]]; then
-        cd $files/.dim || return 1
-      elif [[ -d "$files/.dna" ]]; then
-        cd $files || return 1
-        break
+  while true; do
+    local last_part=${PWD##*/}
+    if [[ -d .dim ]]; then
+      cd .dim || return 1
+    elif [[ "$last_part" == .dim ]]; then
+      if [[ "${1:-}" && -d "$1" ]]; then
+        cd "$1" || return 1
+        shift || true
       else
-        break
+        local files=( $(find -mindepth 1 -maxdepth 1 -type d -not -name ".*") )
+        if [[ -d "$files/.dim" ]]; then
+          cd $files/.dim || return 1
+        elif [[ -d "$files/.dna" ]]; then
+          cd $files || return 1
+          break
+        else
+          break
+        fi
       fi
+    else
+      break
     fi
-  else
-    break
-  fi
-done
-return 0
+  done
+  return 0
 }
 
 cd_to_trunk() {
-local trunk_cell
-get_trunk_cell $PWD || return 1
-if [[ "$trunk_cell" ]]; then
-  cd "$trunk_cell" 
-else
-  echo "No trunk found" >&2
-  return 1
-fi
-return 0
+  local trunk_cell
+  get_trunk_cell $PWD || return 1
+  if [[ "$trunk_cell" ]]; then
+    cd "$trunk_cell" 
+  else
+    echo "No trunk found" >&2
+    return 1
+  fi
+  return 0
 }
 
 cd_to_seed() {
-local seed from=$PWD
-find_seed $from || return 1
-if [[ "$seed" ]]; then
-  local path=${from#$seed/}
-  local to=$seed/.dna/sub/$path 
-  while [[ ! -d $to ]]; do
-    to=${to%/*}
-  done
-  cd $to || return 1
-else
-  echo "No seed found" >&2
-  return 1
-fi
-return 0
+  local seed from=$PWD
+  find_seed $from || return 1
+  if [[ "$seed" ]]; then
+    local path=${from#$seed/}
+    local to=$seed/.dna/sub/$path 
+    while [[ ! -d $to ]]; do
+      to=${to%/*}
+    done
+    cd $to || return 1
+  else
+    echo "No seed found" >&2
+    return 1
+  fi
+  return 0
 }
 
 cd_to_plant() {
-local from=$PWD
-local to=${from//.dna\/sub\//}
-if [[ "$from" != "$to" ]]; then
-  while [[ ! -d $to ]]; do
-    to=${to%/*}
-  done
-  cd $to || return 1
-else
-  echo "No plant found" >&2
-  return 1
-fi
-return 0
+  local from=$PWD
+  local to=${from//.dna\/sub\//}
+  if [[ "$from" != "$to" ]]; then
+    while [[ ! -d $to ]]; do
+      to=${to%/*}
+    done
+    cd $to || return 1
+  else
+    echo "No plant found" >&2
+    return 1
+  fi
+  return 0
 }
 
