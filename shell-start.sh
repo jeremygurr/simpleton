@@ -33,6 +33,7 @@ else
   if [[ "$old" == "$target" \
      || "${old%/*}" == "$target" \
      || "$old" == "${target%/*}" \
+     || ! -d "$old" \
      ]]; then
     # don't need to record, since the change is small
     :
