@@ -21,6 +21,9 @@ update_upstream() {
     local needs_update=
     local up_part=${upstream##*/}
     local up_cyto=$up_path/$up_part
+    if [[ ! -d "$up_path" ]]; then
+      mkdir "$up_path" || fail
+    fi
 
     if [[ $previous_upstream_changed == t ]]; then
       log_debug "Previous upstream changed, removing cyto upstream"
