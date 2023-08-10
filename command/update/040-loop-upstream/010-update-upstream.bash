@@ -17,7 +17,6 @@ update_upstream() {
       fi
     }
 
-    debug_start
     local needs_update=
     local up_part=${upstream##*/}
     local up_cyto=$up_path/$up_part
