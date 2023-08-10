@@ -1,7 +1,8 @@
 update_upstream() {
-  local required_freshness=$required_freshness fresh=$fresh default_freshness=$default_freshness
+  local required_freshness=$required_freshness fresh=$fresh \
+    default_freshness=$default_freshness up_dna=$upstream
 
-  local log_show_vars=^upstream 
+  local log_show_vars=^up_dna 
   begin_function
 
     if [[ "${localize_dim_vars:-}" ]]; then
@@ -11,14 +12,14 @@ update_upstream() {
     # This may be overridden by upstream prep file to customize how failure of this upstream is handled
     handle_upstream_result() {
       if [[ "$update_successful" == f ]]; then
-        log_error "Failed to update upstream cell $upstream"
+        log_error "Failed to update upstream cell $up_dna"
       else 
         update_successful=
       fi
     }
 
     local needs_update=
-    local up_part=${upstream##*/}
+    local up_part=${up_dna##*/}
     local up_cyto=$up_path/$up_part
     if [[ ! -d "$up_path" ]]; then
       mkdir "$up_path" || fail
@@ -31,14 +32,16 @@ update_upstream() {
 
     if [[ ! -e $up_cyto ]]; then
       log_debug "Cyto upstream is missing, will create"
-      setup_cyto_upstream $upstream $up_cyto || fail
+      prep_upstream $up_dna || fail
+      setup_cyto_upstream $up_dna $up_cyto || fail
+    else
+      prep_upstream $up_cyto || fail
     fi
 
-    prep_upstream $up_cyto || fail
     get_needs_update $up_cyto || fail
 
     if [[ $needs_update == t ]]; then
-      downstream_ref_path=$upstream
+      downstream_ref_path=$up_dna
       downstream_cell_stack+=( $cell_path )
       fork execute_command "$(realpath $up_cyto)" update || fail
       previous_upstream_changed=t
