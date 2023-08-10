@@ -4,6 +4,8 @@ if [[ "${ADD_PATH:-}" ]]; then
   export PATH=$ADD_PATH:$PATH
 fi
 
+complete -r # remove built-in shell completion since it currently has problems
+
 prompt_name=${prompt_name:-}
 NL=$'\n'
 
