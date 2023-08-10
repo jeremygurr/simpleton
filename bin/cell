@@ -13,272 +13,272 @@ source $SIMPLETON_REPO/lib/omni-navigator || exit 1
 source $SIMPLETON_REPO/lib/cell-lib || exit 1
 
 handle_command() {
-local subject_type=$0
-subject_type=${subject_type##*/}
-local commands=( "$@" )
-local cells=${cells:-${cell:-.}}
-local multi_cell=f
-[[ "$cells" == *\ * ]] && multi_cell=t
+  local subject_type=$0
+  subject_type=${subject_type##*/}
+  local commands=( "$@" )
+  local cells=${cells:-${cell:-.}}
+  local multi_cell=f
+  [[ "$cells" == *\ * ]] && multi_cell=t
 
-begin_function_flat
+  begin_function_flat
 
-  debugger_init || fail
-  command="$original_cmd" omni_log_init || fail
-  omni_navigator_init || fail
+    debugger_init || fail
+    command="$original_cmd" omni_log_init || fail
+    omni_navigator_init || fail
 
-  local cell_path
-  begin_for cell_path in $cells; doo
+    local cell_path
+    begin_for cell_path in $cells; doo
 
-    cell_path=$(unrealpath $cell_path) || {
-      fatal "Failed to resolve path for $cell_path"
-      fail1
-      }
-
-    local command i next
-    begin_for ((i=0; i<${#commands[*]}; i++)); doo
-
-      command=${commands[$i]}
-
-      if [[ "$cell_path" == */.dna/sub/* && $command == update ]]; then
-        fatal "Don't run update cell commands within sub cell dna folders. Run in the real cell folders."
+      cell_path=$(unrealpath $cell_path) || {
+        fatal "Failed to resolve path for $cell_path"
         fail1
-      fi
+        }
 
-      if [[ $command == */* && -d $command/.dna ]]; then
-        cell_path=$(unrealpath $command/.dna)
-        continue
-      fi
+      local command i next
+      begin_for ((i=0; i<${#commands[*]}; i++)); doo
 
-      case $command in
-        help|?|--help)
-          handle_help_command "${commands[@]:$((i+1))}"
-          succeed
-        ;;
-        shell)
-          export prompt_name='cell shell'
-          bash --init-file <(
-            cat \
-            /etc/profile \
-            $SIMPLETON_REPO/lib/bash-lib \
-            $SIMPLETON_REPO/lib/omni-log \
-            $SIMPLETON_REPO/lib/omni-navigator \
-            $SIMPLETON_REPO/lib/bash-debugger \
-            $SIMPLETON_REPO/lib/cell-lib \
-            $SIMPLETON_REPO/lib/cell-shell-prep \
-            )
-        ;;
-        clean)
-          get_bottom_cell $cell_path || fail
-          if [[ ! "$bottom_cell" ]]; then
-            fatal "Not a valid cell: $cell_path"
-            fail1
-          fi
-          local cell_path=$bottom_cell
-          log_info "Cleaning $cell_path..." 
-          local clean_file=$cell_path/.dna/op/clean.bash
-          if [[ -f $clean_file ]]; then
-            source $clean_file || fail
-            clean || fail
-          else
-            local dir
-            begin_for dir in out build .dim; doo
-              if [[ -d $cell_path/$dir ]]; then
-                rm -rf $cell_path/$dir &>/dev/null
-              fi
-            end_for
-          fi
-          if [[ -e "$cell_path/.cyto" ]]; then
-            rm -rf $cell_path/.cyto || fail
-            log_info "Cleaned."
-          else
-            log_info "Already clean."
-          fi
-        ;;
-        *)
-          next=
-          if [[ $((i+1)) -lt ${#commands[*]} ]]; then
-            next=${commands[$((i+1))]}
-          fi
-          if [[ $next == --help || $next == -h || $next == help ]]; then
-            show_help_for_command $command
-            fail1
-          else
+        command=${commands[$i]}
+
+        if [[ "$cell_path" == */.dna/sub/* && $command == update ]]; then
+          fatal "Don't run update cell commands within sub cell dna folders. Run in the real cell folders."
+          fail1
+        fi
+
+        if [[ $command == */* && -d $command/.dna ]]; then
+          cell_path=$(unrealpath $command/.dna)
+          continue
+        fi
+
+        case $command in
+          help|?|--help)
+            handle_help_command "${commands[@]:$((i+1))}"
+            succeed
+          ;;
+          shell)
+            export prompt_name='cell shell'
+            bash --init-file <(
+              cat \
+              /etc/profile \
+              $SIMPLETON_REPO/lib/bash-lib \
+              $SIMPLETON_REPO/lib/omni-log \
+              $SIMPLETON_REPO/lib/omni-navigator \
+              $SIMPLETON_REPO/lib/bash-debugger \
+              $SIMPLETON_REPO/lib/cell-lib \
+              $SIMPLETON_REPO/lib/cell-shell-prep \
+              )
+          ;;
+          clean)
             get_bottom_cell $cell_path || fail
-            cell_path=$bottom_cell
-            local omni_log_job_id job_id_log=${home_job_path:-$HOME/.simpleton/job-log}
-
-            if [[ ! -d ${job_id_log%/*} ]]; then
-              mkdir -p ${job_id_log%/*} || fail
+            if [[ ! "$bottom_cell" ]]; then
+              fatal "Not a valid cell: $cell_path"
+              fail1
             fi
+            local cell_path=$bottom_cell
+            log_info "Cleaning $cell_path..." 
+            local clean_file=$cell_path/.dna/op/clean.bash
+            if [[ -f $clean_file ]]; then
+              source $clean_file || fail
+              clean || fail
+            else
+              local dir
+              begin_for dir in out build .dim; doo
+                if [[ -d $cell_path/$dir ]]; then
+                  rm -rf $cell_path/$dir &>/dev/null
+                fi
+              end_for
+            fi
+            if [[ -e "$cell_path/.cyto" ]]; then
+              rm -rf $cell_path/.cyto || fail
+              log_info "Cleaned."
+            else
+              log_info "Already clean."
+            fi
+          ;;
+          *)
+            next=
+            if [[ $((i+1)) -lt ${#commands[*]} ]]; then
+              next=${commands[$((i+1))]}
+            fi
+            if [[ $next == --help || $next == -h || $next == help ]]; then
+              show_help_for_command $command
+              fail1
+            else
+              get_bottom_cell $cell_path || fail
+              cell_path=$bottom_cell
+              local omni_log_job_id job_id_log=${home_job_path:-$HOME/.simpleton/job-log}
 
-            local needs_update= \
-              command_to_log="$(realpath $cell_path)"
-            execute_command $cell_path $command || fail
-          fi
-        ;;
-      esac
+              if [[ ! -d ${job_id_log%/*} ]]; then
+                mkdir -p ${job_id_log%/*} || fail
+              fi
+
+              local needs_update= \
+                command_to_log="$(realpath $cell_path)"
+              execute_command $cell_path $command || fail
+            fi
+          ;;
+        esac
+
+      end_for
 
     end_for
 
-  end_for
-
-end_function_flat
-handle_return
+  end_function_flat
+  handle_return
 }
 
 handle_help_command() {
-local commands=( "$@" ) command first_command=t
-begin_function_flat
-  if [[ "${commands:-}" ]]; then
-    begin_for command in "${commands[@]}"; doo
-      show_help_for_command $command || fail
-      first_command=f
-    end_for
-  else
-    show_cell_help
-  fi
-end_function_flat
-handle_return
+  local commands=( "$@" ) command first_command=t
+  begin_function_flat
+    if [[ "${commands:-}" ]]; then
+      begin_for command in "${commands[@]}"; doo
+        show_help_for_command $command || fail
+        first_command=f
+      end_for
+    else
+      show_cell_help
+    fi
+  end_function_flat
+  handle_return
 }
 
 show_cell_help() {
-begin_function_flat
+  begin_function_flat
 
-  get_bottom_cell $cell_path || {
-    fatal "No cell found here: $cell_path"
-    fail1
-    }
-  cell_path=$bottom_cell \
-    cell_context_load || fail
-  if [[ $multi_cell == t ]]; then
-    out "===================================================================================================="
-    out "Cell: $short_cell"
-  fi
-
-  if [[ "${cell_description:-}" ]]; then
-    out "Description: $cell_description"
-  else
-    out "No description for this cell. Set cell_description variable in context file."
-  fi
-
-  local required=()
-
-  if [[ "${leaf_dims:-}" ]]; then
-    out "Dimension parameters:"
-    show_dimensions ${leaf_dims[*]} || fail
-  fi
-
-  if [[ "${sub_dims:-}" || "${props:-}" ]]; then
-    out "Other parameters:"
-    if [[ "${sub_dims:-}" ]]; then
-      show_dimensions ${sub_dims[*]} || fail
+    get_bottom_cell $cell_path || {
+      fatal "No cell found here: $cell_path"
+      fail1
+      }
+    cell_path=$bottom_cell \
+      cell_context_load || fail
+    if [[ $multi_cell == t ]]; then
+      out "===================================================================================================="
+      out "Cell: $short_cell"
     fi
-    if [[ "${props:-}" ]]; then
-      show_dimensions ${props[*]} || fail
+
+    if [[ "${cell_description:-}" ]]; then
+      out "Description: $cell_description"
+    else
+      out "No description for this cell. Set cell_description variable in context file."
     fi
-  fi
 
-  if [[ "${required:-}" ]]; then
-    out "Required parameters: ${required[*]}"
-  fi
+    local required=()
 
-end_function_flat
-handle_return
+    if [[ "${leaf_dims:-}" ]]; then
+      out "Dimension parameters:"
+      show_dimensions ${leaf_dims[*]} || fail
+    fi
+
+    if [[ "${sub_dims:-}" || "${props:-}" ]]; then
+      out "Other parameters:"
+      if [[ "${sub_dims:-}" ]]; then
+        show_dimensions ${sub_dims[*]} || fail
+      fi
+      if [[ "${props:-}" ]]; then
+        show_dimensions ${props[*]} || fail
+      fi
+    fi
+
+    if [[ "${required:-}" ]]; then
+      out "Required parameters: ${required[*]}"
+    fi
+
+  end_function_flat
+  handle_return
 }
 
 show_dimensions() {
-local dims=( $* ) dim description values is_required
-begin_for dim in ${dims[*]}; doo
-  eval "description=\$${dim}_description" || fail
-  out "  $dim: $description"
-  if type -t ${dim}_member_expand >/dev/null; then
-    values=
-    is_required=f
-    eval "value='' ${dim}_member_expand" &>/dev/null || is_required=t
-    if [[ "$values" ]]; then
-      if [[ "$values" == $empty_member ]]; then
-        out "    default: (empty)"
-      else
-        out "    default: ${values[*]}"
-      fi
-    elif [[ $is_required == f ]]; then
-      out "    optional"
-    else
-      required+=( $dim )
-    fi
-    if [[ -v ${dim}_examples ]]; then
-      eval "local examples=( \"\${${dim}_examples[@]}\" )"
-      local example_count=${#examples[*]} i index_string=
-      for ((i=0; i<example_count; i++)); do
-        if [[ example_count -gt 1 ]]; then
-          index_string=" #$((i+1))"
+  local dims=( $* ) dim description values is_required
+  begin_for dim in ${dims[*]}; doo
+    eval "description=\$${dim}_description" || fail
+    out "  $dim: $description"
+    if type -t ${dim}_member_expand >/dev/null; then
+      values=
+      is_required=f
+      eval "value='' ${dim}_member_expand" &>/dev/null || is_required=t
+      if [[ "$values" ]]; then
+        if [[ "$values" == $empty_member ]]; then
+          out "    default: (empty)"
+        else
+          out "    default: ${values[*]}"
         fi
-        out "    example$index_string: ${examples[$i]}"
-      done
+      elif [[ $is_required == f ]]; then
+        out "    optional"
+      else
+        required+=( $dim )
+      fi
+      if [[ -v ${dim}_examples ]]; then
+        eval "local examples=( \"\${${dim}_examples[@]}\" )"
+        local example_count=${#examples[*]} i index_string=
+        for ((i=0; i<example_count; i++)); do
+          if [[ example_count -gt 1 ]]; then
+            index_string=" #$((i+1))"
+          fi
+          out "    example$index_string: ${examples[$i]}"
+        done
+      fi
     fi
-  fi
-end_for
+  end_for
 }
 
 show_help_for_command() {
-local command=$1
-begin_function_flat
-  get_bottom_cell $cell_path || fail
-  if [[ "$bottom_cell" ]]; then
-    local cell_path=$bottom_cell
-    cell_context_load || fail
-    [[ $first_command == f ]] && out ''
-    out "command: $command"
-    if [[ -f $command_path/$command.info ]]; then
-      source $command_path/$command.info || fail
-      out "  $command_description"
-      local name description default default_string i
-      if [[ "${parameter_names:-}" ]]; then
-        out "parameters:"
-        begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
-          parameter="${parameter_names[$i]}"
-          description="${parameter_descriptions[$i]}"
-          default="${parameter_defaults[$i]}"
-          default_string=
-          [[ "$default" ]] && default_string=" default: $default"
-          out "  $parameter: $description$default_string"
-        end_for
+  local command=$1
+  begin_function_flat
+    get_bottom_cell $cell_path || fail
+    if [[ "$bottom_cell" ]]; then
+      local cell_path=$bottom_cell
+      cell_context_load || fail
+      [[ $first_command == f ]] && out ''
+      out "command: $command"
+      if [[ -f $command_path/$command.info ]]; then
+        source $command_path/$command.info || fail
+        out "  $command_description"
+        local name description default default_string i
+        if [[ "${parameter_names:-}" ]]; then
+          out "parameters:"
+          begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
+            parameter="${parameter_names[$i]}"
+            description="${parameter_descriptions[$i]}"
+            default="${parameter_defaults[$i]}"
+            default_string=
+            [[ "$default" ]] && default_string=" default: $default"
+            out "  $parameter: $description$default_string"
+          end_for
+        fi
       fi
     fi
-  fi
-end_function_flat
-handle_return
+  end_function_flat
+  handle_return
 }
 
 show_usage() {
-warn "Usage: ${0##*/} {command(s)}"
-local command
-if [[ -d "$cell_path/.cyto" ]]; then
-  warn "commands:"
-  for command in $(find1 $cell_path/.cyto/command | sort); do
-    if [[ -f $command ]]; then
-      source $command || fail
-    elif [[ -d $command ]]; then
-      local first_file=$(find1 $command -type f | sort -g | head -n 1)
-      if [[ "$first_file" ]]; then
-        source $first_file || fail
+  warn "Usage: ${0##*/} {command(s)}"
+  local command
+  if [[ -d "$cell_path/.cyto" ]]; then
+    warn "commands:"
+    for command in $(find1 $cell_path/.cyto/command | sort); do
+      if [[ -f $command ]]; then
+        source $command || fail
+      elif [[ -d $command ]]; then
+        local first_file=$(find1 $command -type f | sort -g | head -n 1)
+        if [[ "$first_file" ]]; then
+          source $first_file || fail
+        fi
       fi
-    fi
-    local command_name=${command##*/}
-    local command_description=describe_${command_name}
-    command_description=${!command_description:-}
-    if [[ "$command_description" ]]; then
-      warn "  $command_name $COL20$command_description"
-    else
-      warn "  $command_name ${COL20}Please add a description to this command in $command"
-    fi
-  done
-else
-  warn "  either run this command inside of a cell folder, or specify"
-  warn "  the cell variable with the path to a cell. "
-  warn "  example: cell cell=/some/cell update"
-fi
-return 0
+      local command_name=${command##*/}
+      local command_description=describe_${command_name}
+      command_description=${!command_description:-}
+      if [[ "$command_description" ]]; then
+        warn "  $command_name $COL20$command_description"
+      else
+        warn "  $command_name ${COL20}Please add a description to this command in $command"
+      fi
+    done
+  else
+    warn "  either run this command inside of a cell folder, or specify"
+    warn "  the cell variable with the path to a cell. "
+    warn "  example: cell cell=/some/cell update"
+  fi
+  return 0
 }
 
 handle_command "$@"

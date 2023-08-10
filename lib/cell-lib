@@ -22,6 +22,7 @@ show_branches=${show_branches:-f}
 downstream_cell_stack=( ) 
 
 disable_log=${disable_log:-f}
+export debug_ignore=${debug_ignore:- apad begin_fork change_log_file debug_start defer echo_align find1 fork get_new_reply_file get_shell_quoted_value load_log_vars log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log }
 
 setup_cyto_out() {
   local from=$1 to=$2
@@ -814,7 +815,7 @@ parallel_loop() {
 
     local size=${#array[*]}
     if (( size > 1 )); then
-      log_debug "looping over $size values$extra. body: $body2"
+      log_debug "Looping over $size values$extra. body: $body2"
     fi
 
     begin_for value in "${array[@]}"; doo
@@ -1195,7 +1196,7 @@ promote_dep_cell() {
 
     begin_for dep_dim in ${dims[*]}; doo
 
-      log_debug "Promoting $dep_dim"
+      log_debug "Considering promotion of $dep_dim"
 
       # is this dim already promoted?
       if [[ $already_promoted_path == */.dim/* ]]; then
@@ -1206,6 +1207,8 @@ promote_dep_cell() {
 
       local branch_dim found_branch_dim=f
       # upstream prep script can add extra_dims as needed
+      # branch_dims here is the full set of dims for the subject cell, whereas 
+      #   dims is the full set of dims for the upstream cell being promoted
       begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
         if [[ $branch_dim == $dep_dim ]]; then
           log_debug "Found branch dim for $dep_dim"
@@ -1215,15 +1218,22 @@ promote_dep_cell() {
       end_for
 
       if [[ $found_branch_dim == f ]]; then
-        debug_start
-        if [[ $cell_is_leaf == t ]]; then
-          value= ${dim}_member_expand || return 0
-
-        fi
-
         # can't promote if dep dim doesn't exist on the branch 
-        log_debug "Dim not found on branch: $dep_dim"
-        break
+        log_debug "Upstream dim not found in base branch dims: $dep_dim"
+        if [[ $cell_is_leaf == t ]]; then
+          if type -t ${dep_dim}_member_expand >/dev/null; then
+            value= ${dep_dim}_member_expand 
+            if [[ "$values" ]]; then
+              log_debug "Found default for $dep_dim = $values"
+            fi
+          fi
+          if [[ ! "$values" ]]; then
+            log_fatal "Leaf cell was unable to resolve upstream dep to a leaf also. Missing dim $dep_dim"
+            fail1
+          fi
+        else
+          break
+        fi
       fi
 
       local dep_dim_var=d_$dep_dim
@@ -1231,10 +1241,9 @@ promote_dep_cell() {
 
       if [[ -v $dep_dim_var ]]; then
         values=${!dep_dim_var}
-      fi
-
-      if type -t ${dep_dim}_member_expand >/dev/null; then
-        eval "value=\$values ${dep_dim}_member_expand" &>/dev/null || is_required=t
+        if type -t ${dep_dim}_member_expand >/dev/null; then
+          value=$values ${dep_dim}_member_expand
+        fi
       fi
 
       values=( $values )
@@ -1249,12 +1258,14 @@ promote_dep_cell() {
         get_sane_value "$values" || fail
         local old_from=$from
         from=$from/.dim/$sane_value
+        log_debug "Promoted $dep_dim"
         if [[ ! -d $from ]]; then
           eval "$dep_dim_var=\"$values\""
           log_debug "Creating sub for $from"
           fork "load_context_and_create_sub $old_from $from" || fail
         fi
       else
+        log_debug "Did not promote $dep_dim because no value is found for it yet"
         break
       fi
 
@@ -2327,30 +2338,30 @@ return 0
 #   trunk_dims
 #   trunk_dim_count
 setup_branch_dims() {
-local cell_path=$1 \
-  trunk_cell dims
+  local cell_path=$1 \
+    trunk_cell dims
 
-get_trunk_cell $cell_path || return 1
-get_dims $trunk_cell || return 1
-trunk_dims=( ${dims[*]} )
-trunk_dim_count=${#trunk_dims[*]}
+  get_trunk_cell $cell_path || return 1
+  get_dims $trunk_cell || return 1
+  trunk_dims=( ${dims[*]} )
+  trunk_dim_count=${#trunk_dims[*]}
 
-branch_dims=() 
-local dim
-for dim in ${dims[*]}; do
-  if [[ $cell_path =~ .dim ]]; then
-    cell_path=${cell_path%/.dim/*}
-    branch_dims+=( $dim )
-  else
-    break
+  branch_dims=() 
+  local dim
+  for dim in ${dims[*]}; do
+    if [[ $cell_path =~ .dim ]]; then
+      cell_path=${cell_path%/.dim/*}
+      branch_dims+=( $dim )
+    else
+      break
+    fi
+  done
+  branch_dim_count=${#branch_dims[*]}
+  if [[ "${branch_dims:-}" ]]; then
+    log_debug "Branch dims found: ${branch_dims[*]}"
   fi
-done
-branch_dim_count=${#branch_dims[*]}
-if [[ "${branch_dims:-}" ]]; then
-  log_debug "Branch dims found: ${branch_dims[*]}"
-fi
 
-return 0
+  return 0
 }
 
 # returns array of dims, which may be empty if there are no dims
