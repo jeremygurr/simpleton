@@ -51,6 +51,6 @@ post_update() {
     to=$running_job_path \
       link_unlock 
 
-  end_function_flat
+  end_function
   handle_return
 }

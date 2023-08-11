@@ -15,7 +15,7 @@ else
   update_successful=t
 fi
 
-end_function_flat
+end_function
 handle_return
 
 }

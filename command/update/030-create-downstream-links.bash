@@ -27,6 +27,6 @@ create_downstream_links() {
     fi
   fi
 
-  end_function_flat
+  end_function
   handle_return
 }

@@ -19,6 +19,6 @@ pre_update() {
       rm $status_path/last-good-update-end || fail
     fi
 
-  end_function_flat
+  end_function
   handle_return
 }

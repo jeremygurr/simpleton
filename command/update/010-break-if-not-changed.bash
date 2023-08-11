@@ -9,7 +9,7 @@ break_if_not_changed() {
     if [[ $needs_update == f ]]; then
       leave_loop=1
     fi
-  end_function_flat
+  end_function
   handle_return
 }
 
