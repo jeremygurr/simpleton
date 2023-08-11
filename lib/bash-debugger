@@ -370,7 +370,7 @@ debug_trap() {
   debug_step_to_next_file=f
 
   if [[ $debug_expansion == 1 && $debug_long_command == f || $debug_expansion == 2 ]]; then
-    if [[ -f "$debug_out_path" ]]; then
+    if [[ -f "$debug_out_path" && ! "$debug_buffered_commands" ]]; then
 
       rm "$debug_fifo_path" &>/dev/null
       cat "$debug_out_path" >&$fd_original_err
@@ -394,14 +394,14 @@ debug_trap() {
     rm "$debug_out_path"
   fi
 
-  if [[ $debug_prev_command =~ (\[\[.*\]\]) ]]; then
+  if [[ $debug_prev_command =~ (\[\[.*\]\]) && ! "$debug_buffered_commands" ]]; then
     set +u
     local condition=${BASH_REMATCH[1]}
     eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
     set -u
   fi
 
-  if [[ $debug_prev_command =~ if\ (\(\(.*\)\))\;\ then ]]; then
+  if [[ $debug_prev_command =~ if\ (\(\(.*\)\))\;\ then && ! "$debug_buffered_commands" ]]; then
     set +u
     local condition=${BASH_REMATCH[1]}
     eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
@@ -433,7 +433,7 @@ debug_trap() {
         | sed -E 's/#.*//'
         )
     fi
-    if [[ $debug_follow_source == t && "$current_source_line_without_comment" ]]; then
+    if [[ $debug_follow_source == t && "$current_source_line_without_comment" && ! "$debug_buffered_commands" ]]; then
       if [[ $no_follow_once == t ]]; then
         no_follow_once=f
       else
@@ -451,7 +451,7 @@ debug_trap() {
     fi
 
     set +u
-    if [[ "$debug_watch" ]]; then
+    if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
       local w wn
       for w in $debug_watch; do
 
@@ -467,30 +467,38 @@ debug_trap() {
     fi
     set -u
 
-    local prefix=
-    if [[ $BASH_SUBSHELL -gt 0 ]]; then
-      prefix+="$YELLOW$BASH_SUBSHELL:$BASHPID "
-    fi
-    if [[ "$debug_id" ]]; then
-      prefix+="${CYAN}debug_id=$debug_id_current "
-    fi
-    if [[ $debug_source_file != none ]]; then
-      echo -n "$prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
-    fi
-    echo -n " $GREEN$debug_current_function $RESET:" >&$fd_original_err
+    if [[ ! "$debug_buffered_commands" ]]; then
+      local prefix=
+      if [[ $BASH_SUBSHELL -gt 0 ]]; then
+        prefix+="$YELLOW$BASH_SUBSHELL:$BASHPID "
+      fi
+      if [[ "$debug_id" ]]; then
+        prefix+="${CYAN}debug_id=$debug_id_current "
+      fi
+      if [[ $debug_source_file != none ]]; then
+        echo -n "$prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
+      fi
+      echo -n " $GREEN$debug_current_function $RESET:" >&$fd_original_err
 
-    if [[ $debug_follow_source == t ]]; then
-      echo -n " $debug_command " >&$fd_original_err
-    else
-      if [[ $debug_highlight == t ]]; then
-        echo -n " $display_command " >&$fd_original_err
+      if [[ $debug_follow_source == t ]]; then
+        echo -n " $debug_command " >&$fd_original_err
       else
-        echo -n " $raw_display_command " >&$fd_original_err
+        if [[ $debug_highlight == t ]]; then
+          echo -n " $display_command " >&$fd_original_err
+        else
+          echo -n " $raw_display_command " >&$fd_original_err
+        fi
       fi
     fi
 
     debug_long_command=f
-    read -rs -n1 debug_c <&$fd_original_in
+    if [[ "$debug_buffered_commands" ]]; then
+      debug_buffered_commands=${debug_buffered_commands##*( )}
+      debug_c=${debug_buffered_commands:0:1}
+      debug_buffered_commands=${debug_buffered_commands:1}
+    else
+      read -rs -n1 debug_c <&$fd_original_in
+    fi
 
     if [[ "$debug_c" != l && "$debug_c" != L ]]; then
       debug_list_offset=0
@@ -1060,6 +1068,7 @@ debug_save_state() {
 if [[ $BASH_SUBSHELL -gt 0 || ${force_save:-f} == t ]]; then
 [[ $debug_debug == t ]] && echo "${CYAN}Saving debug_state_file${RESET}" >&$fd_original_err
 echo "
+debug_buffered_commands='$debug_buffered_commands'
 debug_condition='$debug_condition'
 debug_condition_old='$debug_condition_old'
 debug_display='$debug_display'
@@ -1160,6 +1169,7 @@ cooked_stack_trace() {
 alias debug_once='[[ ! "${debug_once_triggered:-}" ]] && { debug_once_triggered=t; debug_start; }'
 
 debug_start() {
+debug_buffered_commands=$*
 parallel_execution=${p_par:-f}
 if [[ ! -v debugging ]]; then
   debugger_init || return 1
@@ -1167,6 +1177,7 @@ fi
 if [[ $debugging == f ]]; then
   export debugging=t
   export debug
+  export debug_buffered_commands=${debug_buffered_commands:-}
   export debug_condition=${debug_condition:-}
   export debug_condition_old=${debug_condition_old:-}
   export debug_debug=${debug_debug:-f}
