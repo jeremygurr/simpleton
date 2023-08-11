@@ -24,6 +24,9 @@ post_update() {
           from_cell=$cell_path \
             propagate_change_to_downstream || fail
         fi
+        if [[ $on_trunk == t && "${downstream_ref_path:-}" ]]; then
+          force=t safe_link $cell_path $downstream_ref_path || fail
+        fi
       else
         touch -d @$completion_time $status_path/last-bad-update-end || fail
         force=t safe_link $current_job_path $job_path/last-failure || fail

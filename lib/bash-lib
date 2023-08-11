@@ -44,16 +44,28 @@ alias stop_tracing='
 alias begin_no_tracing_zone='[[ $no_trace_depth == 0 && $tracing_depth -gt 0 ]] && set +x || true; let no_trace_depth++ || true'
 alias end_no_tracing_zone='let no_trace_depth-- || true; [[ $no_trace_depth -le 0 && $tracing_depth -gt 0 ]] && set -x || true'
 
-alias       begin_function='local return_value=0 break_out=f deep_function=t; while true; do'
-alias  begin_function_flat='local return_value=0 break_out=f deep_function; while true; do'
-alias          begin_while='break_out=f; while'
-alias            begin_for='break_out=f; for'
-alias           begin_loop='break_out=f; while true; do'
-alias         end_function='break; done'
-alias    end_function_flat='break; done' # deprecated, use end_function instead
-alias            end_while='done; [[ $break_out == t ]] && break; true'
-alias              end_for='done; [[ $break_out == t ]] && break; true'
-alias             end_loop='done; [[ $break_out == t ]] && break; true'
+# allow these to be overridden by an earlier script
+if ! alias begin_function &>/dev/null; then
+  alias       begin_function='local return_value=0 break_out=f deep_function=t; while true; do'
+  alias  begin_function_flat='local return_value=0 break_out=f deep_function; while true; do'
+  alias          begin_while='break_out=f; while'
+  alias            begin_for='break_out=f; for'
+  alias           begin_loop='break_out=f; while true; do'
+  alias         end_function='break; done'
+  alias            end_while='done; [[ $break_out == t ]] && break; true'
+  alias              end_for='done; [[ $break_out == t ]] && break; true'
+  alias             end_loop='done; [[ $break_out == t ]] && break; true'
+
+  # should be at the end of every function which contains a begin_function block
+  alias handle_return='
+    if [[ "${deep_function:-}" ]]; then
+      (( log_depth_current-- ))
+    fi
+    return $return_value
+  '
+  alias handle_exit='exit $return_value'
+
+fi
 
 # to avoid bash syntax parsing problems
 alias doo='do'
@@ -68,15 +80,6 @@ alias failed='[[ $return_value -gt 0 ]]'
 
 alias succeed='{ return_value=0; break_out=t; break; }'
 alias succeeded='[[ $return_value -eq 0 ]]'
-
-# should be at the end of every function which contains a try / end_try block
-alias handle_return='
-  if [[ "${deep_function:-}" ]]; then
-    (( log_depth_current-- ))
-  fi
-  return $return_value
-'
-alias handle_exit='exit $return_value'
 
 # used in if condition to be more clear.
 # instead of:
@@ -591,200 +594,200 @@ handle_return
 }
 
 folder_is_locked() {
-local folder_to_lock=$folder_to_lock
-local pid_file=${pid_file:-$folder_to_lock/pid}
-local is_locked=f
-if [[ -d "$folder_to_lock" ]]; then
-  if [[ -f "$pid_file" ]]; then
-    pid=$(<"$pid_file")
-    if [[ "$pid" ]] && ps $pid &>/dev/null; then
-      is_locked=t
+  local folder_to_lock=$folder_to_lock
+  local pid_file=${pid_file:-$folder_to_lock/pid}
+  local is_locked=f
+  if [[ -d "$folder_to_lock" ]]; then
+    if [[ -f "$pid_file" ]]; then
+      pid=$(<"$pid_file")
+      if [[ "$pid" ]] && ps $pid &>/dev/null; then
+        is_locked=t
+      fi
     fi
   fi
-fi
-[[ "$is_locked" == t ]]
+  [[ "$is_locked" == t ]]
 }
 
 # inputs: folder_to_unlock pid_file
 folder_unlock() {
-local folder_to_unlock=$folder_to_unlock
-local pid_file=${pid_file:-$folder_to_unlock/pid}
-local remove_folder_when_unlocked=${remove_folder_when_unlocked:-f}
+  local folder_to_unlock=$folder_to_unlock
+  local pid_file=${pid_file:-$folder_to_unlock/pid}
+  local remove_folder_when_unlocked=${remove_folder_when_unlocked:-f}
 
-if [[ ! "$folder_to_unlock" ]]; then
-  log_fatal "Usage: folder_to_unlock=... folder_unlock "
-  return 1
-fi
+  if [[ ! "$folder_to_unlock" ]]; then
+    log_fatal "Usage: folder_to_unlock=... folder_unlock "
+    return 1
+  fi
 
-if [[ -d "$folder_to_unlock" && $remove_folder_when_unlocked == t ]]; then
-  rm -r "$folder_to_unlock" || return 1
-fi
+  if [[ -d "$folder_to_unlock" && $remove_folder_when_unlocked == t ]]; then
+    rm -r "$folder_to_unlock" || return 1
+  fi
 
-if [[ -f "$pid_file" ]]; then
-  rm "$pid_file" || return 1
-fi
+  if [[ -f "$pid_file" ]]; then
+    rm "$pid_file" || return 1
+  fi
 
-return 0
+  return 0
 }
 
 fd_read_lock() {
-local lock_path=$lock_path timeout=$timeout
-if [[ ! -d "${lock_path%/*}" ]]; then
-  log_fatal "Bad lock path: $lock_path. It must either exist, or point to a file in a folder that exists."
-  return 1
-fi
-if [[ ! -e "$lock_path" ]]; then
-  touch "$lock_path" || return 1
-fi
-exec {lock_fd}<>$lock_path
-flock -s -w $timeout $lock_fd || {
-  log_fatal "Failed to get read lock for $lock_path within $timeout seconds"
-  return 1
-  }
+  local lock_path=$lock_path timeout=$timeout
+  if [[ ! -d "${lock_path%/*}" ]]; then
+    log_fatal "Bad lock path: $lock_path. It must either exist, or point to a file in a folder that exists."
+    return 1
+  fi
+  if [[ ! -e "$lock_path" ]]; then
+    touch "$lock_path" || return 1
+  fi
+  exec {lock_fd}<>$lock_path
+  flock -s -w $timeout $lock_fd || {
+    log_fatal "Failed to get read lock for $lock_path within $timeout seconds"
+    return 1
+    }
 }
 
 fd_write_lock() {
-local lock_path=$lock_path timeout=$timeout
-if [[ ! -d "${lock_path%/*}" ]]; then
-  log_fatal "Bad lock path: $lock_path. It must either exist, or point to a file in a folder that exists."
-  return 1
-fi
-if [[ ! -e "$lock_path" ]]; then
-  touch "$lock_path" || return 1
-fi
-exec {lock_fd}<>$lock_path
-flock -e -w $timeout $lock_fd || {
-  log_fatal "Failed to get write lock for $lock_path within $timeout seconds"
-  return 1
-  }
+  local lock_path=$lock_path timeout=$timeout
+  if [[ ! -d "${lock_path%/*}" ]]; then
+    log_fatal "Bad lock path: $lock_path. It must either exist, or point to a file in a folder that exists."
+    return 1
+  fi
+  if [[ ! -e "$lock_path" ]]; then
+    touch "$lock_path" || return 1
+  fi
+  exec {lock_fd}<>$lock_path
+  flock -e -w $timeout $lock_fd || {
+    log_fatal "Failed to get write lock for $lock_path within $timeout seconds"
+    return 1
+    }
 }
 
 fd_unlock() {
-flock -u $lock_fd
+  flock -u $lock_fd
 }
 
 get_next_fd() {
-next_fd=$(ls -1 /proc/self/fd | tail -n1)
-let next_fd++
+  next_fd=$(ls -1 /proc/self/fd | tail -n1)
+  let next_fd++
 }
 
 is_dir_empty() {
-eval "local contents=( $1/* )"
-local first=${contents[0]}
-[[ "${first%\*}" != "$first" ]]
+  eval "local contents=( $1/* )"
+  local first=${contents[0]}
+  [[ "${first%\*}" != "$first" ]]
 }
 
 # TODO: should be defaulted to ask
 pretend=${pretend:-f}
 maybe() {
-local command_to_execute="$*"
-local execute
+  local command_to_execute="$*"
+  local execute
 
-case $pretend in
-  f)
-    execute=t
-  ;;
-  t)
-    echo "Pretending: $command_to_execute" >&2
-    execute=f
-  ;;
-  a|ask)
-    local response
-    echo "Will execute: $command_to_execute" >&2
-    sleep 0.5
-    read -p 'Are you sure? [yes/no/All/None/quit] ' -s -n1 response >&2
-    case $response in
-      y)
-        echo "yes" >&2
-        execute=t
-      ;;
-      A)
-        echo "all" >&2
-        pretend=f
-        execute=t
-      ;;
-      N)
-        echo "none" >&2
-        pretend=t
-        execute=f
-      ;;
-      q)
-        echo "quit" >&2
-        exit 1
-      ;;
-      *)
-        echo "no" >&2
-        execute=f
-      ;;
-    esac
-  ;;
-  *)
-    log_fatal "Invalid pretend setting: $pretend. Must be one of: t f ask"
-    return 1
-  ;;
-esac
+  case $pretend in
+    f)
+      execute=t
+    ;;
+    t)
+      echo "Pretending: $command_to_execute" >&2
+      execute=f
+    ;;
+    a|ask)
+      local response
+      echo "Will execute: $command_to_execute" >&2
+      sleep 0.5
+      read -p 'Are you sure? [yes/no/All/None/quit] ' -s -n1 response >&2
+      case $response in
+        y)
+          echo "yes" >&2
+          execute=t
+        ;;
+        A)
+          echo "all" >&2
+          pretend=f
+          execute=t
+        ;;
+        N)
+          echo "none" >&2
+          pretend=t
+          execute=f
+        ;;
+        q)
+          echo "quit" >&2
+          exit 1
+        ;;
+        *)
+          echo "no" >&2
+          execute=f
+        ;;
+      esac
+    ;;
+    *)
+      log_fatal "Invalid pretend setting: $pretend. Must be one of: t f ask"
+      return 1
+    ;;
+  esac
 
-if [[ $execute == t ]]; then
-  log_info "Executing: $command_to_execute"
-  eval "$command_to_execute" || return $?
-fi
+  if [[ $execute == t ]]; then
+    log_info "Executing: $command_to_execute"
+    eval "$command_to_execute" || return $?
+  fi
 
-return 0
+  return 0
 }
 
 min() {
-result=$1
-if [[ $1 == inf || $2 -lt $1 ]]; then
-  result=$2
-fi
+  result=$1
+  if [[ $1 == inf || $2 -lt $1 ]]; then
+    result=$2
+  fi
 }
 
 max() {
-result=$1
-if [[ $2 == inf || $2 -gt $1 ]]; then
-  result=$2
-fi
+  result=$1
+  if [[ $2 == inf || $2 -gt $1 ]]; then
+    result=$2
+  fi
 }
 
 # input: $1 (name of array variable which was already populated 
 #   with string values)
 enum() {
-local i count array=$1 var
-eval "count=\${#$array[*]}"
-for ((i=0; i < count; i++)); do
-  eval "var=\${$array[$i]}"
-  eval "$var=$i"
-done
+  local i count array=$1 var
+  eval "count=\${#$array[*]}"
+  for ((i=0; i < count; i++)); do
+    eval "var=\${$array[$i]}"
+    eval "$var=$i"
+  done
 }
 
 safe_link() {
-local from=$1 to=$2 force=${force:-f} from_must_exist=${from_must_exist:-t}
-local log_show_vars="from to" log_vars="force from_must_exist"
-begin_function
+  local from=$1 to=$2 force=${force:-f} from_must_exist=${from_must_exist:-t}
+  local log_show_vars="from to" log_vars="force from_must_exist"
+  begin_function
 
-  if [[ $to != */ && -L "$to" ]]; then
-    rm "$to" || fail
-  fi
+    if [[ $to != */ && -L "$to" ]]; then
+      rm "$to" || fail
+    fi
 
-  if [[ $from_must_exist == t && ! -e "$from" ]]; then
-    log_fatal "Internal error: Source of link doesn't exist: $from"
-    stack_trace
-    fail1
-  fi
+    if [[ $from_must_exist == t && ! -e "$from" ]]; then
+      log_fatal "Internal error: Source of link doesn't exist: $from"
+      stack_trace
+      fail1
+    fi
 
-  local to_parent=${to%/*}
-  if [[ ! -d "$to_parent" ]]; then
-    log_fatal "Missing target folder for link: $to_parent"
-  fi
+    local to_parent=${to%/*}
+    if [[ ! -d "$to_parent" ]]; then
+      log_fatal "Missing target folder for link: $to_parent"
+    fi
 
-  if [[ $force == t ]]; then
-    ln -sfn "$from" "$to" || fail
-  else
-    ln -sn "$from" "$to" || fail
-  fi
+    if [[ $force == t ]]; then
+      ln -sfn "$from" "$to" || fail
+    else
+      ln -sn "$from" "$to" || fail
+    fi
 
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 pause() {
