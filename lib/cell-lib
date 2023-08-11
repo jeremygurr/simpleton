@@ -373,6 +373,7 @@ prep_upstream() {
   begin_function
   unset prep
   if [[ -f $upstream.prep ]]; then
+    log_debug "Executing upstream prep: $upstream.prep"
     source $upstream.prep || fail
     if ! type -t prep &>/dev/null; then
       log_fatal "$upstream.prep must have a function named prep"
@@ -422,6 +423,9 @@ setup_cyto_upstream() {
   local up_dna=$1 up_cyto=$2
   log_debug "Setting up cyto upstream"
   migrate_dep $up_dna $up_cyto || return 1
+  if [[ -f $up_dna.prep ]]; then
+    safe_link $up_dna.prep $up_cyto.prep || return 1
+  fi
   return 0
 }
 
@@ -451,9 +455,8 @@ get_upstream_needs_update() {
           needs_update=t
           break
         fi
-        prep_upstream $up || fail
         # recursive
-        check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up || fail
+        check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto || fail
         if [[ $needs_update == t ]]; then
           break
         fi
@@ -498,11 +501,13 @@ get_needs_update() {
 
     needs_update=
 
-    local dims localize_dim_vars=${localize_dim_vars:-local} leaf_dims \
+    local dims localize_dim_vars=local leaf_dims \
       last_cell_dims_loaded
     load_dims $cell_path/.dna/dim || fail
     leaf_dims=( ${dims[*]:-} )
-    eval "$localize_dim_vars" || fail
+    if [[ "$localize_dim_vars" != local ]]; then
+      eval "$localize_dim_vars" || fail
+    fi
 
     if [[ ! -e $status_path/last-good-update-end ]]
     then
@@ -1735,31 +1740,33 @@ execute_command_internal() {
     log_show_vars='short_cell current_command' 
   begin_function
 
-    if [[ $current_command != edit ]]; then
+    case $current_command in
+      edit)
+        if [[ ! "$cell_path" ]]; then
+          log_fatal "You must execute this command from within a cell"
+          fail1
+        fi
+        dna_path=$cell_path/.dna
+        key_path=$dna_path/key
+        status_path=
+        if [[ ! -e $key_path ]]; then
+          mkdir $key_path || fail
+        fi
+      ;;
+      log)
+        job_path=$cell_path/.job
+      ;;
+      *)
+        cell_context_load || {
+          log_fatal "Context failed to load for $cell_path"
+          fail1
+          }
 
-      cell_context_load || {
-        log_fatal "Context failed to load for $cell_path"
-        fail1
-        }
-
-      if [[ "$localize_dim_vars" != local ]]; then
-        eval "$localize_dim_vars" || fail
-      fi
-
-    else # current_command == edit
-
-      if [[ ! "$cell_path" ]]; then
-        log_fatal "You must execute this command from within a cell"
-        fail1
-      fi
-      dna_path=$cell_path/.dna
-      key_path=$dna_path/key
-      status_path=
-      if [[ ! -e $key_path ]]; then
-        mkdir $key_path || fail
-      fi
-
-    fi
+        if [[ "$localize_dim_vars" != local ]]; then
+          eval "$localize_dim_vars" || fail
+        fi
+      ;;
+    esac
 
     local command_path=$cell_path/.cyto/command/$current_command
 
@@ -2027,7 +2034,7 @@ execute_command_step_folder() {
   local log_vars=step
   begin_function_flat
 
-    local contents=( $(find1 $step -not -name ".*" -not -name "*-before*" -not -name "after-block*" | sort -g) ) || fail 
+    local contents=( $(find1 $step -not -name ".*" -not -name "*-before*" -not -name "*-after*" | sort -g) ) || fail 
     local files i=0 file_index
     [[ ! "${contents:-}" ]] && succeed
 
@@ -2665,6 +2672,7 @@ begin_function
 
   if [[ "${#values[*]}" -gt 1 ]]; then
     multi_cell=t
+    on_trunk=f # used to track which cell to link to downstream
   fi
 
   loop_over_var=values \

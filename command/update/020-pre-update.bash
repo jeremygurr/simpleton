@@ -9,12 +9,10 @@ pre_update() {
       timeout=5000 \
       link_lock || fail
 
-    if [[ "$status_path" ]]; then
-      touch $status_path/last-update-start || fail
-      # this needs to be at the beginning of the update so other processes
-      #   could potentially invalidate it, requiring another update
-      touch $status_path/up-to-date || fail
-    fi
+    touch $status_path/last-update-start || fail
+    # this needs to be at the beginning of the update so other processes
+    #   could potentially invalidate it, requiring another update
+    touch $status_path/up-to-date || fail
 
     if [[ $reuse_existing_out == t && -f $status_path/last-good-update-end ]]; then
       # Don't allow cells to reuse old data when it is mid-modification and this update fails

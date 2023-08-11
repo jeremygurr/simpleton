@@ -25,25 +25,29 @@ update_upstream() {
       mkdir "$up_path" || fail
     fi
 
-    if [[ $previous_upstream_changed == t ]]; then
+    if [[ $previous_upstream_changed == t && -e "$up_cyto" ]]; then
       log_debug "Previous upstream changed, removing cyto upstream"
       rm $up_cyto || fail
     fi
 
     if [[ ! -e $up_cyto ]]; then
-      log_debug "Cyto upstream is missing, will create"
-      prep_upstream $up_dna || fail
-      setup_cyto_upstream $up_dna $up_cyto || fail
+      log_debug "Cyto upstream is missing, will need to update"
+      needs_update=t
     else
       prep_upstream $up_cyto || fail
+      get_needs_update $up_cyto || fail
     fi
 
-    get_needs_update $up_cyto || fail
-
     if [[ $needs_update == t ]]; then
-      downstream_ref_path=$up_dna
-      downstream_cell_stack+=( $cell_path )
-      fork execute_command "$(realpath $up_cyto)" update || fail
+      # not used anywhere? 
+      # downstream_cell_stack+=( $cell_path )
+
+      # on_trunk gets set to false when the first dim being updated has more than one matching member, thus creating branches (not trunk anymore). 
+      #   Used to determine what level of cell to link to cyto upstream
+      on_trunk=t \
+      downstream_ref_path=$up_cyto \
+        fork execute_command "$(realpath $up_cyto)" update || fail
+
       previous_upstream_changed=t
       handle_upstream_result || fail
     fi
