@@ -1740,6 +1740,13 @@ execute_command_internal() {
     log_show_vars='short_cell current_command' 
   begin_function
 
+    if [[ " ${command_history:-}" == *" $current_command $short_cell "* ]]; then
+      log_fatal "Circular dependency found: arrived at $current_command $short_cell a second time."
+      fail1
+    fi
+
+    command_history+="$current_command $short_cell "
+
     case $current_command in
       edit)
         if [[ ! "$cell_path" ]]; then
@@ -1798,11 +1805,11 @@ execute_command_internal() {
       validate_dims || fail
     fi
 
-    if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
+    #if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
       log_info "Executing command: $current_command $short_cell"
     # else
     #   log_debug "Executing command: $current_command $short_cell"
-    fi
+    #fi
 
     if type -t command_$current_command &>/dev/null; then
       command_$current_command || fail
@@ -1871,7 +1878,7 @@ execute_command() {
     fi
 
     cell_open_log_file || fail
-    fork execute_command_internal || fail
+    fork execute_command_internal || fail_later
     cell_close_log_file || fail
 
   end_function
