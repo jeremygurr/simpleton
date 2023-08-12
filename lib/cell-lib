@@ -22,7 +22,7 @@ show_branches=${show_branches:-f}
 downstream_cell_stack=( ) 
 
 disable_log=${disable_log:-f}
-export debug_ignore=${debug_ignore:- apad begin_fork change_log_file debug_start defer echo_align find1 fork get_new_reply_file get_shell_quoted_value load_log_vars log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log }
+export debug_ignore=${debug_ignore:- apad change_log_file debug_start defer echo_align find1 fork get_new_reply_file get_shell_quoted_value load_log_vars log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log }
 
 setup_cyto_out() {
   local from=$1 to=$2
@@ -398,7 +398,7 @@ migrate_dep() {
         safe_link $(realpath $from) $to || fail
       elif [[ -d $from/.dna ]]; then
         # recursive
-        fork "migrate_cell $from $to" || fail
+        fork_fg "migrate_cell $from $to" || fail
       elif [[ -d $from ]]; then
         if [[ ! -d $to ]]; then
           mkdir $to || fail
@@ -695,11 +695,6 @@ reply_to_caller() {
   fi
   return 0
 }
-# run within the subshell at the beginning
-end_fork() {
-  reply_to_caller "omni_log_pos=${omni_log_pos:-}" || return 1
-  return 0
-}
 
 # run outside of the subshell afterwards
 after_fork() {
@@ -748,18 +743,6 @@ cell_close_log_file() {
   fi
 }
 
-# run within the subshell at the beginning
-begin_background_fork() {
-  cell_open_log_file || return 1
-  return 0
-}
-
-# run within the subshell at the beginning
-end_background_fork() {
-  cell_close_log_file || return 1
-  return 0
-}
-
 reply_file=
 
 get_new_reply_file() {
@@ -771,17 +754,44 @@ get_new_reply_file() {
   return 0
 }
 
+# this should be run in a subshell
+fork_inside() {
+
+  if [[ $background == t ]]; then
+    cell_open_log_file || exit 1
+  fi
+
+  eval "$command"; return_code=$?
+  reply_to_caller "omni_log_pos=${omni_log_pos:-}" || exit 1
+
+  if [[ $background == t ]]; then
+    cell_close_log_file || return 1
+  fi
+
+  exit $return_code
+
+}
+
+fork_fg() {
+  background=f fork "$@"
+}
+
+fork_bg() {
+  background=t fork "$@"
+}
+
 fork() {
   local reply_file command=$* return_code=0
+  local background=${background:-f}
+
   get_new_reply_file || return 1
   defer "rm $reply_file"
 
-  (
-    begin_fork || exit 1
-    eval "$command"; return_code=$?
-    end_fork || exit 1
-    exit $return_code
-  )
+  if [[ $background == t ]]; then
+    ( fork_inside ) &
+  else
+    ( fork_inside )
+  fi
 
   return_code=$?
   after_fork || { let return_code++ || true; }
@@ -838,11 +848,11 @@ parallel_loop() {
       fi
 
       if [[ $parallel == t ]]; then
-        { begin_background_fork; eval "$body2"; end_background_fork; } &
+        fork_bg "$body2" 
         processes+=" $!"
       else
         if [[ $fork2 == t ]]; then
-          fork "$body2" || fail
+          fork_fg "$body2" || fail
         else
           eval "$body2" || fail
         fi
@@ -915,6 +925,7 @@ propagate_change_to_downstream() {
     local dep_stack=( ${downstream_cell_stack[*]} )
     folders=( $(find1 $down_path -not -name '.*' -type d) ) || fail
     loop_over_var=folders \
+    background=f \
       par=${par:-t} fork=f \
       body=propagate_change_to_downstream2 \
       parallel_loop || fail
@@ -1273,7 +1284,7 @@ promote_dep_cell() {
         if [[ ! -d $from ]]; then
           eval "$dep_dim_var=\"$values\""
           log_debug "Creating sub for $from"
-          fork "load_context_and_create_sub $old_from $from" || fail
+          fork_fg "load_context_and_create_sub $old_from $from" || fail
         fi
       else
         log_debug "Did not promote $dep_dim because no value is found for it yet"
@@ -1888,7 +1899,7 @@ execute_command() {
     fi
 
     cell_open_log_file || fail
-    fork execute_command_internal || fail_later
+    fork_fg execute_command_internal || fail_later
     cell_close_log_file || fail
 
   end_function

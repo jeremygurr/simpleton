@@ -13,7 +13,7 @@ update_member() {
     local needs_update=
     get_needs_update $member_path || return 1
     if [[ $needs_update == t ]]; then
-      fork execute_command $member_path update || fail
+      fork_fg execute_command $member_path update || fail
       if [[ $update_successful == f ]]; then
         error "Failed to update member cell $member"
         reply_to_caller "update_successful=f" || fail

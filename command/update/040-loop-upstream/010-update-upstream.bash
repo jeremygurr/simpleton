@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 update_upstream() {
   local required_freshness=$required_freshness fresh=$fresh \
     default_freshness=$default_freshness up_dna=$upstream
@@ -32,6 +34,7 @@ update_upstream() {
 
     if [[ ! -e $up_cyto ]]; then
       log_debug "Cyto upstream is missing, will need to update"
+      prep_upstream $up_dna || fail
       needs_update=t
     else
       prep_upstream $up_cyto || fail
