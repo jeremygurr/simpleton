@@ -45,8 +45,8 @@ update_upstream() {
       # on_trunk gets set to false when the first dim being updated has more than one matching member, thus creating branches (not trunk anymore). 
       #   Used to determine what level of cell to link to cyto upstream
       on_trunk=t \
-      downstream_ref_path=$up_cyto \
-        fork execute_command "$(realpath $up_cyto)" update || fail
+        downstream_ref_path=$up_cyto \
+        fork execute_command "$(realpath $up_dna)" update || fail
 
       previous_upstream_changed=t
       handle_upstream_result || fail
