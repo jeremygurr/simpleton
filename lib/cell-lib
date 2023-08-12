@@ -714,8 +714,8 @@ after_fork() {
 cell_open_log_file() {
   if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
     local previous_fork_id=$omni_log_fork_id
-    get_fork_id || return 1
-    local new_log_file=$log_path/$omni_log_job_id:$omni_log_fork_id.olog
+    get_new_fork_id || return 1
+    local new_log_file=$log_path/$omni_log_job_id:$new_fork_id.olog
     local first_log_path=${new_log_file%/*}/first.olog
     if [[ ! -f $first_log_path ]]; then
       from_must_exist=f \
@@ -723,8 +723,9 @@ cell_open_log_file() {
     fi
     if [[ "${logging_to_file:-}" ]]; then
       cell_log_file_stack+=( "$logging_to_file" )
-      cell_log_pos_stack+=( "$((omni_log_pos + 1))" )
+      cell_log_pos_stack+=( "$((new_fork_id + 1))" )
     fi
+    omni_log_fork_id=$new_fork_id
     log_function=${FUNCNAME[1]} \
       change_log_file
   fi
@@ -1683,7 +1684,8 @@ find_op_or_function() {
 }
 
 # inputs: fork_id_log 
-get_fork_id() {
+# outputs: new_fork_id
+get_new_fork_id() {
   if [[ ! "${fork_id_log:-}" ]]; then
     log_fatal "Missing fork_id_log"
     stack_trace
@@ -1694,8 +1696,8 @@ get_fork_id() {
     return 1
   }
   local last_id=$(tail -n1 $fork_id_log | awk '{print $1}')
-  (( omni_log_fork_id = last_id + 1 ))
-  echo $omni_log_fork_id >>$fork_id_log || return 1
+  (( new_fork_id = last_id + 1 ))
+  echo $new_fork_id >>$fork_id_log || return 1
   fd_unlock
   return 0
 }
