@@ -80,6 +80,10 @@ alias gbg='git bisect good'
 alias gbb='git bisect bad'
 alias gr='git remote'
 
+log_fatal() {
+  echo "$*" >&2
+}
+
 # resolves relative paths but does not resolve symlinks
 # should run in a subprocess so dir change doesn't affect caller
 # normal usage: x=$(unrealpath "$some_path")

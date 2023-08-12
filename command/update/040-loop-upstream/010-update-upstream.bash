@@ -46,7 +46,7 @@ update_upstream() {
       #   Used to determine what level of cell to link to cyto upstream
       on_trunk=t \
         downstream_ref_path=$up_cyto \
-        fork execute_command "$(realpath $up_dna)" update || fail
+        execute_command "$(realpath $up_dna)" update || fail
 
       previous_upstream_changed=t
       handle_upstream_result || fail
