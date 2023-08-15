@@ -24,7 +24,7 @@ post_update() {
           from_cell=$cell_path \
             propagate_change_to_downstream || fail
         fi
-        if [[ ${on_trunk:-t} == t && "${downstream_ref_path:-}" ]]; then
+        if [[ "${downstream_ref_path:-}" ]]; then
           log_debug "Linking upstream cell to it's downstream cell cyto up folder"
           force=t safe_link $cell_path $downstream_ref_path || fail
         fi

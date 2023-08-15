@@ -509,7 +509,14 @@ get_needs_update() {
       eval "$localize_dim_vars" || fail
     fi
 
-    if [[ ! -e $status_path/last-good-update-end ]]
+    if [[ "${downstream_ref_path:-}" && ! -e "$downstream_ref_path" ]]; then
+      needs_update=t
+      log_message="Needs update because downstream_ref_path hasn't been linked yet"
+    elif (( refresh_less_than > update_cost ))
+    then
+      needs_update=t
+      log_message="Needs update because update_cost ($update_cost) < refresh_less_than ($refresh_less_than)"
+    elif [[ ! -e $status_path/last-good-update-end ]]
     then
       needs_update=t
       log_message="Needs update because cell has never been updated successfully"
@@ -700,6 +707,14 @@ reply_to_caller() {
 after_fork() {
   if [[ -f "${reply_file:-}" ]]; then
     source $reply_file || return 1
+    if [[ "${debug_state_file:-}" ]]; then
+      local debugging
+      debug_load_state || return 1
+      debug_immediate=f \
+      first_run=f \
+      debug_needs_to_load_state=t \
+      debug_start || return 1
+    fi
     rm $reply_file
     reply_file=
   fi
@@ -716,11 +731,11 @@ cell_open_log_file() {
       from_must_exist=f \
         safe_link $new_log_file $first_log_path || return 1
     fi
-    if [[ "${logging_to_file:-}" ]]; then
-      cell_log_file_stack+=( $logging_to_file )
-      cell_log_pos_stack+=( $((omni_log_pos + 1)) )
-      cell_log_fork_stack+=( $omni_log_fork_id )
-    fi
+    # if [[ "${logging_to_file:-}" ]]; then
+    #   cell_log_file_stack+=( $logging_to_file )
+    #   cell_log_pos_stack+=( $((omni_log_pos + 1)) )
+    #   cell_log_fork_stack+=( $omni_log_fork_id )
+    # fi
     omni_log_fork_id=$new_fork_id
     log_function=${FUNCNAME[1]} \
       change_log_file
@@ -736,10 +751,10 @@ cell_close_log_file() {
       resume_existing_log=t \
       logging_to_file= \
       change_log_file
-    omni_log_pos=${cell_log_pos_stack[-1]}
-    unset cell_log_pos_stack[-1]
-    omni_log_fork_id=${cell_log_fork_stack[-1]}
-    unset cell_log_fork_stack[-1]
+    # omni_log_pos=${cell_log_pos_stack[-1]}
+    # unset cell_log_pos_stack[-1]
+    # omni_log_fork_id=${cell_log_fork_stack[-1]}
+    # unset cell_log_fork_stack[-1]
   fi
 }
 
@@ -757,18 +772,25 @@ get_new_reply_file() {
 # this should be run in a subshell
 fork_inside() {
 
-  if [[ $background == t ]]; then
-    cell_open_log_file || exit 1
+  begin_function_flat
+
+    if [[ $change_log == t ]]; then
+      cell_open_log_file || fail
+    fi
+
+    eval "$command"; return_code=$?
+
+    if [[ $change_log == t ]]; then
+      cell_close_log_file || fail
+    fi
+
+  end_function
+
+  if [[ "${debugging:-}" == t ]]; then
+    reply_to_caller "debug_state_file='${debug_state_file:-}'" || fail
   fi
 
-  eval "$command"; return_code=$?
-  reply_to_caller "omni_log_pos=${omni_log_pos:-}" || exit 1
-
-  if [[ $background == t ]]; then
-    cell_close_log_file || return 1
-  fi
-
-  exit $return_code
+  handle_return
 
 }
 
@@ -781,8 +803,13 @@ fork_bg() {
 }
 
 fork() {
-  local reply_file command=$* return_code=0
-  local background=${background:-f}
+  local reply_file command=$* return_code=0 \
+    background=${background:-f} \
+    change_log=${change_log:-f}
+
+  if [[ $background == t ]]; then
+    change_log=t
+  fi
 
   get_new_reply_file || return 1
   defer "rm $reply_file"
@@ -1611,7 +1638,8 @@ execute_command_step() {
     
     if [[ -d $step/.dna ]]; then
       # recursive
-      execute_command $step update || fail
+      downstream_ref_path=$up_cyto \
+        execute_command $step update || fail
       safe_link $step $source_path/$base || fail
     elif [[ -d $step ]]; then
       if [[ $base =~ ^choose-.* ]]; then
@@ -1898,9 +1926,8 @@ execute_command() {
 
     fi
 
-    cell_open_log_file || fail
-    fork_fg execute_command_internal || fail_later
-    cell_close_log_file || fail
+    change_log=t \
+      fork_fg execute_command_internal || fail_later
 
   end_function
   handle_return
@@ -2365,7 +2392,9 @@ init_context() {
   leaf_dims= \
   sub_dims= \
   in_path= \
-  out_path=out 
+  out_path=out \
+  update_cost=1 \
+  refresh_less_than=${refresh_less_than:-1} 
   return 0
 }
 
@@ -2687,35 +2716,33 @@ handle_return
 #   fork=whether the process should be forked before executing 
 #     the function. (optional)
 for_each_member() {
-local dim=$1 multi_cell=f \
-  function=$function leave_loop=${leave_loop:-0} \
-  fork=${fork:-t} \
-  par=${par:-t}
+  local dim=$1 \
+    function=$function leave_loop=${leave_loop:-0} \
+    fork=${fork:-t} \
+    par=${par:-t}
 
-local log_vars='fork par' \
-  log_show_vars='dim function'
-begin_function
+  member_count=0
+  local log_vars='fork par' \
+    log_show_vars='dim function'
+  begin_function
 
-  expand_values || fail
+    expand_values || fail
 
-  if [[ "${#values[*]}" -gt 1 ]]; then
-    multi_cell=t
-    on_trunk=f # used to track which cell to link to downstream
-  fi
+    member_count=${#values[*]}
 
-  loop_over_var=values \
-    head="local member=\$value
-      eval \"local d_$dim=\$member\"" \
-    body=$function \
-    tail='
-      if [[ $leave_loop -gt 0 ]]; then
-        break
-      fi
-      ' \
-    parallel_loop || fail
+    loop_over_var=values \
+      head="local member=\$value
+        eval \"local d_$dim=\$member\"" \
+      body=$function \
+      tail='
+        if [[ $leave_loop -gt 0 ]]; then
+          break
+        fi
+        ' \
+      parallel_loop || fail
 
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 # same as for_each_leaf but faster but can't divide into parallel processes or fork

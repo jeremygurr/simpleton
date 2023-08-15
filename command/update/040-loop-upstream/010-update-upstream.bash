@@ -34,10 +34,15 @@ update_upstream() {
 
     if [[ ! -e $up_cyto ]]; then
       log_debug "Cyto upstream is missing, will need to update"
-      prep_upstream $up_dna || fail
+      if [[ -e $up_dna.prep && ! -e $up_cyto.prep ]]; then
+        safe_link $up_dna.prep $up_cyto.prep || fail
+      fi
       needs_update=t
-    else
-      prep_upstream $up_cyto || fail
+    fi
+
+    prep_upstream $up_cyto || fail
+
+    if [[ ! "$needs_update" ]]; then
       get_needs_update $up_cyto || fail
     fi
 
@@ -45,10 +50,7 @@ update_upstream() {
       # not used anywhere? 
       # downstream_cell_stack+=( $cell_path )
 
-      # on_trunk gets set to false when the first dim being updated has more than one matching member, thus creating branches (not trunk anymore). 
-      #   Used to determine what level of cell to link to cyto upstream
-      on_trunk=t \
-        downstream_ref_path=$up_cyto \
+      downstream_ref_path=$up_cyto \
         execute_command "$(realpath $up_dna)" update || fail
 
       previous_upstream_changed=t

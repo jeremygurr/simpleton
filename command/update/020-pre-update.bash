@@ -3,6 +3,7 @@ pre_update() {
 
     update_successful=
     something_changed=f
+    member_count=0
 
     from=$current_job_path \
       to=$running_job_path \
