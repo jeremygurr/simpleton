@@ -7,6 +7,10 @@ break_if_not_changed() {
       fi
     fi
     if [[ $needs_update == f ]]; then
+      if [[ "${downstream_ref_path:-}" ]]; then
+        log_debug "Linking upstream cell to it's downstream cell cyto up folder"
+        force=t safe_link $cell_path $downstream_ref_path || fail
+      fi
       leave_loop=1
     fi
   end_function
