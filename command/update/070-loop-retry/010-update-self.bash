@@ -1,6 +1,6 @@
 update_self() {
 local log_vars='short_cell'
-begin_function
+begin_function_flat
   update_successful=
   can_retry=f
 

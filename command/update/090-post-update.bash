@@ -35,11 +35,11 @@ post_update() {
               $status_path/last-bad-update-start || fail
       fi
 
-      #if [[ $cell_is_leaf == t || $show_branches == t ]]; then
+      if [[ $cell_is_leaf == t || $show_branches == t ]]; then
         log_info "Update $result_string. ($short_cell)"
-      #else
-      #  log_debug "Update $result_string. ($short_cell)"
-      #fi
+      else
+        log_debug "Update $result_string. ($short_cell)"
+      fi
 
     else
       log_info "Pretend update $result_string."
