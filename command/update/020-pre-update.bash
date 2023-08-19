@@ -4,11 +4,13 @@ pre_update() {
     update_successful=
     something_changed=f
     member_count=0
+    locks=
 
-    from=$current_job_path \
-      to=$running_job_path \
-      timeout=5000 \
-      link_lock || fail
+    local lock_fd
+    cell_lock $cell_path || fail
+    locks+=( $lock_fd )
+
+    safe_link $current_job_path $running_job_path || fail
 
     touch $status_path/last-update-start || fail
     # this needs to be at the beginning of the update so other processes

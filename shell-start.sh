@@ -432,8 +432,10 @@ relink() {
   done
 
   out_exec mv "$from" "$to" || return 1
-  if [[ "$from" != "$planted_from" ]]; then
+  out_exec ln -s "$to" "$from" || return 1
+  if [[ -e "$planted_from" && "$from" != "$planted_from" ]]; then
     out_exec mv "$planted_from" "$planted_to" || return 1
+    out_exec ln -s "$planted_to" "$planted_from" || return 1
   fi
 
   return 0
