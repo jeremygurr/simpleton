@@ -431,6 +431,40 @@ setup_cyto_upstream() {
   return 0
 }
 
+# checks one particular folder in .dna/up that is not a cell
+# each sub folder needs to be searched for cells. 
+# If one cell is found which is fresh, the whole folder is considered fresh.
+get_upstream_needs_update2() {
+
+  local up_folder=$1
+  begin_function_flat
+
+      log_debug "Checking upstream folder of $short_cell: ${up_folder##*/}"
+      local -r upstream_cells=( 
+        $(find1 $up_folder -not -name '.*' -not -name '*.prep' | sort -g) 
+        ) || fail
+      begin_for up in ${upstream_cells[*]}; doo
+
+        log_debug "Checking $up"
+
+        if [[ -d $up/.dna ]]; then
+          # recursive
+          check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto || fail
+        elif [[ -d $up ]]; then
+          get_upstream_needs_update2 $up || fail
+        fi
+
+        if [[ $needs_update == f ]]; then
+          succeed
+        fi
+
+      end_for
+
+  end_function
+  handle_return
+
+}
+
 get_upstream_needs_update() {
 
   local cell_path=$1
@@ -457,11 +491,18 @@ get_upstream_needs_update() {
           needs_update=t
           break
         fi
-        # recursive
-        check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto || fail
+
+        if [[ -d $up/.dna ]]; then
+          # recursive
+          check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto || fail
+        elif [[ -d $up ]]; then
+          get_upstream_needs_update2 $up || fail
+        fi
+
         if [[ $needs_update == t ]]; then
           break
         fi
+
       end_for
     fi
 
@@ -496,8 +537,8 @@ get_needs_update() {
       succeed
     fi
 
-    if [[ ! -d $cell_path ]]; then
-      log_fatal "Attempted to run get_needs_update on a non-existent cell: $cell_path"
+    if [[ ! -d $cell_path/.dna ]]; then
+      log_fatal "Attempted to run get_needs_update on folder that is not a cell: $cell_path"
       fail1
     fi
 
@@ -3320,3 +3361,5 @@ run_pipe_command() {
   end_function
   handle_return
 }
+
+
