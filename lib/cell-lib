@@ -36,7 +36,7 @@ setup_cyto_out() {
         fi
         # recursive
         setup_cyto_out $from/$last_part $to/$last_part || fail
-      elif [[ ${item%.safe} != $item ]]; then
+      elif [[ $item == *.safe ]]; then
         local target_file=${item##*/}
         target_file=${target_file%.safe}
         from=$item to=$to/$target_file decrypt_file || fail
@@ -46,6 +46,67 @@ setup_cyto_out() {
     end_for
   end_function
   handle_return
+}
+
+copy_cyto_template() {
+  local from=$1 to=$2
+  local parent=${from%/*}
+  if [[ ${#parent} -gt 1 && -d "$parent" ]]; then
+    copy_cyto_template $parent $to || return 1
+  fi
+  if [[ -d $from/.dna/cyto-template ]]; then
+    rcp $from/.dna/cyto-template/ $to/.cyto/ || return 1
+  fi
+  return 0
+}
+
+record_context() {
+  local cell=$1
+  local parent=${cell%/*}
+  local new_context=$new_cyto/context
+
+  record_context_before $cell || return 1
+
+  local context_local_path=$cell/.dna/context-local
+  local dna_path=$cell/.dna
+
+  if [[ -f $context_local_path ]]; then
+    echo "# generated from: $context_local_path" >>$new_context || return 1
+    echo | cat $context_local_path - >>$new_context || return 1
+  elif [[ -f $dna_path ]]; then
+    echo "# generated from: $dna_path" >>$new_context || return 1
+    echo | cat $dna_path - >>$new_context || return 1
+  fi
+
+  record_context_after $cell || return 1
+
+  return 0
+}
+
+record_context_before() {
+  local cell=$1
+  local parent=${cell%/*}
+  if [[ ${#parent} -gt 1 ]]; then
+    record_context_before $parent || return 1
+  fi
+  local context_before_path=$cell/.dna/context-before
+  if [[ -f $context_before_path ]]; then
+    echo "# generated from: $context_before_path" >>$new_context || return 1
+    echo | cat $context_before_path - >>$new_context || return 1
+  fi
+}
+
+record_context_after() {
+  local cell=$1
+  local parent=${cell%/*}
+  local context_after_path=$cell/.dna/context-after
+  if [[ -f $context_after_path ]]; then
+    echo "# generated from: $context_after_path" >>$new_context || return 1
+    echo | cat $context_after_path - >>$new_context || return 1
+  fi
+  if [[ ${#parent} -gt 1 ]]; then
+    record_context_after $parent || return 1
+  fi
 }
 
 # This is run if cell hasn't been initialized = missing .cyto folder
@@ -60,11 +121,22 @@ make_cyto() {
       fail1
     fi
 
-    if [[ -e $new_cyto ]]; then
-      rm -rf $new_cyto || fail
-    fi
-    mkdir -p $new_cyto || fail
+    timeout=0 \
+      folder_to_lock=$new_cyto \
+      folder_lock || {
+        log_warn "Waiting for new cyto lock"
+        local i=0
+        begin_while [[ -d $new_cyto ]]; doo
+          (( i++ ))
+          if (( i > 50 )); then
+            log_fatal "Waited too long for new cyto lock, aborting"
+            fail1
+          fi
+          sleep 0.5
+        end_while
+      }
 
+    copy_cyto_template $cell_path $cell_path || fail
     record_context $cell_path || fail
 
     get_top_cell $cell_path || fail
@@ -89,13 +161,6 @@ make_cyto() {
     fi
 
     local dna_path=$cell_path/.dna
-    # if [[ -d $dna_path/up ]]; then
-    #   rsync -a $dna_path/up/ $new_cyto/up/ || fail
-    # fi
-
-    # if [[ -d $dna_path/down ]]; then
-    #   rsync -a $dna_path/down/ $new_cyto/down/ || fail
-    # fi
 
     if [[ -d $dna_path/out && "$out_path" ]]; then
       local item
@@ -108,6 +173,8 @@ make_cyto() {
       setup_cyto_out $dna_path/out $out_path || fail
     fi
 
+    folder_to_lock=$new_cyto \
+      folder_unlock || fail
     mv $new_cyto $cell_path/.cyto || fail
 
   end_function
@@ -775,11 +842,6 @@ cell_open_log_file() {
       from_must_exist=f \
         safe_link $new_log_file $first_log_path || return 1
     fi
-    # if [[ "${logging_to_file:-}" ]]; then
-    #   cell_log_file_stack+=( $logging_to_file )
-    #   cell_log_pos_stack+=( $((omni_log_pos + 1)) )
-    #   cell_log_fork_stack+=( $omni_log_fork_id )
-    # fi
     omni_log_fork_id=$new_fork_id
     log_function=${FUNCNAME[1]} \
       change_log_file
@@ -795,10 +857,6 @@ cell_close_log_file() {
       resume_existing_log=t \
       logging_to_file= \
       change_log_file
-    # omni_log_pos=${cell_log_pos_stack[-1]}
-    # unset cell_log_pos_stack[-1]
-    # omni_log_fork_id=${cell_log_fork_stack[-1]}
-    # unset cell_log_fork_stack[-1]
   fi
 }
 
@@ -1042,55 +1100,6 @@ already_in_dep_stack() {
   return 1
 }
 
-record_context() {
-  local cell=$1
-  local parent=${cell%/*}
-  local new_context=$new_cyto/context
-
-  record_context_before $cell || return 1
-
-  local context_local_path=$cell/.dna/context-local
-  local dna_path=$cell/.dna
-
-  if [[ -f $context_local_path ]]; then
-    echo "# generated from: $context_local_path" >>$new_context || return 1
-    echo | cat $context_local_path - >>$new_context || return 1
-  elif [[ -f $dna_path ]]; then
-    echo "# generated from: $dna_path" >>$new_context || return 1
-    echo | cat $dna_path - >>$new_context || return 1
-  fi
-
-  record_context_after $cell || return 1
-
-  return 0
-}
-
-record_context_before() {
-  local cell=$1
-  local parent=${cell%/*}
-  if [[ ${#parent} -gt 1 ]]; then
-    record_context_before $parent || return 1
-  fi
-  local context_before_path=$cell/.dna/context-before
-  if [[ -f $context_before_path ]]; then
-    echo "# generated from: $context_before_path" >>$new_context || return 1
-    echo | cat $context_before_path - >>$new_context || return 1
-  fi
-}
-
-record_context_after() {
-  local cell=$1
-  local parent=${cell%/*}
-  local context_after_path=$cell/.dna/context-after
-  if [[ -f $context_after_path ]]; then
-    echo "# generated from: $context_after_path" >>$new_context || return 1
-    echo | cat $context_after_path - >>$new_context || return 1
-  fi
-  if [[ ${#parent} -gt 1 ]]; then
-    record_context_after $parent || return 1
-  fi
-}
-
 inherit_lib() {
   local cell_from=$1
   local parent=${cell_from%/*}
@@ -1160,8 +1169,8 @@ create_sub_branch() {
 
     mkdir $sub_dna_path/dim || fail
 
-    begin_for ((i = 1; i < super_dim_count; i++)); doo
-      local from_dim=${super_dims[$i]}
+    local from_dim
+    begin_for from_dim in ${super_dims[*]:1}; doo
       local to_dim=$sub_dna_path/dim/${from_dim##*/}
       safe_link $(realpath $from_dim) $to_dim || fail
     end_for
@@ -1173,6 +1182,7 @@ create_sub_branch() {
          || "$part" == */up \
          || "$part" == */down \
          || "$part" == */leaf \
+         || "$part" == */cyto-template \
          ]]; then
         continue
       fi
