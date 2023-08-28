@@ -49,16 +49,7 @@ post_update() {
       echo "update_successful=${update_successful:-}" >>$reply_file || fail
     fi
 
-    local lock_fd
-    begin_for lock_fd in ${locks[*]}; doo
-      cell_unlock || fail
-    end_for
-    locks=
-
     cell_unlock $cell_path || fail
-    if [[ $cell_usage_lock == f ]]; then
-      rm $lock_file_path || fail
-    fi
 
     rm $running_job_path || fail
 

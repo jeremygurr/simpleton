@@ -4,11 +4,10 @@ pre_update() {
     update_successful=
     something_changed=f
     member_count=0
-    locks=
+    cell_locks=
 
-    local lock_fd
-    cell_lock $cell_path || fail
-    locks+=( $lock_fd )
+    write_lock=t \
+      cell_lock $cell_path || fail
 
     safe_link $current_job_path $running_job_path || fail
 

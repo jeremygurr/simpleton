@@ -47,27 +47,15 @@ update_upstream() {
     fi
 
     if [[ $needs_update == t ]]; then
-      # not used anywhere? 
-      # downstream_cell_stack+=( $cell_path )
-
-      local lock_path=$cell_path/.job/lock
-      local context_down_path=$cell_path/.dna/context-down
-      if [[ -f $context_down_path ]]; then
-        local cell_usage_lock=f
-        source $context_down_path || fail
-        if [[ $cell_usage_lock == t ]]; then
-          local lock_fd
-          cell_lock $cell_path || fail
-          locks+=( $lock_fd )
-        fi
-      fi
-      
       downstream_ref_path=$up_cyto \
         execute_command "$(realpath $up_dna)" update || fail
 
       previous_upstream_changed=t
       handle_upstream_result || fail
     fi
+
+    write_lock=f \
+      cell_lock $up_cyto || fail
 
   end_function
   handle_return

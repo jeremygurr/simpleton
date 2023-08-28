@@ -55,7 +55,7 @@ copy_cyto_template() {
     copy_cyto_template $parent $to || return 1
   fi
   if [[ -d $from/.dna/cyto-template ]]; then
-    rcp $from/.dna/cyto-template/ $to/.cyto/ || return 1
+    rcp $from/.dna/cyto-template/ $to/ >/dev/null || return 1
   fi
   return 0
 }
@@ -136,7 +136,7 @@ make_cyto() {
         end_while
       }
 
-    copy_cyto_template $cell_path $cell_path || fail
+    copy_cyto_template $cell_path $new_cyto || fail
     record_context $cell_path || fail
 
     get_top_cell $cell_path || fail
@@ -173,7 +173,7 @@ make_cyto() {
       setup_cyto_out $dna_path/out $out_path || fail
     fi
 
-    folder_to_lock=$new_cyto \
+    folder_to_unlock=$new_cyto \
       folder_unlock || fail
     mv $new_cyto $cell_path/.cyto || fail
 
@@ -662,8 +662,10 @@ get_needs_update() {
     if [[ $needs_update == t && ${pre_validate:-f} == t ]]; then
 
       local check_successful=f
+      log_debug "Pre validating"
       if execute_op check; then
         if [[ $check_successful == t ]]; then
+          log_debug "Validation failed"
           needs_update=f
           log_message="No update needed because remote value already matches intended value"
         fi
@@ -2448,7 +2450,6 @@ init_context() {
   in_path= \
   out_path=out \
   update_cost=1 \
-  cell_usage_lock=f \
   refresh_less_than=${refresh_less_than:-1} 
   return 0
 }
@@ -3348,18 +3349,31 @@ cd_to_plant() {
 
 # locks the given cell, or fails if it can't obtain a lock
 cell_lock() {
-  local cell_path=$1
-  local timeout=$lock_timeout
-  local lock_path=$cell_path/.job/lock
-  fd_write_lock || return 1
+  local cell_path=$1 \
+    write_lock=${write_lock:-t} \
+    timeout=$lock_timeout \
+    lock_path=$cell_path/.cyto/lock \
+    lock_fd
+  if [[ $write_lock == f && -f $cell_path/.cyto/require-write-lock ]]; then
+    write_lock=t
+  fi
+  if [[ -f $lock_path ]]; then
+    if [[ $write_lock == t ]]; then
+      fd_write_lock || return 1
+    else
+      fd_read_lock || return 1
+    fi
+    cell_locks+=( $lock_fd )
+  fi
   return 0
 }
 
 # locks the given cell, or fails if it can't obtain a lock
 cell_unlock() {
-  # local cell_path=$1
-  # local lock_path=$cell_path/.job/lock
-  fd_unlock || return 1
+  local lock_fd
+  for lock_fd in ${cell_locks[*]:-}; do
+    fd_unlock || return 1
+  done
   return 0
 }
 
