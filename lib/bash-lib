@@ -5,7 +5,8 @@ bash_lib_loaded=t
 
 set -uem +H -o pipefail
 shopt -s expand_aliases   # make sure aliases are expanded even for non-interactive scripts
-shopt -s extglob
+shopt -s extglob          # enable extended pattern matching
+shopt -s huponexit        # terminate sub processes when parent process exits
 
 umask 0077  # to make created files readable only by the user by default
 
@@ -241,12 +242,21 @@ split_to_array() {
 
 escape_regex() {
   local var=$1
-
   eval "$var="'${'"$var"'//\"/\\\"}'
   eval "$var="'${'"$var"'// /\\ }'
   eval "$var="'${'"$var"'//\(/\\\(}'
   eval "$var="'${'"$var"'//)/\\)}'
   eval "$var="'${'"$var"'//\?/\\\?}'
+}
+
+literal_to_regex() {
+  local -n var=$1
+  var=${var//\\/\\\\}
+  var=${var//\$/\\\$}
+  var=${var//^/\\^}
+  var=${var//\[/\\\[}
+  var=${var//\]/\\\]}
+  var=${var//./\\.}
 }
 
 get_shell_quoted_value() {
@@ -878,6 +888,7 @@ rcp() {
 # this needs to be run again whenever forking to a subprocess
 setup_exit_trap() {
   trap '
+    # zombie "EXIT $BASH_COMMAND cleanup=${cleanup_on_exit:-}"
     trap - DEBUG ERR EXIT RETURN QUIT &>/dev/null
     set +TeuExv
     eval "${cleanup_on_exit:-}" &>/dev/null
