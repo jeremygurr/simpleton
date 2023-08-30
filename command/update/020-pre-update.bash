@@ -7,6 +7,7 @@ pre_update() {
     cell_locks=
 
     write_lock=t \
+      timeout=$lock_timeout \
       cell_lock $cell_path || fail
 
     safe_link $current_job_path $running_job_path || fail
