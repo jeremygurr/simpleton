@@ -235,7 +235,7 @@ begin_function_flat
     key_path=$dna_path/key
   fi
 
-  lock_path=$job_path/lock 
+  lock_path=$cyto_path/lock 
 
   op_path=$dna_path/op
 
@@ -3377,13 +3377,270 @@ cell_unlock() {
   return 0
 }
 
+magic_shell_prompt='$=-=$ '
+# input:
+#   pipe
+#   command
+#   timeout
+# output: 
+#   result
 run_pipe_command() {
-  local pipe_in=$pipe_in pipe_out=$pipe_out command="$*"
+  local pipe=$pipe command=$command timeout=${timeout:-30}
+  local log_show_vars='pipe command'
   begin_function
-    log_debug "Executing command on pipe $pipe_in: $command"
-    echo -n "$command" >$pipe_in
+    command_successful=f
+    from_var=command \
+      to_background_shell || fail
+    to_var=result \
+      stop_after=$magic_shell_prompt \
+      from_background_shell || fail
+    if [[ $timed_out == f && $failed == f ]]; then
+      command_successful=t
+    fi
   end_function
   handle_return
 }
 
+to_background_shell() {
+  local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+    secret=${secret:-none} \
+    sleep_between_lines=${sleep_between_lines:-0}
+  local -n from=$from_var
+  local masked_from=$from
+  if [[ "$secret" != none ]]; then
+    masked_from=${from//$secret/****}
+  fi
+
+  local log_show_vars='pipe masked_from'
+  begin_function
+
+    from=${from%%*($NL| |$TAB)}
+    from="$from$NL"
+
+    if (( sleep_between_lines > 0 )); then
+      local line
+      while IFS= read -r line || [[ "$line" ]]; do
+        echo "$line" >$pipe_in || fail
+        sleep $sleep_between_lines
+      done <<<"$from"
+      handle_break
+    else
+      echo -n "$from" >$pipe_in || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+from_background_shell__record_line() {
+  local no_newline=${no_newline:-f}
+  local fbj_result=$line
+  [[ "$no_newline" == f ]] && fbj_result=$fbj_result$NL
+  log_debug "Appending to $to_var: ${fbj_result%$NL}"
+  to+=$fbj_result
+  return 0
+}
+
+# sets found or failed
+from_background_shell__check_line() {
+  begin_function_flat
+
+    if [[ "$stop_after" ]]; then
+      begin_for ((i=0; i < stop_after_count; i++)); doo
+        if [[ "$line" =~ ${stop_after[$i]} ]]; then
+          log_debug "Stopped after [$stop_after]"
+          found=t
+          succeed
+        fi
+      end_for
+    fi
+
+    if [[ "$fail_after" ]]; then
+      if [[ "$line" =~ $fail_after ]]; then
+        log_debug "Failed after [$fail_after]"
+        failed=t
+        succeed
+      fi
+    fi
+
+    if (( interact_count > 0 )); then
+      begin_for ((i=0; i < interact_count; i++)); doo
+        if [[ "$line" =~ ${interact_in[$i]} ]]; then
+          log_debug "Interact matched [${interact_in[$i]}]"
+          no_newline=t from_background_shell__record_line || fail
+          line=
+          local output=${interact_out[$i]}
+          secret="$secret" from_var=output to_background_shell || fail
+          succeed
+        fi
+      end_for
+    fi
+
+  end_function
+  handle_return
+}
+
+from_background_shell__prep() {
+
+  if [ "$interact" ]; then
+
+    split_to_array interact 
+    interact_count=${#interact[*]}
+    local c=0
+    for ((i=0; i<interact_count; i++)); do
+      s=${interact[$i]:-}
+      s=${s##*( )}
+      if [ "$s" ]; then
+        if [ $((i%2)) == 0 ]; then
+          escape_regex s
+          interact_in+=( "$s" )
+        else
+          interact_out+=( "$s" )
+        fi
+        let c++
+      fi
+    done
+    interact_count=$c
+
+    (( interact_count/=2 ))
+
+  fi
+
+  if [ "$stop_after" ]; then
+
+    split_to_array stop_after
+    stop_after_count=${#stop_after[*]}
+    for ((i=0; i<stop_after_count; i++)); do
+      s=${stop_after[$i]##*( )}
+      if [ "$s" ]; then
+        escape_regex s
+        stop_after+=( "$s" )
+      fi
+    done
+
+  fi
+
+  if [ "$fail_after" ]; then
+    escape_regex fail_after
+  fi
+
+  if [ ! -p $pipe_out ]; then
+    log_fatal "FIFO missing: $pipe_out"
+    fail1
+  fi
+
+}
+
+# input:
+#   pipe      path to pipe to receive commands from
+#   to_var    var to write result to
+# output:
+#   timed_out 
+#   failed
+from_background_shell() {
+  local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+    buffering=${buffering:-line} \
+    timeout=${timeout:-2} \
+    stop_after=${stop_after:-} \
+    fail_after=${fail_after:-} \
+    interact=${interact:-} \
+    secret=${secret:-none}
+  local -n to=$to_var
+
+  local log_show_vars='pipe' \
+    log_vars='timeout stop_after fail_after interact'
+
+  begin_function
+
+    timed_out=f
+    failed=f
+
+    local line= char= found=f i \
+      interact_in=() interact_out=() stop_after_count=0 interact_count=0 s
+
+    from_background_shell__prep || fail
+
+    log_debug "Waiting for background job output from $pipe_out"
+    if [[ $buffering == line ]]; then
+      while IFS= read -r -t $timeout line || [[ "$line" ]]; do
+        if [[ "$line" ]]; then
+          from_background_shell__record_line || fail
+          from_background_shell__check_line || fail
+          line=
+          if [[ $found == t || $failed == t ]]; then
+            succeed
+          fi
+        fi
+      done <$pipe_out
+      handle_break
+    elif [[ $buffering == char ]]; then
+      line=
+      while IFS= read -N1 -r -t $timeout char || [[ "$line" ]]; do
+        if [[ "$char" ]]; then
+          line+=$char
+          from_background_shell__check_line || fail
+          if [[ $found == t || $failed == t ]]; then
+            succeed
+          fi
+        else
+          from_background_shell__record_line || fail
+          line=
+        fi
+      done <$pipe_out
+      handle_break
+    else
+      log_fatal "Invalid buffering type: $buffering. Should be char or line"
+      fail1
+    fi
+
+    if [[ "$line" ]]; then
+      if [[ $found == f && $failed == f ]]; then
+        log_debug "Timed out with remaining line:" \
+          "$(echo -n "${line// /~}" | hexdump -e '60/1 "%_c " "\n"')"
+      fi
+      no_newline=t from_background_shell__record_line || fail
+    fi
+
+    if [[ $found == f && $failed == f ]]; then
+      timed_out=t
+      log_debug "Timed out after $timeout seconds"
+    fi
+
+    # if [[ $timed_out == t || $failed == t ]]; then
+    #   fail1
+    # fi
+
+  end_try
+  handle_return
+}
+
+flush_background_shell() {
+  local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+    buffering=${buffering:-line} \
+    timeout=${timeout:-1} line char
+  local log_show_vars=pipe
+  begin_function
+
+    line=
+    if [[ $buffering == char ]]; then
+      while IFS= read -n1 -r -t $timeout -r char || [[ "$line" ]]; do
+        if [ "$char" ]; then
+          line+=$char
+        else
+          log_debug "Flushing: $line"
+          line=
+        fi
+      done <$pipe_out
+    elif [[ $buffering == line ]]; then
+      while IFS= read -r -t $timeout -r line; do
+        log_debug "Flushing: $line"
+      done <$pipe_out
+    else
+      log_fatal "Invalid buffering type: $buffering. Should be char or line"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
 
