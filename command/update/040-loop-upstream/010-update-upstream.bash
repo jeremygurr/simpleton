@@ -55,6 +55,7 @@ update_upstream() {
     fi
 
     write_lock=f \
+    timeout=$lock_timeout \
       cell_lock $up_cyto || fail
 
   end_function
