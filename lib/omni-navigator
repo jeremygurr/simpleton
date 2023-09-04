@@ -609,6 +609,7 @@ omni_search_get_matches() {
 
   local plane_id=${plane_map[$index]} 
   local plane_depth=${plane_depth_map[$index]}
+  local log_string=${log_array[$index]}
 
   if [[ "$log_file" == "$original_log_file" ]]; then
     if [[ $allow_in == f ]] \
@@ -632,6 +633,7 @@ omni_search_get_matches() {
   if [[ $found_matching_line == t \
      && ( "$find_level" || "$find_action" \
         || "$find_log_id" || "$find_function" \
+        || "$find_substring" || "$find_regex" \
         ) \
      ]]; then
     local log_level log_action log_id log_function
@@ -667,6 +669,21 @@ omni_search_get_matches() {
       vars=log_function \
         omni_extract_vars || fail
       if [[ "${log_function:-}" && $log_function =~ $find_function ]]; then
+        found_matching_line=t
+      fi
+    fi
+
+    if [[ $found_matching_line == f && "$find_substring" ]]; then
+      local sub=${find_substring// /\\ /}
+      if [[ "$log_string" == *$sub* ]]; then
+        found_matching_line=t
+      fi
+    fi
+
+    if [[ $found_matching_line == f && "$find_regex" ]]; then
+      local find_regex=$find_regex
+      escape_regex $find_regex
+      if [[ "$log_string" =~ $find_regex ]]; then
         found_matching_line=t
       fi
     fi
@@ -716,6 +733,8 @@ omni_search() {
       find_action=${find_action:-} \
       find_log_id=${find_log_id:-} \
       find_function=${find_function:-} \
+      find_substring=${find_substring:-} \
+      find_regex=${find_regex:-} \
       allow_in=${allow_in:-f} \
       allow_out=${allow_out:-f} \
       allow_in_log=${allow_in_log:-f} \
@@ -726,6 +745,7 @@ omni_search() {
       allow_all=${allow_all:-f} \
       allow_all_in_same_log=${allow_all_in_same_log:-f} \
       count=${count:-1} \
+      omni_prev_go_to_string=${omni_prev_go_to_string:-} \
 
     # implications
     if [[ $allow_all == t ]]; then
@@ -790,6 +810,8 @@ omni_search() {
 
     begin_loop
 
+      side_log "omni_search next"
+
       if [[ $found_matching_line == t ]]; then
         omni_copy_cursor $cursor backup
       fi
@@ -800,10 +822,16 @@ omni_search() {
       omni_search_get_matches || fail
       
       if [[ $failed_to_move == t ]]; then
+
+        side_log "omni_search: didn't move"
+
         break
       fi
 
       if [[ $found_matching_line == t ]]; then
+
+        side_log "omni_search: found match"
+
         (( cursor_moved += direction ))
         if [[ $count_is_infinite == f ]]; then
           (( count -= direction ))
@@ -819,14 +847,23 @@ omni_search() {
     end_loop
 
     if [[ $restore_backup == t ]]; then
+
+      side_log "omni_search: restoring backup"
+
       omni_copy_cursor backup $cursor || fail
     fi
 
     # restore original cursor
     if [[ "$original_cursor" ]]; then
+
+      side_log "omni_search: restoring original_cursor"
+
       new_cursor=$original_cursor \
         omni_select_cursor || fail
     fi
+
+    side_log "omni_search: found_matching_line=$found_matching_line"
+    side_log "omni_search: cursor_moved=$cursor_moved"
 
   end_function
   handle_return
@@ -838,6 +875,9 @@ omni_search() {
 #   plane_map
 #   output_array
 omni_show_log() {
+
+  side_log "show_log"
+
   begin_function_flat
 
     # display lines until end
@@ -1031,6 +1071,9 @@ omni_print_details() {
 }
 
 omni_go_until() {
+
+  side_log "go_until"
+
   local find_log_id find_function
   if [[ "$go_until" =~ ^[0-9:]+$ ]]; then
     find_log_id=$go_until
@@ -1311,6 +1354,33 @@ omni_navigator() (
           omni_show_context || fail
           no_follow_once=t
           ;;
+        /)
+          echo >&$fd_original_err
+          local go_to_string=
+          read -e -p "Search for substring: " go_to_string <&$fd_original_in >&$fd_original_err
+          if [[ "${go_to_string:-}" ]]; then
+            omni_prev_go_to_string=$go_to_string
+            local find_substring find_regex
+            if [[ "$go_to_string" == ~* ]]; then
+              find_regex=${go_to_string#\~}
+              find_substring=
+            else
+              find_substring=$go_to_string
+              find_regex=
+            fi
+
+            side_log "searching for $go_to_string"
+
+            move_cursor=$cursor \
+              allow_all=t \
+              omni_search || fail
+
+            find_substring= find_regex=
+
+            omni_show_context || fail
+            no_follow_once=t
+          fi
+          ;;
         \?)
           echo >&$fd_original_err
           echo >&$fd_original_err
@@ -1340,6 +1410,7 @@ omni_navigator() (
           echo "]  go to last log line within the same plane" >&$fd_original_err
           echo "{  go to first log line within the log file" >&$fd_original_err
           echo "}  go to last log line within the log file" >&$fd_original_err
+          echo "f  search forward for a string" >&$fd_original_err
           no_follow_once=t
           ;;
         *)
