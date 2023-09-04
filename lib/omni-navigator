@@ -810,8 +810,6 @@ omni_search() {
 
     begin_loop
 
-      side_log "omni_search next"
-
       if [[ $found_matching_line == t ]]; then
         omni_copy_cursor $cursor backup
       fi
@@ -823,14 +821,10 @@ omni_search() {
       
       if [[ $failed_to_move == t ]]; then
 
-        side_log "omni_search: didn't move"
-
         break
       fi
 
       if [[ $found_matching_line == t ]]; then
-
-        side_log "omni_search: found match"
 
         (( cursor_moved += direction ))
         if [[ $count_is_infinite == f ]]; then
@@ -848,22 +842,15 @@ omni_search() {
 
     if [[ $restore_backup == t ]]; then
 
-      side_log "omni_search: restoring backup"
-
       omni_copy_cursor backup $cursor || fail
     fi
 
     # restore original cursor
     if [[ "$original_cursor" ]]; then
 
-      side_log "omni_search: restoring original_cursor"
-
       new_cursor=$original_cursor \
         omni_select_cursor || fail
     fi
-
-    side_log "omni_search: found_matching_line=$found_matching_line"
-    side_log "omni_search: cursor_moved=$cursor_moved"
 
   end_function
   handle_return
@@ -875,8 +862,6 @@ omni_search() {
 #   plane_map
 #   output_array
 omni_show_log() {
-
-  side_log "show_log"
 
   begin_function_flat
 
@@ -1072,8 +1057,6 @@ omni_print_details() {
 
 omni_go_until() {
 
-  side_log "go_until"
-
   local find_log_id find_function
   if [[ "$go_until" =~ ^[0-9:]+$ ]]; then
     find_log_id=$go_until
@@ -1151,6 +1134,37 @@ omni_navigator() (
           echo "# Show context" >&$fd_original_err
           omni_show_context || fail
           no_follow_once=t
+          ;;
+        f)
+          if [[ "$omni_prev_go_to_string" ]]; then
+            echo "# Searching for $omni_prev_go_to_string" >&$fd_original_err
+            local go_to_string=$omni_prev_go_to_string
+            local find_substring find_regex
+            if [[ "$go_to_string" == ~* ]]; then
+              find_regex=${go_to_string#\~}
+              find_substring=
+            else
+              find_substring=$go_to_string
+              find_regex=
+            fi
+
+            local cursor_moved=0
+            move_cursor=$cursor \
+              allow_all=t \
+              omni_search || fail
+
+            find_substring= find_regex=
+
+            if (( cursor_moved == 0 )); then
+              echo "Not found" >&$fd_original_err
+            else
+              omni_show_context || fail
+              no_follow_once=t
+            fi
+
+          else
+            echo "# No previous search" >&$fd_original_err
+          fi
           ;;
         g)
           echo >&$fd_original_err
@@ -1369,16 +1383,20 @@ omni_navigator() (
               find_regex=
             fi
 
-            side_log "searching for $go_to_string"
-
+            local cursor_moved=0
             move_cursor=$cursor \
               allow_all=t \
               omni_search || fail
 
             find_substring= find_regex=
 
-            omni_show_context || fail
-            no_follow_once=t
+            if (( cursor_moved == 0 )); then
+              echo "Not found" >&$fd_original_err
+            else
+              omni_show_context || fail
+              no_follow_once=t
+            fi
+
           fi
           ;;
         \?)
@@ -1388,6 +1406,7 @@ omni_navigator() (
           echo "c  list a few lines of logs before and after current line" >&$fd_original_err
           echo "i  step in: go to the next log line of the same depth or deeper" >&$fd_original_err
           echo "I  backward step in: go to the previous log line of the same depth or deeper" >&$fd_original_err
+          echo "f  repeat last find forward" >&$fd_original_err
           echo "g  go to the given function or log_id" >&$fd_original_err
           echo "G  repeat previous g command" >&$fd_original_err
           echo "l  list next few log lines" >&$fd_original_err
