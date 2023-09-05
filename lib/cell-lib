@@ -3355,20 +3355,27 @@ cell_lock() {
   local cell_path=$1 \
     write_lock=${write_lock:-t} \
     timeout=$timeout \
-    lock_path=$cell_path/.cyto/lock \
-    lock_fd
+    lock_fd \
+    lock_type=read
+  local lock_path=$cell_path/.cyto/lock
   if [[ $write_lock == f && -f $cell_path/.cyto/require-write-lock ]]; then
     write_lock=t
   fi
-  if [[ -f $lock_path ]]; then
-    if [[ $write_lock == t ]]; then
-      fd_write_lock || return 1
-    else
-      fd_read_lock || return 1
-    fi
-    cell_locks+=( $lock_fd )
+  if [[ $write_lock == t ]]; then
+    lock_type=write
   fi
-  return 0
+  local log_show_vars="lock_type timeout ^lock_path"
+  begin_function
+    if [[ -f $lock_path ]]; then
+      if [[ $write_lock == t ]]; then
+        fd_write_lock || return 1
+      else
+        fd_read_lock || return 1
+      fi
+      cell_locks+=( $lock_fd )
+    fi
+  end_function
+  handle_return
 }
 
 # locks the given cell, or fails if it can't obtain a lock
