@@ -6,10 +6,8 @@ cell_lib_loaded=t
 # don't let other users read any files written by these scripts
 umask 0077
 
-failed_but_can_retry=2 skip=2 \
-  somethings_wrong=1 everythings_fine=0 \
-  empty_member=_ wild_sub_path=_ 
-
+empty_member=_ 
+wild_sub_path=_ 
 pretend=${pretend:-f}
 
 parallel_default=t 
@@ -19,10 +17,11 @@ parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 # Whether we should show logging for each seperate branch or only for leaves
 show_branches=${show_branches:-f}
 
+# used to detect upstream circular dependencies
 downstream_cell_stack=( ) 
 
 disable_log=${disable_log:-f}
-export debug_ignore=${debug_ignore:- apad change_log_file debug_start defer echo_align find1 fork get_new_reply_file get_shell_quoted_value load_log_vars log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log }
+export debug_ignore+="${debug_ignore:-} apad change_log_file debug_start defer echo_align find1 fork get_new_reply_file get_shell_quoted_value load_log_vars log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log"
 
 setup_cyto_out() {
   local from=$1 to=$2
@@ -60,6 +59,34 @@ copy_cyto_template() {
   return 0
 }
 
+record_context_before() {
+  local cell=$1
+  local parent=${cell%/*}
+  if [[ ${#parent} -gt 1 ]]; then
+    record_context_before $parent || return 1
+  fi
+  local context_before_path=$cell/.dna/context-before
+  if [[ -f $context_before_path ]]; then
+    echo "# generated from: $context_before_path" >>$new_context || return 1
+    echo | cat $context_before_path - >>$new_context || return 1
+  fi
+  return 0
+}
+
+record_context_after() {
+  local cell=$1
+  local parent=${cell%/*}
+  local context_after_path=$cell/.dna/context-after
+  if [[ -f $context_after_path ]]; then
+    echo "# generated from: $context_after_path" >>$new_context || return 1
+    echo | cat $context_after_path - >>$new_context || return 1
+  fi
+  if [[ ${#parent} -gt 1 ]]; then
+    record_context_after $parent || return 1
+  fi
+  return 0
+}
+
 record_context() {
   local cell=$1
   local parent=${cell%/*}
@@ -81,32 +108,6 @@ record_context() {
   record_context_after $cell || return 1
 
   return 0
-}
-
-record_context_before() {
-  local cell=$1
-  local parent=${cell%/*}
-  if [[ ${#parent} -gt 1 ]]; then
-    record_context_before $parent || return 1
-  fi
-  local context_before_path=$cell/.dna/context-before
-  if [[ -f $context_before_path ]]; then
-    echo "# generated from: $context_before_path" >>$new_context || return 1
-    echo | cat $context_before_path - >>$new_context || return 1
-  fi
-}
-
-record_context_after() {
-  local cell=$1
-  local parent=${cell%/*}
-  local context_after_path=$cell/.dna/context-after
-  if [[ -f $context_after_path ]]; then
-    echo "# generated from: $context_after_path" >>$new_context || return 1
-    echo | cat $context_after_path - >>$new_context || return 1
-  fi
-  if [[ ${#parent} -gt 1 ]]; then
-    record_context_after $parent || return 1
-  fi
 }
 
 # This is run if cell hasn't been initialized = missing .cyto folder
@@ -150,7 +151,7 @@ make_cyto() {
       safe_link $top_cell/.dna/lib $new_cyto/lib || fail
     fi
 
-    #   older more powerful, but more fragile way
+    #   more powerful, but more fragile way
     # mkdir -p $new_cyto/command || fail
     # mkdir -p $new_cyto/lib || fail
     # inherit_lib $cell_path || fail
@@ -226,8 +227,6 @@ begin_function_flat
   else
     cell_is_leaf=t
   fi
-
-  get_short_cell $cell_path
 
   key_path=$cyto_path/key
   if [[ ! -d $key_path ]]; then
@@ -426,6 +425,14 @@ plant_seed() {
   handle_return
 }
 
+setup_dep_defaults() {
+  required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
+  # Make this go back to default for any further contexts loaded
+  # fresh passed in by user should only apply to top level cell, not to deps or subs
+  fresh=
+  return 0
+}
+
 prep_upstream() {
   local upstream=$1
 
@@ -440,22 +447,177 @@ prep_upstream() {
 
   local log_show_vars=^upstream
   begin_function
-  unset prep
-  if [[ -f $upstream.prep ]]; then
-    log_debug "Executing upstream prep: $upstream.prep"
-    source $upstream.prep || fail
-    if ! type -t prep &>/dev/null; then
-      log_fatal "$upstream.prep must have a function named prep"
-      fail1
+    unset prep
+    if [[ -f $upstream/prep ]]; then
+      log_debug "Executing upstream prep: $upstream/prep"
+      source $upstream/prep || fail
+      if ! type -t prep &>/dev/null; then
+        log_fatal "$upstream/prep must have a function named prep"
+        fail1
+      fi
+      prep || fail
+      setup_dep_defaults || fail
     fi
-    prep || fail
-    setup_dep_defaults || fail
-  fi
+  end_function
+  handle_return
+}
+
+promote_dep_cell() {
+  local log_show_vars=^from
+  begin_function
+
+    local trunk_cell=
+    get_trunk_cell $from || fail
+
+    local dims= last_cell_dims_loaded
+    load_dims $trunk_cell/.dna/dim || fail
+
+    local dep_dim already_promoted_path=$from
+
+    # We don't need to promote all dims in target, but only the dims in the source
+    # e1 -> e1, not e1 -> e1/ods
+    # only promote what is in source + provided by prep
+    #   can't just promote because a var exists, only if it's actually used at that point
+
+    begin_for dep_dim in ${dims[*]}; doo
+
+      log_debug "Considering promotion of $dep_dim"
+
+      # is this dim already promoted?
+      if [[ $already_promoted_path == */.dim/* ]]; then
+        already_promoted_path=${already_promoted_path%/.dim/*}
+        log_debug "Already promoted: $dep_dim"
+        continue
+      fi
+
+      local branch_dim found_branch_dim=f
+      # upstream prep script can add extra_dims as needed
+      # branch_dims here is the full set of dims for the subject cell, whereas 
+      #   dims is the full set of dims for the upstream cell being promoted
+      begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
+        if [[ $branch_dim == $dep_dim ]]; then
+          log_debug "Found branch dim for $dep_dim"
+          found_branch_dim=t
+          break
+        fi
+      end_for
+
+      local values=
+      if [[ $found_branch_dim == f ]]; then
+        # can't promote if dep dim doesn't exist on the branch 
+        log_debug "Upstream dim not found in base branch dims: $dep_dim"
+        if [[ $cell_is_leaf == t ]]; then
+          if type -t ${dep_dim}_member_expand >/dev/null; then
+            value= ${dep_dim}_member_expand 
+            if [[ "$values" ]]; then
+              log_debug "Found default for $dep_dim = $values"
+            fi
+          fi
+          if [[ ! "$values" ]]; then
+            log_fatal "Leaf cell was unable to resolve upstream dep to a leaf also. Missing dim $dep_dim"
+            fail1
+          fi
+        else
+          break
+        fi
+      fi
+
+      local dep_dim_var=d_$dep_dim
+
+      if [[ -v $dep_dim_var ]]; then
+        values=${!dep_dim_var}
+        if type -t ${dep_dim}_member_expand >/dev/null; then
+          value=$values ${dep_dim}_member_expand
+        fi
+      fi
+
+      values=( $values )
+
+      if [[ "${#values[*]}" -gt 1 ]]; then
+        log_fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
+        fail1
+      fi
+
+      if [[ "${values:-}" ]]; then
+        local sane_value
+        get_sane_value "$values" || fail
+        local old_from=$from
+        from=$from/.dim/$sane_value
+        log_debug "Promoted $dep_dim"
+        if [[ ! -d $from ]]; then
+          eval "$dep_dim_var=\"$values\""
+          log_debug "Creating sub for $from"
+          fork_fg "load_context_and_create_sub $old_from $from" || fail
+        fi
+      else
+        log_debug "Did not promote $dep_dim because no value is found for it yet"
+        break
+      fi
+
+    end_for
+  end_function
+  handle_return
+}
+
+# should be forked because dims will be altered
+# from and to are paths to up/choices/{upstream} which must be a cell
+migrate_cell() {
+  local -r dep_link=$1 to=$2
+  local from=$(realpath $dep_link) 
+  local log_vars=from log_show_vars="^dep_link ^to"
+  begin_function
+
+    if [[ "$from" == */.dna/sub/* ]]; then
+      local fixed_from=${from//.dna\/sub\//}
+      if [[ -d $fixed_from ]]; then
+        rm $dep_link || fail
+        safe_link $fixed_from $dep_link || fail
+        from=$fixed_from
+      else
+        log_fatal "Dependencies must link to planted cells, not seeds: $from"
+        fail1
+      fi
+    fi
+
+    promote_dep_cell || fail
+    safe_link $from $to || fail
 
   end_function
   handle_return
 }
 
+fork_fg() {
+  background=f fork "$@"
+}
+
+fork_bg() {
+  background=t fork "$@"
+}
+
+fork() {
+  local reply_file command=$* return_code=0 \
+    background=${background:-f} \
+    change_log=${change_log:-f}
+
+  if [[ $background == t ]]; then
+    change_log=t
+  fi
+
+  get_new_reply_file || return 1
+  defer "rm $reply_file"
+
+  if [[ $background == t ]]; then
+    ( fork_inside ) &
+  else
+    ( fork_inside )
+  fi
+
+  return_code=$?
+  after_fork || { let return_code++ || true; }
+  return $return_code
+}
+
+# migrates a dependency given a .dna/up folder
 migrate_dep() {
   local -r from=$1 to=$2
 
@@ -463,39 +625,29 @@ migrate_dep() {
   begin_function
     if [[ -e $from ]]; then
 
-      if [[ -f $from || -f $from/.dna ]]; then
-        safe_link $(realpath $from) $to || fail
-      elif [[ -d $from/.dna ]]; then
-        # recursive
-        fork_fg "migrate_cell $from $to" || fail
-      elif [[ -d $from ]]; then
-        if [[ ! -d $to ]]; then
-          mkdir $to || fail
-        fi
-        local item item_name \
-          items=$(find1 $from \
-          -not -name '.*' \
-          | sort -g) || fail
-        begin_for item in $items; doo
-          item_name=${item##*/}
+      local choice choices
+      choices=$(find1 $from/choices -type d -not -name '.*') || fail
+      begin_for choice in $choices; doo
+
+        local choice_name=${choice##*/}
+        if [[ -f $choice || -f $choice/.dna ]]; then
+          safe_link $(realpath $choice) $to/choices/$choice_name || fail
+
+        elif [[ -d $choice/.dna ]]; then
           # recursive
-          migrate_dep $item $to/$item_name || fail
-        end_for
-      fi
+          fork_fg "migrate_cell $choice $to/choices/$choice_name" || fail
+
+        elif [[ -d $choice ]]; then
+          log_fatal "Directory inside of dependency not supported yet"
+          fail1
+        
+        fi
+
+      end_for
 
     fi
   end_function
   handle_return
-}
-
-setup_cyto_upstream() {
-  local up_dna=$1 up_cyto=$2
-  log_debug "Setting up cyto upstream"
-  migrate_dep $up_dna $up_cyto || return 1
-  if [[ -f $up_dna.prep ]]; then
-    safe_link $up_dna.prep $up_cyto.prep || return 1
-  fi
-  return 0
 }
 
 # checks one particular folder in .dna/up that is not a cell
@@ -544,14 +696,15 @@ get_upstream_needs_update() {
   begin_function
     if [[ "${dna_up_path:-}" && -d "$dna_up_path" ]] \
        && (( check_upstream_depth > 0 )); then
-      log_debug "Checking upstream of $short_cell"
+      #log_debug "Checking upstream of $short_cell"
       local -r upstream_cells=( 
         $(find1 $dna_up_path -not -name '.*' -not -name '*.prep' | sort -g) 
         ) || fail
       local up up_part
       begin_for up in ${upstream_cells[*]}; doo
-        log_debug "Checking $up"
+
         up_part=${up##*/}
+        log_debug "Checking $up_part"
         up_cyto=$up_path/$up_part
         if [[ ! -e $up_cyto ]]; then
           log_debug "Cyto up is missing, needs update"
@@ -559,12 +712,7 @@ get_upstream_needs_update() {
           break
         fi
 
-        if [[ -d $up/.dna ]]; then
-          # recursive
-          check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto || fail
-        elif [[ -d $up ]]; then
-          get_upstream_needs_update2 $up || fail
-        fi
+        check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto || fail
 
         if [[ $needs_update == t ]]; then
           break
@@ -663,6 +811,7 @@ get_needs_update() {
 
       local check_successful=f
       log_debug "Pre validating"
+
       if execute_op check; then
         if [[ $check_successful == t ]]; then
           log_debug "Validation failed"
@@ -693,14 +842,6 @@ get_needs_update() {
   fi
 
   handle_return
-}
-
-setup_dep_defaults() {
-  required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
-  # Make this go back to default for any further contexts loaded
-  # fresh passed in by user should only apply to top level cell, not to deps or subs
-  fresh=
-  return 0
 }
 
 get_leaf_needs_update() {
@@ -899,37 +1040,6 @@ fork_inside() {
 
   handle_return
 
-}
-
-fork_fg() {
-  background=f fork "$@"
-}
-
-fork_bg() {
-  background=t fork "$@"
-}
-
-fork() {
-  local reply_file command=$* return_code=0 \
-    background=${background:-f} \
-    change_log=${change_log:-f}
-
-  if [[ $background == t ]]; then
-    change_log=t
-  fi
-
-  get_new_reply_file || return 1
-  defer "rm $reply_file"
-
-  if [[ $background == t ]]; then
-    ( fork_inside ) &
-  else
-    ( fork_inside )
-  fi
-
-  return_code=$?
-  after_fork || { let return_code++ || true; }
-  return $return_code
 }
 
 # 'value' is the loop var
@@ -1285,129 +1395,6 @@ load_context_and_create_sub() {
   handle_return
 }
 
-promote_dep_cell() {
-  local log_show_vars=^from
-  begin_function
-
-    local trunk_cell=
-    get_trunk_cell $from || fail
-
-    local dims= last_cell_dims_loaded
-    load_dims $trunk_cell/.dna/dim || fail
-
-    local dep_dim already_promoted_path=$from
-
-    # We don't need to promote all dims in target, but only the dims in the source
-    # e1 -> e1, not e1 -> e1/ods
-    # only promote what is in source + provided by prep
-    #   can't just promote because a var exists, only if it's actually used at that point
-
-    begin_for dep_dim in ${dims[*]}; doo
-
-      log_debug "Considering promotion of $dep_dim"
-
-      # is this dim already promoted?
-      if [[ $already_promoted_path == */.dim/* ]]; then
-        already_promoted_path=${already_promoted_path%/.dim/*}
-        log_debug "Already promoted: $dep_dim"
-        continue
-      fi
-
-      local branch_dim found_branch_dim=f
-      # upstream prep script can add extra_dims as needed
-      # branch_dims here is the full set of dims for the subject cell, whereas 
-      #   dims is the full set of dims for the upstream cell being promoted
-      begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
-        if [[ $branch_dim == $dep_dim ]]; then
-          log_debug "Found branch dim for $dep_dim"
-          found_branch_dim=t
-          break
-        fi
-      end_for
-
-      local values=
-      if [[ $found_branch_dim == f ]]; then
-        # can't promote if dep dim doesn't exist on the branch 
-        log_debug "Upstream dim not found in base branch dims: $dep_dim"
-        if [[ $cell_is_leaf == t ]]; then
-          if type -t ${dep_dim}_member_expand >/dev/null; then
-            value= ${dep_dim}_member_expand 
-            if [[ "$values" ]]; then
-              log_debug "Found default for $dep_dim = $values"
-            fi
-          fi
-          if [[ ! "$values" ]]; then
-            log_fatal "Leaf cell was unable to resolve upstream dep to a leaf also. Missing dim $dep_dim"
-            fail1
-          fi
-        else
-          break
-        fi
-      fi
-
-      local dep_dim_var=d_$dep_dim
-
-      if [[ -v $dep_dim_var ]]; then
-        values=${!dep_dim_var}
-        if type -t ${dep_dim}_member_expand >/dev/null; then
-          value=$values ${dep_dim}_member_expand
-        fi
-      fi
-
-      values=( $values )
-
-      if [[ "${#values[*]}" -gt 1 ]]; then
-        log_fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
-        fail1
-      fi
-
-      if [[ "${values:-}" ]]; then
-        local sane_value
-        get_sane_value "$values" || fail
-        local old_from=$from
-        from=$from/.dim/$sane_value
-        log_debug "Promoted $dep_dim"
-        if [[ ! -d $from ]]; then
-          eval "$dep_dim_var=\"$values\""
-          log_debug "Creating sub for $from"
-          fork_fg "load_context_and_create_sub $old_from $from" || fail
-        fi
-      else
-        log_debug "Did not promote $dep_dim because no value is found for it yet"
-        break
-      fi
-
-    end_for
-  end_function
-  handle_return
-}
-
-# should be forked because dims will be altered
-migrate_cell() {
-  local -r dep_link=$1 to=$2
-  local from=$(realpath $dep_link) 
-  local log_vars=from log_show_vars="^dep_link ^to"
-  begin_function
-
-    if [[ "$from" == */.dna/sub/* ]]; then
-      local fixed_from=${from//.dna\/sub\//}
-      if [[ -d $fixed_from ]]; then
-        rm $dep_link || fail
-        safe_link $fixed_from $dep_link || fail
-        from=$fixed_from
-      else
-        log_fatal "Dependencies must link to planted cells, not seeds: $from"
-        fail1
-      fi
-    fi
-
-    promote_dep_cell || fail
-    safe_link $from $to || fail
-
-  end_function
-  handle_return
-}
-
 migrate_out() {
   local from=$1
   local -r to=$2
@@ -1596,19 +1583,6 @@ get_dep_member() {
 
   dep_member=${!dep_dim}
   return 0
-}
-
-# ??
-migrate_member() {
-  local -r from_cell=$from to_cell=$to member=$member
-  local -r dep_name=${upstream_branch_cell##*/} \
-    target=$sub_dna_path/up/$dep_name
-  begin_for leaf_cell in ${leaf_cells[*]}; doo
-    while [[ -f $target-$i ]]; do
-      let i++ || true
-    done
-    safe_link $(realpath $leaf_cell) $target-$i || fail
-  end_for
 }
 
 # given a cell, find the nearest seed searching it's ancestors
@@ -2210,20 +2184,6 @@ gather_files_with_same_index() {
     end_loop
   end_function
   handle_return
-}
-
-# input: $* = cell values in dim order
-# output: cell_node = string path to cell from cell path
-get_cell_node() {
-  local v i=0 d
-  cell_node=
-  for v in "$@"; do
-    d=${cell_dims[$i]}
-    get_sane_value "$v"
-    v=$sane_value
-    cell_node+=/dim/$d/$v
-    let i++ || true
-  done
 }
 
 # input: $* = cell values in dim order

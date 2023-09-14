@@ -34,8 +34,8 @@ update_upstream() {
 
     if [[ ! -e $up_cyto ]]; then
       log_debug "Cyto upstream is missing, will need to update"
-      if [[ -e $up_dna.prep && ! -e $up_cyto.prep ]]; then
-        safe_link $up_dna.prep $up_cyto.prep || fail
+      if [[ -e $up_dna/prep && ! -e $up_cyto/prep ]]; then
+        safe_link $up_dna/prep $up_cyto/prep || fail
       fi
       needs_update=t
     fi
