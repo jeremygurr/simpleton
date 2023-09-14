@@ -617,6 +617,27 @@ fork() {
   return $return_code
 }
 
+migrate_dep2() {
+  local from=$1 to=$2
+  begin_function_flat
+
+    if [[ -f $from || -f $from/.dna ]]; then
+      safe_link $(realpath $from) $to || fail
+
+    elif [[ -d $from/.dna ]]; then
+      # recursive
+      fork_fg "migrate_cell $from $to" || fail
+
+    elif [[ -d $from ]]; then
+      log_fatal "Directory inside of dependency not supported yet"
+      fail1
+    
+    fi
+
+  end_function
+  handle_return
+}
+
 # migrates a dependency given a .dna/up folder
 migrate_dep() {
   local -r from=$1 to=$2
@@ -625,25 +646,16 @@ migrate_dep() {
   begin_function
     if [[ -e $from ]]; then
 
-      local choice choices
-      choices=$(find1 $from/choices -type d -not -name '.*') || fail
-      begin_for choice in $choices; doo
-
-        local choice_name=${choice##*/}
-        if [[ -f $choice || -f $choice/.dna ]]; then
-          safe_link $(realpath $choice) $to/choices/$choice_name || fail
-
-        elif [[ -d $choice/.dna ]]; then
-          # recursive
-          fork_fg "migrate_cell $choice $to/choices/$choice_name" || fail
-
-        elif [[ -d $choice ]]; then
-          log_fatal "Directory inside of dependency not supported yet"
-          fail1
-        
-        fi
-
-      end_for
+      if [[ -d $from/cell ]]; then
+        migrate_dep2 $from/cell $to/cell || fail 
+      else
+        local choice choices
+        choices=$(find1 $from/choices -type d -not -name '.*') || fail
+        begin_for choice in $choices; doo
+          local choice_name=${choice##*/}
+          migrate_dep2 $choice $to/choices/$choice_name || fail
+        end_for
+      fi
 
     fi
   end_function
@@ -3609,6 +3621,27 @@ flush_background_shell() {
       log_fatal "Invalid buffering type: $buffering. Should be char or line"
       fail1
     fi
+
+  end_function
+  handle_return
+}
+
+up_delegate() {
+  local up_path=$1
+  local cell_path=${up_path%/.cyto/up/*} \
+    up_lock=$up_path/.cyto/lock \
+    up_name=${up_path##*/}
+  begin_function_flat
+
+    if [[ -e $up_lock ]]; then
+      safe_link $up_lock $cell_path/.cyto/up-locks/$up_name || fail
+    fi
+
+    local out_item
+    out_items=$(find1 $up_path -not -name ".*") || fail
+    begin_for out_item in $out_items; doo
+      safe_link $out_item $cell_path/ || fail
+    end_for
 
   end_function
   handle_return
