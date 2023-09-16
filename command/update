@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+
+update() {
+
+  break_if_not_changed
+  pre_update
+  create_downstream_links
+  update_upstream
+  update_member
+  create_sub_cells
+  update_self
+  check_results
+  return 0
+}
+
+break_if_not_changed() {
+  begin_function_flat
+    if [[ ! "${needs_update:-}" ]]; then
+      needs_update=t
+      if [[ "$status_path" ]]; then
+        get_needs_update $cell_path || fail
+      fi
+    fi
+    if [[ $needs_update == f ]]; then
+      if [[ "${downstream_ref_path:-}" ]]; then
+        log_debug "Linking upstream cell to it's downstream cell cyto up folder"
+        force=t safe_link $cell_path $downstream_ref_path || fail
+      fi
+      leave_loop=1
+    fi
+  end_function
+  handle_return
+}
+
+pre_update() {
+  begin_function_flat
+
+    update_successful=
+    something_changed=f
+    member_count=0
+    cell_locks=
+
+    write_lock=t \
+      timeout=$lock_timeout \
+      cell_lock $cell_path || fail
+
+    safe_link $current_job_path $running_job_path || fail
+
+    touch $status_path/last-update-start || fail
+    # this needs to be at the beginning of the update so other processes
+    #   could potentially invalidate it, requiring another update
+    touch $status_path/up-to-date || fail
+
+    if [[ $reuse_existing_out == t && -f $status_path/last-good-update-end ]]; then
+      # Don't allow cells to reuse old data when it is mid-modification and this update fails
+      rm $status_path/last-good-update-end || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+create_downstream_links() {
+  begin_function_flat
+
+  if [[ "${downstream_ref_path:-}" ]]; then
+    local cell_path down_cell_path down_cell_name
+
+    get_cell_path ${downstream_ref_path%/*} || fail
+    down_cell_path=$cell_path
+
+    get_cell_name $down_cell_path || fail
+    down_cell_name=${cell_name%% *}
+
+    local down_link=$down_path/$down_cell_name
+    if [[ ! -e $down_link ]]; then
+      if [[ ! -d $down_path ]]; then
+        mkdir $down_path || fail
+      fi
+      safe_link $down_cell_path $down_link || fail
+    else
+      local link_target=$(readlink $down_link) || fail
+      if [[ $link_target != $down_cell_path ]]; then
+        log_fatal "Link conflict: A link already exists but doesn't point to the same place."
+        log_fatal "  $link_target is expected to point to $down_cell_path"
+      fi
+    fi
+  fi
+
+  end_function
+  handle_return
+}
+
+update_upstream() {
+
+  if [[ -d "${dna_up_path:-}" && ! "$update_successful" ]]; then
+    upstreams=( $(find1 $dna_up_path \
+      -not -name '.*' \
+      -not -name '*.prep' \
+      -not -regex '.*/\([0-9]+-\)?\(before\|after\|choose\)-.*' \
+      | sort -g \
+      ) )
+    previous_upstream_changed=f
+  else
+    upstreams=
+  fi
+
+  #### LOOP HERE
+
+  local required_freshness=$required_freshness fresh=$fresh \
+    default_freshness=$default_freshness up_dna=$upstream
+
+  local log_show_vars=^up_dna 
+  begin_function
+
+    if [[ "${localize_dim_vars:-}" ]]; then
+      eval "$localize_dim_vars"
+    fi
+
+    # This may be overridden by upstream prep file to customize how failure of this upstream is handled
+    handle_upstream_result() {
+      if [[ "$update_successful" == f ]]; then
+        log_error "Failed to update upstream cell $up_dna"
+      else 
+        update_successful=
+      fi
+    }
+
+    local needs_update=
+    local up_part=${up_dna##*/}
+    local up_cyto=$up_path/$up_part
+    if [[ ! -d "$up_path" ]]; then
+      mkdir "$up_path" || fail
+    fi
+
+    if [[ $previous_upstream_changed == t && -e "$up_cyto" ]]; then
+      log_debug "Previous upstream changed, removing cyto upstream"
+      rm $up_cyto || fail
+    fi
+
+    if [[ ! -e $up_cyto ]]; then
+      log_debug "Cyto upstream is missing, will need to update"
+      if [[ -e $up_dna/prep && ! -e $up_cyto/prep ]]; then
+        safe_link $up_dna/prep $up_cyto/prep || fail
+      fi
+      needs_update=t
+    fi
+
+    prep_upstream $up_cyto || fail
+
+    if [[ ! "$needs_update" ]]; then
+      get_needs_update $up_cyto || fail
+    fi
+
+    if [[ $needs_update == t ]]; then
+      downstream_ref_path=$up_cyto \
+        execute_command "$(realpath $up_dna)" update || fail
+
+      previous_upstream_changed=t
+      handle_upstream_result || fail
+    fi
+
+    write_lock=f \
+    timeout=$lock_timeout \
+      cell_lock $up_cyto || fail
+
+    touch $status_path/deps-up-to-date || return 1
+    touch $status_path/up-to-date || return 1
+
+  end_function
+  handle_return
+}
+
+update_member() {
+  local sane_value member_path \
+    log_vars=member log_show_vars=member \
+    downstream_ref_path=${downstream_ref_path:-}
+
+  begin_function
+
+    #### LOOP HERE
+    handle_step_loop() {
+      if [[ "${leaf_dims:-}" ]]; then
+        par=t fork=t function=execute_command_step_folder for_each_member "${leaf_dims[0]}"
+      fi
+    }
+
+    get_sane_value "$member" || fail
+    member_path=$cell_path/.dim/$sane_value
+    if [[ ! -d $member_path ]]; then
+      if [[ ! -d $cell_path/.dim ]]; then
+        mkdir $cell_path/.dim || fail
+      fi
+      create_sub_cell $member_path || fail
+    fi
+    local needs_update=
+    get_needs_update $member_path || return 1
+    if [[ $needs_update == t ]]; then
+
+      if (( member_count > 1 )); then
+        log_debug "More than one member found ($member_count), not passing downstream_ref_path."
+        downstream_ref_path=
+      elif [[ "$downstream_ref_path" ]]; then
+        log_debug "Only one member found, passing downstream_ref_path: $downstream_ref_path"
+      fi
+      fork_fg execute_command $member_path update || fail
+
+      if [[ $update_successful == f ]]; then
+        error "Failed to update member cell $member"
+        reply_to_caller "update_successful=f" || fail
+      else 
+        update_successful=
+      fi
+    fi
+
+    if (( member_count == 1 )); then
+      downstream_ref_path=
+    fi
+
+  end_function
+  handle_return
+}
+
+update_self() {
+  local log_vars='short_cell'
+  begin_function_flat
+
+    ## BEFORE
+    ref_group=none
+    delay=$retry_delay
+
+    handle_step_loop() {
+
+    can_update=f
+    find_op_or_function update || return 1
+    if [[ "$found_op_function" || "$found_op" ]]; then
+      can_update=t
+    fi
+
+    if [[ "$update_successful" ]]; then
+      can_update=f
+    fi
+
+    local action=local_update
+    if [[ $can_update == t ]]; then
+      for ((retry=0; retry < retry_max; retry++)); do
+
+        if [[ $retry -gt 0 ]]; then
+          log_info "Waiting $delay seconds before trying again" 
+          sleep $delay
+          let 'delay *= retry_scale' || true
+        fi
+
+        local attempt_string=
+        if (( retry_max > 1 )); then
+          attempt_string=", attempt $((retry+1)) of $retry_max"
+        fi
+          
+        log_debug "Executing local update of $short_cell$attempt_string" 
+
+        execute_command_step_folder || return 1
+
+        [[ $can_retry == f || $update_successful == t ]] && break
+
+      done
+    fi
+
+    update_successful=${update_successful:-t}
+
+    return 0
+
+    }
+
+    ## END BEFORE
+
+    update_successful=
+    can_retry=f
+
+    if [[ $can_update == t ]]; then
+
+      local reuse_existing_out=${reuse_existing_out:-f}
+
+      if [[ "$out_path" ]]; then
+        if [[ $reuse_existing_out == f ]]; then
+          local original_out=$out_path
+          local out_path=$out_path.new
+          if [[ -d $out_path ]]; then
+            rm -rf $out_path || fail
+          fi
+        else
+          # allow update code to set this, since we can't compare when changes are made in place
+          something_changed=
+        fi
+        if [[ ! -d $out_path ]]; then
+          mkdir $out_path || fail
+        fi
+      fi
+
+      tee_output_to_log || fail
+      execute_op update || fail
+      completion_time=$EPOCHSECONDS
+      untee_output || fail
+
+      update_successful=${update_successful:-f}
+
+      if [[ "$out_path" ]]; then
+        if [[ $reuse_existing_out == f ]]; then
+          out_path=$original_out
+          if [[ $update_successful == t ]]; then
+            if files_are_same -r $out_path $out_path.new &>/dev/null; then
+              rm -rf $out_path.new || fail
+            else
+              if [[ -e $out_path.old ]]; then
+                rm -rf $out_path.old || fail
+              fi
+              if [[ -d $out_path ]]; then
+                mv $out_path $out_path.old || fail
+              fi
+              mv $out_path.new $out_path || fail
+              something_changed=t
+            fi
+          fi
+        else # $reuse_existing_out == t
+          # if update code didn't set this, we must assume the worst
+          if [[ ! "$something_changed" ]]; then
+            something_changed=t
+          fi
+        fi
+      fi
+
+    fi
+
+  end_function
+  untee_output  # in case update failed and block was exited early
+  handle_return
+}
+
+check_results() {
+
+begin_function_flat
+
+if [[ $can_update == t ]]; then
+  if [[ $update_successful == t && $post_validate == t ]]; then
+    log_debug "Post validating"
+    local check_successful=f
+    can_retry=f
+    execute_op check || return 1
+    if [[ $check_successful == f ]]; then
+      log_debug "Validation failed"
+      update_successful=f
+    fi
+  fi
+else
+  update_successful=t
+fi
+
+end_function
+handle_return
+
+}
