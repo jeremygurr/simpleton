@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 
 update() {
-
-  break_if_not_changed
-  pre_update
-  create_downstream_links
-  update_upstream
-  update_member
-  create_sub_cells
-  update_self
-  check_results
-  return 0
+  begin_function_flat
+    break_if_not_changed || fail
+    pre_update || fail
+    create_downstream_links || fail
+    update_upstreams || fail
+    update_members || fail
+    create_sub_cells || fail
+    update_self || fail
+    check_results || fail
+    post_update || fail
+  end_function
+  handle_return
 }
 
 break_if_not_changed() {
-  begin_function_flat
+  begin_function
     if [[ ! "${needs_update:-}" ]]; then
       needs_update=t
       if [[ "$status_path" ]]; then
@@ -33,7 +35,7 @@ break_if_not_changed() {
 }
 
 pre_update() {
-  begin_function_flat
+  begin_function
 
     update_successful=
     something_changed=f
@@ -61,51 +63,61 @@ pre_update() {
 }
 
 create_downstream_links() {
-  begin_function_flat
+  begin_function
 
-  if [[ "${downstream_ref_path:-}" ]]; then
-    local cell_path down_cell_path down_cell_name
+    if [[ "${downstream_ref_path:-}" ]]; then
+      local cell_path down_cell_path down_cell_name
 
-    get_cell_path ${downstream_ref_path%/*} || fail
-    down_cell_path=$cell_path
+      get_cell_path ${downstream_ref_path%/*} || fail
+      down_cell_path=$cell_path
 
-    get_cell_name $down_cell_path || fail
-    down_cell_name=${cell_name%% *}
+      get_cell_name $down_cell_path || fail
+      down_cell_name=${cell_name%% *}
 
-    local down_link=$down_path/$down_cell_name
-    if [[ ! -e $down_link ]]; then
-      if [[ ! -d $down_path ]]; then
-        mkdir $down_path || fail
-      fi
-      safe_link $down_cell_path $down_link || fail
-    else
-      local link_target=$(readlink $down_link) || fail
-      if [[ $link_target != $down_cell_path ]]; then
-        log_fatal "Link conflict: A link already exists but doesn't point to the same place."
-        log_fatal "  $link_target is expected to point to $down_cell_path"
+      local down_link=$down_path/$down_cell_name
+      if [[ ! -e $down_link ]]; then
+        if [[ ! -d $down_path ]]; then
+          mkdir $down_path || fail
+        fi
+        safe_link $down_cell_path $down_link || fail
+      else
+        local link_target=$(readlink $down_link) || fail
+        if [[ $link_target != $down_cell_path ]]; then
+          log_fatal "Link conflict: A link already exists but doesn't point to the same place."
+          log_fatal "  $link_target is expected to point to $down_cell_path"
+        fi
       fi
     fi
-  fi
+
+  end_function
+  handle_return
+}
+
+update_upstreams() {
+  begin_function
+
+    if [[ -d "${dna_up_path:-}" && ! "$update_successful" ]]; then
+      upstreams=( $(find1 $dna_up_path \
+        -not -name '.*' \
+        -not -name '*.prep' \
+        -not -regex '.*/\([0-9]+-\)?\(before\|after\|choose\)-.*' \
+        | sort -g \
+        ) )
+      previous_upstream_changed=f
+    else
+      upstreams=
+    fi
+
+    local upstream
+    begin_for upstream in $upstreams; doo
+      update_upstream || fail
+    end_for
 
   end_function
   handle_return
 }
 
 update_upstream() {
-
-  if [[ -d "${dna_up_path:-}" && ! "$update_successful" ]]; then
-    upstreams=( $(find1 $dna_up_path \
-      -not -name '.*' \
-      -not -name '*.prep' \
-      -not -regex '.*/\([0-9]+-\)?\(before\|after\|choose\)-.*' \
-      | sort -g \
-      ) )
-    previous_upstream_changed=f
-  else
-    upstreams=
-  fi
-
-  #### LOOP HERE
 
   local required_freshness=$required_freshness fresh=$fresh \
     default_freshness=$default_freshness up_dna=$upstream
@@ -171,19 +183,21 @@ update_upstream() {
   handle_return
 }
 
+update_members() {
+  begin_function
+    if [[ "${leaf_dims:-}" ]]; then
+      par=t fork=t function=execute_command_step_folder for_each_member "${leaf_dims[0]}"
+    fi
+  end_function
+  handle_return
+}
+
 update_member() {
   local sane_value member_path \
     log_vars=member log_show_vars=member \
     downstream_ref_path=${downstream_ref_path:-}
 
   begin_function
-
-    #### LOOP HERE
-    handle_step_loop() {
-      if [[ "${leaf_dims:-}" ]]; then
-        par=t fork=t function=execute_command_step_folder for_each_member "${leaf_dims[0]}"
-      fi
-    }
 
     get_sane_value "$member" || fail
     member_path=$cell_path/.dim/$sane_value
@@ -223,7 +237,7 @@ update_member() {
 
 update_self() {
   local log_vars='short_cell'
-  begin_function_flat
+  begin_function
 
     ## BEFORE
     ref_group=none
@@ -337,7 +351,7 @@ update_self() {
 
 check_results() {
 
-begin_function_flat
+begin_function
 
 if [[ $can_update == t ]]; then
   if [[ $update_successful == t && $post_validate == t ]]; then
@@ -357,4 +371,63 @@ fi
 end_function
 handle_return
 
+}
+
+post_update() {
+  local result_string
+
+  begin_function
+
+    completion_time=${completion_time:-$EPOCHSECONDS}
+    if [[ $update_successful == t ]]; then
+      result_string="successful"
+    else
+      result_string="failed"
+    fi
+
+    if [[ $pretend == f ]]; then
+
+      if [[ $update_successful == t ]]; then
+        touch -d @$completion_time $status_path/last-good-update-end || fail
+        cp -a $status_path/last-update-start \
+              $status_path/last-good-update-start || fail
+        force=t safe_link $current_job_path $job_path/last-success || fail
+        if [[ "${props:-}" ]]; then
+          update_prop_hash || fail
+        fi
+        if [[ $something_changed == t ]]; then
+          from_cell=$cell_path \
+            propagate_change_to_downstream || fail
+        fi
+        if [[ "${downstream_ref_path:-}" ]]; then
+          log_debug "Linking upstream cell to it's downstream cell cyto up folder"
+          force=t safe_link $cell_path $downstream_ref_path || fail
+        fi
+      else
+        touch -d @$completion_time $status_path/last-bad-update-end || fail
+        force=t safe_link $current_job_path $job_path/last-failure || fail
+        cp -a $status_path/last-update-start \
+              $status_path/last-bad-update-start || fail
+      fi
+
+      if [[ $cell_is_leaf == t || $show_branches == t ]]; then
+        log_info "Update $result_string. ($short_cell)"
+      else
+        log_debug "Update $result_string. ($short_cell)"
+      fi
+
+    else
+      log_info "Pretend update $result_string."
+    fi
+
+    if [[ "${reply_file:-}" ]]; then
+      echo "update_successful=${update_successful:-}" >>$reply_file || fail
+    fi
+
+    cell_unlock $cell_path || fail
+
+    rm $running_job_path || fail
+
+  end_function
+  handle_return
 }
