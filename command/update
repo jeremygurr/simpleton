@@ -8,7 +8,7 @@ update() {
     update_upstreams || fail
     update_members || fail
     create_sub_cells || fail
-    update_self || fail
+    update_self_retry_loop || fail
     check_results || fail
     post_update || fail
   end_function
@@ -235,15 +235,11 @@ update_member() {
   handle_return
 }
 
-update_self() {
-  local log_vars='short_cell'
+update_self_retry_loop() {
   begin_function
 
-    ## BEFORE
     ref_group=none
     delay=$retry_delay
-
-    handle_step_loop() {
 
     can_update=f
     find_op_or_function update || return 1
@@ -272,7 +268,7 @@ update_self() {
           
         log_debug "Executing local update of $short_cell$attempt_string" 
 
-        execute_command_step_folder || return 1
+        update_successful || fail
 
         [[ $can_retry == f || $update_successful == t ]] && break
 
@@ -281,11 +277,13 @@ update_self() {
 
     update_successful=${update_successful:-t}
 
-    return 0
+  end_function
+  handle_return
+}
 
-    }
-
-    ## END BEFORE
+update_self() {
+  local log_vars='short_cell'
+  begin_function
 
     update_successful=
     can_retry=f
@@ -350,32 +348,29 @@ update_self() {
 }
 
 check_results() {
+  begin_function
 
-begin_function
-
-if [[ $can_update == t ]]; then
-  if [[ $update_successful == t && $post_validate == t ]]; then
-    log_debug "Post validating"
-    local check_successful=f
-    can_retry=f
-    execute_op check || return 1
-    if [[ $check_successful == f ]]; then
-      log_debug "Validation failed"
-      update_successful=f
+    if [[ $can_update == t ]]; then
+      if [[ $update_successful == t && $post_validate == t ]]; then
+        log_debug "Post validating"
+        local check_successful=f
+        can_retry=f
+        execute_op check || return 1
+        if [[ $check_successful == f ]]; then
+          log_debug "Validation failed"
+          update_successful=f
+        fi
+      fi
+    else
+      update_successful=t
     fi
-  fi
-else
-  update_successful=t
-fi
 
-end_function
-handle_return
-
+  end_function
+  handle_return
 }
 
 post_update() {
   local result_string
-
   begin_function
 
     completion_time=${completion_time:-$EPOCHSECONDS}
