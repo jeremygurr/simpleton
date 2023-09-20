@@ -612,6 +612,7 @@ fork_inside() {
 
   if (( return_code != 0 )); then
     reply_to_caller "return_code=$return_code" || fail
+    return_value=$return_code
   fi
 
   handle_return
@@ -649,7 +650,7 @@ fork_bg() {
   background=t fork "$@"
 }
 
-# from and to are paths to up/choices/{upstream} 
+# from and to are paths to cells
 migrate_dep2() {
   local from=$1 to=$2
   begin_function_flat
@@ -671,7 +672,7 @@ migrate_dep2() {
   handle_return
 }
 
-# migrates a dependency given a .dna/up or .dna/down or .dna/out folder
+# migrates a dependency given a .dna/up or .dna/leaf/up or .dna/down folder
 migrate_dep() {
   local -r from=$1 to=$2
 
@@ -688,24 +689,31 @@ migrate_dep() {
       begin_for dep in $deps; doo
 
         local dep_name=${dep##*/}
+
+        if [[ ! -d $to/$dep_name ]]; then
+          mkdir $to/$dep_name || fail
+        fi
+
         if [[ -d $dep/cell ]]; then
-          if [[ ! -d $to/cell ]]; then
-            mkdir $to/cell || fail
+          if [[ ! -d $to/$dep_name/cell ]]; then
+            mkdir $to/$dep_name/cell || fail
           fi
           migrate_dep2 $dep/cell $to/cell || fail 
         elif [[ -d $dep/choices ]]; then
           local choice choices
-          if [[ ! -d $to/choices ]]; then
-            mkdir $to/choices || fail
+          if [[ ! -d $to/$dep_name/choices ]]; then
+            mkdir $to/$dep_name/choices || fail
           fi
           choices=$(find1 $dep/choices -type d -not -name '.*') || fail
           begin_for choice in $choices; doo
             local choice_name=${choice##*/}
-            if [[ ! -d $to/choices/$choice_name ]]; then
-              mkdir $to/choices/$choice_name || fail
+            if [[ ! -d $to/$dep_name/choices/$choice_name ]]; then
+              mkdir $to/$dep_name/choices/$choice_name || fail
             fi
             migrate_dep2 $choice $to/$dep_name/choices/$choice_name || fail
           end_for
+        elif [[ -d $dep/.dna ]]; then
+          migrate_dep2 $dep $to/$dep_name || fail 
         else
           log_fatal "Dependency is missing choices or cell folder: $dep"
           fail1
@@ -1080,6 +1088,37 @@ get_new_reply_file() {
     return 1
   fi
   return 0
+}
+
+# input: parallel processes
+wait_for_sub_processes() {
+if [[ "$processes" ]]; then
+  log_debug "Waiting for sub processes to complete"
+  local process last_err_code= last_failed_process= rc
+  for process in $processes; do
+    log_debug "Waiting for process $process"
+    wait $process &>/dev/null; rc=$?
+    if [[ $rc -gt 0 && $rc -lt 127 ]]; then
+      if [[ ! "$last_err_code" ]]; then
+        last_err_code=$rc
+        last_failed_process=$process
+      else
+        log_warn "Subprocess $process failed to terminate successfully"
+        return 1
+      fi
+    fi
+  done
+  after_fork
+  if [[ "$last_err_code" ]]; then
+    if [[ "$last_err_code" == 1 ]]; then
+      log_warn "Subprocess $last_failed_process failed to terminate successfully"
+      return 1
+    fi
+    return $last_err_code
+  fi
+  processes=
+fi
+return 0
 }
 
 # 'value' is the loop var
@@ -1862,7 +1901,7 @@ execute_command_internal() {
       fail1
     fi
 
-    command_history+="$current_command $short_cell "
+    command_history="${command_history:- }$current_command $short_cell "
 
     case $current_command in
       edit)
@@ -3080,37 +3119,6 @@ if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
 else
   hash=$(echo "$value" | sha1sum | awk '{ print $1 }')
   sane_value=${hash:0:8}
-fi
-return 0
-}
-
-# input: parallel processes
-wait_for_sub_processes() {
-if [[ "$processes" ]]; then
-  log_debug "Waiting for sub processes to complete"
-  local process last_err_code= last_failed_process= rc
-  for process in $processes; do
-    log_debug "Waiting for process $process"
-    wait $process &>/dev/null; rc=$?
-    if [[ $rc -gt 0 && $rc -lt 127 ]]; then
-      if [[ ! "$last_err_code" ]]; then
-        last_err_code=$rc
-        last_failed_process=$process
-      else
-        log_warn "Subprocess $process failed to terminate successfully"
-        return 1
-      fi
-    fi
-  done
-  after_fork
-  if [[ "$last_err_code" ]]; then
-    if [[ "$last_err_code" == 1 ]]; then
-      log_warn "Subprocess $last_failed_process failed to terminate successfully"
-      return 1
-    fi
-    return $last_err_code
-  fi
-  processes=
 fi
 return 0
 }
