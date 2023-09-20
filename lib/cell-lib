@@ -21,7 +21,7 @@ show_branches=${show_branches:-f}
 downstream_cell_stack=( ) 
 
 disable_log=${disable_log:-f}
-export debug_ignore+="${debug_ignore:-} apad change_log_file debug_start defer echo_align find1 fork get_new_reply_file get_shell_quoted_value load_log_vars log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log"
+export debug_ignore+="${debug_ignore:-} apad change_log_file debug_start defer echo_align fd_unlock fd_write_lock find1 fork fork_bg fork_fg fork_inside get_new_fork_id get_new_reply_file get_shell_quoted_value load_log_vars log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars setup_exit_trap snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log"
 
 setup_cyto_out() {
   local from=$1 to=$2
@@ -586,14 +586,6 @@ migrate_cell() {
   handle_return
 }
 
-fork_fg() {
-  background=f fork "$@"
-}
-
-fork_bg() {
-  background=t fork "$@"
-}
-
 fork() {
   local reply_file command=$* return_code=0 \
     background=${background:-f} \
@@ -613,8 +605,16 @@ fork() {
   fi
 
   return_code=$?
-  after_fork || { let return_code++ || true; }
+  after_fork || (( return_code++ ))
   return $return_code
+}
+
+fork_fg() {
+  background=f fork "$@"
+}
+
+fork_bg() {
+  background=t fork "$@"
 }
 
 migrate_dep2() {
@@ -646,16 +646,26 @@ migrate_dep() {
   begin_function
     if [[ -e $from ]]; then
 
-      if [[ -d $from/cell ]]; then
-        migrate_dep2 $from/cell $to/cell || fail 
-      else
-        local choice choices
-        choices=$(find1 $from/choices -type d -not -name '.*') || fail
-        begin_for choice in $choices; doo
-          local choice_name=${choice##*/}
-          migrate_dep2 $choice $to/choices/$choice_name || fail
-        end_for
-      fi
+      local dep deps
+      deps=$(find1 $from -type d -not -name '.*') || fail
+      begin_for dep in $deps; doo
+
+        local dep_name=${dep##*/}
+        if [[ -d $dep/cell ]]; then
+          migrate_dep2 $dep/cell $to/cell || fail 
+        elif [[ -d $dep/choices ]]; then
+          local choice choices
+          choices=$(find1 $dep/choices -type d -not -name '.*') || fail
+          begin_for choice in $choices; doo
+            local choice_name=${choice##*/}
+            migrate_dep2 $choice $to/$dep_name/choices/$choice_name || fail
+          end_for
+        else
+          log_fatal "Dependency is missing choices or cell folder: $dep"
+          fail1
+        fi
+
+      end_for
 
     fi
   end_function
