@@ -415,154 +415,55 @@ get_overlap() {
 # if timeout is not given, then attempt will immediately fail if it can not get the lock right away
 #   otherwise it will keep trying until the timeout is reached or the lock is obtained.
 link_lock() {
-local from=$from
-local to=$to
-local timeout=${timeout:-}
-local pid_file=${pid_file:-$to/pid}
+  local from=$from
+  local to=$to
+  local timeout=${timeout:-}
+  local pid_file=${pid_file:-$to/pid}
 
-local log_vars='from to timeout'
-begin_function
+  local log_vars='from to timeout'
+  begin_function
 
-  if [[ ! -e "$from" ]]; then
-    log_fatal "$from doesn't exist, can't link lock it"
-    fail1
-  fi
-  
-  if [[ -L "$to" ]]; then
+    if [[ ! -e "$from" ]]; then
+      log_fatal "$from doesn't exist, can't link lock it"
+      fail1
+    fi
+    
+    if [[ -L "$to" ]]; then
 
-    log_debug "Lock link exists already: $to"
-    local pid=
+      log_debug "Lock link exists already: $to"
+      local pid=
 
-    if [[ -f "$pid_file" ]]; then
-      pid=$(<"$pid_file")
-      if [[ "$pid" == $$ ]]; then
-        log_debug "This process already owns the lock, so we are done."
-        succeed
+      if [[ -f "$pid_file" ]]; then
+        pid=$(<"$pid_file")
+        if [[ "$pid" == $$ ]]; then
+          log_debug "This process already owns the lock, so we are done."
+          succeed
+        fi
       fi
-    fi
 
-    # check to see if the process is still running
-    if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
-      rm "$to" || fail
-      log_debug "Removed stale lock: $to with pid: $pid"
-    fi
-
-  elif [[ -e "$to" ]]; then
-    log_fatal "$to already exists and it's not a link. Can't obtain lock."
-    fail1
-  fi
-
-  local parent=${to%/*}
-  if [[ ! -d "$parent" ]]; then
-    log_fatal "Target of link lock isn't in a folder ($to)"
-    fail1
-  fi
-
-  local timeleft
-  let timeleft=timeout
-  local delay=250
-  local success=f
-  begin_while true; doo
-    ln -sn "$from" "$to" &>/dev/null && success=t
-    if [[ $success == t ]]; then
-      echo $$ >"$pid_file" || fail
-      break
-    fi
-
-    if [ ! "$timeout" ]; then
-      break
-    fi
-
-    local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
-    log_debug "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
-    sleep $seconds_to_wait
-    timeleft=$((timeleft-delay))
-
-    let delay*=2
-    if (( delay > 10000 )); then
-      delay=10000
-    fi
-
-    if (( timeleft <= 0 )); then
-      log_warn "Timeout reached. Couldn't obtain the lock in time."
-      break
-    fi
-
-  end_while
-
-  if [[ $success == f ]]; then
-    log_debug "Failed to obtain lock."
-    fail1
-  fi
-
-  defer "rm '$pid_file' '$to' &>/dev/null"
-
-  # lock obtained
-  log_debug "Succeeded in obtaining lock."
-
-end_function
-handle_return
-}
-
-link_unlock() {
-local to=$to
-local pid_file=${pid_file:-$to/pid}
-
-if [[ -f "$pid_file" ]]; then
-  rm "$pid_file" || return 1
-fi
-
-if [[ -L "$to" ]]; then
-  rm "$to" || return 1
-elif [[ -e "$to" ]]; then
-  log_fatal "$to is not a link, can't unlock it"
-  return 1
-fi
-
-return 0
-}
-
-# inputs: folder_to_lock timeout pid_file
-# if timeout is not given, then attempt will immediately fail if it can't get the lock right away
-#   otherwise it will keep trying until the timeout is reached or the lock is obtained.
-folder_lock() {
-local folder_to_lock=${folder_to_lock}
-local timeout=${timeout:-$lock_timeout}
-local pid_file=${pid_file:-$folder_to_lock/pid}
-local remove_folder_when_unlocked=${remove_folder_when_unlocked:-f}
-
-local log_vars='folder_to_lock timeout'
-begin_function
-
-  if [[ -d "$folder_to_lock" ]]; then
-
-    log_debug "Lock folder exists already: $folder_to_lock"
-    local pid=
-
-    if [[ -f "$pid_file" ]]; then
-      pid=$(<"$pid_file")
-      if [[ "$pid" == $$ ]]; then
-        log_debug "This process already owns the lock, so we are done."
-        succeed
+      # check to see if the process is still running
+      if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
+        rm "$to" || fail
+        log_debug "Removed stale lock: $to with pid: $pid"
       fi
+
+    elif [[ -e "$to" ]]; then
+      log_fatal "$to already exists and it's not a link. Can't obtain lock."
+      fail1
     fi
 
-    # check to see if the process is still running
-    if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
-      rm -rf "$folder_to_lock" || fail
-      log_debug "Removed stale lock: $folder_to_lock with pid: $pid"
+    local parent=${to%/*}
+    if [[ ! -d "$parent" ]]; then
+      log_fatal "Target of link lock isn't in a folder ($to)"
+      fail1
     fi
 
-  fi
-
-  local timeleft
-  let timeleft=timeout*1000
-  local delay=250
-  local success=f
-  local parent=${folder_to_lock%/*}
-  if [[ -d "$parent" ]]; then
+    local timeleft
+    let timeleft=timeout
+    local delay=250
+    local success=f
     begin_while true; doo
-      mkdir "$folder_to_lock" &>/dev/null && success=t
+      ln -sn "$from" "$to" &>/dev/null && success=t
       if [[ $success == t ]]; then
         echo $$ >"$pid_file" || fail
         break
@@ -576,32 +477,131 @@ begin_function
       log_debug "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
       sleep $seconds_to_wait
       timeleft=$((timeleft-delay))
+
       let delay*=2
-      if [ "$timeleft" -le 0 ]; then
+      if (( delay > 10000 )); then
+        delay=10000
+      fi
+
+      if (( timeleft <= 0 )); then
         log_warn "Timeout reached. Couldn't obtain the lock in time."
         break
       fi
+
     end_while
-  else
-    log_fatal "Attempting to obtain a folder lock when it's parent doesn't exist: $parent"
-    stack_trace
-    fail1
+
+    if [[ $success == f ]]; then
+      log_debug "Failed to obtain lock."
+      fail1
+    fi
+
+    defer "rm '$pid_file' '$to' &>/dev/null"
+
+    # lock obtained
+    log_debug "Succeeded in obtaining lock."
+
+  end_function
+  handle_return
+}
+
+link_unlock() {
+  local to=$to
+  local pid_file=${pid_file:-$to/pid}
+
+  if [[ -f "$pid_file" ]]; then
+    rm "$pid_file" || return 1
   fi
 
-  if [[ $success == f ]]; then
-    log_debug "Failed to obtain lock."
-    fail1
+  if [[ -L "$to" ]]; then
+    rm "$to" || return 1
+  elif [[ -e "$to" ]]; then
+    log_fatal "$to is not a link, can't unlock it"
+    return 1
   fi
 
-  if [[ $remove_folder_when_unlocked == t ]]; then
-    defer "rm -r '$pid_file' '$folder_to_lock' &>/dev/null"
-  fi
+  return 0
+}
 
-  # lock obtained
-  log_debug "Succeeded in obtaining lock."
+# inputs: folder_to_lock timeout pid_file
+# if timeout is not given, then attempt will immediately fail if it can't get the lock right away
+#   otherwise it will keep trying until the timeout is reached or the lock is obtained.
+folder_lock() {
+  local folder_to_lock=${folder_to_lock}
+  local timeout=${timeout:-$lock_timeout}
+  local pid_file=${pid_file:-$folder_to_lock/pid}
+  local remove_folder_when_unlocked=${remove_folder_when_unlocked:-f}
 
-end_function
-handle_return
+  local log_vars='folder_to_lock timeout'
+  begin_function
+
+    if [[ -d "$folder_to_lock" ]]; then
+
+      log_debug "Lock folder exists already: $folder_to_lock"
+      local pid=
+
+      if [[ -f "$pid_file" ]]; then
+        pid=$(<"$pid_file")
+        if [[ "$pid" == $$ ]]; then
+          log_debug "This process already owns the lock, so we are done."
+          succeed
+        fi
+      fi
+
+      # check to see if the process is still running
+      if [[ ! "$pid" ]] || ! ps $pid &>/dev/null; then
+        rm -rf "$folder_to_lock" || fail
+        log_debug "Removed stale lock: $folder_to_lock with pid: $pid"
+      fi
+
+    fi
+
+    local timeleft
+    let timeleft=timeout*1000
+    local delay=250
+    local success=f
+    local parent=${folder_to_lock%/*}
+    if [[ -d "$parent" ]]; then
+      begin_while true; doo
+        mkdir "$folder_to_lock" &>/dev/null && success=t
+        if [[ $success == t ]]; then
+          echo $$ >"$pid_file" || fail
+          break
+        fi
+
+        if [ ! "$timeout" ]; then
+          break
+        fi
+
+        local seconds_to_wait=$(dc -e "2 k $delay 1000 / p")
+        log_debug "Failed to obtain lock. Waiting $seconds_to_wait seconds before trying again."
+        sleep $seconds_to_wait
+        timeleft=$((timeleft-delay))
+        let delay*=2
+        if [ "$timeleft" -le 0 ]; then
+          log_warn "Timeout reached. Couldn't obtain the lock in time."
+          break
+        fi
+      end_while
+    else
+      log_fatal "Attempting to obtain a folder lock when it's parent doesn't exist: $parent"
+      stack_trace
+      fail1
+    fi
+
+    if [[ $success == f ]]; then
+      log_debug "Failed to obtain lock."
+      fail1
+    fi
+
+    if [[ $remove_folder_when_unlocked == t ]]; then
+      defer "rm -r '$pid_file' '$folder_to_lock' &>/dev/null"
+    fi
+
+    # lock obtained
+    log_debug "Succeeded in obtaining lock."
+
+  end_function
+  handle_return
 }
 
 folder_is_locked() {
@@ -818,74 +818,74 @@ safe_link() {
 }
 
 pause() {
-read -p "${1:-Press any key}" -n 1 none || true
+  read -p "${1:-Press any key}" -n 1 none || true
 }
 
 # resolves relative paths but does not resolve symlinks
 # should run in a subprocess so dir change doesn't affect caller
 # normal usage: x=$(unrealpath "$some_path")
 unrealpath() {
-local p=$PWD x=$1
-if [[ "$x" != /* ]]; then
-  x="$p/$x"
-fi
-realpath -s "$x" || {
-  log_fatal "Internal error: could not resolve $x"
-  return 1 
-  }
-return 0
+  local p=$PWD x=$1
+  if [[ "$x" != /* ]]; then
+    x="$p/$x"
+  fi
+  realpath -s "$x" || {
+    log_fatal "Internal error: could not resolve $x"
+    return 1 
+    }
+  return 0
 }
 
 remove_from_string() {
-local from_var=$1 remove_value=$2
-if [[ -v $from_var ]]; then
-  local old_value=${!from_var}
-  local left=${old_value% $remove_value *}
-  local right=${old_value#* $remove_value }
-  eval "$from_var=\" \$left \$right \""
-fi
+  local from_var=$1 remove_value=$2
+  if [[ -v $from_var ]]; then
+    local old_value=${!from_var}
+    local left=${old_value% $remove_value *}
+    local right=${old_value#* $remove_value }
+    eval "$from_var=\" \$left \$right \""
+  fi
 }
 
 cooked_stack_trace() {
-echo "Cooked call stack:" >&$fd_original_err
-local count=${#cooked_stack[*]} n
-for ((n = 0; n < count; n++)); do
-  echo " ${cooked_stack[$n]}" >&$fd_original_err
-done
-return 0
+  echo "Cooked call stack:" >&$fd_original_err
+  local count=${#cooked_stack[*]} n
+  for ((n = 0; n < count; n++)); do
+    echo " ${cooked_stack[$n]}" >&$fd_original_err
+  done
+  return 0
 }
 
 stack_trace() {
-local start_frame=${start_frame:-1}
-local count=${#FUNCNAME[*]}
-local p n
+  local start_frame=${start_frame:-1}
+  local count=${#FUNCNAME[*]}
+  local p n
 
-if [ ${tracing_midline:-f} == t ]; then
-  tracing_midline=f
-  echo >&$fd_original_err
-fi
+  if [ ${tracing_midline:-f} == t ]; then
+    tracing_midline=f
+    echo >&$fd_original_err
+  fi
 
-echo "Raw call stack:" >&$fd_original_err
-for ((n = count - 1; n >= start_frame; n--)) ; do
-  let p=n-1
-  echo "  ${BASH_SOURCE[$n]} ${FUNCNAME[$n]} ${BASH_LINENO[$p]}" >&$fd_original_err
-done
-return 0
+  echo "Raw call stack:" >&$fd_original_err
+  for ((n = count - 1; n >= start_frame; n--)) ; do
+    let p=n-1
+    echo "  ${BASH_SOURCE[$n]} ${FUNCNAME[$n]} ${BASH_LINENO[$p]}" >&$fd_original_err
+  done
+  return 0
 }
 
 show_array() {
-local -n array=$1
-if [[ -v array ]]; then
-  local i size=${#array[*]}
-  echo "size=$size" >&$fd_original_err
-  for ((i=0; i<size; i++)); do
-    if [[ ! -v array[$i] ]]; then
-      echo "$i: << MISSING >>" >&$fd_original_err
-    else
-      echo "$i: ${array[$i]:-}" >&$fd_original_err
-    fi
-  done
-fi
+  local -n array=$1
+  if [[ -v array ]]; then
+    local i size=${#array[*]}
+    echo "size=$size" >&$fd_original_err
+    for ((i=0; i<size; i++)); do
+      if [[ ! -v array[$i] ]]; then
+        echo "$i: << MISSING >>" >&$fd_original_err
+      else
+        echo "$i: ${array[$i]:-}" >&$fd_original_err
+      fi
+    done
+  fi
 }
 
 rcp() {

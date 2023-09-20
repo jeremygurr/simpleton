@@ -649,6 +649,7 @@ fork_bg() {
   background=t fork "$@"
 }
 
+# from and to are paths to up/choices/{upstream} 
 migrate_dep2() {
   local from=$1 to=$2
   begin_function_flat
@@ -670,13 +671,17 @@ migrate_dep2() {
   handle_return
 }
 
-# migrates a dependency given a .dna/up folder
+# migrates a dependency given a .dna/up or .dna/down or .dna/out folder
 migrate_dep() {
   local -r from=$1 to=$2
 
   local log_show_vars='^from ^to'
   begin_function
-    if [[ -e $from ]]; then
+    if [[ -d $from ]]; then
+
+      if [[ ! -d $to ]]; then
+        mkdir $to || fail
+      fi
 
       local dep deps
       deps=$(find1 $from -type d -not -name '.*') || fail
@@ -684,12 +689,21 @@ migrate_dep() {
 
         local dep_name=${dep##*/}
         if [[ -d $dep/cell ]]; then
+          if [[ ! -d $to/cell ]]; then
+            mkdir $to/cell || fail
+          fi
           migrate_dep2 $dep/cell $to/cell || fail 
         elif [[ -d $dep/choices ]]; then
           local choice choices
+          if [[ ! -d $to/choices ]]; then
+            mkdir $to/choices || fail
+          fi
           choices=$(find1 $dep/choices -type d -not -name '.*') || fail
           begin_for choice in $choices; doo
             local choice_name=${choice##*/}
+            if [[ ! -d $to/choices/$choice_name ]]; then
+              mkdir $to/choices/$choice_name || fail
+            fi
             migrate_dep2 $choice $to/$dep_name/choices/$choice_name || fail
           end_for
         else
