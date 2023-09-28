@@ -103,51 +103,38 @@ create_downstream_links() {
   handle_return
 }
 
-update_upstreams() {
+# inputs: 
+#   up_dna
+prep_upstream() {
+  # down_fresh may be used by prep script to propagate freshness requirements to upstream
+  down_fresh=$required_freshness
+
+  # Don't inherit parent's freshness requirements, 
+  #   only what upstream prep explicitly states
+  # extra_dims includes dimensions that need to be promoted in upstream that don't
+  #   exist in branch_dims
+  fresh=$down_fresh required_freshness= default_freshness= extra_dims=
+
+  local log_show_vars=^up_dna
   begin_function
-
-    if [[ -d "${dna_up_path:-}" && ! "$update_successful" ]]; then
-      local upstreams=( $(find1 $dna_up_path -not -name '.*' | sort -g) ) || fail
-      local previous_upstream_changed=f
-
-      local upstream
-      begin_for upstream in $upstreams; doo
-        update_dna_upstream || fail
-      end_for
-
-      upstreams=( $(find1 $cyto_up_path -not -name '.*' | sort -g) )
-      begin_for upstream in $upstreams; doo
-        update_cyto_upstream || fail
-      end_for
-
+    unset prep
+    if [[ -f $up_dna/prep ]]; then
+      log_debug "Executing upstream prep: $up_dna/prep"
+      source $up_dna/prep || fail
+      if ! type -t prep &>/dev/null; then
+        log_fatal "$up_dna/prep must have a function named prep"
+        fail1
+      fi
+      prep || fail
+      setup_dep_defaults || fail
     fi
-
-  end_function
-  handle_return
-}
-
-update_dna_upstream_choice() {
-  begin_function
-
-    if [[ "${localize_dim_vars:-}" ]]; then
-      eval "$localize_dim_vars"
-    fi
-
-    if [[ $needs_update == t ]]; then
-      downstream_ref_path=$up_cyto \
-        execute_command "$(realpath $up_dna)" update || fail
-
-      previous_upstream_changed=t
-      handle_upstream_result || fail
-    fi
-    
   end_function
   handle_return
 }
 
 # inputs: 
 #   upstream: a folder in .dna/up
-update_dna_upstream() {
+update_upstream() {
 
   local required_freshness=$required_freshness fresh=$fresh \
     default_freshness=$default_freshness up_dna=$upstream
@@ -180,100 +167,48 @@ update_dna_upstream() {
     }
 
     local needs_update
-    mkdir "$up_cyto" || fail
+    mkdir $up_cyto || fail
 
     if [[ ! -e $up_cyto ]]; then
       log_debug "Cyto upstream is missing, will need to update"
-      if [[ -e $up_dna/prep && ! -e $up_cyto/prep ]]; then
-        safe_link $up_dna/prep $up_cyto/prep || fail
-      fi
       needs_update=t
     fi
 
-    prep_upstream $up_cyto || fail
+    prep_upstream || fail
 
     local choices=$(find1 $up_dna/choices -not -name ".*" | sort -g) || fail
+    local chosen= choice
 
+    if [[ ! "$choices" ]]; then
+      log_debug "No choices for upstream. Skipping."
+      succeed
+    fi
+
+    # are any already updated?
     begin_for choice in $choices; doo
 
       needs_update=
       if [[ ! "$needs_update" ]]; then
         get_needs_update $choice || fail
       fi
-
-      downstream_ref_path=$up_cyto \
-        update_dna_upstream_choice $choice || fail
-      handle_upstream_result || fail
-
-      if [[ $cell_output_changed == t ]]; then
-        previous_upstream_changed=t
-      fi
-
-      if
-      then
-        succeed
+      if [[ "$needs_update" == f ]]; then
+        chosen=$choice
+        break
       fi
 
     end_for
 
-    write_lock=f \
-    timeout=$lock_timeout \
-      cell_lock $up_cyto || fail
-
-    touch $status_path/deps-up-to-date || return 1
-    touch $status_path/up-to-date || return 1
-
-  end_function
-  handle_return
-}
-
-# inputs: 
-#   upstream: a cyto upstream folder
-update_cyto_upstream() {
-
-  local required_freshness=$required_freshness fresh=$fresh \
-    default_freshness=$default_freshness up_cyto=$upstream
-
-  local log_show_vars=^up_dna 
-  begin_function
-
-    if [[ "${localize_dim_vars:-}" ]]; then
-      eval "$localize_dim_vars"
-    fi
-
-    # This may be overridden by upstream prep file to customize how failure of this upstream is handled
-    handle_upstream_result() {
-      if [[ "$update_successful" == f ]]; then
-        log_error "Failed to update upstream cell $up_dna"
-      else 
-        update_successful=
-      fi
-    }
-
-    local needs_update=
-    local up_part=${up_dna##*/}
-    local up_cyto=$cyto_up_path/$up_part
-    if [[ ! -d "$cyto_up_path" ]]; then
-      mkdir "$cyto_up_path" || fail
-    fi
-
-    if [[ $previous_upstream_changed == t && -e "$up_cyto" ]]; then
-      log_debug "Previous upstream changed, removing cyto upstream"
-      rm $up_cyto || fail
-    fi
-
-    if [[ ! -e $up_cyto ]]; then
-      log_debug "Cyto upstream is missing, will need to update"
-      if [[ -e $up_dna/prep && ! -e $up_cyto/prep ]]; then
-        safe_link $up_dna/prep $up_cyto/prep || fail
-      fi
+    if [[ ! "$chosen" ]]; then
+      chosen=${choices%% *}
       needs_update=t
     fi
 
-    prep_upstream $up_cyto || fail
-
-    if [[ ! "$needs_update" ]]; then
-      get_needs_update $up_cyto || fail
+    if [[ $needs_update == f && ! -e $up_cyto/chosen ]]; then
+      needs_update=t
+    fi
+      
+    if [[ "${localize_dim_vars:-}" ]]; then
+      eval "$localize_dim_vars"
     fi
 
     if [[ $needs_update == t ]]; then
@@ -283,15 +218,46 @@ update_cyto_upstream() {
       previous_upstream_changed=t
       handle_upstream_result || fail
     fi
+    
+    if [[ $cell_output_changed == t ]]; then
+      previous_upstream_changed=t
+    fi
 
+    # obtain locks from lock-shared
+
+    # obtain locks from lock-exclusive
+
+    # obtain lock from upstream cell
     write_lock=f \
     timeout=$lock_timeout \
       cell_lock $up_cyto || fail
 
-    touch $status_path/deps-up-to-date || return 1
-    touch $status_path/up-to-date || return 1
+  end_function
+  handle_return
+}
+
+update_upstreams() {
+  begin_function
+
+    touch $status_path/deps-up-to-date || fail
+
+    if [[ -d "${dna_up_path:-}" && ! "$update_successful" ]]; then
+
+      local previous_upstream_changed=f upstream upstreams
+
+      upstreams=( $(find1 $dna_up_path -not -name '.*' | sort -g) ) || fail
+      begin_for upstream in $upstreams; doo
+        update_upstream || fail
+      end_for
+
+    fi
 
   end_function
+
+  if failed; then
+    rm $status_path/deps-up-to-date 
+  fi
+
   handle_return
 }
 
