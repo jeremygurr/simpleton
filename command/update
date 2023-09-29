@@ -213,24 +213,37 @@ update_upstream() {
 
     if [[ $needs_update == t ]]; then
       downstream_ref_path=$up_cyto \
-        execute_command "$(realpath $up_dna)" update || fail
+        execute_command "$(realpath $chosen)" update || fail
+
+      if [[ $something_changed == t ]]; then
+        previous_upstream_changed=t
+      fi
 
       previous_upstream_changed=t
       handle_upstream_result || fail
     fi
     
-    if [[ $cell_output_changed == t ]]; then
-      previous_upstream_changed=t
-    fi
-
     # obtain locks from lock-shared
+    local lock 
+    local shared_locks=$(find1 $up_cyto/shared-locks -not -name ".*" | sort -g) || fail
+    begin_for lock in $shared_locks; doo
+      write_lock=f \
+      timeout=$lock_timeout \
+        cell_lock $lock || fail
+    end_for
 
     # obtain locks from lock-exclusive
+    local exclusive_locks=$(find1 $up_cyto/shared-locks -not -name ".*" | sort -g) || fail
+    begin_for lock in $exclusive_locks; doo
+      write_lock=t \
+      timeout=$lock_timeout \
+        cell_lock $lock || fail
+    end_for
 
     # obtain lock from upstream cell
     write_lock=f \
     timeout=$lock_timeout \
-      cell_lock $up_cyto || fail
+      cell_lock $up_cyto/chosen || fail
 
   end_function
   handle_return
@@ -474,7 +487,7 @@ post_update() {
         fi
         if [[ "${downstream_ref_path:-}" ]]; then
           log_debug "Linking upstream cell to it's downstream cell cyto up folder"
-          force=t safe_link $cell_path $downstream_ref_path || fail
+          force=t safe_link $cell_path $downstream_ref_path/chosen || fail
         fi
       else
         touch -d @$completion_time $status_path/last-bad-update-end || fail

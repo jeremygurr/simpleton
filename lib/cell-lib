@@ -3333,19 +3333,33 @@ cd_to_plant() {
 }
 
 # locks the given cell, or fails if it can't obtain a lock
+# may lock an individual file instead if the path given isn't a cell
 cell_lock() {
+
   local cell_path=$1 \
     write_lock=${write_lock:-t} \
     timeout=$timeout \
     lock_fd \
     lock_type=read
-  local lock_path=$cell_path/.cyto/lock
+  local lock_path
+
+  if [[ -e $cell_path/.dna ]]; then
+    lock_path==$cell_path/.cyto/lock
+  elif [[ -f $cell_path ]]; then
+    lock_path==$cell_path/.cyto/lock
+  else
+    log_fatal "Invalid lock path: $cell_path"
+    return 1
+  fi
+
   if [[ $write_lock == f && -f $cell_path/.cyto/require-write-lock ]]; then
     write_lock=t
   fi
+
   if [[ $write_lock == t ]]; then
     lock_type=write
   fi
+
   local log_show_vars="lock_type timeout ^lock_path"
   begin_function
     if [[ -f $lock_path ]]; then
@@ -3358,6 +3372,7 @@ cell_lock() {
     fi
   end_function
   handle_return
+
 }
 
 # locks the given cell, or fails if it can't obtain a lock
