@@ -3578,6 +3578,7 @@ from_background_shell() {
 
     timed_out=f
     failed=f
+    found=f
 
     local line= char= found=f i \
       interact_in=() interact_out=() stop_after_count=0 interact_count=0 s
@@ -3586,7 +3587,15 @@ from_background_shell() {
 
     log_debug "Waiting for background job output from $pipe_out"
     if [[ $buffering == line ]]; then
-      while IFS= read -r -t $timeout line || [[ "$line" ]]; do
+      while true; do
+
+        IFS= read -r -t $timeout line <$pipe_out
+
+        if (( $? > 128 )); then 
+          timed_out=t
+          break
+        fi
+
         if [[ "$line" ]]; then
           from_background_shell__record_line || fail
           from_background_shell__check_line || fail
@@ -3594,12 +3603,23 @@ from_background_shell() {
           if [[ $found == t || $failed == t ]]; then
             succeed
           fi
+        else
+          break
         fi
-      done <$pipe_out
+
+      done
       handle_break
     elif [[ $buffering == char ]]; then
       line=
-      while IFS= read -N1 -r -t $timeout char || [[ "$line" ]]; do
+      while true; do
+
+        IFS= read -N1 -r -t $timeout char <$pipe_out
+
+        if (( $? > 128 )); then 
+          timed_out=t
+          break
+        fi
+
         if [[ "$char" ]]; then
           line+=$char
           from_background_shell__check_line || fail
@@ -3610,29 +3630,21 @@ from_background_shell() {
           from_background_shell__record_line || fail
           line=
         fi
-      done <$pipe_out
+      done
       handle_break
     else
       log_fatal "Invalid buffering type: $buffering. Should be char or line"
       fail1
     fi
 
-    if [[ "$line" ]]; then
-      if [[ $found == f && $failed == f ]]; then
-        log_debug "Timed out with remaining line:" \
+    if [[ $timed_out == t ]]; then
+      if [[ "$line" ]]; then
+        log_debug "Timed out after $timeout seconds with remaining line:" \
           "$(echo -n "${line// /~}" | hexdump -e '60/1 "%_c " "\n"')"
+      else
+        log_debug "Timed out after $timeout seconds"
       fi
-      no_newline=t from_background_shell__record_line || fail
     fi
-
-    if [[ $found == f && $failed == f ]]; then
-      timed_out=t
-      log_debug "Timed out after $timeout seconds"
-    fi
-
-    # if [[ $timed_out == t || $failed == t ]]; then
-    #   fail1
-    # fi
 
   end_function
   handle_return
