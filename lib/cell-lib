@@ -1962,7 +1962,7 @@ execute_command() {
 
   local log_vars='cell_path' \
     log_show_vars='short_cell current_command' 
-  begin_function_flat
+  begin_function
 
     if [[ ! -e "$starting_point" ]]; then
       log_fatal "Folder doesn't exist: $starting_point"
@@ -2003,6 +2003,7 @@ execute_command() {
       fi
 
       force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
+      force=t safe_link $current_job_path $job_path/last-attempt || fail
 
       # only set this for the first cell in the job, all other cells should 
       #   use the same fork_id log so that they all have unique ids across the job
@@ -3392,26 +3393,30 @@ cell_unlock() {
 # output:
 #   
 to_background_shell_single() {
+  local command=$1
   begin_function
 
     local timeout_ms=${timeout_ms:-0}
     if (( timeout_ms == 0 )); then
-      echo -n "$line" >$pipe_in || fail
+      log_debug "Running command without timeout: $command"
+      echo -n "$command" >$pipe_in || fail
     else
 
       local pid \
         time_left=$timeout_ms \
-        delay_ms=250
-      echo -n "$line" >$pipe_in & 
+        delay_ms=250 \
+        seconds_to_wait=$(dc -e "2 k $delay_ms 1000 / p")
+
+      log_debug "Running command with ${seconds_to_wait}s timeout: $command"
+      echo -n "$command" >$pipe_in & 
       pid=$!
 
       timed_out=f
       begin_while ps $pid &>/dev/null; doo
-        local seconds_to_wait=$(dc -e "2 k $delay_ms 1000 / p")
         sleep $seconds_to_wait
         (( time_left -= $delay_ms ))
         if (( time_left <= 0 )); then
-          log_debug "Timed out trying to execute: $line"
+          log_debug "Timed out trying to execute: $command"
           timed_out=t
           break
         fi
@@ -3433,7 +3438,7 @@ to_background_shell() {
     masked_from=${from//$secret/****}
   fi
 
-  local log_show_vars='pipe masked_from'
+  local log_show_vars='pipe from=masked_from'
   begin_function
 
     from=${from%%*($NL| |$TAB)}
@@ -3442,7 +3447,7 @@ to_background_shell() {
     if (( sleep_between_lines > 0 )); then
       local line
       while IFS= read -r line || [[ "$line" ]]; do
-        to_background_shell_single || fail
+        to_background_shell_single "$line" || fail
         if [[ $timed_out == t ]]; then
           succeed
         fi
@@ -3450,7 +3455,7 @@ to_background_shell() {
       done <<<"$from"
       handle_break
     else
-      to_background_shell_single || fail
+      to_background_shell_single "$from" || fail
     fi
 
   end_function
