@@ -3396,7 +3396,12 @@ to_background_shell_single() {
   local command=$1
   begin_function
 
-    local timeout_ms=${timeout_ms:-0}
+    if [[ "${timeout:-}" ]]; then
+      local timeout_ms=$((timeout*1000))
+    else
+      local timeout_ms=${timeout_ms:-0}
+    fi
+
     if (( timeout_ms == 0 )); then
       log_debug "Running command without timeout: $command"
       echo -n "$command" >$pipe_in || fail
@@ -3404,8 +3409,8 @@ to_background_shell_single() {
 
       local pid \
         time_left=$timeout_ms \
-        delay_ms=250 \
-        seconds_to_wait=$(dc -e "2 k $delay_ms 1000 / p")
+        delay_ms=250
+      local seconds_to_wait=$(dc -e "2 k $delay_ms 1000 / p") || fail
 
       log_debug "Running command with ${seconds_to_wait}s timeout: $command"
       echo -n "$command" >$pipe_in & 
@@ -3413,7 +3418,7 @@ to_background_shell_single() {
 
       timed_out=f
       begin_while ps $pid &>/dev/null; doo
-        sleep $seconds_to_wait
+        sleep $seconds_to_wait || fail
         (( time_left -= $delay_ms ))
         if (( time_left <= 0 )); then
           log_debug "Timed out trying to execute: $command"
