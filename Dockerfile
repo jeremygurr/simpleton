@@ -148,6 +148,7 @@ RUN mkdir -p $REPO_CACHE
 
 ARG TIME_ZONE=UTC
 RUN setup-timezone -z $TIME_ZONE
+RUN ssh-keygen -f /etc/ssh/ssh_host_rsa_key -N '' -t rsa
 
 WORKDIR /work
 CMD /bin/bash $SIMPLETON_REPO/init
