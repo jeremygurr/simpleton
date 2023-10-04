@@ -124,6 +124,10 @@ RUN apk --allow-untrusted add \
   yq \
   zlib-doc 
 
+RUN apk --allow-untrusted add \
+  bc \
+  bc-doc
+
 # RUN apk --allow-untrustedadd \
 #   openssl3-doc \
 #   $nothing

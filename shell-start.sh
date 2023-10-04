@@ -461,8 +461,8 @@ big_prompt() {
   fi
 
   export PS1="
-  | $RED\$(prompt_error_string)$LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
-  | $LIGHT_RED\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+| $RED\$(prompt_error_string)$LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
+| $LIGHT_RED\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
   export PS2='> '
   export PS4='+ '
 }
