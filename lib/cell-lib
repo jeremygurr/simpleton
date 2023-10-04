@@ -3407,21 +3407,24 @@ to_background_shell_single() {
       echo -n "$command" >$pipe_in || fail
     else
 
+      # don't know why 'k' command in dc isn't working properly, so working around it
+      local timeout_ms=$(dc -e "$timeout 1000 * p")
+      timeout_ms=${timeout_ms%.*}
       local pid \
         time_left=$timeout_ms \
+        wait_message=f \
         delay_ms=250
-      local seconds_to_wait=$(dc -e "2 k $delay_ms 1000 / p") || fail
+      local delay_s=$(dc -e "$delay 1000 / p")
 
-      log_debug "Running command with ${seconds_to_wait}s timeout: $command"
+      log_debug "Running command with ${timeout}s timeout: $command"
       echo -n "$command" >$pipe_in & 
       pid=$!
 
       timed_out=f wait_time=0
-      set -x
       begin_while ps $pid &>/dev/null; doo
 
-        log_debug "Sleeping for $seconds_to_wait seconds"
-        sleep $seconds_to_wait || fail
+        log_debug "Sleeping for ${delay_s}s"
+        sleep $delay_s || fail
 
         (( time_left -= delay_ms 
          , wait_time += delay_ms ))
@@ -3433,13 +3436,14 @@ to_background_shell_single() {
           break
         fi
 
-        if (( wait_time > 2 )); then
+        if (( wait_time > 2 )) && [[ $wait_message == f ]]; then
           out "${NL}Waiting for pipe to be open"
+          wait_message=t
         fi
 
       end_while
-      set +x
-      log_debug "Finished waiting. Took $wait_time seconds."
+      local wait_time_s=$(dc -e "$wait_time 1000 / p")
+      log_debug "Finished waiting. Took ${wait_time_s}s."
 
     fi
 
@@ -3598,19 +3602,13 @@ from_background_shell() {
     stop_after=${stop_after:-} \
     fail_after=${fail_after:-} \
     interact=${interact:-} \
-    secret=${secret:-none}
-
-  if [[ "${timeout:-}" ]]; then
-    local timeout_ms=$((timeout*1000))
-  else
-    local timeout_ms=${timeout_ms:-0}
-  fi
-  local timeout_s=$(dc -e "2 k $timeout_s 1000 / p") || fail
+    secret=${secret:-none} \
+    timeout=${timeout:-0}
 
   local -n to=$to_var
 
   local log_show_vars='pipe' \
-    log_vars='timeout_s stop_after fail_after interact'
+    log_vars='timeout stop_after fail_after interact'
   begin_function
 
     timed_out=f
@@ -3626,7 +3624,7 @@ from_background_shell() {
     if [[ $buffering == line ]]; then
       while true; do
 
-        IFS= read -r -t $timeout_ms line <$pipe_out
+        IFS= read -r -t $timeout line <$pipe_out
 
         if (( $? > 128 )); then 
           timed_out=t
@@ -3696,21 +3694,28 @@ magic_shell_prompt='$=-=$'$NL
 #   result
 run_pipe_command() {
   local pipe=$pipe command=$command 
+
   local log_show_vars='pipe command'
   begin_function
+
     command_successful=f
     from_var=command \
       to_background_shell || fail
+
     if [[ $timed_out == t ]]; then
       succeed
     fi
+
     local stop_after=$magic_shell_prompt
     literal_to_regex stop_after
+
     to_var=result \
       from_background_shell || fail
+
     if [[ $timed_out == f && $failed == f ]]; then
       command_successful=t
     fi
+
   end_function
   handle_return
 }
@@ -3718,23 +3723,22 @@ run_pipe_command() {
 flush_background_shell() {
   local pipe_in=${pipe}_in pipe_out=${pipe}_out \
     buffering=${buffering:-line} \
+    timeout=${timeout:-0} \
     line char
   local log_show_vars=pipe
 
-  if [[ "${timeout:-}" ]]; then
-    local timeout_ms=$((timeout*1000))
-  else
-    local timeout_ms=${timeout_ms:-1000}
-  fi
-  local seconds_to_wait=$(dc -e "2 k $timeout_ms 1000 / p") || fail
-
   begin_function
 
-    log_debug "Flushing background output with timeout of ${seconds_to_wait}s"
+    if (( timeout > 0 )); then
+      log_debug "Flushing background output with timeout of ${timeout}s"
+    else
+      log_debug "Flushing background output with no timeout"
+    fi
+
     line=
     case "$buffering" in
       char)
-        while IFS= read -n1 -r -t $seconds_to_wait -r char || [[ "$line" ]]; do
+        while IFS= read -n1 -r -t $timeout -r char || [[ "$line" ]]; do
           if [ "$char" ]; then
             line+=$char
           else
@@ -3744,7 +3748,7 @@ flush_background_shell() {
         done <$pipe_out
         ;;
       line)
-        while IFS= read -r -t $seconds_to_wait -r line; do
+        while IFS= read -r -t $timeout -r line; do
           log_debug "Flushing: $line"
         done <$pipe_out
         ;;
