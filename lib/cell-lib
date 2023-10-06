@@ -2288,6 +2288,143 @@ validate_dims() {
   return 0
 }
 
+encrypt_file() {
+  local user_public_key=${user_public_key:-~/.ssh/id_rsa.pub}
+  local from=$from \
+    to=$to \
+    key=${key:-$user_public_key}
+
+  begin_function
+
+    if [[ ! -f $from ]]; then
+      log_fatal "File doesn't exist: $from"
+      fail1
+    fi
+     
+    if [[ -e $to ]]; then
+      log_fatal "File already exists: $to"
+      fail1
+    fi
+     
+    if [[ ! -f $key ]]; then
+      log_fatal "Key doesn't exist: $key"
+      fail1
+    fi
+     
+    setup_tmp_path || fail
+    if ! log_and_run openssl pkeyutl -encrypt -pubin -inkey $key -in $from -out $to; then
+      log_fatal "Failed to encrypt file: $from"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
+encrypt_file_with_shared_key() {
+
+  setup_tmp_path || return 1
+
+  local from=$from \
+    to=$to \
+    tmp_path=$tmp_path \
+    key_path=$key_path \
+    user_private_key=${user_private_key:-~/.ssh/id_rsa}
+
+  log_debug "Encrypting $from to $to"
+
+  local log_vars='from to'
+  begin_function
+
+    if [[ ! -f "$from" ]]; then
+      log_fatal "Attempting to encrypt non-existent file: $from"
+      fail1
+    fi
+
+    if [[ -f "$to" ]]; then
+      log_fatal "Encrypt: target file already exists: $to"
+      fail1
+    fi
+
+    if [[ ! -f "$user_private_key" ]]; then
+      log_fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
+      log_fatal "You may create one using: ssh-keygen -mPEM"
+      fail1
+    fi
+
+    if [[ ! "$tmp_path" ]]; then
+      log_fatal "tmp_path must be set to a directory before calling decrypt_file."
+      fail1
+    fi
+
+    if [[ ! -d $tmp_path ]]; then
+      mkdir -p $tmp_path || fail
+    fi
+
+    if [[ ! -d $key_path ]]; then
+      mkdir $key_path || fail
+    fi
+
+    if [[ ! -f "$key_path/key.$USER" ]]; then
+
+      local key_count=$(find -L $key_path -mindepth 1 -maxdepth 1 -name 'key.*' -type f | wc -l)
+
+      if (( key_count > 0 )); then
+
+        log_fatal "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
+        find -L $key_path -name "key.*" >&2
+        fail1
+
+      else
+
+        log_debug "There are no keys for this cell yet. Will create a new key."
+
+        # create a new main key
+        if ! out_to_file=$tmp_path/main log_and_run openssl rand -base64 40; then
+          log_fatal "Failed to generate new main key."
+          fail1
+        fi
+        defer "rm $tmp_path/main"
+
+        # create a compatible public key from the user's private key
+        if ! log_and_run openssl pkey -in $user_private_key -out $tmp_path/public -pubout; then 
+          log_fatal "Failed to convert private key to public key."
+          fail1
+        fi
+
+        # encrypt main key with given user key
+        if ! log_and_run openssl pkeyutl -encrypt -pubin -inkey $tmp_path/public -in $tmp_path/main -out $key_path/key.$USER; then
+          log_fatal "Failed to encrypt main key."
+          fail1
+        fi
+
+      fi
+    else 
+      # extract the main key
+      if ! log_and_run openssl pkeyutl -decrypt -inkey $user_private_key -in $key_path/key.$USER -out $tmp_path/main; then
+        log_fatal "Failed to decrypt main key." 
+        fail1
+      fi
+
+      defer "rm $tmp_path/main"
+    fi
+      
+    # encrypt the file with main key
+    if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -pass file:$tmp_path/main; then
+      log_fatal "Failed to create new secret file."
+      fail1
+    fi
+
+  end_function
+
+  if [[ -f $tmp_path/main ]]; then
+    rm $tmp_path/main
+  fi
+
+  handle_return
+
+}
+
 handle_secure_edit() {
 
   local log_vars= old_file=$file new_file=$file.new
@@ -2329,7 +2466,7 @@ handle_secure_edit() {
     fi
 
     if [[ $changed == t ]]; then
-      from=$new_unsafe_file to=$new_file encrypt_file || fail
+      from=$new_unsafe_file to=$new_file encrypt_file_with_shared_key || fail
       mv $new_file $old_file || fail
       update_modify_times $new_file || fail
     fi
@@ -2637,105 +2774,6 @@ begin_function
   # decrypt the secret file
   if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -d -pass file:$tmp_path/main; then 
     log_fatal "Failed to decrypt secret file." 
-    fail1
-  fi
-
-end_function
-handle_return
-
-}
-
-encrypt_file() {
-
-setup_tmp_path || return 1
-
-local from=$from
-local to=$to
-local tmp_path=$tmp_path
-local key_path=$key_path
-local user_private_key=${user_private_key:-~/.ssh/id_rsa}
-
-log_debug "Encrypting $from to $to"
-
-local log_vars='from to'
-begin_function
-
-  if [[ ! -f "$from" ]]; then
-    log_fatal "Attempting to encrypt non-existent file: $from"
-    fail1
-  fi
-
-  if [[ -f "$to" ]]; then
-    log_fatal "Encrypt: target file already exists: $to"
-    fail1
-  fi
-
-  if [[ ! -f "$user_private_key" ]]; then
-    log_fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
-    log_fatal "You may create one using: ssh-keygen -mPEM"
-    fail1
-  fi
-
-  if [[ ! "$tmp_path" ]]; then
-    log_fatal "tmp_path must be set to a directory before calling decrypt_file."
-    fail1
-  fi
-
-  if [[ ! -d $tmp_path ]]; then
-    mkdir -p $tmp_path || fail
-  fi
-
-  if [[ ! -d $key_path ]]; then
-    mkdir $key_path || fail
-  fi
-
-  if [[ ! -f "$key_path/key.$USER" ]]; then
-
-    local key_count=$(find -L $key_path -mindepth 1 -maxdepth 1 -name 'key.*' -type f | wc -l)
-
-    if [[ $key_count -gt 0 ]]; then
-
-      log_fatal "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
-      find -L $key_path -name "key.*" >&2
-      fail1
-
-    else
-
-      log_debug "There are no keys for this cell yet. Will create a new key."
-
-      # create a new main key
-      if ! out_to_file=$tmp_path/main log_and_run openssl rand -base64 40; then
-        log_fatal "Failed to generate new main key."
-        fail1
-      fi
-      defer "rm $tmp_path/main"
-
-      # create a compatible public key from the user's private key
-      if ! log_and_run openssl pkey -in $user_private_key -out $tmp_path/public -pubout; then 
-        log_fatal "Failed to convert private key to public key."
-        fail1
-      fi
-
-      # encrypt main key with given user key
-      if ! log_and_run openssl pkeyutl -encrypt -pubin -inkey $tmp_path/public -in $tmp_path/main -out $key_path/key.$USER; then
-        log_fatal "Failed to encrypt main key."
-        fail1
-      fi
-
-    fi
-  else 
-    # extract the main key
-    if ! log_and_run openssl pkeyutl -decrypt -inkey $user_private_key -in $key_path/key.$USER -out $tmp_path/main; then
-      log_fatal "Failed to decrypt main key." 
-      fail1
-    fi
-
-    defer "rm $tmp_path/main"
-  fi
-    
-  # encrypt the file with main key
-  if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -pass file:$tmp_path/main; then
-    log_fatal "Failed to create new secret file."
     fail1
   fi
 
