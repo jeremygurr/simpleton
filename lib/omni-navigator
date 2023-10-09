@@ -3,6 +3,8 @@
 type -t omni_navigator_init >/dev/null && return 0
 
 omni_navigator_init() {
+  ansi=${ansi:-t}
+
   omni_list_radius=${omni_list_radius:-5}
   if [[ ! -v fd_original_in ]]; then
     exec {fd_original_in}<&0
@@ -410,14 +412,17 @@ omni_change_cursor_log() {
 #   new_index
 omni_enter_sub_log() {
   local new_index=${new_index:-0}
-  log_file_stack+=( $log_file )
-  log_file_pos_stack+=( $log_array_index )
-  omni_change_cursor_log || return 1
-  if [[ $new_index == -1 ]]; then
-    (( new_index = log_array_size - 1 ))
-  fi
-  log_array_index=$new_index
-  return 0
+  local log_show_vars="new_index log_file"
+  begin_function
+    log_file_stack+=( $log_file )
+    log_file_pos_stack+=( $log_array_index )
+    omni_change_cursor_log || fail
+    if [[ $new_index == -1 ]]; then
+      (( new_index = log_array_size - 1 ))
+    fi
+    log_array_index=$new_index
+  end_function
+  handle_return
 }
 
 # inputs:
@@ -425,35 +430,40 @@ omni_enter_sub_log() {
 omni_exit_sub_log() {
   local direction=${direction:-0}
 
-  if (( ${#log_file_stack[*]} == 0 )); then
-    log_warn "Internal error: attempted omni_exit_sub_log when log_file_stack size is 0"
-  else
-
-    local parent_log_file=${log_file_stack[-1]}
-    unset log_file_stack[-1]
-
-    local parent_pos=${log_file_pos_stack[-1]}
-    unset log_file_pos_stack[-1]
-
-  fi
-
-  new_log_file=$parent_log_file \
-    omni_change_cursor_log || return 1
-  (( log_array_index = parent_pos + direction ))
-
-  if (( log_array_index < 0 || log_array_index >= log_array_size )); then
-    if (( ${#log_file_stack[*]} > 0 )); then
-      omni_exit_sub_log || return 1
+  local log_show_vars="direction log_file index"
+  begin_function
+    if (( ${#log_file_stack[*]} == 0 )); then
+      log_warn "Internal error: attempted omni_exit_sub_log when log_file_stack size is 0"
     else
-      if (( log_array_index < 0 )); then
-        log_array_index=0
-      elif (( log_array_index >= log_array_size )); then
-        (( log_array_index = log_array_size - 1 ))
+
+      local parent_log_file=${log_file_stack[-1]}
+      unset log_file_stack[-1]
+
+      local parent_pos=${log_file_pos_stack[-1]}
+      unset log_file_pos_stack[-1]
+
+    fi
+
+    new_log_file=$parent_log_file \
+      omni_change_cursor_log || fail
+    (( log_array_index = parent_pos + direction ))
+
+    if (( log_array_index < 0 || log_array_index >= log_array_size )); then
+      if (( ${#log_file_stack[*]} > 0 )); then
+        omni_exit_sub_log || fail
+      else
+        if (( log_array_index < 0 )); then
+          log_array_index=0
+          went_out_of_bounds=t
+        elif (( log_array_index >= log_array_size )); then
+          (( log_array_index = log_array_size - 1 ))
+          went_out_of_bounds=t
+        fi
       fi
     fi
-  fi
 
-  return 0
+  end_function
+  handle_return
 }
 
 # inputs: 
@@ -526,10 +536,12 @@ push_to_function_stack() {
 # Move to the next log line to search
 # This is meant to be able to move past the boundaries if there are no other possibilities
 omni_search_next() {
-  begin_function_flat
+  local log_show_vars="log_file index direction"
+  begin_function
 
     local original_index=$index \
       original_log=$log_file
+    went_out_of_bounds=f
 
     if [[ ${action_map[$index]} == log_to && $allow_in_log == t ]]; then
 
@@ -586,12 +598,14 @@ omni_search_next() {
             omni_exit_sub_log || fail
           else
             (( index = log_array_size - 1 ))
+            went_out_of_bounds=t
           fi
         elif [[ $direction == -1 ]]; then
           if [[ $allow_out_log == t && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
           else
             index=0
+            went_out_of_bounds=t
           fi
         else
           log_fatal "omni_search_next: invalid direction: $direction"
@@ -601,7 +615,9 @@ omni_search_next() {
 
     fi
 
-    if [[ $original_index == $index && $original_log == $log_file ]]; then
+    if [[ $original_index == $index 
+       && $original_log == $log_file 
+       ]]; then
       failed_to_move=t
     else
       failed_to_move=f
@@ -700,30 +716,34 @@ omni_search_get_matches() {
 omni_copy_cursor() {
   local from=$1 to=$2
 
-  if [[ $from != $to ]]; then
-    local -n \
-      from_log_file=cursor_${from}_log_file \
-      to_log_index=cursor_${to}_log_array_index \
-      from_log_index=cursor_${from}_log_array_index \
-      from_log_file_stack=cursor_${from}_log_file_stack \
-      from_log_file_pos_stack=cursor_${from}_log_file_pos_stack \
-      from_function_call_stack=cursor_${from}_function_call_stack \
-      to_log_file_stack=cursor_${to}_log_file_stack \
-      to_log_file_pos_stack=cursor_${to}_log_file_pos_stack \
-      to_function_call_stack=cursor_${to}_function_call_stack \
+  local log_show_vars="from to"
+  begin_function
 
-    new_log_file=$from_log_file \
-      cursor=$to \
-      omni_change_cursor_log || return 1
+    if [[ $from != $to ]]; then
+      local -n \
+        from_log_file=cursor_${from}_log_file \
+        to_log_index=cursor_${to}_log_array_index \
+        from_log_index=cursor_${from}_log_array_index \
+        from_log_file_stack=cursor_${from}_log_file_stack \
+        from_log_file_pos_stack=cursor_${from}_log_file_pos_stack \
+        from_function_call_stack=cursor_${from}_function_call_stack \
+        to_log_file_stack=cursor_${to}_log_file_stack \
+        to_log_file_pos_stack=cursor_${to}_log_file_pos_stack \
+        to_function_call_stack=cursor_${to}_function_call_stack \
 
-    to_log_index=$from_log_index
+      new_log_file=$from_log_file \
+        cursor=$to \
+        omni_change_cursor_log || fail
 
-    to_log_file_stack=( "${from_log_file_stack[@]}" )
-    to_log_file_pos_stack=( "${from_log_file_pos_stack[@]}" )
-    to_function_call_stack=( "${from_function_call_stack[@]}" )
-  fi
+      to_log_index=$from_log_index
 
-  return 0
+      to_log_file_stack=( "${from_log_file_stack[@]}" )
+      to_log_file_pos_stack=( "${from_log_file_pos_stack[@]}" )
+      to_function_call_stack=( "${from_function_call_stack[@]}" )
+    fi
+
+  end_function
+  handle_return
 }
 
 # will move the cursor according to the parameters given
@@ -734,7 +754,7 @@ omni_copy_cursor() {
 #   move_cursosr=s    which cursor is changed in the process
 omni_search() {
   local log_vars='from_log from_index move_cursor count deep'
-  begin_function_flat
+  begin_function
 
     local \
       from_cursor=${from_cursor:-} \
@@ -818,7 +838,6 @@ omni_search() {
     local plane_id=$original_plane_id \
       found_matching_line=t \
       restore_backup=f \
-      failed_to_move=f \
       lid \
       visited=() \
       visited_backup=()
@@ -839,9 +858,10 @@ omni_search() {
         visited_backup=( "${visited[@]}" )
       fi
 
+      local went_out_of_bounds failed_to_move
       omni_search_next || fail
 
-      if [[ $failed_to_move == t ]]; then
+      if [[ $failed_to_move == t || $went_out_of_bounds == t ]]; then
         break
       fi
 
