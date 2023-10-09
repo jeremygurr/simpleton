@@ -2289,10 +2289,10 @@ validate_dims() {
 }
 
 encrypt_file() {
-  local user_public_key=${user_public_key:-~/.ssh/id_rsa.pub}
+  local user_private_key=${user_private_key:-~/.ssh/id_rsa}
   local from=$from \
     to=$to \
-    key=${key:-$user_public_key}
+    key=${key:-$user_private_key}
 
   begin_function
 
@@ -2312,7 +2312,7 @@ encrypt_file() {
     fi
      
     setup_tmp_path || fail
-    if ! log_and_run openssl pkeyutl -encrypt -pubin -inkey $key -in $from -out $to; then
+    if ! log_and_run openssl pkeyutl -encrypt -inkey $key -in $from -out $to; then
       log_fatal "Failed to encrypt file: $from"
       fail1
     fi
@@ -2642,183 +2642,216 @@ setup_branch_dims() {
 
 # returns array of dims, which may be empty if there are no dims
 get_dims() {
-local -r cell=$1
-if [[ -d $cell/.dna/dim ]]; then
-  dims=( $( \
-    find1 $cell/.dna/dim \
-    -not -name '.*' \
-    -printf '%f\n' \
-    | sort -g \
-    | sed -E 's/^[0-9]+-(.*)/\1/' \
-    ) ) || return 1
-else
-  dims=()
-fi
-return 0
+  local -r cell=$1
+  if [[ -d $cell/.dna/dim ]]; then
+    dims=( $( \
+      find1 $cell/.dna/dim \
+      -not -name '.*' \
+      -printf '%f\n' \
+      | sort -g \
+      | sed -E 's/^[0-9]+-(.*)/\1/' \
+      ) ) || return 1
+  else
+    dims=()
+  fi
+  return 0
 }
 
 
 update_cell_value_file() {
-begin_function_flat
-  if [[ "${cell_values:-}" && ! -f $cell_path/cell_values ]]; then
-    local v s='cell_values=( '
-    for v in "${cell_values[@]}"; do
-      s+="\"$v\" "
-    done
-    s+=')'
-    echo "$s" >$cell_path/cell_values || fail
-  fi
-end_function
-handle_return
+  begin_function_flat
+    if [[ "${cell_values:-}" && ! -f $cell_path/cell_values ]]; then
+      local v s='cell_values=( '
+      for v in "${cell_values[@]}"; do
+        s+="\"$v\" "
+      done
+      s+=')'
+      echo "$s" >$cell_path/cell_values || fail
+    fi
+  end_function
+  handle_return
 }
 
 get_cell() {
-cell_path=$1
-[[ ${#cell_path} -lt 3 ]] && return 1
-[[ -d $cell_path/.dna ]] && return 0
-[[ -d $cell_path/.cyto ]] && return 0
-get_cell ${cell_path%/*} || return 1
-return 0
+  cell_path=$1
+  [[ ${#cell_path} -lt 3 ]] && return 1
+  [[ -d $cell_path/.dna ]] && return 0
+  [[ -d $cell_path/.cyto ]] && return 0
+  get_cell ${cell_path%/*} || return 1
+  return 0
 }
 
 setup_tmp_path() {
-if [[ ! "${tmp_path:-}" ]]; then
-  if [[ -d ${cell_path:-}/.cyto/tmp ]]; then
-    tmp_path=$cell_path/.cyto/tmp
-  elif [[ -d ~/tmp ]]; then
-    tmp_path=~/tmp
-  else
-    tmp_path=/tmp
+  if [[ ! "${tmp_path:-}" ]]; then
+    if [[ -d ${cell_path:-}/.cyto/tmp ]]; then
+      tmp_path=$cell_path/.cyto/tmp
+    elif [[ -d ~/tmp ]]; then
+      tmp_path=~/tmp
+    else
+      tmp_path=/tmp
+    fi
   fi
-fi
-if [[ ! -d $tmp_path ]]; then
-  mkdir -p $tmp_path || return 1
-fi
-return 0
+  if [[ ! -d $tmp_path ]]; then
+    mkdir -p $tmp_path || return 1
+  fi
+  return 0
 }
 
 # params: $1 (subject)
 # output: workspace
 get_workspace() {
-local subject=$1
-workspace=
-while [[ ${#subject} -gt 1 && $subject =~ / ]]; do
-  if [[ "$subject" == "$top_cell"/* ]]; then
-    workspace=$subject
-    break
-  fi
-  subject=${subject%/*}
-done
-[[ "$workspace" ]]
+  local subject=$1
+  workspace=
+  while [[ ${#subject} -gt 1 && $subject =~ / ]]; do
+    if [[ "$subject" == "$top_cell"/* ]]; then
+      workspace=$subject
+      break
+    fi
+    subject=${subject%/*}
+  done
+  [[ "$workspace" ]]
+}
+
+decrypt_file() {
+  local user_private_key=${user_private_key:-~/.ssh/id_rsa}
+  local from=$from \
+    to=$to \
+    key=${key:-$user_private_key}
+
+  begin_function
+
+    if [[ ! -f $from ]]; then
+      log_fatal "File doesn't exist: $from"
+      fail1
+    fi
+     
+    if [[ -e $to ]]; then
+      log_fatal "File already exists: $to"
+      fail1
+    fi
+     
+    if [[ ! -f $key ]]; then
+      log_fatal "Key doesn't exist: $key"
+      fail1
+    fi
+     
+    setup_tmp_path || fail
+    if ! log_and_run openssl pkeyutl -decrypt -inkey $key -in $from -out $to; then
+      log_fatal "Failed to decrypt file: $from"
+      fail1
+    fi
+
+  end_function
+  handle_return
 }
 
 # inputs: from to tmp_path current_cell
 # will write output to file at $to
 decrypt_file_with_shared_key() {
 
-setup_tmp_path || return 1
+  setup_tmp_path || return 1
 
-local from=$from
-local to=$to
-local tmp_path=$tmp_path
-local key_path=$key_path
-local user_private_key=${user_private_key:-~/.ssh/id_rsa}
+  local from=$from
+  local to=$to
+  local tmp_path=$tmp_path
+  local key_path=$key_path
+  local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
-log_debug "Decrypting $from to $to"
+  log_debug "Decrypting $from to $to"
 
-local log_vars='from to'
-begin_function
+  local log_vars='from to'
+  begin_function
 
-  if [[ ! -f "$from" ]]; then
-    log_fatal "Attempting to decrypt non-existent file: $from"
-    fail1
-  fi
+    if [[ ! -f "$from" ]]; then
+      log_fatal "Attempting to decrypt non-existent file: $from"
+      fail1
+    fi
 
-  if [[ -s "$to" ]]; then
-    log_fatal "Decrypt: target file already exists: $to"
-    fail1
-  fi
+    if [[ -s "$to" ]]; then
+      log_fatal "Decrypt: target file already exists: $to"
+      fail1
+    fi
 
-  if [[ ! -f "$user_private_key" ]]; then
-    log_fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
-    log_fatal "You may create one using: ssh-keygen -mPEM"
-    fail1
-  fi
+    if [[ ! -f "$user_private_key" ]]; then
+      log_fatal "Private key is missing. Set path to it with user_private_key env var, or put it here: $user_private_key"
+      log_fatal "You may create one using: ssh-keygen -mPEM"
+      fail1
+    fi
 
-  if [[ ! "$tmp_path" ]]; then
-    log_fatal "tmp_path must be set to a directory before calling decrypt_file_with_shared_key."
-    fail1
-  fi
+    if [[ ! "$tmp_path" ]]; then
+      log_fatal "tmp_path must be set to a directory before calling decrypt_file_with_shared_key."
+      fail1
+    fi
 
-  if [[ ! -d $tmp_path ]]; then
-    mkdir -p $tmp_path || fail
-  fi
+    if [[ ! -d $tmp_path ]]; then
+      mkdir -p $tmp_path || fail
+    fi
 
-  if [[ ! -d $key_path ]]; then
-    mkdir $key_path || fail
-  fi
+    if [[ ! -d $key_path ]]; then
+      mkdir $key_path || fail
+    fi
 
-  if [[ ! -f "$key_path/key.$USER" ]]; then
-    log_fatal "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
-    find -L $key_path -name "key.*" >&2
-    fail1
-  fi
+    if [[ ! -f "$key_path/key.$USER" ]]; then
+      log_fatal "You don't have a key for this cell ($USER). Ask someone who does to add you. Existing keys:" 
+      find -L $key_path -name "key.*" >&2
+      fail1
+    fi
 
-  # extract the main key
-  if ! log_and_run openssl pkeyutl -decrypt -inkey $user_private_key -in "$key_path/key.$USER" -out $tmp_path/main; then
-    log_fatal "Failed to decrypt main key." 
-    fail1
-  fi
-  defer "rm $tmp_path/main"
+    # extract the main key
+    if ! log_and_run openssl pkeyutl -decrypt -inkey $user_private_key -in "$key_path/key.$USER" -out $tmp_path/main; then
+      log_fatal "Failed to decrypt main key." 
+      fail1
+    fi
+    defer "rm $tmp_path/main"
 
-  # decrypt the secret file
-  if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -d -pass file:$tmp_path/main; then 
-    log_fatal "Failed to decrypt secret file." 
-    fail1
-  fi
+    # decrypt the secret file
+    if ! log_and_run openssl enc -aes256 -pbkdf2 -in $from -out $to -d -pass file:$tmp_path/main; then 
+      log_fatal "Failed to decrypt secret file." 
+      fail1
+    fi
 
-end_function
-handle_return
+  end_function
+  handle_return
 
 }
 
 # input: dim
 # output: values 
 expand_values() {
-begin_function_flat
+  begin_function_flat
 
-  local dims=${dim}s 
-  local ddims=d_$dims \
-        ddim=d_$dim \
-        new_value_list= new_values= value \
-        has_member_expand_function=f
+    local dims=${dim}s 
+    local ddims=d_$dims \
+          ddim=d_$dim \
+          new_value_list= new_values= value \
+          has_member_expand_function=f
 
-  values=( ${!ddim:-} )
-  type -t ${dim}_member_expand >/dev/null && has_member_expand_function=t
+    values=( ${!ddim:-} )
+    type -t ${dim}_member_expand >/dev/null && has_member_expand_function=t
 
-  local problem= failed=f
-  if [[ ! "${values:-}" ]]; then
-    expand_values_plural || failed=t
-  else
-    expand_values_single || failed=t
-  fi
-  if [[ "$problem" ]]; then
-    log_fatal "$problem"
-    fail1
-  elif [[ $failed == t ]]; then
-    if [[ ! "$values" ]]; then
-      log_fatal "Missing required dimension: $dim"
-      fail1
+    local problem= failed=f
+    if [[ ! "${values:-}" ]]; then
+      expand_values_plural || failed=t
     else
-      log_fatal "Error expanding values for dimension: $dim"
-      fail1
+      expand_values_single || failed=t
     fi
-  fi
+    if [[ "$problem" ]]; then
+      log_fatal "$problem"
+      fail1
+    elif [[ $failed == t ]]; then
+      if [[ ! "$values" ]]; then
+        log_fatal "Missing required dimension: $dim"
+        fail1
+      else
+        log_fatal "Error expanding values for dimension: $dim"
+        fail1
+      fi
+    fi
 
-  values=( $new_value_list )
+    values=( $new_value_list )
 
-end_function
-handle_return
+  end_function
+  handle_return
 }
 
 # input: 

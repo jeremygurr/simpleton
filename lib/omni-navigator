@@ -460,7 +460,7 @@ omni_exit_sub_log() {
 #   cursor
 #   reverse_index
 omni_show_line() {
-  local reverse_index=$reverse_index \
+  local reverse_index=${reverse_index:-} \
     cursor=$cursor \
     out_to_var=${out_to_var:-} \
     result= \
@@ -471,7 +471,7 @@ omni_show_line() {
     index=cursor_${cursor}_log_array_index \
 
   local reverse=f
-  if (( reverse_index == index )); then
+  if [[ "$reverse_index" ]] && (( reverse_index == index )); then
     reverse=t
   fi
 
@@ -528,7 +528,8 @@ push_to_function_stack() {
 omni_search_next() {
   begin_function_flat
 
-    failed_to_move=f
+    local original_index=$index \
+      original_log=$log_file
 
     if [[ ${action_map[$index]} == log_to && $allow_in_log == t ]]; then
 
@@ -557,7 +558,7 @@ omni_search_next() {
       if [[ $direction == 1 ]]; then
 
         if [[ "$pre_action" == call ]]; then
-          push_to_function_stack $((index - 1 )) || fail
+          push_to_function_stack $(( index - 1 )) || fail
         fi
 
         if [[ "$post_action" == return\(* && -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
@@ -585,14 +586,12 @@ omni_search_next() {
             omni_exit_sub_log || fail
           else
             (( index = log_array_size - 1 ))
-            failed_to_move=t
           fi
         elif [[ $direction == -1 ]]; then
           if [[ $allow_out_log == t && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
           else
             index=0
-            failed_to_move=t
           fi
         else
           log_fatal "omni_search_next: invalid direction: $direction"
@@ -601,6 +600,13 @@ omni_search_next() {
       fi
 
     fi
+
+    if [[ $original_index == $index && $original_log == $log_file ]]; then
+      failed_to_move=t
+    else
+      failed_to_move=f
+    fi
+
   end_function
   handle_return
 }
@@ -721,6 +727,11 @@ omni_copy_cursor() {
 }
 
 # will move the cursor according to the parameters given
+# inputs
+#   count=1           set to inf for unlimited matches
+#   each_match=       function to execute each time a match is found
+#   from_cursor=      cursor to copy to move_cursor. Determines starting point of search
+#   move_cursosr=s    which cursor is changed in the process
 omni_search() {
   local log_vars='from_log from_index move_cursor count deep'
   begin_function_flat
@@ -729,6 +740,7 @@ omni_search() {
       from_cursor=${from_cursor:-} \
       original_cursor=${cursor:-} \
       move_cursor=${move_cursor:-s} \
+      each_match=${each_match:-} \
       find_level=${find_level:-} \
       find_action=${find_action:-} \
       find_log_id=${find_log_id:-} \
@@ -744,8 +756,8 @@ omni_search() {
       allow_diff_plane=${allow_diff_plane:-f} \
       allow_all=${allow_all:-f} \
       allow_all_in_same_log=${allow_all_in_same_log:-f} \
-      count=${count:-1} \
-      omni_prev_go_to_string=${omni_prev_go_to_string:-} \
+      count=${count:-1} 
+    local -n log_file=cursor_${move_cursor}_log_file
 
     # implications
     if [[ $allow_all == t ]]; then
@@ -807,23 +819,35 @@ omni_search() {
       found_matching_line=t \
       restore_backup=f \
       failed_to_move=f \
+      lid \
+      visited=() \
+      visited_backup=()
 
     begin_loop
 
+      # infinite loop detection
+      lid=$log_file:$index
+      if [[ " ${visited[*]} " =~ \ $lid\  ]]; then
+        debug_start
+        log_fatal "Infinite loop detected in omni_search"
+        fail1
+      fi
+      visited+=( $lid )
+
       if [[ $found_matching_line == t ]]; then
         omni_copy_cursor $cursor backup
+        visited_backup=( "${visited[@]}" )
       fi
 
       omni_search_next || fail
 
-      found_matching_line=t
-      omni_search_get_matches || fail
-      
       if [[ $failed_to_move == t ]]; then
-
         break
       fi
 
+      found_matching_line=t
+      omni_search_get_matches || fail
+      
       if [[ $found_matching_line == t ]]; then
 
         (( cursor_moved += direction ))
@@ -831,9 +855,15 @@ omni_search() {
           (( count -= direction ))
         fi
         restore_backup=f
+
+        if [[ "$each_match" ]]; then
+          eval "$each_match" || fail
+        fi
+
         if [[ $count == 0 ]]; then
           break
         fi
+
       else
         restore_backup=t
       fi
@@ -841,13 +871,12 @@ omni_search() {
     end_loop
 
     if [[ $restore_backup == t ]]; then
-
       omni_copy_cursor backup $cursor || fail
+      visited=( "${visited_backup[@]}" )
     fi
 
     # restore original cursor
     if [[ "$original_cursor" ]]; then
-
       new_cursor=$original_cursor \
         omni_select_cursor || fail
     fi
@@ -1368,6 +1397,37 @@ omni_navigator() (
           omni_show_context || fail
           no_follow_once=t
           ;;
+        ,)
+          echo >&$fd_original_err
+          read -er -p "Search for substring: " omni_prev_grep_string <&$fd_original_in >&$fd_original_err
+          if [[ "${omni_prev_grep_string:-}" ]]; then
+            local find_substring find_regex
+            if [[ "$omni_prev_grep_string" == ~* ]]; then
+              find_regex=${omni_prev_grep_string#\~}
+              find_substring=
+            else
+              find_substring=$omni_prev_grep_string
+              find_regex=
+            fi
+
+            local cursor_moved=0
+            from_cursor=$cursor \
+              allow_all=t \
+              each_match='cursor=s omni_show_line' \
+              count=inf \
+              omni_search || fail
+
+            find_substring= find_regex=
+
+            if (( cursor_moved == 0 )); then
+              echo "Not found" >&$fd_original_err
+            else
+              echo "Found $cursor_moved log entries" >&$fd_original_err
+              no_follow_once=t
+            fi
+
+          fi
+          ;;
         /)
           echo >&$fd_original_err
           local go_to_string=
@@ -1429,7 +1489,9 @@ omni_navigator() (
           echo "]  go to last log line within the same plane" >&$fd_original_err
           echo "{  go to first log line within the log file" >&$fd_original_err
           echo "}  go to last log line within the log file" >&$fd_original_err
-          echo "f  search forward for a string" >&$fd_original_err
+          echo ",  grep logs for a given string, listing all matching lines" >&$fd_original_err
+          echo ".  repeat previous grep" >&$fd_original_err
+          echo "/  search forward for a string" >&$fd_original_err
           no_follow_once=t
           ;;
         *)
