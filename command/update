@@ -107,18 +107,14 @@ prep_upstream() {
   handle_return
 }
 
-# inputs: 
-#   upstream: a folder in .dna/up
-update_upstream() {
+update_upstream_prep() {
 
-  local required_freshness=$required_freshness fresh=$fresh \
-    default_freshness=$default_freshness up_dna=$upstream
-
-  local log_show_vars=^up_dna 
+  local log_show_vars="^up_cyto"
   begin_function
 
-    local up_part=${up_dna##*/}
-    local up_cyto=$cyto_up_path/$up_part
+    if [[ ! -d $cyto_up_path ]]; then
+      mkdir $cyto_up_path || fail
+    fi
 
     if [[ -d $up_cyto ]]; then
 
@@ -132,6 +128,14 @@ update_upstream() {
 
     fi
 
+    local needs_update
+    mkdir $up_cyto || fail
+
+    if [[ ! -e $up_cyto ]]; then
+      log_debug "Cyto upstream is missing, will need to update"
+      needs_update=t
+    fi
+
     # This may be overridden by upstream prep file to customize how failure of this upstream is handled
     handle_upstream_result() {
       if [[ $update_successful == f ]]; then
@@ -141,63 +145,52 @@ update_upstream() {
       fi
     }
 
-    local needs_update
-    mkdir $up_cyto || fail
-
-    if [[ ! -e $up_cyto ]]; then
-      log_debug "Cyto upstream is missing, will need to update"
-      needs_update=t
-    fi
-
     prep_upstream || fail
 
-    local choices=$(find1 $up_dna/choices -not -name ".*" | sort -g) || fail
-    local chosen= choice
+  end_function
+  handle_return
 
-    if [[ ! "$choices" ]]; then
-      log_debug "No choices for upstream. Skipping."
-      succeed
-    fi
+}
 
-    # are any already updated?
-    begin_for choice in $choices; doo
+update_upstream_choose() {
+  begin_function
 
-      needs_update=
-      if [[ ! "$needs_update" ]]; then
+    if [[ -d $up_dna/cell ]]; then
+      chosen=$up_dna/cell
+    else
+      local choices=$(find1 $up_dna/choices -not -name ".*" | sort -g) || fail
+
+      if [[ ! "$choices" ]]; then
+        log_debug "No choices for upstream. Skipping."
+        succeed
+      fi
+
+      # are any already updated?
+      local choice
+      begin_for choice in $choices; doo
+
         get_needs_update $choice || fail
+        if [[ "$needs_update" == f ]]; then
+          chosen=$choice
+          break
+        fi
+
+      end_for
+
+      if [[ ! "$chosen" ]]; then
+        chosen=${choices%% *}
+        needs_update=t
       fi
-      if [[ "$needs_update" == f ]]; then
-        chosen=$choice
-        break
-      fi
-
-    end_for
-
-    if [[ ! "$chosen" ]]; then
-      chosen=${choices%% *}
-      needs_update=t
     fi
 
-    if [[ $needs_update == f && ! -e $up_cyto/chosen ]]; then
-      needs_update=t
-    fi
-      
-    if [[ "${localize_dim_vars:-}" ]]; then
-      eval "$localize_dim_vars"
-    fi
+  end_function
+  handle_return
+}
 
-    if [[ $needs_update == t ]]; then
-      downstream_ref_path=$up_cyto \
-        execute_command "$(realpath $chosen)" update || fail
+update_upstream_get_locks() {
+  local log_show_vars=^up_cyto
+  begin_function
 
-      if [[ $something_changed == t ]]; then
-        previous_upstream_changed=t
-      fi
-
-      previous_upstream_changed=t
-      handle_upstream_result || fail
-    fi
-    
     local lock 
     local -r shared_lock_path=$up_cyto/chosen/.cyto/shared-locks
     local shared_locks=$(find1 $shared_lock_path -not -name ".*" | sort -g) || fail
@@ -219,6 +212,56 @@ update_upstream() {
     write_lock=f \
     timeout=$lock_timeout \
       cell_lock $up_cyto/chosen || fail
+
+  end_function
+  handle_return
+}
+
+# inputs: 
+#   upstream: a folder in .dna/up
+update_upstream() {
+
+  local required_freshness=$required_freshness fresh=$fresh \
+    default_freshness=$default_freshness up_dna=$upstream
+
+  local log_show_vars=^up_dna 
+  begin_function
+
+    local up_part=${up_dna##*/}
+    local up_cyto=$cyto_up_path/$up_part
+
+    update_upstream_prep || fail
+
+    local chosen=
+    update_upstream_choose || fail
+
+    if [[ ! -e $up_cyto/chosen ]]; then
+      needs_update=t
+    fi
+
+    if [[ ! "$needs_update" ]]; then
+      get_needs_update $chosen || fail
+    fi
+
+    if [[ "${localize_dim_vars:-}" ]]; then
+      eval "$localize_dim_vars"
+    fi
+
+    if [[ $needs_update == t ]]; then
+
+      downstream_ref_path=$up_cyto \
+        execute_command "$(realpath $chosen)" update || fail
+
+      if [[ $something_changed == t ]]; then
+        previous_upstream_changed=t
+      fi
+
+      previous_upstream_changed=t
+      handle_upstream_result || fail
+
+    fi
+    
+    update_upstream_get_locks || fail
 
   end_function
   handle_return
