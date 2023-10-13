@@ -121,47 +121,46 @@ debug_load_state() {
 debug_save_state() {
   # We don't need to save the state if there are no parent shells to recall that state
   if [[ $BASH_SUBSHELL -gt 0 || ${force_save:-f} == t ]]; then
-  [[ $debug_debug == t ]] && echo "${CYAN}Saving debug_state_file${RESET}" >&$fd_original_err
-  echo "
-  debug_buffered_commands='$debug_buffered_commands'
-  debug_condition='$debug_condition'
-  debug_condition_old='$debug_condition_old'
-  debug_display='$debug_display'
-  debug_exit='$debug_exit'
-  debug_expanded_search='$debug_expanded_search'
-  debug_expansion='$debug_expansion'
-  debug_expression='$debug_expression'
-  debug_follow_source='$debug_follow_source'
-  debug_function='$debug_function'
-  debug_function_old='$debug_function_old'
-  debug_highlight='$debug_highlight'
-  debug_id_current='$debug_id_current'
-  debug_ignore='$debug_ignore'
-  debug_immediate='$debug_immediate'
-  debug_line='$debug_line'
-  debug_line_old='$debug_line_old'
-  debug_max_depth='$debug_max_depth'
-  debug_original_tracefd='$debug_original_tracefd'
-  debug_prev_command='${debug_prev_command//\'/\'\"\'\"\'}'
-  debug_prev_function='$debug_prev_function'
-  debug_prev_line='$debug_prev_line'
-  debug_prev_source_file='$debug_prev_source_file'
-  debug_return='$debug_return'
-  debug_search='$debug_search'
-  debug_search_deep='$debug_search_deep'
-  debug_search_old='$debug_search_old'
-  debug_skip_ignore='$debug_skip_ignore'
-  debug_step_to_later_line='$debug_step_to_later_line'
-  debug_step_to_next_line='$debug_step_to_next_line'
-  debug_step_to_next_file='$debug_step_to_next_file'
-  debug_step_to_next_function='$debug_step_to_next_function'
-  debug_stepping='$debug_stepping'
-  debug_stop_at='$debug_stop_at'
-  debug_subshell='$debug_subshell'
-  debug_watch='$debug_watch'
-  debug_watch_style='$debug_watch_style'
-  PS4='$PS4'
-  " >"$debug_state_file" || return 1
+    [[ $debug_debug == t ]] && echo "${CYAN}Saving debug_state_file${RESET}" >&$fd_original_err
+    echo "
+debug_buffered_commands='$debug_buffered_commands'
+debug_condition='$debug_condition'
+debug_condition_old='$debug_condition_old'
+debug_display='$debug_display'
+debug_exit='$debug_exit'
+debug_expanded_search='$debug_expanded_search'
+debug_expansion='$debug_expansion'
+debug_expression='$debug_expression'
+debug_follow_source='$debug_follow_source'
+debug_function='$debug_function'
+debug_function_old='$debug_function_old'
+debug_highlight='$debug_highlight'
+debug_id_current='$debug_id_current'
+debug_ignore='$debug_ignore'
+debug_immediate='$debug_immediate'
+debug_line='$debug_line'
+debug_line_old='$debug_line_old'
+debug_max_depth='$debug_max_depth'
+debug_original_tracefd='$debug_original_tracefd'
+debug_prev_command='${debug_prev_command//\'/\'\"\'\"\'}'
+debug_prev_function='$debug_prev_function'
+debug_prev_line='$debug_prev_line'
+debug_prev_source_file='$debug_prev_source_file'
+debug_return='$debug_return'
+debug_search='$debug_search'
+debug_search_deep='$debug_search_deep'
+debug_search_old='$debug_search_old'
+debug_skip_ignore='$debug_skip_ignore'
+debug_step_to_later_line='$debug_step_to_later_line'
+debug_step_to_next_line='$debug_step_to_next_line'
+debug_step_to_next_file='$debug_step_to_next_file'
+debug_step_to_next_function='$debug_step_to_next_function'
+debug_stepping='$debug_stepping'
+debug_stop_at='$debug_stop_at'
+debug_subshell='$debug_subshell'
+debug_watch='$debug_watch'
+debug_watch_style='$debug_watch_style'
+PS4='$PS4'" >"$debug_state_file" || return 1
   fi
   return 0
 }
@@ -549,10 +548,12 @@ debug_trap() {
     fi
 
     debug_long_command=f
+    local silent_command=f
     if [[ "$debug_buffered_commands" ]]; then
       debug_buffered_commands=${debug_buffered_commands##*( )}
       debug_c=${debug_buffered_commands:0:1}
       debug_buffered_commands=${debug_buffered_commands:1}
+      silent_command=t
     else
       read -rs -N1 -u $fd_original_in debug_c 
     fi
@@ -1008,7 +1009,9 @@ debug_trap() {
         debug_save_state
         ;;
       \\)
-        echo "# Adding $debug_current_function to function ignore list" >&$fd_original_err
+        if [[ $silent_command == f ]]; then
+          echo "# Adding $debug_current_function to function ignore list" >&$fd_original_err
+        fi
         debug_ignore+="$debug_current_function "
         debug_r=0
         debug_stepping=t
@@ -1308,6 +1311,8 @@ debug_start() {
     shopt -s extdebug
     trap '
       debug_trap_first_line=${LINENO:-0} 
+      debug_saved_shell_options_short=$-
+      set +x
       debug_saved_shell_options=$(set +o)
       debug_saved_params=( "$@" )
       set +exvT +o pipefail
@@ -1364,6 +1369,9 @@ debug_start() {
         fi
       fi
       eval "$debug_saved_shell_options"
+      if [[ $debug_saved_shell_options_short =~ x ]]; then
+        set -x
+      fi
       set_return_code $debug_rc
       ' DEBUG
   else
