@@ -5,6 +5,7 @@ type -t omni_navigator_init >/dev/null && return 0
 omni_navigator_init() {
   ansi=${ansi:-t}
 
+  omni_var_filter=
   omni_list_radius=${omni_list_radius:-5}
   if [[ ! -v fd_original_in ]]; then
     exec {fd_original_in}<&0
@@ -47,7 +48,7 @@ get_log_file_token() {
 
 # input: {line}
 #   line_id
-omni_get_processed_line() {
+omni_get_processed_line2() {
   local line=$1 log_id=$log_id var
 
   processed_line=
@@ -130,7 +131,8 @@ omni_get_processed_line() {
 #   the selected variable, which won't actually change an outer local version of the
 #   variable, only the shared global version.
 omni_extract_vars() {
-  local log_vars='log_array_index vars'
+  local log_vars='log_array_index vars' \
+    index=$index
   begin_function
 
     local line=${log_array[$index]} \
@@ -156,6 +158,61 @@ omni_extract_vars() {
         fi
       done
     fi
+
+  end_function
+  handle_return
+}
+
+omni_get_processed_line() {
+  local last_log_id=${last_log_id:-} \
+    log_show_vars_2=${log_show_vars:-} \
+    index=$index \
+    override_vars=f
+
+  begin_function_flat
+
+    if [[ "$log_show_vars_2" ]]; then
+      override_vars=t
+    fi
+
+    local trace_vars=
+
+    vars='log_id log_action log_function log_message old_log_file new_log_file log_show_vars trace_vars' \
+      omni_extract_vars || fail
+    if [[ ! "$log_show_vars_2" ]]; then
+      log_show_vars_2=$log_show_vars
+    fi
+
+    if [[ "$log_id" ]]; then
+      last_log_id=$log_id
+    fi
+
+    if [[ $log_action == none ]]; then
+      log_fatal "Log line is missing action key: $line"
+      fail1
+    fi
+
+    if [[ "${log_show_vars_2:-}" ]]; then
+      local adjusted_vars=${log_show_vars_2//^/}
+      eval "local $adjusted_vars"
+      vars="$adjusted_vars" \
+        omni_extract_vars || fail
+    fi
+
+    if [[ "$override_vars" == f && "${trace_vars:-}" ]]; then
+      local adjusted_vars=${trace_vars//^/}
+      eval "local $adjusted_vars"
+      vars="$adjusted_vars" \
+        omni_extract_vars || fail
+    fi
+
+    log_id=$last_log_id \
+      log_show_vars=$log_show_vars_2 \
+      trace_vars=$trace_vars \
+      omni_get_processed_line2 "$line" || {
+        log_fatal "Bad log line: $line"
+        fail1
+        }
 
   end_function
   handle_return
@@ -209,46 +266,8 @@ omni_load_log_array() {
       fi
 
       if [[ "$line" =~ ^\=\  ]]; then
-
         index=$i \
-          vars='log_id log_action log_function log_message old_log_file new_log_file log_show_vars trace_vars' \
-          omni_extract_vars || fail
-        log_show_vars_2=$log_show_vars
-
-        if [[ "$log_id" ]]; then
-          last_log_id=$log_id
-        fi
-
-        if [[ $log_action == none ]]; then
-          log_fatal "Log line is missing action key: $line"
-          fail1
-        fi
-
-        action_map[$i]=$log_action
-
-        if [[ "${log_show_vars_2:-}" ]]; then
-          local adjusted_vars=${log_show_vars_2//^/}
-          eval "local $adjusted_vars"
-          index=$i \
-            vars="$adjusted_vars" \
-            omni_extract_vars || fail
-        fi
-
-        if [[ "${trace_vars:-}" ]]; then
-          local adjusted_vars=${trace_vars//^/}
-          eval "local $adjusted_vars"
-          index=$i \
-            vars="$adjusted_vars" \
-            omni_extract_vars || fail
-        fi
-
-        log_id=$last_log_id \
-          log_show_vars=$log_show_vars_2 \
-          trace_vars=$trace_vars \
-          omni_get_processed_line "$line" || {
-            log_fatal "Bad log line: $line"
-            fail1
-            }
+          omni_get_processed_line || fail
       else
         if [[ "$line" == +* ]]; then
           line=${line#*(+) }
@@ -261,6 +280,7 @@ omni_load_log_array() {
 
       log_id_array[$i]=$last_log_id
       output_array[$i]=$processed_line
+      action_map[$i]=$log_action
 
       case $log_action in
         call)
@@ -468,33 +488,48 @@ omni_exit_sub_log() {
 
 # inputs: 
 #   cursor
-#   reverse_index
+#   reverse_index: (optional)  which line to show in reverse
+#   index: (optional)          overrides the cursor index
 omni_show_line() {
   local reverse_index=${reverse_index:-} \
     cursor=$cursor \
+    index=${index:-} \
     out_to_var=${out_to_var:-} \
     result= \
     pad \
 
-  local -n \
-    output_array=cursor_${cursor}_output_array \
-    index=cursor_${cursor}_log_array_index \
+  local -n output_array=cursor_${cursor}_output_array
+
+  if [[ ! "$index" ]]; then
+    eval "index=\$cursor_${cursor}_log_array_index"
+  fi
 
   local reverse=f
   if [[ "$reverse_index" ]] && (( reverse_index == index )); then
     reverse=t
   fi
 
-  if [[ ! -v output_array ]]; then
-    log_fatal "Internal error: Missing output_array"
-    return 1
-  fi
-
   if [[ $reverse == t ]]; then
     result+="$REVERSE"
   fi
 
-  local line=${output_array[$index]}
+  local line
+
+  if [[ "$omni_var_filter" ]]; then
+    line=${log_array[$index]} \
+      log_show_vars=$omni_var_filter \
+      last_log_id= \
+      index=$index \
+      omni_get_processed_line || fail
+    line=$processed_line
+  else
+    if [[ ! -v output_array ]]; then
+      log_fatal "Internal error: Missing output_array"
+      return 1
+    fi
+    line=${output_array[$index]}
+  fi
+
   line=${line//$NL/ }
   line=${line//$TAB/ }
 
@@ -933,6 +968,7 @@ omni_show_log() {
       cursor=s \
         reverse_index=$log_array_index \
         out_to_var=buf \
+        index= \
         omni_show_line || fail
       entries+=$buf
 
@@ -1115,6 +1151,12 @@ omni_go_until() {
     allow_all=t \
     omni_search || return 1
   return 0
+}
+
+omni_show_context() {
+  (( next_log_start = -omni_list_radius ))
+  max_count=$max_log_lines \
+    omni_show_log
 }
 
 # inputs: 
@@ -1336,6 +1378,31 @@ omni_navigator() (
           omni_show_log_stack || fail
           no_follow_once=t
           ;;
+        v)
+          if [[ "$omni_var_filter" ]]; then
+            echo "# Disabling var filter" >&$fd_original_err
+            omni_var_filter_prev=$omni_var_filter
+            omni_var_filter=
+            omni_show_context || fail
+          else
+            if [[ "$omni_var_filter_prev" ]]; then
+              omni_var_filter=$omni_var_filter_prev
+              echo "# Enabling var filter: $omni_var_filter" >&$fd_original_err
+              omni_show_context || fail
+            else
+              echo "# No previous var filter defined. Use V to define one." >&$fd_original_err
+            fi
+          fi
+          no_follow_once=t
+          ;;
+        V)
+          echo >&$fd_original_err
+          local omni_var_filter=
+          read -e -p "Var filter: " omni_var_filter <&$fd_original_in >&$fd_original_err
+          #debug_start
+          omni_show_context || fail
+          no_follow_once=t
+          ;;
         \!)
           echo "# Jump to next error" >&$fd_original_err
           local cursor_moved=0
@@ -1432,7 +1499,7 @@ omni_navigator() (
             local cursor_moved=0
             from_cursor=$cursor \
               allow_all=t \
-              each_match='cursor=s omni_show_line' \
+              each_match='cursor=s index= omni_show_line' \
               count=inf \
               omni_search || fail
 
@@ -1499,6 +1566,8 @@ omni_navigator() (
           echo "S  backward step: step to the previous log line even if it's not a function call" >&$fd_original_err
           echo "t  stack: show call stack" >&$fd_original_err
           echo "T  stack: show log stack" >&$fd_original_err
+          echo "v  var filter toggle: turn on or off var filter" >&$fd_original_err
+          echo "V  var filter: choose which vars to show in each line" >&$fd_original_err
           echo "!  go to next error" >&$fd_original_err
           echo "@  show debug command to get to current log position" >&$fd_original_err
           echo "#  show source code that logged this line" >&$fd_original_err
@@ -1524,10 +1593,4 @@ omni_navigator() (
 
   handle_return
 )
-
-omni_show_context() {
-  (( next_log_start = -omni_list_radius ))
-  max_count=$max_log_lines \
-    omni_show_log
-}
 
