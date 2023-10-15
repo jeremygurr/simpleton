@@ -267,6 +267,10 @@ update_upstream() {
       previous_upstream_changed=t
       handle_upstream_result || fail
 
+      if [[ $update_successful == f ]]; then
+        break
+      fi
+
     fi
     
     update_upstream_get_locks || fail
@@ -287,13 +291,16 @@ update_upstreams() {
       upstreams=( $(find1 $dna_up_path -not -name '.*' | sort -g) ) || fail
       begin_for upstream in $upstreams; doo
         update_upstream || fail
+        if [[ $update_successful == f ]]; then
+          break
+        fi
       end_for
 
     fi
 
   end_function
 
-  if failed; then
+  if failed || [[ $update_successful == f ]]; then
     rm $status_path/deps-up-to-date 
   fi
 
@@ -994,11 +1001,14 @@ update() {
     fi
     pre_update || fail
     create_downstream_links || fail
+    update_successful=t
     update_upstreams || fail
-    update_members || fail
-    create_sub_cells || fail
-    update_self_retry_loop || fail
-    check_results || fail
+    if [[ $update_successful == t ]]; then
+      update_members || fail
+      create_sub_cells || fail
+      update_self_retry_loop || fail
+      check_results || fail
+    fi
     post_update || fail
   end_function
   handle_return
