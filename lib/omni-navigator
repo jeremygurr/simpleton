@@ -531,6 +531,27 @@ omni_show_line() {
   fi
 
   if [[ "${omni_show_time:-}" == t ]]; then
+    local ts=
+    vars=ts \
+      omni_extract_vars || fail
+
+    local ts_start=$(dc -e "$ts 100 % 1000 * p")
+    ts_start=${ts_start%.*}
+    ts_start=$(dc -e "3k $ts_start 1000 / p")
+
+    local new_line
+    apad new_line ts_start "$ts_start"
+
+    local ts_duration
+    if [[ "$omni_prev_timestamp" ]]; then
+      ts_duration=$(dc -e "3k $ts_start $omni_prev_timestamp - p")
+      apad new_line ts_duration " +$ts_duration"
+    else
+      apad new_line ts_duration " "
+    fi
+
+    line="$new_line $line"
+    omni_prev_timestamp=$ts_start
   fi
 
   line=${line//$NL/ }
@@ -964,7 +985,7 @@ omni_show_log() {
       omni_search || fail
 
     next_log_start=$cursor_moved
-    local entries= buf=
+    local entries= buf= omni_prev_timestamp=
 
     begin_while (( remaining_lines-- > 0 )); doo
 
@@ -1170,6 +1191,8 @@ omni_navigator() (
     apad_min[log_id]=6 apad_max[log_id]=12
     apad_min[action]=16 apad_max[action]=20
     apad_min[function]=24 apad_max[function]=40
+    apad_min[ts_start]=6 apad_max[ts_start]=6
+    apad_min[ts_duration]=8 apad_max[ts_duration]=8
 
     local cursor=
 
@@ -1510,7 +1533,7 @@ omni_navigator() (
               find_regex=
             fi
 
-            local cursor_moved=0
+            local omni_prev_timestamp= cursor_moved=0
             from_cursor=$cursor \
               allow_all=t \
               each_match='cursor=s omni_show_line' \
