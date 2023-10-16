@@ -177,7 +177,8 @@ omni_get_processed_line() {
 
     local trace_vars=
 
-    vars='log_id log_action log_function log_message old_log_file new_log_file log_show_vars trace_vars' \
+    vars='log_id log_action log_function log_message old_log_file 
+          new_log_file log_show_vars trace_vars ts' \
       omni_extract_vars || fail
     if [[ ! "$log_show_vars_2" ]]; then
       log_show_vars_2=$log_show_vars
@@ -236,7 +237,8 @@ omni_load_log_array() {
         omni_log_id_array_$log_file_token \
         omni_plane_map_$log_file_token \
         omni_plane_depth_map_$log_file_token \
-        omni_action_map_$log_file_token
+        omni_action_map_$log_file_token \
+        omni_time_map_$log_file_token \
       omni_log_file_$log_file_token=$log_file
       "
 
@@ -246,6 +248,7 @@ omni_load_log_array() {
       plane_depth_map=omni_plane_depth_map_$log_file_token \
       action_map=omni_action_map_$log_file_token \
       output_array=omni_log_output_array_$log_file_token \
+      time_map=omni_time_map_$log_file_token \
 
     local i array_size=${#log_array[*]} \
       plane_stack next_plane_id=1 plane_id=0 \
@@ -257,7 +260,7 @@ omni_load_log_array() {
 
       line=${log_array[$i]} log_action=none processed_line=
       log_function= log_message= old_log_file= new_log_file= log_show_vars= \
-        log_show_vars_2= log_id= trace_vars=
+        log_show_vars_2= log_id= trace_vars= ts=
 
       line=${line//$CR/}
       if [[ "$line" =~ $ESC ]]; then
@@ -274,6 +277,7 @@ omni_load_log_array() {
           line="+ $line"
         fi
         action_map[$i]=debug
+        log_action=debug
         apad processed_line log_id "$last_log_id " action "[debug] "
         processed_line+="$line"
       fi 
@@ -281,6 +285,7 @@ omni_load_log_array() {
       log_id_array[$i]=$last_log_id
       output_array[$i]=$processed_line
       action_map[$i]=$log_action
+      time_map[$i]=$ts
 
       case $log_action in
         call)
@@ -345,6 +350,7 @@ omni_select_cursor() {
     last_cursor_selected=$new_cursor
     declare -gn \
       action_map=cursor_${cursor}_action_map \
+      time_map=cursor_${cursor}_time_map \
       log_array_index=cursor_${cursor}_log_array_index \
       log_array=cursor_${cursor}_log_array \
       log_id_array=cursor_${cursor}_log_id_array \
@@ -357,6 +363,7 @@ omni_select_cursor() {
       log_file_stack=cursor_${cursor}_log_file_stack \
       log_file_pos_stack=cursor_${cursor}_log_file_pos_stack \
       function_call_stack=cursor_${cursor}_function_call_stack \
+      time_stack=cursor_${cursor}_time_stack \
 
     update_cursor_vars || return 1
   fi
@@ -407,6 +414,7 @@ omni_change_cursor_log() {
         declare -gn \
           cursor_${cursor}_log_id_array=omni_log_id_array_$log_file_token \
           cursor_${cursor}_action_map=omni_action_map_$log_file_token \
+          cursor_${cursor}_time_map=omni_time_map_$log_file_token \
           cursor_${cursor}_output_array=omni_log_output_array_$log_file_token \
           cursor_${cursor}_plane_depth_map=omni_plane_depth_map_$log_file_token \
           cursor_${cursor}_plane_map=omni_plane_map_$log_file_token \
@@ -486,6 +494,15 @@ omni_exit_sub_log() {
   handle_return
 }
 
+abbreviate_ts() {
+  local -n from=$1 to=$2
+  to=${from//./}
+  local skip=${to%?????????}
+  to=${to#$skip}
+  to=${to%???}
+  to=${to%???}.${to#???}
+}
+
 # inputs: 
 #   cursor
 #   reverse_index: (optional)  which line to show in reverse
@@ -535,12 +552,16 @@ omni_show_line() {
     vars=ts \
       omni_extract_vars || fail
 
-    local ts_start=$(dc -e "$ts 100 % 1000 * p")
-    ts_start=${ts_start%.*}
-    ts_start=$(dc -e "3k $ts_start 1000 / p")
+    local ts_start
+    abbreviate_ts ts ts_start
 
     local new_line
     apad new_line ts_start "$ts_start"
+
+    if [[ ! "$omni_prev_timestamp" && "${time_stack:-}" ]]; then
+      omni_prev_timestamp=${time_stack[-1]}
+      abbreviate_ts omni_prev_timestamp omni_prev_timestamp
+    fi
 
     local ts_duration
     if [[ "$omni_prev_timestamp" ]]; then
@@ -585,11 +606,20 @@ omni_show_line() {
 }
 
 push_to_function_stack() {
-  local entry=${output_array[$1]} \
+  local index=$1
+  local entry=${output_array[$index]} \
     lid
   lid=${entry%% *}
   entry=${entry#* * }
   function_call_stack+=( "$lid $entry" )
+  time_stack+=( "${time_map[$index]}" )
+}
+
+pop_function_stack() {
+  unset function_call_stack[-1]
+  if [[ "${time_stack:-}" ]]; then
+    unset time_stack[-1]
+  fi
 }
 
 # Move to the next log line to search
@@ -633,7 +663,7 @@ omni_search_next() {
         fi
 
         if [[ "$post_action" == return\(* && -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
-          unset function_call_stack[-1]
+          pop_function_stack
         fi
 
       fi
@@ -641,7 +671,7 @@ omni_search_next() {
       if [[ $direction == -1 ]]; then
 
         if [[ "$post_action" == call && -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
-          unset function_call_stack[-1]
+          pop_function_stack
         fi
 
         if [[ "$pre_action" == return\(* ]]; then
