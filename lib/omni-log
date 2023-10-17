@@ -184,18 +184,7 @@ auto_shorten() {
   fi
 }
 
-# Can be called safely whether or not a log file has been set up
-write_to_log() {
-  begin_no_tracing_zone
-
-  local level=$1 action=${2:-${1:-}} message=${3:-} \
-    var_name var value new_vars= trace_vars= show_vars2=${log_show_vars:-} \
-    log_vars=${log_vars:-}
-
-  if [[ $log_ansi == f ]]; then
-    local RESET= COL15= COL45= COL60= COL90= CYAN= YELLOW= RED= 
-  fi
-
+write_to_log_process_vars() {
   for var in $log_vars $show_vars2 $trace_var; do
 
     if [[ $var == *=* ]]; then
@@ -212,8 +201,8 @@ write_to_log() {
     fi
 
     eval "value=\${$var:-}"
-
-    shell_quote_var value
+    local quoted_value=$value
+    shell_quote_var quoted_value
 
     if [[ " $trace_var " =~ \ $var\  ]]; then
 
@@ -221,7 +210,7 @@ write_to_log() {
         trace_vars+="$CYAN"
       fi
 
-      trace_vars+=" $var_name=$value"
+      trace_vars+=" $var_name=$quoted_value"
 
       if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
         trace_vars+="$RESET"
@@ -230,7 +219,7 @@ write_to_log() {
 
     else
       if [[ "$value" ]]; then
-        new_vars+=" $var_name=$value"
+        new_vars+=" $var_name=$quoted_value"
       fi
     fi
 
@@ -249,27 +238,21 @@ write_to_log() {
     show_vars2=${new_show_vars# }
   fi
 
-  local time="$EPOCHREALTIME"
-  local pid="$BASHPID"
-  local to_log="= ts=$time pid=$pid"
+  return 0
+}
 
-  # if [[ "${debug_id:-}" ]]; then
-  #   to_log+=" debug_id=$debug_id_current"
-  # fi
-
-  local log_id=$omni_log_fork_id:$omni_log_pos
+write_to_log_log_var() {
+  to_log="= ts=$time pid=$pid"
   to_log+=" log_id=$log_id log_level=$level"
 
-  local quoted_value
   if [[ "$action" ]]; then
     shell_quote_var action
     to_log+=" log_action=$action"
   fi
   if [[ ! "${log_function:-}" ]]; then
-    local $snapshot_source_location_locals
     offset=1 snapshot_source_location
   fi
-  local function=$log_function
+  function=$log_function
   if [[ "${log_function:-}" ]]; then
     to_log+=" log_function=$log_function"
   fi
@@ -290,13 +273,10 @@ write_to_log() {
     shell_quote_var quoted_message
     to_log+=" log_message=$quoted_message"
   fi
+  return 0
+}
 
-  if [[ $disable_log == f && $log_to_file == t && "${logging_to_file:-}" ]]; then
-    echo "$to_log" >>$logging_to_file
-  fi
-
-  pause_tee
-
+write_to_log_update_cooked() {
   case $action in
     call)
       local s
@@ -310,7 +290,10 @@ write_to_log() {
       fi
     ;;
   esac
+  return 0
+}
 
+write_to_log_console_out() {
   local out_line=
   if [[ $log_to_out == t ]]; then
     out_line="$to_log$trace_vars"
@@ -356,7 +339,38 @@ write_to_log() {
       echo "$out_line" >&2
     fi
   fi
+  return 0
+}
 
+# Can be called safely whether or not a log file has been set up
+write_to_log() {
+  begin_no_tracing_zone
+
+  local level=$1 action=${2:-${1:-}} message=${3:-} \
+    var_name var value new_vars= trace_vars= show_vars2=${log_show_vars:-} \
+    log_vars=${log_vars:-}
+
+  if [[ $log_ansi == f ]]; then
+    local RESET= COL15= COL45= COL60= COL90= CYAN= YELLOW= RED= 
+  fi
+
+  write_to_log_process_vars 
+
+  local time="$EPOCHREALTIME" \
+    pid="$BASHPID" \
+    to_log $snapshot_source_location_locals \
+    function
+  local log_id=$omni_log_fork_id:$omni_log_pos
+
+  write_to_log_log_var
+
+  if [[ $disable_log == f && $log_to_file == t && "${logging_to_file:-}" ]]; then
+    echo "$to_log" >>$logging_to_file
+  fi
+
+  pause_tee
+  write_to_log_update_cooked
+  write_to_log_console_out
   unpause_tee
 
   if [[ "$debug_at_log_id" ]]; then
@@ -365,15 +379,8 @@ write_to_log() {
     if [[ $omni_log_fork_id == $debug_at_fork_id \
        && $omni_log_pos -ge $debug_at_log_pos ]]; then
       debug_at_log_id=
-      if [[ ! "${debug_id:-}" || $debug_id == t ]]; then
-        debug_immediate=t
-        debug_start \\
-      else
-        echo "${CYAN}Will debug starting at debug_id $debug_id or later${RESET}" >&2
-        debug_subshell=t
-        debug_stepping=f
-        debug_immediate=f
-      fi
+      debug_immediate=t
+      debug_start \\
     fi
   fi
   (( omni_log_pos++ ))
