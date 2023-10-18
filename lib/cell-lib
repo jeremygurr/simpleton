@@ -608,7 +608,7 @@ fork_inside() {
   end_function
 
   if [[ "${debugging:-}" == t ]]; then
-    reply_to_caller "debug_state_file='${debug_state_file:-}'" || fail
+    reply_to_caller "debug_state_file='${debug_state_file:-}'; debugging=t" || fail
   fi
 
   if (( return_code != 0 )); then
@@ -624,26 +624,59 @@ fork_inside() {
 
 }
 
+# run outside of the subshell afterwards
+after_fork() {
+  if [[ -f "${reply_file:-}" ]]; then
+
+		# DEBUGGING
+		local file=$(<$reply_file)
+		zombie "Loading reply $reply_file (size ${#file})"
+
+		zombie "Sourcing reply_file"
+    source $reply_file || return 1
+		zombie "Sourced"
+    if [[ ${debugging:-f} == t ]]; then
+			zombie "Loading debug state"
+      local debugging
+      debug_load_state || return 1
+      debug_immediate=f \
+        first_run=f \
+        debug_needs_to_load_state=t \
+        debug_start || return 1
+    fi
+		zombie "Removing reply_file"
+    rm $reply_file
+		zombie "Removed"
+    reply_file=
+  fi
+  return 0
+}
+
 fork() {
+
   local reply_file command=$* return_code=0 \
     background=${background:-f} \
     change_log=${change_log:-f}
 
-  if [[ $background == t ]]; then
-    change_log=t
-  fi
+	if [[ $background == t ]]; then
+		change_log=t
+	fi
 
-  get_new_reply_file || return 1
-  defer "rm $reply_file"
+	get_new_reply_file || return 1
+	defer "rm $reply_file"
 
-  if [[ $background == t ]]; then
-    ( fork_inside ) &
-  else
-    ( fork_inside )
-  fi
+	if [[ $background == t ]]; then
+		zombie "Forking in background"
+		( fork_inside ) &
+	else
+		zombie "Forking"
+		( fork_inside )
+	fi
+	return_code=$?
 
-  return_code=$?
-  after_fork || (( return_code++ ))
+	zombie "Unforking"
+	after_fork || (( return_code++ ))
+
   return $return_code
 }
 
@@ -958,24 +991,6 @@ begin_fork() {
 reply_to_caller() {
   if [[ "${reply_file:-}" ]]; then
     echo "$*" >>$reply_file || return 1
-  fi
-  return 0
-}
-
-# run outside of the subshell afterwards
-after_fork() {
-  if [[ -f "${reply_file:-}" ]]; then
-    source $reply_file || return 1
-    if [[ "${debug_state_file:-}" ]]; then
-      local debugging
-      debug_load_state || return 1
-      debug_immediate=f \
-        first_run=f \
-        debug_needs_to_load_state=t \
-        debug_start || return 1
-    fi
-    rm $reply_file
-    reply_file=
   fi
   return 0
 }
