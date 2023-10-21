@@ -3,9 +3,10 @@
 break_if_not_changed() {
   begin_function
     if [[ ! "${needs_update:-}" ]]; then
-      needs_update=t
       if [[ "$status_path" ]]; then
         get_needs_update $cell_path || fail
+      else
+        needs_update=t
       fi
     fi
     if [[ $needs_update == f ]]; then
@@ -198,24 +199,28 @@ update_upstream_get_locks() {
 
     local lock 
     local -r shared_lock_path=$up_cyto/chosen/.cyto/shared-locks
-    local shared_locks=$(find1 $shared_lock_path -not -name ".*" | sort -g) || fail
-    begin_for lock in $shared_locks; doo
-      write_lock=f \
-      timeout=$lock_timeout \
-        cell_lock $lock || fail
-    end_for
+    if [[ -d $shared_lock_path ]]; then
+      local shared_locks=$(find1 $shared_lock_path -not -name ".*" | sort -g) || fail
+      begin_for lock in $shared_locks; doo
+        write_lock=f \
+          timeout=$lock_timeout \
+          cell_lock $lock || fail
+      end_for
+    fi
 
     local -r exclusive_lock_path=$up_cyto/chosen/.cyto/exclusive-locks
-    local exclusive_locks=$(find1 $exclusive_lock_path -not -name ".*" | sort -g) || fail
-    begin_for lock in $exclusive_locks; doo
-      write_lock=t \
-      timeout=$lock_timeout \
-        cell_lock $lock || fail
-    end_for
+    if [[ -d $exclusive_lock_path ]]; then
+      local exclusive_locks=$(find1 $exclusive_lock_path -not -name ".*" | sort -g) || fail
+      begin_for lock in $exclusive_locks; doo
+        write_lock=t \
+          timeout=$lock_timeout \
+          cell_lock $lock || fail
+      end_for
+    fi
 
     # obtain lock from upstream cell
     write_lock=f \
-    timeout=$lock_timeout \
+      timeout=$lock_timeout \
       cell_lock $up_cyto/chosen || fail
 
   end_function
