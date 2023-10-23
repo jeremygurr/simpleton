@@ -333,6 +333,7 @@ PURPLE="\[\033[0;35m\]"
 LIGHT_PURPLE="\[\033[1;35m\]"
 CYAN="\[\033[0;36m\]"
 LIGHT_GREEN=$'\033[0;32m'
+LIGHT_YELLOW=$'\033[0;33m'
 
 get_cell_location_string() {
   local p=
@@ -455,13 +456,27 @@ short_path() {
   echo -n "$p"
 }
 
+pid_path() {
+  local result=$$ parent_pid parent_command current_pid=$$
+  while true; do
+    parent_pid=$(awk '{print $4}' /proc/$current_pid/stat) || break
+    parent_command=$(awk '{print $2}' /proc/$current_pid/stat) || break
+    if [[ $parent_command != '(bash)' || $parent_pid == 0 || $parent_pid == 1 ]]; then
+      break
+    fi
+    result="$parent_pid/$result"
+    current_pid=$parent_pid
+  done
+  echo "pid:$result "
+}
+
 big_prompt() {
   if [ ! "$BASH" ]; then
     return 0
   fi
 
   export PS1="
-| $RED\$(prompt_error_string)$LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
+| $RED\$(prompt_error_string)$LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $LIGHT_YELLOW\$(pid_path)$CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
 | $LIGHT_RED\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
   export PS2='> '
   export PS4='+ '

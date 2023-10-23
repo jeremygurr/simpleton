@@ -1,4 +1,5 @@
 #!/bin/bash
+# depends on lib/bash-lib being sourced first to provide needed aliases
 
 [[ -v cell_lib_loaded ]] && return 0
 cell_lib_loaded=t
@@ -2286,8 +2287,9 @@ get_workspace() {
 decrypt_file() {
   local user_private_key=${user_private_key:-~/.ssh/id_rsa}
   local from=$from \
-    to=$to \
+    to=${to:-} \
     key=${key:-$user_private_key}
+	local -n to_var=${to_var:-}
 
   begin_function
 
@@ -2296,22 +2298,31 @@ decrypt_file() {
       fail1
     fi
      
-    if [[ -e $to ]]; then
-      log_fatal "File already exists: $to"
-      fail1
-    fi
-     
     if [[ ! -f $key ]]; then
       log_fatal "Key doesn't exist: $key"
       fail1
     fi
      
-    setup_tmp_path || fail
-    if ! log_and_run openssl pkeyutl -decrypt -inkey $key -in $from -out $to; then
-      log_fatal "Failed to decrypt file: $from"
-      fail1
-    fi
-
+		if [[ "$to" ]]; then
+			if [[ -e $to ]]; then
+				log_fatal "File already exists: $to"
+				fail1
+			fi
+			setup_tmp_path || fail
+			if ! log_and_run openssl pkeyutl -decrypt -inkey $key -in $from -out $to; then
+				log_fatal "Failed to decrypt file: $from"
+				fail1
+			fi
+		elif [[ "$to_var" ]]; then
+			if ! log_and_run to_var=$(openssl pkeyutl -decrypt -inkey $key -in $from); then
+				log_fatal "Failed to decrypt file: $from"
+				fail1
+			fi
+		else
+		  log_fatal "Either to or to_var must be set"
+			fail1
+		fi
+     
   end_function
   handle_return
 }
