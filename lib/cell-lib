@@ -1860,6 +1860,12 @@ validate_dims() {
   return 0
 }
 
+log_and_run() {
+  local command=$*
+  echo "$command" >&2
+	eval "$command"
+}
+
 encrypt_file() {
   local user_private_key=${user_private_key:-~/.ssh/id_rsa}
   local from=$from \
@@ -2284,12 +2290,15 @@ get_workspace() {
   [[ "$workspace" ]]
 }
 
+# inputs:
+#   from		encrypted file to decrypt
+#   to      (optional) file to save decrypted form to
+#           if 'to' is missing, then it writes the decrypted value to stdout
 decrypt_file() {
   local user_private_key=${user_private_key:-~/.ssh/id_rsa}
   local from=$from \
     to=${to:-} \
     key=${key:-$user_private_key}
-	local -n to_var=${to_var:-}
 
   begin_function
 
@@ -2313,14 +2322,11 @@ decrypt_file() {
 				log_fatal "Failed to decrypt file: $from"
 				fail1
 			fi
-		elif [[ "$to_var" ]]; then
-			if ! log_and_run to_var=$(openssl pkeyutl -decrypt -inkey $key -in $from); then
+		else
+			if ! log_and_run openssl pkeyutl -decrypt -inkey $key -in $from; then
 				log_fatal "Failed to decrypt file: $from"
 				fail1
 			fi
-		else
-		  log_fatal "Either to or to_var must be set"
-			fail1
 		fi
      
   end_function
