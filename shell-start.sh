@@ -1,3 +1,10 @@
+#!/usr/bin/env bash
+
+if [[ "$shell_start_already_run" ]]; then
+  return 0
+fi
+
+shell_start_already_run=t
 echo "Executing shell-start.sh"
 
 if [[ "${ADD_PATH:-}" ]]; then
