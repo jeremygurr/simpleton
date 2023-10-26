@@ -113,7 +113,7 @@ ENV SIMPLETON_REPO /repo/simpleton
 ENV REPO_CACHE /home/.m2/repository
 
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
-RUN chmod a+rwx /etc
+# RUN chmod a+rwx /etc
 RUN ln -sf $SIMPLETON_REPO/target/shell-start.sh /etc/profile.d/
 RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
 COPY sudoers /etc/
