@@ -106,27 +106,29 @@ RUN --mount=type=cache,target=/var/cache/apk \
     zlib-doc \
     $end_of_packages
   
- ENV HOME /home
- ENV PAGER less
- ENV SIMPLETON_BASE /repo
- ENV SIMPLETON_REPO /repo/simpleton
- ENV REPO_CACHE /home/.m2/repository
- 
- RUN adduser -h /home -s /bin/bash -D autouser -u 99999
- RUN chmod a+rwx /etc
- RUN ln -sf $SIMPLETON_REPO/target/shell-start.sh /etc/profile.d/
- RUN ln -sf $SIMPLETON_REPO/bashrc /home/.bashrc
- RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
- COPY sudoers /etc/
- RUN chown root /etc/sudoers
- RUN mkdir -p $REPO_CACHE
- 
- ARG TIME_ZONE=UTC
- RUN setup-timezone -z $TIME_ZONE
- RUN ssh-keygen -f /etc/ssh/ssh_host_rsa_key -N '' -t rsa
- 
- RUN mkdir -p $HOME/scripts
- 
- WORKDIR /work
- CMD /bin/bash $SIMPLETON_REPO/init
- 
+ENV HOME /home
+ENV PAGER less
+ENV SIMPLETON_BASE /repo
+ENV SIMPLETON_REPO /repo/simpleton
+ENV REPO_CACHE /home/.m2/repository
+
+RUN adduser -h /home -s /bin/bash -D autouser -u 99999
+RUN chmod a+rwx /etc
+RUN ln -sf $SIMPLETON_REPO/target/shell-start.sh /etc/profile.d/
+RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
+COPY sudoers /etc/
+RUN chown root /etc/sudoers
+RUN mkdir -p $REPO_CACHE
+
+ARG TIME_ZONE=UTC
+RUN setup-timezone -z $TIME_ZONE
+# RUN ssh-keygen -f /etc/ssh/ssh_host_rsa_key -N '' -t rsa
+
+RUN mkdir -p $HOME/scripts
+RUN mkdir -p $HOME/.ssh
+RUN chmod 700 $HOME/.ssh
+RUN chown -R autouser $HOME
+
+WORKDIR /work
+CMD /bin/bash $SIMPLETON_REPO/init
+
