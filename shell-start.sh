@@ -13,7 +13,7 @@ fi
 
 complete -r # remove built-in shell completion since it currently has problems
 
-prompt_name=${prompt_name:-}
+export prompt_name=${prompt_name:-}
 NL=$'\n'
 
 alias sp='source /etc/profile'
