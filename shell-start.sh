@@ -13,7 +13,11 @@ fi
 
 complete -r # remove built-in shell completion since it currently has problems
 
-export prompt_name=${prompt_name:-}
+if [[ -e /etc/prompt_name ]]; then
+  prompt_name=$(</etc/prompt_name)
+fi
+
+export prompt_name
 NL=$'\n'
 
 alias sp='source /etc/profile'
@@ -451,7 +455,7 @@ relink() {
 
 prompt_error_string() {
   local rc=$?
-  (( rc > 0 )) && echo -n "err $rc "
+  (( rc > 0 )) && echo -n "err=$rc "
 }
 
 short_path() {
@@ -474,7 +478,7 @@ pid_path() {
     result="$parent_pid/$result"
     current_pid=$parent_pid
   done
-  echo "pid:$result "
+  echo "pid=$result "
 }
 
 big_prompt() {

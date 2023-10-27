@@ -128,6 +128,7 @@ RUN mkdir -p $HOME/scripts
 RUN mkdir -p $HOME/.ssh
 RUN chmod 700 $HOME/.ssh
 RUN chown -R autouser $HOME
+RUN rm /etc/motd
 
 WORKDIR /work
 CMD /bin/bash $SIMPLETON_REPO/init
