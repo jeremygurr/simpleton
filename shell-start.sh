@@ -13,8 +13,9 @@ fi
 
 complete -r # remove built-in shell completion since it currently has problems
 
-if [[ -e /etc/prompt_name ]]; then
-  prompt_name=$(</etc/prompt_name)
+if [[ -e /tmp/prompt_name ]]; then
+  prompt_name=$(</tmp/prompt_name)
+  prompt_name=${prompt_name%%*( )}
 fi
 
 export prompt_name
@@ -343,8 +344,10 @@ LIGHT_BLUE="\[\033[1;34m\]"
 PURPLE="\[\033[0;35m\]"
 LIGHT_PURPLE="\[\033[1;35m\]"
 CYAN="\[\033[0;36m\]"
-LIGHT_GREEN=$'\033[0;32m'
-LIGHT_YELLOW=$'\033[0;33m'
+GREEN=$'\033[0;32m'
+LIGHT_GREEN=$'\033[1;32m'
+YELLOW=$'\033[0;33m'
+LIGHT_YELLOW=$'\033[1;33m'
 
 get_cell_location_string() {
   local p=
@@ -487,18 +490,18 @@ big_prompt() {
   fi
 
   export PS1="
-| $RED\$(prompt_error_string)$LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $LIGHT_YELLOW\$(pid_path)$CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
-| $LIGHT_RED\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+| $LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $RED\$(prompt_error_string)$YELLOW\$(pid_path)$CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
+| $LIGHT_YELLOW\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
   export PS2='> '
   export PS4='+ '
 }
 
 medium_prompt() {
-  export PS1="$LIGHT_GREEN\$prompt_name $LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+  export PS1="$LIGHT_GREEN\$prompt_name $YELLOW\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
 }
 
 small_prompt() {
-  export PS1="$LIGHT_RED\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+  export PS1="$YELLOW\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
 }
 
 big_prompt
