@@ -473,8 +473,13 @@ short_path() {
 pid_path() {
   local result=$$ parent_pid parent_command current_pid=$$
   while true; do
-    parent_pid=$(awk '{print $4}' /proc/$current_pid/stat) || break
-    parent_command=$(awk '{print $2}' /proc/$current_pid/stat) || break
+    if [[ "${MAC:-}" ]]; then
+      parent_pid=$(ps -co ppid -p $current_pid | tail +2 | awk '{print $1}') || break
+      parent_command='('$(ps -co comm -p $parent_pid | tail +2 | awk '{print $1}')')' || break
+    else
+      parent_pid=$(awk '{print $4}' /proc/$current_pid/stat) || break
+      parent_command=$(awk '{print $2}' /proc/$current_pid/stat) || break
+    fi
     if [[ $parent_command != '(bash)' || $parent_pid == 0 || $parent_pid == 1 ]]; then
       break
     fi
