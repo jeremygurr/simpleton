@@ -602,7 +602,12 @@ fork_inside() {
     cleanup_on_exit=
     setup_exit_trap
 
-    eval "$command"; return_code=$?
+		if [[ "$to_var" ]]; then
+			eval "$to_var=\$($command)"; return_code=$?
+			reply_to_caller "$to_var='${!to_var}'" || fail
+		else
+			eval "$command"; return_code=$?
+		fi
 
     if [[ $change_log == t ]]; then
       cell_close_log_file || fail
@@ -649,11 +654,16 @@ after_fork() {
   return 0
 }
 
+# usage: fork {command to execute}
+#  background=f (whether to run as a background process)
+#  change_log=f (whether to change the log)
+#  to_var				(write output to the given var instead of stdout)
 fork() {
 
   local reply_file command=$* return_code=0 \
     background=${background:-f} \
-    change_log=${change_log:-f}
+    change_log=${change_log:-f} \
+		to_var=${to_var:-}
 
 	if [[ $background == t ]]; then
 		change_log=t
@@ -2302,7 +2312,7 @@ decrypt_file() {
 
   begin_function
 
-		paused_tee
+		pause_tee
 
     if [[ ! -f $from ]]; then
       log_fatal "File doesn't exist: $from"
@@ -3066,7 +3076,7 @@ to_background_shell_single() {
     fi
 
     if (( timeout_ms == 0 )); then
-      log_debug "Running command without timeout: $command"
+      log_debug "Sending output to process without timeout: $command"
       echo -n "$command" >$pipe_in || fail
     else
 
@@ -3079,7 +3089,7 @@ to_background_shell_single() {
         delay_ms=250
       local delay_s=$(dc -e "$delay 1000 / p")
 
-      log_debug "Running command with ${timeout}s timeout: $command"
+      log_debug "Sending output to process with ${timeout}s timeout: $command"
       echo -n "$command" >$pipe_in & 
       pid=$!
 
@@ -3100,7 +3110,7 @@ to_background_shell_single() {
         fi
 
         if (( wait_time > 2 )) && [[ $wait_message == f ]]; then
-          out "${NL}Waiting for pipe to be open"
+          log_warn "${NL}Waiting for pipe to be open"
           wait_message=t
         fi
 
@@ -3124,7 +3134,8 @@ to_background_shell() {
     masked_from=${from//$secret/****}
   fi
 
-  local log_show_vars='pipe from=masked_from'
+  local log_show_vars='from=masked_from' \
+		log_vars=pipe
   begin_function
 
     if [[ ! -p $pipe_in ]]; then
@@ -3270,7 +3281,8 @@ from_background_shell() {
 
   local -n to=$to_var
 
-  local log_vars='pipe timeout stop_after fail_after interact'
+  local log_vars='pipe interact' \
+	  log_show_vars='timeout stop_after fail_after'
   begin_function
 
     timed_out=f
@@ -3282,7 +3294,9 @@ from_background_shell() {
 
     from_background_shell__prep || fail
 
-    log_debug "Waiting for background job output from $pipe_out"
+		log_vars=pipe_out \
+			log_debug "Waiting for background job output"
+
     if [[ $buffering == line ]]; then
       while true; do
 
