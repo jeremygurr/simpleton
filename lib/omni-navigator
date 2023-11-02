@@ -231,7 +231,7 @@ omni_load_log_array() {
 
     eval "declare -ga omni_log_array_$log_file_token"
     local -n log_array=omni_log_array_$log_file_token
-    readarray log_array < <(grep -v '^ *$' $log_file) || fail
+    readarray log_array < <(cat $log_file) || fail
 
     eval "
       declare -ga \
@@ -253,7 +253,7 @@ omni_load_log_array() {
 
     local i array_size=${#log_array[*]} \
       plane_stack next_plane_id=1 plane_id=0 \
-      processed_line line last_log_id= \
+      processed_line line last_log_id=0:0 \
       log_fork_id=${log_file_id#*:} \
       log_action log_function log_message old_log_file new_log_file log_id
 
@@ -263,7 +263,7 @@ omni_load_log_array() {
       log_function= log_message= old_log_file= new_log_file= log_show_vars= \
         log_show_vars_2= log_id= trace_vars= ts=
 
-      line=${line//$CR/}
+      line=${line//$NL/}
       if [[ "$line" =~ $ESC ]]; then
         ansi_filter_var line
         log_array[$i]=$line
@@ -272,6 +272,8 @@ omni_load_log_array() {
       if [[ "$line" =~ ^\=\  ]]; then
         index=$i \
           omni_get_processed_line || fail
+      elif [[ "$line" =~ ^[\ $TAB]*$ ]]; then
+        processed_line=
       else
         if [[ "$line" == +* ]]; then
           line=${line#*(+) }
@@ -655,7 +657,19 @@ omni_search_next() {
          && [[ -v action_map[$index] ]]; then
         pre_action=${action_map[$index]}
       fi
-      (( index += direction ))
+
+      begin_while ((
+          direction > 0 && index < log_array_size ||
+          direction < 0 && index >= 0 
+          ))
+          doo
+        (( index += direction ))
+        if (( index >= 0 && index < log_array_size )) &&
+           [[ "${output_array[$index]}" ]]; then
+          break
+        fi
+      end_while
+
       if (( index >= 0 && index < log_array_size )) \
          && [[ -v action_map[$index] ]]; then
         post_action=${action_map[$index]}
@@ -671,9 +685,7 @@ omni_search_next() {
           pop_function_stack
         fi
 
-      fi
-
-      if [[ $direction == -1 ]]; then
+      elif [[ $direction == -1 ]]; then
 
         if [[ "$post_action" == call && -v function_call_stack && ${#function_call_stack[*]} -gt 0 ]]; then
           pop_function_stack
@@ -691,14 +703,14 @@ omni_search_next() {
           if [[ $allow_out_log == t && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
           else
-            (( index = log_array_size - 1 ))
+            index=$original_index
             went_out_of_bounds=t
           fi
         elif [[ $direction == -1 ]]; then
           if [[ $allow_out_log == t && -v log_file_stack ]] && (( ${#log_file_stack[*]} > 0 )); then
             omni_exit_sub_log || fail
           else
-            index=0
+            index=$original_index
             went_out_of_bounds=t
           fi
         else
@@ -726,6 +738,7 @@ omni_search_get_matches() {
   local plane_id=${plane_map[$index]} 
   local plane_depth=${plane_depth_map[$index]}
   local log_string=${log_array[$index]}
+  local out_string=${output_array[$index]}
 
   if [[ "$log_file" == "$original_log_file" ]]; then
     if [[ $allow_in == f ]] \
@@ -805,6 +818,12 @@ omni_search_get_matches() {
     fi
 
   fi
+
+  # Skip blank lines
+  if [[ $found_matching_line == t && -z "$out_string" ]]; then
+    found_matching_line=f
+  fi
+   
 }
 
 omni_copy_cursor() {
@@ -1210,11 +1229,10 @@ omni_print_details() {
 }
 
 omni_go_until() {
-
-  local find_log_id find_function
+  local find_log_id find_function go_until=${go_until:-}
   if [[ "$go_until" =~ ^[0-9:]+$ ]]; then
     find_log_id=$go_until
-  else
+  elif [[ "$go_until" ]]; then
     find_function=$go_until
   fi
   move_cursor=$cursor \
@@ -1248,15 +1266,14 @@ omni_navigator() (
     new_cursor=a \
       omni_select_cursor || fail
     (( next_log_start = -omni_list_radius ))
-    log_array_index=0
     local -n log_file=cursor_${cursor}_log_file
 
     local debug_r=-1 no_follow_once max_log_lines
     (( max_log_lines = omni_list_radius * 2 + 1 ))
 
-    if [[ "${go_until:-}" ]]; then
-      omni_go_until "$go_until" 
-    fi
+    # Advance to the first valid log line
+    log_array_index=-1
+    omni_go_until || fail
 
     begin_while [[ $debug_r == -1 ]]; doo
 

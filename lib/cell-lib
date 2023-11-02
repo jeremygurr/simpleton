@@ -593,9 +593,9 @@ fork_inside() {
 
   begin_function_flat
 
-		local change_log2=$change_log
-		# Prevents this variable from bleeding through to lower called functions
-		change_log=
+    local change_log2=$change_log
+    # Prevents this variable from bleeding through to lower called functions
+    change_log=
 
     if [[ $change_log2 == t ]]; then
       previous_log_pos=$omni_log_pos
@@ -3220,6 +3220,7 @@ from_background_shell__prep() {
 
   if [[ "$interact" ]]; then
 
+		log_debug "interact=$interact"
     split_to_array interact 
     interact_count=${#interact[*]}
     local c=0
@@ -3285,6 +3286,7 @@ from_background_shell() {
 
   local -n to=$to_var
 
+	debug_start
   local log_vars='pipe interact' \
     log_show_vars='timeout stop_after fail_after'
   begin_function
@@ -3302,13 +3304,13 @@ from_background_shell() {
       log_debug "Waiting for background job output"
 
     if [[ $buffering == line ]]; then
-      while true; do
+      begin_loop
 
         IFS= read -r -t $timeout line <$pipe_out
 
         if (( $? > 128 )); then 
           timed_out=t
-          break
+          fail1
         fi
 
         if [[ "$line" ]]; then
@@ -3316,17 +3318,16 @@ from_background_shell() {
           from_background_shell__check_line || fail
           line=
           if [[ $found == t || $failed == t ]]; then
-            succeed
+            break
           fi
         else
           break
         fi
 
-      done
-      handle_break
+		  end_loop
     elif [[ $buffering == char ]]; then
       line=
-      while true; do
+			begin_loop
 
         IFS= read -N1 -r -t $timeout char <$pipe_out
 
@@ -3339,14 +3340,14 @@ from_background_shell() {
           line+=$char
           from_background_shell__check_line || fail
           if [[ $found == t || $failed == t ]]; then
-            succeed
+            break
           fi
         else
           from_background_shell__record_line || fail
           line=
         fi
-      done
-      handle_break
+
+		  end_loop
     else
       log_fatal "Invalid buffering type: $buffering. Should be char or line"
       fail1

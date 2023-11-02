@@ -369,55 +369,9 @@ update_member() {
   handle_return
 }
 
-update_self_retry_loop() {
-  begin_function
-
-    ref_group=none
-    delay=$retry_delay
-
-    can_update=f
-    find_op_or_function update || return 1
-    if [[ "$found_op_function" || "$found_op" ]]; then
-      can_update=t
-    fi
-
-    if [[ "$update_successful" ]]; then
-      can_update=f
-    fi
-
-    local action=local_update
-    if [[ $can_update == t ]]; then
-      for ((retry=0; retry < retry_max; retry++)); do
-
-        if [[ $retry -gt 0 ]]; then
-          log_info "Waiting $delay seconds before trying again" 
-          sleep $delay
-          let 'delay *= retry_scale' || true
-        fi
-
-        local attempt_string=
-        if (( retry_max > 1 )); then
-          attempt_string=", attempt $((retry+1)) of $retry_max"
-        fi
-          
-        log_debug "Executing local update of $short_cell$attempt_string" 
-
-        update_self || fail
-
-        [[ $can_retry == f || $update_successful == t ]] && break
-
-      done
-    fi
-
-    update_successful=${update_successful:-t}
-
-  end_function
-  handle_return
-}
-
 update_self() {
   local log_vars='short_cell'
-  begin_function
+  begin_function_flat
 
     update_successful=
     can_retry=f
@@ -478,6 +432,52 @@ update_self() {
 
   end_function
   untee_output  # in case update failed and block was exited early
+  handle_return
+}
+
+update_self_retry_loop() {
+  begin_function
+
+    ref_group=none
+    delay=$retry_delay
+
+    can_update=f
+    find_op_or_function update || return 1
+    if [[ "$found_op_function" || "$found_op" ]]; then
+      can_update=t
+    fi
+
+    if [[ "$update_successful" ]]; then
+      can_update=f
+    fi
+
+    local action=local_update
+    if [[ $can_update == t ]]; then
+      for ((retry=0; retry < retry_max; retry++)); do
+
+        if [[ $retry -gt 0 ]]; then
+          log_info "Waiting $delay seconds before trying again" 
+          sleep $delay
+          let 'delay *= retry_scale' || true
+        fi
+
+        local attempt_string=
+        if (( retry_max > 1 )); then
+          attempt_string=", attempt $((retry+1)) of $retry_max"
+        fi
+          
+        log_debug "Executing local update of $short_cell$attempt_string" 
+
+        update_self || fail
+
+        [[ $can_retry == f || $update_successful == t ]] && break
+
+      done
+    fi
+
+    update_successful=${update_successful:-t}
+
+  end_function
   handle_return
 }
 
