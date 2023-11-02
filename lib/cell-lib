@@ -2314,6 +2314,7 @@ decrypt_file() {
     to=${to:-} \
     key=${key:-$user_private_key}
 
+  local log_show_vars='^from ^to'
   begin_function
 
     pause_tee
@@ -3269,9 +3270,10 @@ from_background_shell__prep() {
 }
 
 # input:
-#   pipe      path to pipe to receive commands from
-#   to_var    var to write result to
-#   timeout   0=never timeout, >0=timeout after that many seconds (may be fractional)
+#   pipe         path to pipe to receive commands from
+#   to_var       var to write result to
+#   timeout      0=never timeout, >0=timeout after that many seconds (may be fractional)
+#   pretend_out  fake data that gets fed into the reader for testing purposes
 # output:
 #   timed_out 
 #   failed
@@ -3282,6 +3284,8 @@ from_background_shell() {
     fail_after=${fail_after:-} \
     interact=${interact:-} \
     secret=${secret:-none} \
+    pretend_out=${pretend_out:-} \
+    pretending=f \
     timeout=${timeout:-0}
 
   local -n to=$to_var
@@ -3293,6 +3297,9 @@ from_background_shell() {
     timed_out=f
     failed=f
     found=f
+    if [[ "$pretend_out" ]]; then
+      pretending=t
+    fi
 
     local line= char= found=f i \
       interact_in=() interact_out=() stop_after_count=0 interact_count=0 s
@@ -3305,7 +3312,21 @@ from_background_shell() {
     if [[ $buffering == line ]]; then
       begin_loop
 
-        IFS= read -r -t $timeout line <$pipe_out
+        if [[ $pretending == t ]]; then
+          if [[ "$pretend_out" ]]; then
+            if [[ "$pretend_out" =~ "$NL" ]]; then
+              line=${pretend_out%%$NL*}
+              pretend_out=${pretend_out#*$NL}
+            else
+              line=$pretend_out
+              pretend_out=
+            fi
+          else
+            line=
+          fi
+        else
+          IFS=$NL read -r -t $timeout line <$pipe_out
+        fi
 
         if (( $? > 128 )); then 
           timed_out=t
@@ -3328,7 +3349,16 @@ from_background_shell() {
       line=
       begin_loop
 
-        IFS= read -N1 -r -t $timeout char <$pipe_out
+        if [[ $pretending == t ]]; then
+          if [[ "$pretend_out" ]]; then
+            char=${pretend_out:0:1}
+            pretend_out=${pretend_out:1}
+          else
+            char=
+          fi
+        else
+          IFS= read -N1 -r -t $timeout char <$pipe_out
+        fi
 
         if (( $? > 128 )); then 
           timed_out=t
