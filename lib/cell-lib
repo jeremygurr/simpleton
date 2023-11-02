@@ -22,7 +22,7 @@ show_branches=${show_branches:-f}
 downstream_cell_stack=( ) 
 
 disable_log=${disable_log:-f}
-export debug_ignore+=" apad cell_close_log_file cell_open_log_file change_log_file debug_start defer echo_align fd_unlock fd_write_lock find1 fork fork_bg fork_fg fork_inside get_new_fork_id get_new_reply_file load_log_vars log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars setup_exit_trap shell_quote_var snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log "
+export debug_ignore+=" apad cell_close_log_file cell_open_log_file change_log_file debug_start defer echo_align fd_unlock fd_write_lock find1 fork fork_bg fork_fg fork_inside get_new_fork_id get_new_reply_file load_log_vars load_log_vars_and_write_to_log log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars setup_exit_trap shell_quote_var snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log write_to_log_console_out write_to_log_log_var write_to_log_update_cooked "
 
 setup_cyto_out() {
   local from=$1 to=$2
@@ -640,9 +640,6 @@ fork_inside() {
 after_fork() {
   if [[ -f "${reply_file:-}" ]]; then
 
-    # DEBUGGING
-    local file=$(<$reply_file)
-
     source $reply_file || return 1
     if [[ ${debugging:-f} == t ]]; then
       local debugging
@@ -661,7 +658,7 @@ after_fork() {
 # usage: fork {command to execute}
 #  background=f (whether to run as a background process)
 #  change_log=f (whether to change the log)
-#  to_var        (write output to the given var instead of stdout)
+#  to_var       (write output to the given var instead of stdout)
 fork() {
 
   local reply_file command=$* return_code=0 \
@@ -2312,10 +2309,16 @@ decrypt_file() {
   local user_private_key=${user_private_key:-~/.ssh/id_rsa}
   local from=$from \
     to=${to:-} \
+    to_var=${to_var:-} \
     key=${key:-$user_private_key}
 
   local log_show_vars='^from ^to'
   begin_function
+
+    if [[ ! "$to" && ! "$to_var" ]]; then
+      log_fatal "decrypt_file: Must set either 'to' or 'to_var'"
+      fail1
+    fi
 
     pause_tee
 
@@ -2340,7 +2343,9 @@ decrypt_file() {
         fail1
       fi
     else
-      if ! openssl pkeyutl -decrypt -inkey $key -in $from; then
+      local -n v=$to_var
+      v=$(openssl pkeyutl -decrypt -inkey $key -in $from)
+      if (( $? > 0 )); then
         log_fatal "Failed to decrypt file: $from"
         fail1
       fi
@@ -2904,9 +2909,7 @@ untee_output() {
       BASH_XTRACEFD=
       exec 1>&$fd_original_out || return 1
       exec 2>&$fd_original_err || return 1
-      eval "exec $fd_trace>&-" || return 1
-      #local tee_size=${#tee_files[*]}
-      #tee_files=( ${tee_files[*]:0:$((tee_size-1))} )
+      eval "exec $fd_trace>&$fd_original_trace" || return 1
       unset tee_files[-1]
     else
       # log_warn "untee was called when nothing was teed"
@@ -3075,51 +3078,58 @@ to_background_shell_single() {
   begin_function_flat
 
     if [[ "${timeout:-}" ]]; then
-      local timeout_ms=$((timeout*1000))
+      local timeout_ms=$(dc -e "$timeout 1000 * p")
+      timeout_ms=${timeout_ms%.*}
     else
       local timeout_ms=${timeout_ms:-0}
     fi
 
     if (( timeout_ms == 0 )); then
       log_debug "Sending output to process without timeout: $command"
-      echo -n "$command" >$pipe_in || fail
+      if [[ $pretend == f ]]; then
+        echo -n "$command" >$pipe_in || fail
+      fi
     else
 
       # don't know why 'k' command in dc isn't working properly, so working around it
-      local timeout_ms=$(dc -e "$timeout 1000 * p")
-      timeout_ms=${timeout_ms%.*}
       local pid \
         time_left=$timeout_ms \
         wait_message=f \
         delay_ms=250
-      local delay_s=$(dc -e "$delay 1000 / p")
+      local delay_s=$(dc -e "$delay_ms 1000 / p")
 
       log_debug "Sending output to process with ${timeout}s timeout: $command"
-      echo -n "$command" >$pipe_in & 
-      pid=$!
 
       timed_out=f wait_time=0
-      begin_while ps $pid &>/dev/null; doo
+      if [[ $pretend == f ]]; then
 
-        log_debug "Sleeping for ${delay_s}s"
-        sleep $delay_s || fail
+        echo -n "$command" >$pipe_in & 
+        pid=$!
 
-        (( time_left -= delay_ms 
-         , wait_time += delay_ms ))
+        begin_while ps $pid &>/dev/null; doo
 
-        if (( time_left <= 0 )); then
-          log_debug "Timed out trying to execute: $command"
-          timed_out=t
-          kill $pid || log_warn "Failed to kill $pid"
-          break
-        fi
+          log_debug "Sleeping for ${delay_s}s"
+          sleep $delay_s || fail
 
-        if (( wait_time > 2 )) && [[ $wait_message == f ]]; then
-          log_warn "${NL}Waiting for pipe to be open"
-          wait_message=t
-        fi
+          (( time_left -= delay_ms 
+           , wait_time += delay_ms ))
 
-      end_while
+          if (( time_left <= 0 )); then
+            log_debug "Timed out trying to execute: $command"
+            timed_out=t
+            kill $pid || log_warn "Failed to kill $pid"
+            break
+          fi
+
+          if (( wait_time > 2 )) && [[ $wait_message == f ]]; then
+            log_warn "${NL}Waiting for pipe to be open"
+            wait_message=t
+          fi
+
+        end_while
+
+      fi
+
       local wait_time_s=$(dc -e "$wait_time 1000 / p")
       log_debug "Finished waiting. Took ${wait_time_s}s."
 
@@ -3132,6 +3142,7 @@ to_background_shell_single() {
 to_background_shell() {
   local pipe_in=${pipe}_in pipe_out=${pipe}_out \
     secret=${secret:-none} \
+    pretend=${pretend:-f} \
     sleep_between_lines=${sleep_between_lines:-0} 
   local -n from=$from_var
   local masked_from=$from
@@ -3148,8 +3159,7 @@ to_background_shell() {
       fail1
     fi
 
-    from=${from%%*($NL| |$TAB)}
-    from="$from$NL"
+    from="${from%%*($NL| |$TAB)}$NL"
 
     if (( sleep_between_lines > 0 )); then
       local line
@@ -3201,14 +3211,15 @@ from_background_shell__check_line() {
     fi
 
     if (( interact_count > 0 )); then
+      local pretend=$pretending
       begin_for ((i=0; i < interact_count; i++)); doo
         if [[ "$line" =~ ${interact_in[$i]} ]]; then
           log_debug "Interact matched [${interact_in[$i]}]"
           no_newline=t from_background_shell__record_line || fail
           line=
           local output=${interact_out[$i]}
-          secret="$secret" from_var=output to_background_shell || fail
-          succeed
+          pretend=$pretend secret="$secret" from_var=output to_background_shell || fail
+          break
         fi
       end_for
     fi
