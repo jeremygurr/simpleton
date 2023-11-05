@@ -3322,6 +3322,7 @@ from_background_shell() {
       begin_loop
 
         if [[ $pretending == t ]]; then
+          log_debug "Reading a line"
           if [[ "$pretend_out" ]]; then
             if [[ "$pretend_out" =~ "$NL" ]]; then
               line=${pretend_out%%$NL*}
@@ -3336,10 +3337,11 @@ from_background_shell() {
         else
           IFS=$NL read -r -t $timeout line <$pipe_out
         fi
+        log_debug "Line read: $line"
 
         if (( $? > 128 )); then 
           timed_out=t
-          fail1
+          break
         fi
 
         if [[ "$line" ]]; then
@@ -3458,16 +3460,12 @@ magic_shell_prompt='$=-=$'$NL
 run_pipe_command() {
   local pipe=$pipe command=$command 
 
-  local log_show_vars='pipe command'
+  local log_show_vars=command log_vars=pipe
   begin_function
 
-    command_successful=f
+    timed_out=f failed=f command_successful=f
     from_var=command \
       to_background_shell || fail
-
-    if [[ $timed_out == t ]]; then
-      succeed
-    fi
 
     local stop_after=$magic_shell_prompt
     literal_to_regex stop_after
@@ -3475,7 +3473,14 @@ run_pipe_command() {
     to_var=result \
       from_background_shell || fail
 
-    if [[ $timed_out == f && $failed == f ]]; then
+    if [[ "$timed_out" == t ]]; then
+      log_vars=result \
+        log_error "Timed out waiting for prompt from remote ssh session"
+    elif [[ "$failed" == t ]]; then
+      log_vars=result \
+        log_error "Failed to establish remote ssh session"
+    else 
+      log_debug "Command was successful"
       command_successful=t
     fi
 
