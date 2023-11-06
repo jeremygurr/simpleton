@@ -3183,7 +3183,7 @@ from_background_shell__record_line() {
   local no_newline=${no_newline:-f}
   local result=$line
   [[ "$no_newline" == f ]] && result=$result$NL
-  log_debug "Appending to $to_var: ${result%$NL}"
+  #log_debug "Appending to $to_var: ${result%$NL}"
   to+=$result
   return 0
 }
@@ -3191,6 +3191,18 @@ from_background_shell__record_line() {
 # sets found or failed
 from_background_shell__check_line() {
   begin_function_flat
+
+    if (( interact_count > 0 )); then
+      local pretend=$pretending
+      begin_for ((i=0; i < interact_count; i++)); doo
+        if [[ "$line" =~ ${interact_in[$i]} ]]; then
+          log_debug "Interact matched [${interact_in[$i]}]"
+          local output=${interact_out[$i]}
+          pretend=$pretend secret="$secret" from_var=output to_background_shell || fail
+          succeed
+        fi
+      end_for
+    fi
 
     if [[ "$stop_after" ]]; then
       begin_for ((i=0; i < stop_after_count; i++)); doo
@@ -3210,18 +3222,6 @@ from_background_shell__check_line() {
       fi
     fi
 
-    if (( interact_count > 0 )); then
-      local pretend=$pretending
-      begin_for ((i=0; i < interact_count; i++)); doo
-        if [[ "$line" =~ ${interact_in[$i]} ]]; then
-          log_debug "Interact matched [${interact_in[$i]}]"
-          local output=${interact_out[$i]}
-          pretend=$pretend secret="$secret" from_var=output to_background_shell || fail
-          break
-        fi
-      end_for
-    fi
-
   end_function
   handle_return
 }
@@ -3230,7 +3230,6 @@ from_background_shell__prep() {
 
   if [[ "$interact" ]]; then
 
-    log_debug "interact=$interact"
     split_to_array interact 
     interact_count=${#interact[*]}
     local c=0
@@ -3239,17 +3238,15 @@ from_background_shell__prep() {
       s=${s##*( )}
       if [[ "$s" ]]; then
         if (( i % 2 == 0 )); then
-          escape_regex s
+          # escape_regex s
           interact_in+=( "$s" )
         else
           interact_out+=( "$s" )
+          let c++
         fi
-        let c++
       fi
     done
     interact_count=$c
-
-    (( interact_count/=2 ))
 
   fi
 
@@ -3257,19 +3254,21 @@ from_background_shell__prep() {
 
     split_to_array stop_after
     stop_after_count=${#stop_after[*]}
-    for ((i=0; i<stop_after_count; i++)); do
+    local new_stop_after=()
+    for ((i=0; i < stop_after_count; i++)); do
       s=${stop_after[$i]##*( )}
       if [[ "$s" ]]; then
-        escape_regex s
-        stop_after+=( "$s" )
+        # escape_regex s
+        new_stop_after+=( "$s" )
       fi
     done
+    stop_after=( "${new_stop_after[@]}" )
 
   fi
 
-  if [[ "$fail_after" ]]; then
-    escape_regex fail_after
-  fi
+  # if [[ "$fail_after" ]]; then
+  #   escape_regex fail_after
+  # fi
 
   if [[ ! -p $pipe_out ]]; then
     log_fatal "Invalid FIFO: $pipe_out"
@@ -3336,13 +3335,13 @@ from_background_shell() {
           fi
         else
           IFS=$NL read -r -t $timeout line <$pipe_out
+          if (( $? > 128 )); then 
+            timed_out=t
+            break
+          fi
         fi
-        log_debug "Line read: $line"
 
-        if (( $? > 128 )); then 
-          timed_out=t
-          break
-        fi
+        log_debug "Line read: $line"
 
         if [[ "$line" ]]; then
           from_background_shell__record_line || fail
@@ -3380,6 +3379,7 @@ from_background_shell() {
           line+=$char
           from_background_shell__check_line || fail
           if [[ $found == t || $failed == t ]]; then
+            from_background_shell__record_line || fail
             break
           fi
         else
@@ -3458,19 +3458,20 @@ magic_shell_prompt='$=-=$'$NL
 #   result
 #   command_successful
 run_pipe_command() {
-  local pipe=$pipe command=$command 
+  local pipe=$pipe command=$command buffering=${buffering:-line} \
+    shell_prompt=${shell_prompt:-$magic_shell_prompt}
 
-  local log_show_vars=command log_vars=pipe
+  local log_show_vars=command log_vars='pipe shell_prompt buffering'
   begin_function
 
     timed_out=f failed=f command_successful=f
     from_var=command \
       to_background_shell || fail
 
-    local stop_after=$magic_shell_prompt
-    literal_to_regex stop_after
-
+    escape_regex shell_prompt
     to_var=result \
+      stop_after="^0 $shell_prompt" \
+      fail_after=$shell_prompt \
       from_background_shell || fail
 
     if [[ "$timed_out" == t ]]; then

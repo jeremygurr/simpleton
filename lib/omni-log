@@ -189,6 +189,528 @@ auto_shorten() {
 }
 
 write_to_log_process_vars() {
+  begin_no_tracing_zone
+  local var var_name value
+  for var in $log_vars $show_vars2 $trace_var; do
+
+    if [[ $var == *=* ]]; then
+      var_name=${var%%=*}
+      var=${var#*=}
+    else
+      var_name=$var
+    fi
+
+    local shorten=f
+    if [[ "$var" == ^* ]]; then
+      var=${var#^}
+      var_name=${var_name#^}
+    fi
+
+    eval "value=\${$var:-}"
+    local quoted_value=$value
+    shell_quote_var quoted_value
+
+    if [[ " $trace_var " =~ \ $var\  ]]; then
+
+      if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
+        trace_vars+="$CYAN"
+      fi
+
+      trace_vars+=" $var_name=$quoted_value"
+
+      if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
+        trace_vars+="$RESET"
+        trace_var_value[$var]=$value
+      fi
+
+    else
+      if [[ "$value" ]]; then
+        new_vars+=" $var_name=$quoted_value"
+      fi
+    fi
+
+  done
+
+  if [[ "$show_vars2" ]]; then
+    local new_show_vars=
+    for var in $show_vars2; do
+      if [[ $var == *=* ]]; then
+        var_name=${var%%=*}
+      else
+        var_name=$var
+      fi
+      new_show_vars+=" $var_name"
+    done
+    show_vars2=${new_show_vars# }
+  fi
+
+  end_no_tracing_zone
+  return 0
+}
+
+write_to_log_log_var() {
+  local quoted
+  to_log="= ts=$time pid=$pid"
+  to_log+=" log_id=$log_id log_level=$level"
+
+  if [[ "$action" ]]; then
+    local quoted=$action
+    shell_quote_var quoted
+    to_log+=" log_action=$quoted"
+  fi
+  if [[ ! "${log_function:-}" ]]; then
+    offset=2 snapshot_source_location
+  fi
+  function=$log_function
+  if [[ "${log_function:-}" ]]; then
+    to_log+=" log_function=$log_function"
+  fi
+  if [[ "${log_source_file:-}" ]]; then
+    to_log+=" log_source=$log_source_file:$log_source_line log_source_caller=$log_source_file2:$log_source_line2"
+  fi
+  if [[ "${show_vars2:-}" ]]; then
+    quoted=$show_vars2
+    shell_quote_var quoted
+    to_log+=" log_show_vars=$quoted"
+  fi
+  to_log+="$new_vars$trace_vars"
+  if [[ "${trace_var:-}" ]]; then
+    quoted=$trace_var
+    shell_quote_var quoted
+    to_log+=" trace_vars=$quoted"
+  fi
+  local quoted=${message:-}
+  if [[ "$message" ]]; then
+    shell_quote_var quoted
+    to_log+=" log_message=$quoted"
+  fi
+  return 0
+}
+
+write_to_log_update_cooked() {
+  case $action in
+    call)
+      local s
+      apad s log_id "log_id=$log_id " function "$function "
+      s+="$new_vars$trace_vars"
+      cooked_stack+=( "$s" )
+    ;;
+    return*)
+      if [[ "$cooked_stack" ]]; then
+        unset cooked_stack[-1]
+      fi
+    ;;
+  esac
+  return 0
+}
+
+write_to_log_console_out() {
+  local out_line=
+  if [[ $log_to_out == t ]]; then
+    out_line="$to_log$trace_vars"
+    echo "$out_line" >&2
+  else
+
+    local hide=f
+
+    if [[ "$log_action_filter" && ! $action =~ "$log_action_filter" ]]; then
+      hide=t
+    fi
+
+    if [[ "$log_function_filter" && ! $function =~ "$log_function_filter" ]]; then
+      hide=t
+    fi
+
+    if [[ "$log_depth_filter" && $log_depth_current -gt $log_depth_filter ]]; then
+      hide=t
+    fi
+
+    local level_num=${log_level_num_map[$level]}
+    local log_level_num=${log_level_num_map[$log_level_filter]}
+    if [[ "$log_level_filter" && $level_num -lt $log_level_num ]]; then
+      hide=t
+    fi
+
+    local level_color=${log_level_color_map[$level]}
+    if [[ $log_ansi == f ]]; then
+      level_color=
+    fi
+
+    function=" $function"
+    action=" $action"
+    message=" $message"
+    local log_vars="$new_vars"
+    time=" $time"
+    pid=" pid=$pid"
+    log_id=" log_id=$log_id"
+    eval "local to_terminal=\"$log_format\""
+    out_line="$to_terminal$trace_vars"
+
+    if [[ $hide == f ]]; then
+      echo "$out_line" >&2
+    fi
+  fi
+  return 0
+}
+
+# Can be called safely whether or not a log file has been set up
+write_to_log() {
+  begin_no_tracing_zone
+  pause_tee
+
+  local level=$1 action=${2:-${1:-}} message=${3:-} \
+    new_vars= trace_vars= show_vars2=${log_show_vars:-} \
+    log_vars=${log_vars:-}
+
+  if [[ $log_ansi == f ]]; then
+    local RESET= COL15= COL45= COL60= COL90= CYAN= YELLOW= RED= 
+  fi
+
+  write_to_log_process_vars 
+
+  local time="$EPOCHREALTIME" \
+    pid="$BASHPID" \
+    to_log= \
+    function= log_function=${log_function:-} \
+    log_source_file=${log_source_file:-} \
+    log_source_line=${log_source_line:-} \
+    log_id=$omni_log_fork_id:$omni_log_pos
+
+  write_to_log_log_var
+
+  if [[ $disable_log == f && $log_to_file == t && "${logging_to_file:-}" ]]; then
+    echo "$NL$to_log" >>$logging_to_file
+  fi
+
+  write_to_log_update_cooked
+  write_to_log_console_out
+
+  if [[ "$debug_at_log_id" ]]; then
+    local debug_at_fork_id=${debug_at_log_id%:*}
+    local debug_at_log_pos=${debug_at_log_id#*:}
+    if [[ $omni_log_fork_id == $debug_at_fork_id \
+       && $omni_log_pos -ge $debug_at_log_pos ]]; then
+      debug_at_log_id=
+      debug_immediate=t
+      debug_start \\
+    fi
+  fi
+  (( omni_log_pos++ ))
+
+  unpause_tee
+  end_no_tracing_zone
+}
+
+# Usage:
+#   new_log_file=... change_log_file  point to new log file
+#   new_log_file= change_log_file     stop logging
+# should also include previous_fork_id
+change_log_file() {
+  begin_function_flat
+
+    local new_log_file=$new_log_file old_log_file \
+      log_function=${log_function:-${FUNCNAME[1]}} \
+      previous_fork_id=${previous_fork_id:-0} \
+      resume_existing_log=${resume_existing_log:-f}
+
+    local $snapshot_source_location_locals
+    offset=2 snapshot_source_location
+
+    if [[ "${logging_to_file:-}" == "$new_log_file" || $disable_log == t ]]; then
+      succeed
+    fi
+
+    if [[ "${logging_to_file:-}" ]]; then
+      if [[ "$new_log_file" ]]; then
+        omni_log_fork_id=$previous_fork_id log_vars=new_log_file write_to_log trace log_to
+      else
+        omni_log_fork_id=$previous_fork_id write_to_log trace log_close
+      fi
+    fi
+
+    if [[ "$new_log_file" ]]; then
+      old_log_file=${logging_to_file:-}
+      logging_to_file=$new_log_file
+      omni_log_pos=1
+
+      if [[ -f $logging_to_file && $resume_existing_log == f ]]; then
+        log_fatal "Log file already exists: $logging_to_file"
+        fail1
+      fi
+
+      if [[ "$old_log_file" ]]; then
+        log_vars=old_log_file write_to_log trace log_from
+      fi
+
+    fi
+
+  end_function
+  handle_return
+}
+
+log_trace() {
+  begin_no_tracing_zone
+  
+  local var var_name value
+  for var in $log_vars $show_vars2 $trace_var; do
+
+    if [[ $var == *=* ]]; then
+      var_name=${var%%=*}
+      var=${var#*=}
+    else
+      var_name=$var
+    fi
+
+    local shorten=f
+    if [[ "$var" == ^* ]]; then
+      var=${var#^}
+      var_name=${var_name#^}
+    fi
+
+    eval "value=\${$var:-}"
+    local quoted_value=$value
+    shell_quote_var quoted_value
+
+    if [[ " $trace_var " =~ \ $var\  ]]; then
+
+      if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
+        trace_vars+="$CYAN"
+      fi
+
+      trace_vars+=" $var_name=$quoted_value"
+
+      if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
+        trace_vars+="$RESET"
+        trace_var_value[$var]=$value
+      fi
+
+    else
+      if [[ "$value" ]]; then
+        new_vars+=" $var_name=$quoted_value"
+      fi
+    fi
+
+  done
+
+  if [[ "$show_vars2" ]]; then
+    local new_show_vars=
+    for var in $show_vars2; do
+      if [[ $var == *=* ]]; then
+        var_name=${var%%=*}
+      else
+        var_name=$var
+      fi
+      new_show_vars+=" $var_name"
+    done
+    show_vars2=${new_show_vars# }
+  fi
+
+  return 0
+}
+
+write_to_log_log_var() {
+  local quoted
+  to_log="= ts=$time pid=$pid"
+  to_log+=" log_id=$log_id log_level=$level"
+
+  if [[ "$action" ]]; then
+    local quoted=$action
+    shell_quote_var quoted
+    to_log+=" log_action=$quoted"
+  fi
+  if [[ ! "${log_function:-}" ]]; then
+    offset=2 snapshot_source_location
+  fi
+  function=$log_function
+  if [[ "${log_function:-}" ]]; then
+    to_log+=" log_function=$log_function"
+  fi
+  if [[ "${log_source_file:-}" ]]; then
+    to_log+=" log_source=$log_source_file:$log_source_line log_source_caller=$log_source_file2:$log_source_line2"
+  fi
+  if [[ "${show_vars2:-}" ]]; then
+    quoted=$show_vars2
+    shell_quote_var quoted
+    to_log+=" log_show_vars=$quoted"
+  fi
+  to_log+="$new_vars$trace_vars"
+  if [[ "${trace_var:-}" ]]; then
+    quoted=$trace_var
+    shell_quote_var quoted
+    to_log+=" trace_vars=$quoted"
+  fi
+  local quoted=${message:-}
+  if [[ "$message" ]]; then
+    shell_quote_var quoted
+    to_log+=" log_message=$quoted"
+  fi
+  return 0
+}
+
+write_to_log_update_cooked() {
+  case $action in
+    call)
+      local s
+      apad s log_id "log_id=$log_id " function "$function "
+      s+="$new_vars$trace_vars"
+      cooked_stack+=( "$s" )
+    ;;
+    return*)
+      if [[ "$cooked_stack" ]]; then
+        unset cooked_stack[-1]
+      fi
+    ;;
+  esac
+  return 0
+}
+
+write_to_log_console_out() {
+  local out_line=
+  if [[ $log_to_out == t ]]; then
+    out_line="$to_log$trace_vars"
+    echo "$out_line" >&2
+  else
+
+    local hide=f
+
+    if [[ "$log_action_filter" && ! $action =~ "$log_action_filter" ]]; then
+      hide=t
+    fi
+
+    if [[ "$log_function_filter" && ! $function =~ "$log_function_filter" ]]; then
+      hide=t
+    fi
+
+    if [[ "$log_depth_filter" && $log_depth_current -gt $log_depth_filter ]]; then
+      hide=t
+    fi
+
+    local level_num=${log_level_num_map[$level]}
+    local log_level_num=${log_level_num_map[$log_level_filter]}
+    if [[ "$log_level_filter" && $level_num -lt $log_level_num ]]; then
+      hide=t
+    fi
+
+    local level_color=${log_level_color_map[$level]}
+    if [[ $log_ansi == f ]]; then
+      level_color=
+    fi
+
+    function=" $function"
+    action=" $action"
+    message=" $message"
+    local log_vars="$new_vars"
+    time=" $time"
+    pid=" pid=$pid"
+    log_id=" log_id=$log_id"
+    eval "local to_terminal=\"$log_format\""
+    out_line="$to_terminal$trace_vars"
+
+    if [[ $hide == f ]]; then
+      echo "$out_line" >&2
+    fi
+  fi
+  return 0
+}
+
+# Can be called safely whether or not a log file has been set up
+write_to_log() {
+  begin_no_tracing_zone
+  pause_tee
+
+  local level=$1 action=${2:-${1:-}} message=${3:-} \
+    new_vars= trace_vars= show_vars2=${log_show_vars:-} \
+    log_vars=${log_vars:-}
+
+  if [[ $log_ansi == f ]]; then
+    local RESET= COL15= COL45= COL60= COL90= CYAN= YELLOW= RED= 
+  fi
+
+  write_to_log_process_vars 
+
+  local time="$EPOCHREALTIME" \
+    pid="$BASHPID" \
+    to_log= \
+    function= log_function=${log_function:-} \
+    log_source_file=${log_source_file:-} \
+    log_source_line=${log_source_line:-} \
+    log_id=$omni_log_fork_id:$omni_log_pos
+
+  write_to_log_log_var
+
+  if [[ $disable_log == f && $log_to_file == t && "${logging_to_file:-}" ]]; then
+    echo "$NL$to_log" >>$logging_to_file
+  fi
+
+  write_to_log_update_cooked
+  write_to_log_console_out
+
+  if [[ "$debug_at_log_id" ]]; then
+    local debug_at_fork_id=${debug_at_log_id%:*}
+    local debug_at_log_pos=${debug_at_log_id#*:}
+    if [[ $omni_log_fork_id == $debug_at_fork_id \
+       && $omni_log_pos -ge $debug_at_log_pos ]]; then
+      debug_at_log_id=
+      debug_immediate=t
+      debug_start \\
+    fi
+  fi
+  (( omni_log_pos++ ))
+
+  unpause_tee
+  end_no_tracing_zone
+}
+
+# Usage:
+#   new_log_file=... change_log_file  point to new log file
+#   new_log_file= change_log_file     stop logging
+# should also include previous_fork_id
+change_log_file() {
+  begin_function_flat
+
+    local new_log_file=$new_log_file old_log_file \
+      log_function=${log_function:-${FUNCNAME[1]}} \
+      previous_fork_id=${previous_fork_id:-0} \
+      resume_existing_log=${resume_existing_log:-f}
+
+    local $snapshot_source_location_locals
+    offset=2 snapshot_source_location
+
+    if [[ "${logging_to_file:-}" == "$new_log_file" || $disable_log == t ]]; then
+      succeed
+    fi
+
+    if [[ "${logging_to_file:-}" ]]; then
+      if [[ "$new_log_file" ]]; then
+        omni_log_fork_id=$previous_fork_id log_vars=new_log_file write_to_log trace log_to
+      else
+        omni_log_fork_id=$previous_fork_id write_to_log trace log_close
+      fi
+    fi
+
+    if [[ "$new_log_file" ]]; then
+      old_log_file=${logging_to_file:-}
+      logging_to_file=$new_log_file
+      omni_log_pos=1
+
+      if [[ -f $logging_to_file && $resume_existing_log == f ]]; then
+        log_fatal "Log file already exists: $logging_to_file"
+        fail1
+      fi
+
+      if [[ "$old_log_file" ]]; then
+        log_vars=old_log_file write_to_log trace log_from
+      fi
+
+    fi
+
+  end_function
+  handle_return
+}
+
+log_trace() {
+  begin_no_tracing_zone
+  
   local var var_name value
   for var in $log_vars $show_vars2 $trace_var; do
 
