@@ -3122,7 +3122,7 @@ to_background_shell_single() {
           fi
 
           if (( wait_time > 2 )) && [[ $wait_message == f ]]; then
-            log_warn "${NL}Waiting for pipe to be open"
+            log_warn "${NL}Waiting for pipe to be open (time_left=$time_left)"
             wait_message=t
           fi
 
@@ -3199,6 +3199,7 @@ from_background_shell__check_line() {
           log_debug "Interact matched [${interact_in[$i]}]"
           local output=${interact_out[$i]}
           pretend=$pretend secret="$secret" from_var=output to_background_shell || fail
+          interacted=t
           succeed
         fi
       end_for
@@ -3305,11 +3306,12 @@ from_background_shell() {
     timed_out=f
     failed=f
     found=f
+    interacted=f
     if [[ "$pretend_out" ]]; then
       pretending=t
     fi
 
-    local line= char= found=f i \
+    local line= char= i \
       interact_in=() interact_out=() stop_after_count=0 interact_count=0 s
 
     from_background_shell__prep || fail
@@ -3320,6 +3322,7 @@ from_background_shell() {
     if [[ $buffering == line ]]; then
       begin_loop
 
+        interacted=f
         if [[ $pretending == t ]]; then
           log_debug "Reading a line"
           if [[ "$pretend_out" ]]; then
@@ -3359,6 +3362,7 @@ from_background_shell() {
       line=
       begin_loop
 
+        interacted=f
         if [[ $pretending == t ]]; then
           if [[ "$pretend_out" ]]; then
             char=${pretend_out:0:1}
@@ -3380,7 +3384,11 @@ from_background_shell() {
           from_background_shell__check_line || fail
           if [[ $found == t || $failed == t ]]; then
             from_background_shell__record_line || fail
+            line=
             break
+          elif [[ $interacted == t ]]; then
+            from_background_shell__record_line || fail
+            line=
           fi
         else
           from_background_shell__record_line || fail
@@ -3449,7 +3457,10 @@ flush_background_shell() {
   handle_return
 }
 
-magic_shell_prompt='$=-=$'$NL
+# This should be different enough from a default shell prompt so that it
+#   can't possibly be confused
+magic_shell_prompt='>=-=>'$NL
+
 # input:
 #   pipe
 #   command
@@ -3471,6 +3482,7 @@ run_pipe_command() {
     escape_regex shell_prompt
     shell_prompt=${shell_prompt%%*($NL| |$TAB)}
     shell_prompt=${shell_prompt##*($NL| |$TAB)}
+    debug_start
     to_var=result \
       stop_after="^0\ $shell_prompt" \
       fail_after=$shell_prompt \
@@ -3481,7 +3493,7 @@ run_pipe_command() {
         log_error "Timed out waiting for prompt from remote ssh session"
     elif [[ "$failed" == t ]]; then
       log_vars=result \
-        log_error "Failed to execure command on remote ssh session"
+        log_error "Failed to execute command on remote ssh session"
     else 
       log_debug "Command was successful"
       command_successful=t
