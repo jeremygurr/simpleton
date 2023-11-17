@@ -2942,23 +2942,25 @@ cell_unlock() {
   return 0
 }
 
+# Used by background functions to save and replay (for testing) background interations
+declare -A replay_tracking_to replay_tracking_from
+
 # input:
 #   line        command to send to pipe
 #   pipe_in
 #   pipe_out
-#   timeout_ms 
+#   timeout_to  number of seconds for timeout
 # output:
 #   
 to_background_shell_single() {
-  local command=$1
+  local command=$1 timeout=$timeout_to
+
   begin_function_flat
 
-    if [[ "${timeout:-}" ]]; then
-      local timeout_ms=$(dc -e "$timeout 1000 * p")
-      timeout_ms=${timeout_ms%.*}
-    else
-      local timeout_ms=${timeout_ms:-0}
-    fi
+    replay_tracking_to[$pipe_in]+=$command
+
+    local timeout_ms=$(dc -e "$timeout 1000 * p")
+    timeout_ms=${timeout_ms%.*}
 
     if (( timeout_ms == 0 )); then
       log_debug "Sending output to process without timeout: $command"
@@ -3019,7 +3021,8 @@ to_background_shell() {
   local pipe_in=${pipe}_in pipe_out=${pipe}_out \
     secret=${secret:-none} \
     pretend=${pretend:-f} \
-    sleep_between_lines=${sleep_between_lines:-0} 
+    sleep_between_lines=${sleep_between_lines:-0} \
+    timeout_to=${timeout_to:-0.5}
   local -n from=$from_var
   local masked_from=$from
   if [[ "$secret" != none ]]; then
@@ -3059,8 +3062,8 @@ from_background_shell__record_line() {
   local no_newline=${no_newline:-f}
   local result=$line
   [[ "$no_newline" == f ]] && result=$result$NL
-  #log_debug "Appending to $to_var: ${result%$NL}"
   to+=$result
+  replay_tracking_from[$pipe_in]+=$result
   return 0
 }
 
@@ -3380,11 +3383,11 @@ run_pipe_command() {
 }
 
 up_delegate() {
-  local cyto_up_path=$1
+  local cyto_up_path=$1 # .../.cyto/up/{dep_name}
   local cell_path=${cyto_up_path%/.cyto/up/*} \
-    up_lock=$cyto_up_path/.cyto/lock \
+    up_lock=$cyto_up_path/chosen/.cyto/lock \
     up_name=${cyto_up_path##*/}
-  local log_show_vars='cyto_up_path cell_path up_lock'
+  local log_show_vars='^cyto_up_path ^cell_path up_lock'
   begin_function
 
     debug_start
