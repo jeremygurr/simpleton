@@ -2942,9 +2942,6 @@ cell_unlock() {
   return 0
 }
 
-# Used by background functions to save and replay (for testing) background interations
-declare -A replay_tracking_to replay_tracking_from
-
 # input:
 #   line        command to send to pipe
 #   pipe_in
@@ -3055,6 +3052,13 @@ to_background_process() {
       to_background_process_single "$from" || fail
     fi
 
+    pipe_replay_hash=$(echo -n "${pipe_replay_hash:-}$from" | sha1sum | awk '{print $1}')
+    replay_file=$job_path/pipe_replay.$pipe_replay_hash
+
+    if [[ $pipe_replay == f && -f $replay_file ]]; then
+      rm $replay_file || fail
+    fi
+
   end_function
   handle_return
 }
@@ -3064,7 +3068,9 @@ from_background_process__record_line() {
   local result=$line
   [[ "$no_newline" == f ]] && result=$result$NL
   to+=$result
-  replay_tracking_from[$pipe_in]+=$result
+  if [[ $pipe_replay == f ]]; then
+    echo "$line" >>$replay_file || return 1
+  fi
   return 0
 }
 
@@ -3203,6 +3209,7 @@ flush_background_process() {
             line+=$char
           else
             log_debug "Flushing: $line"
+            from_background_process__record_line || fail
             line=
           fi
         done <$pipe_out
@@ -3210,6 +3217,7 @@ flush_background_process() {
       line)
         while IFS= read -r -t $timeout -r line; do
           log_debug "Flushing: $line"
+          from_background_process__record_line || fail
         done <$pipe_out
         ;;
       *)
@@ -3248,6 +3256,7 @@ from_background_process() {
     secret=${secret:-none} \
     pretend_out=${pretend_out:-} \
     pretending=f \
+    pipe_replay=${pipe_replay:-${replay:-f}} \
     timeout=${timeout:-0}
 
   local -n to=$to_var
@@ -3267,12 +3276,7 @@ from_background_process() {
     local line= char= i \
       interact_in=() interact_out=() \
       succeed_after_count=0 interact_count=0 s \
-      requirement_met=f looking_for_something=f
-
-    if [[ "$fail_after" || "$succeed_after" ]]; then
-      # TODO: Is this needed?
-      looking_for_something=t
-    fi
+      requirement_met=f
 
     from_background_process__prep || fail
 
@@ -3280,6 +3284,16 @@ from_background_process() {
       log_debug "Waiting for background job output"
 
     if [[ $buffering == line ]]; then
+
+      local replay_content=
+      if [[ $pipe_replay == t ]]; then
+        if [[ -f $replay_file ]]; then
+          replay_content=$(<$replay_file)
+        else
+          log_warn "Missing replay file $replay_file, can't replay background process."
+        fi
+      fi
+
       begin_loop
 
         interacted=f
@@ -3296,6 +3310,9 @@ from_background_process() {
           else
             line=
           fi
+        elif [[ $pipe_replay == t ]]; then
+          line=${replay_content%%$NL*}
+          replay_content=${replay_content#*$NL}
         else
           IFS=$NL read -r -t $timeout line <$pipe_out
           if (( $? > 128 )); then 
