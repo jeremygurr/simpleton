@@ -2952,7 +2952,7 @@ declare -A replay_tracking_to replay_tracking_from
 #   timeout_to  number of seconds for timeout
 # output:
 #   
-to_background_shell_single() {
+to_background_process_single() {
   local command=$1 timeout=$timeout_to
 
   begin_function_flat
@@ -3017,12 +3017,13 @@ to_background_shell_single() {
   handle_return
 }
 
-to_background_shell() {
+to_background_process() {
   local pipe_in=${pipe}_in pipe_out=${pipe}_out \
     secret=${secret:-none} \
     pretend=${pretend:-f} \
     sleep_between_lines=${sleep_between_lines:-0} \
-    timeout_to=${timeout_to:-0.5}
+    timeout_to=${timeout_to:-0.5} \
+    pipe_replay=${pipe_replay:-${replay:-f}}
   local -n from=$from_var
   local masked_from=$from
   if [[ "$secret" != none ]]; then
@@ -3043,7 +3044,7 @@ to_background_shell() {
     if (( sleep_between_lines > 0 )); then
       local line
       while IFS= read -r line || [[ "$line" ]]; do
-        to_background_shell_single "$line" || fail
+        to_background_process_single "$line" || fail
         if [[ $timed_out == t ]]; then
           succeed
         fi
@@ -3051,14 +3052,14 @@ to_background_shell() {
       done <<<"$from"
       handle_break
     else
-      to_background_shell_single "$from" || fail
+      to_background_process_single "$from" || fail
     fi
 
   end_function
   handle_return
 }
 
-from_background_shell__record_line() {
+from_background_process__record_line() {
   local no_newline=${no_newline:-f}
   local result=$line
   [[ "$no_newline" == f ]] && result=$result$NL
@@ -3068,8 +3069,18 @@ from_background_shell__record_line() {
 }
 
 # sets found or failed
-from_background_shell__check_line() {
+from_background_process__check_line() {
   begin_function_flat
+
+    if [[ "$fail_after" ]]; then
+      begin_for ((i=0; i < succeed_after_count; i++)); doo
+        if [[ "$line" =~ ${fail_after[$i]} ]]; then
+          log_debug "Failed after [${fail_after[$i]}]"
+          failed=t
+          succeed
+        fi
+      end_for
+    fi
 
     if (( interact_count > 0 )); then
       local pretend=$pretending
@@ -3077,28 +3088,27 @@ from_background_shell__check_line() {
         if [[ "$line" =~ ${interact_in[$i]} ]]; then
           log_debug "Interact matched [${interact_in[$i]}]"
           local output=${interact_out[$i]}
-          pretend=$pretend secret="$secret" from_var=output to_background_shell || fail
+          pretend=$pretend secret="$secret" from_var=output to_background_process || fail
           interacted=t
+          break
+        fi
+      end_for
+    fi
+
+    if [[ "$succeed_after" ]]; then
+      begin_for ((i=0; i < succeed_after_count; i++)); doo
+        if [[ "$line" =~ ${succeed_after[$i]} ]]; then
+          log_debug "Stopped after [${succeed_after[$i]}]"
+          succeeded=t
           succeed
         fi
       end_for
     fi
 
-    if [[ "$stop_after" ]]; then
-      begin_for ((i=0; i < stop_after_count; i++)); doo
-        if [[ "$line" =~ ${stop_after[$i]} ]]; then
-          log_debug "Stopped after [$stop_after]"
-          found=t
-          succeed
-        fi
-      end_for
-    fi
-
-    if [[ "$fail_after" ]]; then
-      if [[ "$line" =~ $fail_after ]]; then
-        log_debug "Failed after [$fail_after]"
-        failed=t
-        succeed
+    if [[ "$required_output" ]]; then
+      if [[ "$line" =~ ${required_output} ]]; then
+        log_debug "Found required text: [$required_output]"
+        requirement_met=t
       fi
     fi
 
@@ -3106,7 +3116,7 @@ from_background_shell__check_line() {
   handle_return
 }
 
-from_background_shell__prep() {
+from_background_process__prep() {
 
   if [[ "$interact" ]]; then
 
@@ -3130,25 +3140,37 @@ from_background_shell__prep() {
 
   fi
 
-  if [[ "$stop_after" ]]; then
+  if [[ "$succeed_after" ]]; then
 
-    split_to_array stop_after
-    stop_after_count=${#stop_after[*]}
-    local new_stop_after=()
-    for ((i=0; i < stop_after_count; i++)); do
-      s=${stop_after[$i]##*( )}
+    split_to_array succeed_after
+    succeed_after_count=${#succeed_after[*]}
+    local new_succeed_after=()
+    for ((i=0; i < succeed_after_count; i++)); do
+      s=${succeed_after[$i]##*( )}
       if [[ "$s" ]]; then
         # escape_regex s
-        new_stop_after+=( "$s" )
+        new_succeed_after+=( "$s" )
       fi
     done
-    stop_after=( "${new_stop_after[@]}" )
+    succeed_after=( "${new_succeed_after[@]}" )
 
   fi
 
-  # if [[ "$fail_after" ]]; then
-  #   escape_regex fail_after
-  # fi
+  if [[ "$fail_after" ]]; then
+
+    split_to_array fail_after
+    fail_after_count=${#fail_after[*]}
+    local new_fail_after=()
+    for ((i=0; i < fail_after_count; i++)); do
+      s=${fail_after[$i]##*( )}
+      if [[ "$s" ]]; then
+        # escape_regex s
+        new_fail_after+=( "$s" )
+      fi
+    done
+    fail_after=( "${new_fail_after[@]}" )
+
+  fi
 
   if [[ ! -p $pipe_out ]]; then
     log_fatal "Invalid FIFO: $pipe_out"
@@ -3157,19 +3179,71 @@ from_background_shell__prep() {
 
 }
 
+flush_background_process() {
+  local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+    buffering=${buffering:-line} \
+    timeout=${timeout:-0} \
+    line char
+
+  local log_show_vars='pipe timeout buffering'
+  begin_function
+
+    local t=${timeout//./}
+    if (( t > 0 )); then
+      log_debug "Flushing background output with timeout of ${timeout}s"
+    else
+      log_debug "Flushing background output with no timeout"
+    fi
+
+    line=
+    case "$buffering" in
+      char)
+        while IFS= read -n1 -r -t $timeout -r char || [[ "$line" ]]; do
+          if [[ "$char" ]]; then
+            line+=$char
+          else
+            log_debug "Flushing: $line"
+            line=
+          fi
+        done <$pipe_out
+        ;;
+      line)
+        while IFS= read -r -t $timeout -r line; do
+          log_debug "Flushing: $line"
+        done <$pipe_out
+        ;;
+      *)
+        log_fatal "Invalid buffering type: $buffering. Should be char or line"
+        fail1
+        ;;
+    esac
+
+  end_function
+  handle_return
+}
+
 # input:
-#   pipe         path to pipe to receive commands from
-#   to_var       var to write result to
-#   timeout      0=never timeout, >0=timeout after that many seconds (may be fractional)
-#   pretend_out  fake data that gets fed into the reader for testing purposes
+#   pipe             path to pipe to receive commands from
+#   to_var           var to write result to
+#   timeout          0=never timeout, >0=timeout after that many seconds (may be fractional)
+#   fail_after       a newline separated list of regex strings. 
+#                      If a line matches any of these, failed will be set to 't', 
+#                      processing will stop and the remaining pipe output flushed.
+#   succeed_after    a newline separated list of regex strings. If a line matches any of
+#                      these. If a line matches any of these, processing will stop and
+#                      the remaining pipe output flushed.
+#   required_output  A regex string which must be found in the output or failed will be 
+#                      set to 't'
+#   pretend_out      fake data that gets fed into the reader for testing purposes
 # output:
 #   timed_out 
 #   failed
-from_background_shell() {
+from_background_process() {
   local pipe_in=${pipe}_in pipe_out=${pipe}_out \
     buffering=${buffering:-line} \
-    stop_after=${stop_after:-} \
+    succeed_after=${succeed_after:-} \
     fail_after=${fail_after:-} \
+    required_output=${required_output:-} \
     interact=${interact:-} \
     secret=${secret:-none} \
     pretend_out=${pretend_out:-} \
@@ -3179,21 +3253,28 @@ from_background_shell() {
   local -n to=$to_var
 
   local log_vars='pipe interact' \
-    log_show_vars='timeout stop_after fail_after'
+    log_show_vars='timeout required_output succeed_after fail_after'
   begin_function
 
     timed_out=f
     failed=f
-    found=f
+    succeeded=f
     interacted=f
     if [[ "$pretend_out" ]]; then
       pretending=t
     fi
 
     local line= char= i \
-      interact_in=() interact_out=() stop_after_count=0 interact_count=0 s
+      interact_in=() interact_out=() \
+      succeed_after_count=0 interact_count=0 s \
+      requirement_met=f looking_for_something=f
 
-    from_background_shell__prep || fail
+    if [[ "$fail_after" || "$succeed_after" ]]; then
+      # TODO: Is this needed?
+      looking_for_something=t
+    fi
+
+    from_background_process__prep || fail
 
     log_vars=pipe_out \
       log_debug "Waiting for background job output"
@@ -3226,10 +3307,10 @@ from_background_shell() {
         log_debug "Line read: $line"
 
         if [[ "$line" ]]; then
-          from_background_shell__record_line || fail
-          from_background_shell__check_line || fail
+          from_background_process__record_line || fail
+          from_background_process__check_line || fail
           line=
-          if [[ $found == t || $failed == t ]]; then
+          if [[ $succeeded == t || $failed == t ]]; then
             break
           fi
         else
@@ -3260,17 +3341,17 @@ from_background_shell() {
 
         if [[ "$char" ]]; then
           line+=$char
-          from_background_shell__check_line || fail
-          if [[ $found == t || $failed == t ]]; then
-            from_background_shell__record_line || fail
+          from_background_process__check_line || fail
+          if [[ $succeeded == t || $failed == t ]]; then
+            from_background_process__record_line || fail
             line=
             break
           elif [[ $interacted == t ]]; then
-            from_background_shell__record_line || fail
+            from_background_process__record_line || fail
             line=
           fi
         else
-          from_background_shell__record_line || fail
+          from_background_process__record_line || fail
           line=
         fi
 
@@ -3290,48 +3371,11 @@ from_background_shell() {
       fi
     fi
 
-  end_function
-  handle_return
-}
-
-flush_background_shell() {
-  local pipe_in=${pipe}_in pipe_out=${pipe}_out \
-    buffering=${buffering:-line} \
-    timeout=${timeout:-0} \
-    line char
-  local log_show_vars=pipe
-
-  begin_function
-
-    local t=${timeout//./}
-    if (( t > 0 )); then
-      log_debug "Flushing background output with timeout of ${timeout}s"
-    else
-      log_debug "Flushing background output with no timeout"
+    if [[ "$required_output" && $requirement_met == f ]]; then
+      failed=t
     fi
 
-    line=
-    case "$buffering" in
-      char)
-        while IFS= read -n1 -r -t $timeout -r char || [[ "$line" ]]; do
-          if [ "$char" ]; then
-            line+=$char
-          else
-            log_debug "Flushing: $line"
-            line=
-          fi
-        done <$pipe_out
-        ;;
-      line)
-        while IFS= read -r -t $timeout -r line; do
-          log_debug "Flushing: $line"
-        done <$pipe_out
-        ;;
-      *)
-        log_fatal "Invalid buffering type: $buffering. Should be char or line"
-        fail1
-        ;;
-    esac
+    timeout=0.5 flush_background_process
 
   end_function
   handle_return
@@ -3357,15 +3401,15 @@ run_pipe_command() {
 
     timed_out=f failed=f command_successful=f
     from_var=command \
-      to_background_shell || fail
+      to_background_process || fail
 
     escape_regex shell_prompt
     shell_prompt=${shell_prompt%%*($NL| |$TAB)}
     shell_prompt=${shell_prompt##*($NL| |$TAB)}
     to_var=result \
-      stop_after="^0\ $shell_prompt" \
+      succeed_after="^0\ $shell_prompt" \
       fail_after=$shell_prompt \
-      from_background_shell || fail
+      from_background_process || fail
 
     if [[ "$timed_out" == t ]]; then
       log_vars=result \
