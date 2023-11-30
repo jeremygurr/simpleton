@@ -164,13 +164,9 @@ make_cyto() {
 
     local dna_path=$cell_path/.dna
 
-    if [[ -d $dna_path/out && "$out_path" ]]; then
+    if [[ -d $dna_path/out ]]; then
       local item
-      local out_path=$cell_path/$out_path
-      if [[ ! -d $out_path  ]]; then
-        mkdir $out_path || fail
-      fi
-
+      local out_path=$cell_path
       local key_path=$dna_path/key
       setup_cyto_out $dna_path/out $out_path || fail
     fi
@@ -267,11 +263,6 @@ setup_cell_path_vars() {
     in_path=${in_path:-}
     if [[ "$in_path" && "$in_path" != /* ]]; then
       in_path=$cell_path/$in_path
-    fi
-
-    out_path=${out_path:-}
-    if [[ "$out_path" && "$out_path" != /* ]]; then
-      out_path=$cell_path/$out_path
     fi
 
     status_path=$cyto_path/status
@@ -2067,7 +2058,6 @@ init_context() {
   leaf_dims= \
   sub_dims= \
   in_path= \
-  out_path=out \
   update_cost=1 \
   refresh_less_than=${refresh_less_than:-1} 
   return 0
@@ -2954,8 +2944,6 @@ to_background_process_single() {
 
   begin_function_flat
 
-    replay_tracking_to[$pipe_in]+=$command
-
     local timeout_ms=$(dc -e "$timeout 1000 * p")
     timeout_ms=${timeout_ms%.*}
 
@@ -3052,8 +3040,12 @@ to_background_process() {
       to_background_process_single "$from" || fail
     fi
 
-    pipe_replay_hash=$(echo -n "${pipe_replay_hash:-}$from" | sha1sum | awk '{print $1}')
+    local pipe_replay_hash=$(echo -n "${pipe_replay_hash:-}$from" | sha1sum | awk '{print $1}')
+    replay_counter=${replay_counter:-0}
+    (( replay_counter++ ))
     replay_file=$job_path/pipe_replay.$pipe_replay_hash
+    local replay_counter_file=$job_path/pipe_replay-$replay_counter
+    ln -sf $replay_file $replay_counter_file
 
     if [[ $pipe_replay == f && -f $replay_file ]]; then
       rm $replay_file || fail
@@ -3070,6 +3062,9 @@ from_background_process__record_line() {
   to+=$result
   if [[ $pipe_replay == f ]]; then
     echo "$line" >>$replay_file || return 1
+    log_debug "Recording line to replay file: $line"
+  else
+    log_debug "Replaying line: $line"
   fi
   return 0
 }
@@ -3261,7 +3256,7 @@ from_background_process() {
 
   local -n to=$to_var
 
-  local log_vars='pipe interact' \
+  local log_vars='pipe interact pipe_replay' \
     log_show_vars='timeout required_output succeed_after fail_after'
   begin_function
 
@@ -3280,18 +3275,19 @@ from_background_process() {
 
     from_background_process__prep || fail
 
-    log_vars=pipe_out \
-      log_debug "Waiting for background job output"
-
     if [[ $buffering == line ]]; then
 
       local replay_content=
       if [[ $pipe_replay == t ]]; then
         if [[ -f $replay_file ]]; then
+          log_debug "Replaying background interaction from $replay_file"
           replay_content=$(<$replay_file)
         else
           log_warn "Missing replay file $replay_file, can't replay background process."
         fi
+      else
+        log_vars=pipe_out \
+          log_debug "Waiting for background job output"
       fi
 
       begin_loop
@@ -3321,8 +3317,6 @@ from_background_process() {
           fi
         fi
 
-        log_debug "Line read: $line"
-
         if [[ "$line" ]]; then
           from_background_process__record_line || fail
           from_background_process__check_line || fail
@@ -3347,6 +3341,9 @@ from_background_process() {
           else
             char=
           fi
+        elif [[ $pipe_replay == t ]]; then
+          char=${replay_content:0:1}
+          replay_content=${replay_content:1}
         else
           IFS= read -N1 -r -t $timeout char <$pipe_out
         fi
@@ -3453,11 +3450,16 @@ up_delegate() {
 
     debug_start
     if [[ -e $up_lock ]]; then
-      safe_link $up_lock $cell_path/.cyto/up-locks/$up_name || fail
+      local locks_folder=$cell_path/.cyto/up-locks
+      if [[ ! -d $locks_folder ]]; then
+        mkdir $locks_folder || fail
+      fi
+      safe_link $up_lock $locks_folder/$up_name || fail
     fi
 
     local out_item
-    out_items=$(find1 $cyto_up_path -not -name ".*") || fail
+    # TODO incorrect out_items, needs to promote to dims and add out path
+    out_items=$(find1 $cyto_up_path/out -not -name ".*") || fail
     begin_for out_item in $out_items; doo
       safe_link $out_item $cell_path/ || fail
     end_for
