@@ -3015,40 +3015,53 @@ to_background_process() {
     masked_from=${from//$secret/****}
   fi
 
-  local log_show_vars='from=masked_from' \
-    log_vars=pipe
+  local log_show_vars='from=masked_from pipe_replay timeout_to' \
+    log_vars='pipe pretend'
   begin_function
 
-    if [[ ! -p $pipe_in ]]; then
-      log_fatal "Invalid FIFO: $pipe_in"
-      fail1
-    fi
-
-    from="${from%%*($NL| |$TAB)}$NL"
-
-    if (( sleep_between_lines > 0 )); then
-      local line
-      while IFS= read -r line || [[ "$line" ]]; do
-        to_background_process_single "$line" || fail
-        if [[ $timed_out == t ]]; then
-          succeed
-        fi
-        sleep $sleep_between_lines
-      done <<<"$from"
-      handle_break
-    else
-      to_background_process_single "$from" || fail
-    fi
-
-    local pipe_replay_hash=$(echo -n "${pipe_replay_hash:-}$from" | sha1sum | awk '{print $1}')
-    replay_counter=${replay_counter:-0}
-    (( replay_counter++ ))
+    local pipe_replay_hash=$(echo -n "$from" | sha1sum | awk '{print $1}')
     replay_file=$job_path/pipe_replay.$pipe_replay_hash
-    local replay_counter_file=$job_path/pipe_replay-$replay_counter
-    ln -sf $replay_file $replay_counter_file
 
-    if [[ $pipe_replay == f && -f $replay_file ]]; then
-      rm $replay_file || fail
+    if [[ $pipe_replay == f ]]; then
+
+      if [[ ! -p $pipe_in ]]; then
+        log_fatal "Invalid FIFO: $pipe_in"
+        fail1
+      fi
+
+      from="${from%%*($NL| |$TAB)}$NL"
+
+      if (( sleep_between_lines > 0 )); then
+        local line
+        while IFS= read -r line || [[ "$line" ]]; do
+          to_background_process_single "$line" || fail
+          if [[ $timed_out == t ]]; then
+            succeed
+          fi
+          sleep $sleep_between_lines
+        done <<<"$from"
+        handle_break
+      else
+        to_background_process_single "$from" || fail
+      fi
+
+      if [[ -f $replay_file ]]; then
+        rm $replay_file || fail
+      fi
+
+      replay_counter=${replay_counter:-0}
+      (( replay_counter++ ))
+      local replay_counter_file=$job_path/pipe_replay-$replay_counter
+      ln -sf $replay_file $replay_counter_file || true
+
+    else # pipe_replay == t 
+
+      if [[ ! -f $replay_file ]]; then
+        log_fatal "Can't replay session since replay file doesn't exist."
+        log_fatal "Run this command without replay=t first to record the session."
+        fail1
+      fi
+      
     fi
 
   end_function
@@ -3275,20 +3288,21 @@ from_background_process() {
 
     from_background_process__prep || fail
 
-    if [[ $buffering == line ]]; then
-
-      local replay_content=
-      if [[ $pipe_replay == t ]]; then
-        if [[ -f $replay_file ]]; then
-          log_debug "Replaying background interaction from $replay_file"
-          replay_content=$(<$replay_file)
-        else
-          log_warn "Missing replay file $replay_file, can't replay background process."
-        fi
+    local replay_content=
+    if [[ $pipe_replay == t ]]; then
+      if [[ -f $replay_file ]]; then
+        log_debug "Replaying background interaction from $replay_file"
+        replay_content=$(<$replay_file)
       else
-        log_vars=pipe_out \
-          log_debug "Waiting for background job output"
+        log_fatal "Missing replay file, can't replay background process."
+        fail1
       fi
+    else
+      log_vars=pipe_out \
+        log_debug "Waiting for background job output"
+    fi
+
+    if [[ $buffering == line ]]; then
 
       begin_loop
 
@@ -3458,8 +3472,7 @@ up_delegate() {
     fi
 
     local out_item
-    # TODO incorrect out_items, needs to promote to dims and add out path
-    out_items=$(find1 $cyto_up_path/out -not -name ".*") || fail
+    out_items=$(find1 $cyto_up_path -not -name ".*") || fail
     begin_for out_item in $out_items; doo
       safe_link $out_item $cell_path/ || fail
     end_for
