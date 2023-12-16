@@ -1336,7 +1336,7 @@ execute_command_internal() {
         fi
       ;;
       log)
-        job_path=$cell_path/.cyto/job
+        :
       ;;
       *)
         cell_context_load || {
@@ -1349,6 +1349,41 @@ execute_command_internal() {
         fi
       ;;
     esac
+
+    if [[ $disable_log == f ]]; then
+      if [[ ! "${omni_log_job_id:-}" ]]; then
+        job_start_time=${EPOCHREALTIME//./}
+        command_to_log="${original_cmd#* }" \
+          get_job_id || fail
+      fi
+
+      local current_job_path=$job_path/$omni_log_job_id
+      if [[ ! -d $current_job_path ]]; then
+        mkdir $current_job_path || fail
+      fi
+
+      local running_job_path=$job_path/running
+      local log_path=$current_job_path/log
+
+      if [[ ! -d $log_path ]]; then
+        mkdir $log_path || fail
+      fi
+
+      force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
+      force=t safe_link $current_job_path $job_path/last-attempt || fail
+
+      # only set this for the first cell in the job, all other cells should 
+      #   use the same fork_id log so that they all have unique ids across the job
+      if [[ ! "${fork_id_log:-}" ]]; then
+        fork_id_log=$current_job_path/fork-id-log
+      fi
+
+      previous_log_pos=$omni_log_pos
+      cell_open_log_file || fail
+      (( previous_log_pos++ ))
+
+    fi
+
 
     local command_path=$cell_path/.cyto/command/$current_command
 
@@ -1414,8 +1449,6 @@ execute_command() {
       fail1
     fi
 
-    local job_path=$cell_path/.cyto/job
-
     case $current_command in log|edit)
       disable_log=t
     esac
@@ -1438,34 +1471,10 @@ execute_command() {
       fi
     fi
 
+    local job_path=$cell_path/.cyto/job
+
     local omni_log_job_id=${omni_log_job_id:-}
-    if [[ $disable_log == f ]]; then
-      if [[ ! "${omni_log_job_id:-}" ]]; then
-        job_start_time=${EPOCHREALTIME//./}
-        command_to_log="${original_cmd#* }" \
-          get_job_id || fail
-      fi
-
-      local current_job_path=$job_path/$omni_log_job_id
-      local running_job_path=$job_path/running
-      local log_path=$current_job_path/log
-
-      if [[ ! -d $log_path ]]; then
-        mkdir -p $log_path || fail
-      fi
-
-      force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
-      force=t safe_link $current_job_path $job_path/last-attempt || fail
-
-      # only set this for the first cell in the job, all other cells should 
-      #   use the same fork_id log so that they all have unique ids across the job
-      if [[ ! "${fork_id_log:-}" ]]; then
-        fork_id_log=$current_job_path/fork-id-log
-      fi
-
-    fi
-
-    change_log=t \
+    change_log=f \
       fork_fg execute_command_internal || fail_later
 
   end_function
