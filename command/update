@@ -375,6 +375,81 @@ update_member() {
   handle_return
 }
 
+no_change_in_dirs() {
+  local left=$1 right=$2
+  if [[ -d $left ]]; then
+    if [[ -d $right ]]; then
+      local sub_full sub already_checked
+
+      for sub_full in $(find1 $left -not -name .dna -not -name .cyto); do
+        sub=${sub_full##*/}
+        if ! no_change_in_dirs $left/$sub $right/$sub; then
+          return 1
+        fi
+        already_checked+=" $sub"
+      done
+      already_checked+=' '
+
+      for sub_full in $(find1 $right -not -name .dna -not -name .cyto); do
+        sub=${sub_full##*/}
+        if [[ "$already_checked" =~ \ $sub\  ]]; then
+          continue
+        fi
+        if ! no_change_in_dirs $right/$sub $left/$sub; then
+          return 1
+        fi
+      done
+
+    else
+      return 1
+    fi
+  elif [[ -f $left ]]; then
+    if [[ -f $right ]]; then
+      diff $left $right &>/dev/null
+    else
+      return 1
+    fi
+  else
+    return 0
+  fi
+}
+
+update_self_move_out_path() {
+  begin_function_flat
+
+    if [[ -e $out_path/.dna ]]; then
+      if [[ ! -e $out_path.new/.dna ]]; then
+        mv $out_path/.dna $out_path.new/.dna || fail
+      else
+        log_fatal "Target .dna folder already exists, when it shouldn't"
+        fail1
+      fi
+    fi
+
+    if [[ -e $out_path/.cyto ]]; then
+      if [[ ! -e $out_path.new/.cyto ]]; then
+        mv $out_path/.cyto $out_path.new/.cyto || fail
+      else
+        log_fatal "Target .cyto folder already exists, when it shouldn't"
+        fail1
+      fi
+    fi
+
+    if [[ -e $out_path.old ]]; then
+      rm -rf $out_path.old || fail
+    fi
+
+    if [[ -d $out_path ]]; then
+      mv $out_path $out_path.old || fail
+    fi
+
+    mv $out_path.new $out_path || fail
+    something_changed=t
+
+  end_function
+  handle_return
+}
+
 update_self() {
   local log_vars='short_cell'
   begin_function_flat
@@ -386,8 +461,9 @@ update_self() {
 
       local reuse_existing_out=${reuse_existing_out:-f}
 
+      local out_path=$cell_path
       if [[ $reuse_existing_out == f ]]; then
-        local out_path=$cell_path.new
+        out_path=$cell_path.new
         if [[ -d $out_path ]]; then
           rm -rf $out_path || fail
         fi
@@ -409,17 +485,10 @@ update_self() {
       if [[ $reuse_existing_out == f ]]; then
         out_path=$cell_path
         if [[ $update_successful == t ]]; then
-          if files_are_same -r $out_path $out_path.new &>/dev/null; then
+          if no_change_in_dirs $out_path $out_path.new; then
             rm -rf $out_path.new || fail
           else
-            if [[ -e $out_path.old ]]; then
-              rm -rf $out_path.old || fail
-            fi
-            if [[ -d $out_path ]]; then
-              mv $out_path $out_path.old || fail
-            fi
-            mv $out_path.new $out_path || fail
-            something_changed=t
+            update_self_move_out_path || fail
           fi
         fi
       else # $reuse_existing_out == t
