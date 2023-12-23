@@ -1385,7 +1385,6 @@ execute_command_internal() {
 
     fi
 
-
     local command_path=$cell_path/.cyto/command/$current_command
 
     if [[ ! -e $command_path && ! -e $cell_path/.cyto ]]; then
@@ -3014,7 +3013,18 @@ to_background_process_single() {
   handle_return
 }
 
+setup_replay_file() {
+  local from="$*"
+  local pipe_replay_hash=$(echo -n "$from" | sha1sum | awk '{print $1}') || return 1
+  replay_file=$job_path/pipe_replay.$pipe_replay_hash
+  replay_counter=${replay_counter:-0}
+  (( replay_counter++ ))
+  local replay_counter_file=$job_path/pipe_replay-$replay_counter
+  ln -sf $replay_file $replay_counter_file || true
+}
+
 to_background_process() {
+
   local pipe_in=${pipe}_in pipe_out=${pipe}_out \
     secret=${secret:-none} \
     pretend=${pretend:-f} \
@@ -3031,8 +3041,7 @@ to_background_process() {
     log_vars='pipe pretend'
   begin_function
 
-    local pipe_replay_hash=$(echo -n "$from" | sha1sum | awk '{print $1}')
-    replay_file=$job_path/pipe_replay.$pipe_replay_hash
+    setup_replay_file "$from" || fail
 
     if [[ $pipe_replay == f ]]; then
 
@@ -3060,11 +3069,6 @@ to_background_process() {
       if [[ -f $replay_file ]]; then
         rm $replay_file || fail
       fi
-
-      replay_counter=${replay_counter:-0}
-      (( replay_counter++ ))
-      local replay_counter_file=$job_path/pipe_replay-$replay_counter
-      ln -sf $replay_file $replay_counter_file || true
 
     else # pipe_replay == t 
 
@@ -3277,6 +3281,7 @@ from_background_process() {
     pretend_out=${pretend_out:-} \
     pretending=f \
     pipe_replay=${pipe_replay:-${replay:-f}} \
+    replay_file=${replay_file:-} \
     timeout=${timeout:-0}
 
   local -n to=$to_var
@@ -3284,6 +3289,12 @@ from_background_process() {
   local log_vars='pipe interact pipe_replay' \
     log_show_vars='timeout required_output succeed_after fail_after'
   begin_function
+
+    if [[ ! "$replay_file" ]]; then
+      log_fatal "replay_file has not been set up before from_background_process was called. "
+      log_fatal "To fix: either call to_background_process before from_background_process, or use setup_replay_file."
+      fail1
+    fi
 
     timed_out=f
     failed=f
@@ -3300,18 +3311,22 @@ from_background_process() {
 
     from_background_process__prep || fail
 
-    local replay_content=
+    local back_fd
     if [[ $pipe_replay == t ]]; then
       if [[ -f $replay_file ]]; then
         log_debug "Replaying background interaction from $replay_file"
-        replay_content=$(<$replay_file)
+        #replay_content=$(<$replay_file)
+        exec {back_fd}<>$replay_file || fail
       else
         log_fatal "Missing replay file, can't replay background process."
         fail1
       fi
+    elif [[ $pretending == t ]]; then
+      log_debug "Pretending to read background job output"
     else
       log_vars=pipe_out \
         log_debug "Waiting for background job output"
+      exec {back_fd}<>$pipe_out || fail
     fi
 
     if [[ $buffering == line ]]; then
@@ -3320,7 +3335,6 @@ from_background_process() {
 
         interacted=f
         if [[ $pretending == t ]]; then
-          log_debug "Reading a line"
           if [[ "$pretend_out" ]]; then
             if [[ "$pretend_out" =~ "$NL" ]]; then
               line=${pretend_out%%$NL*}
@@ -3332,11 +3346,11 @@ from_background_process() {
           else
             line=
           fi
-        elif [[ $pipe_replay == t ]]; then
-          line=${replay_content%%$NL*}
-          replay_content=${replay_content#*$NL}
+        # elif [[ $pipe_replay == t ]]; then
+        #   line=${replay_content%%$NL*}
+        #   replay_content=${replay_content#*$NL}
         else
-          IFS=$NL read -r -t $timeout line <$pipe_out
+          IFS=$NL read -r -t $timeout -u $back_fd line
           if (( $? > 128 )); then 
             timed_out=t
             break
@@ -3367,11 +3381,11 @@ from_background_process() {
           else
             char=
           fi
-        elif [[ $pipe_replay == t ]]; then
-          char=${replay_content:0:1}
-          replay_content=${replay_content:1}
+        # elif [[ $pipe_replay == t ]]; then
+        #   char=${replay_content:0:1}
+        #   replay_content=${replay_content:1}
         else
-          IFS= read -N1 -r -t $timeout char <$pipe_out
+          IFS= read -N1 -r -t $timeout -u $back_fd char 
         fi
 
         if (( $? > 128 )); then 
@@ -3418,6 +3432,11 @@ from_background_process() {
     timeout=0.5 flush_background_process
 
   end_function
+
+  if [[ "$back_fd" ]]; then
+    exec {back_fd}>&-
+  fi
+
   handle_return
 }
 
@@ -3448,7 +3467,7 @@ run_pipe_command() {
     shell_prompt=${shell_prompt##*($NL| |$TAB)}
     to_var=result \
       succeed_after="^0\ $shell_prompt" \
-      fail_after=$shell_prompt \
+      fail_after="^[1-9][0-9]*\ $shell_prompt" \
       from_background_process || fail
 
     if [[ "$timed_out" == t ]]; then
@@ -3474,7 +3493,6 @@ up_delegate() {
   local log_show_vars='^cyto_up_path ^cell_path up_lock'
   begin_function
 
-    debug_start
     if [[ -e $up_lock ]]; then
       local locks_folder=$cell_path/.cyto/up-locks
       if [[ ! -d $locks_folder ]]; then
