@@ -680,7 +680,10 @@ get_needs_update() {
       eval "$localize_dim_vars" || fail
     fi
 
-    if [[ "${downstream_ref_path:-}" && ! -e "$downstream_ref_path" ]]; then
+    if [[ "$out_file" && ! -e "$out_file" ]]; then
+      needs_update=t
+      log_message="Needs update because output file doesn't exist"
+    elif [[ "${downstream_ref_path:-}" && ! -e "$downstream_ref_path" ]]; then
       needs_update=t
       log_message="Needs update because downstream_ref_path hasn't been linked yet"
     elif (( refresh_less_than > update_cost ))
@@ -718,24 +721,12 @@ get_needs_update() {
          && [[ $needs_update == t ]]
     then
       log_message="Needs update because at least one upstream cell is out of date"
-    fi
-
-    if [[ $needs_update == t && ${pre_validate:-f} == t ]]; then
-
-      local check_successful=f
-      log_debug "Pre validating"
-
-      if execute_op check; then
-        if [[ $check_successful == t ]]; then
-          log_debug "Validation failed"
-          needs_update=f
-          log_message="No update needed because remote value already matches intended value"
-        fi
-      else
-        log_fatal "Failed to pre-validate. Something is wrong with the check operator."
-        fail1
-      fi
-
+    elif local data_valid=t
+      ignore_missing=t execute_op check || fail
+      [[ $data_valid == f ]]
+    then
+      needs_update=t
+      log_message="Needs update because current value does not match intended value"
     fi
 
   end_function
@@ -1219,7 +1210,7 @@ execute_op() {
       if [[ "$found_op_function" ]]; then
         $found_op_function || fail
       else
-        execute_command_step $op || fail
+        execute_command_step $found_op || fail
       fi
 
       if [[ $trace_op == $op_name ]]; then
@@ -1243,7 +1234,7 @@ execute_op() {
 
 # returns either found_op_function or found_op
 find_op_or_function() {
-  local op_name=$1 
+  local op_name=$1 op
   found_op_function= found_op=
   if type -t op_$op_name &>/dev/null; then
     found_op_function=op_$op_name
@@ -2060,6 +2051,7 @@ init_context() {
   lock_timeout=2 \
   pre_validate=f \
   post_validate=f \
+  out_file= \
   min_pause=250 \
   current_pause=250 \
   max_pause=60000 \
