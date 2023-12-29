@@ -150,6 +150,7 @@ update_upstream_prep() {
 
 }
 
+# needs_update is guaranteed to be set after this completes successfully
 update_upstream_choose() {
   begin_function
 
@@ -165,15 +166,17 @@ update_upstream_choose() {
 
       # are any already updated?
       local choice
-      begin_for choice in $choices; doo
+      if [[ ! "$needs_update" ]]; then
+        begin_for choice in $choices; doo
 
-        get_needs_update $choice || fail
-        if [[ "$needs_update" == f ]]; then
-          chosen=$choice
-          break
-        fi
+          get_needs_update $choice || fail
+          if [[ "$needs_update" == f ]]; then
+            chosen=$choice
+            break
+          fi
 
-      end_for
+        end_for
+      fi
 
       if [[ ! "$chosen" ]]; then
         chosen=${choices%% *}
@@ -255,10 +258,6 @@ update_upstream() {
       needs_update=t
     fi
 
-    if [[ ! "$needs_update" ]]; then
-      get_needs_update $chosen || fail
-    fi
-
     if [[ "${localize_dim_vars:-}" ]]; then
       eval "$localize_dim_vars"
     fi
@@ -293,8 +292,8 @@ update_upstreams() {
       succeed
     fi
 
-    touch $status_path/deps-up-to-date || fail
     update_successful=t
+    touch $status_path/deps-up-to-date || fail
 
     if [[ -d "${dna_up_path:-}" ]]; then
 
@@ -1208,7 +1207,7 @@ find_seed_dna() {
 
 update() {
   begin_function_flat
-    local leave_loop=0 needs_update=
+    local leave_loop=0 needs_update= something_changed=f
     break_if_not_changed || fail
     if (( leave_loop > 0 )); then
       break
