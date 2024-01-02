@@ -21,7 +21,7 @@ show_branches=${show_branches:-f}
 # used to detect upstream circular dependencies
 downstream_cell_stack=( ) 
 
-disable_log=${disable_log:-f}
+disable_log=${disable_log:-}
 export debug_ignore+=" apad cell_close_log_file cell_open_log_file change_log_file debug_start defer echo_align fd_unlock fd_write_lock find1 fork fork_bg fork_fg fork_inside get_new_fork_id get_new_reply_file load_log_vars load_log_vars_and_write_to_log log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars setup_exit_trap shell_quote_var snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log write_to_log_console_out write_to_log_log_var write_to_log_update_cooked "
 
 setup_cyto_out() {
@@ -1364,8 +1364,13 @@ execute_command_internal() {
         mkdir $log_path || fail
       fi
 
-      force=t safe_link $current_job_path $job_path/last-$current_command-attempt || fail
-      force=t safe_link $current_job_path $job_path/last-attempt || fail
+      local link_target
+      begin_for link_target in $current_command-attempt attempt; doo
+        if [[ -e "$job_path/last-$link_target" ]]; then
+          mv $job_path/last-$link_target $job_path/prev-$link_target || fail
+        fi
+        safe_link $current_job_path $job_path/last-$link_target || fail
+      end_for
 
       # only set this for the first cell in the job, all other cells should 
       #   use the same fork_id log so that they all have unique ids across the job
