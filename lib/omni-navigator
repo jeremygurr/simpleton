@@ -397,7 +397,7 @@ omni_change_cursor_log() {
   fi
 
   local log_vars='cursor new_log_file'
-  begin_function
+  begin_function_flat
 
     eval "local old_log_file=\${cursor_${cursor}_log_file:-}"
     if [[ "$old_log_file" != "$new_log_file" ]]; then
@@ -633,8 +633,8 @@ pop_function_stack() {
 # Move to the next log line to search
 # This is meant to be able to move past the boundaries if there are no other possibilities
 omni_search_next() {
-  local log_show_vars="log_file index direction"
-  begin_function
+  local log_show_vars="^log_file index direction"
+  begin_function_flat
 
     local original_index=$index \
       original_log=$log_file
@@ -736,102 +736,106 @@ omni_search_next() {
 
 omni_search_get_matches() {
 
-  local plane_id=${plane_map[$index]} 
-  local plane_depth=${plane_depth_map[$index]}
-  local log_string=${log_array[$index]}
-  local out_string=${output_array[$index]}
+  begin_function_flat
 
-  if [[ "$log_file" == "$original_log_file" ]]; then
-    if [[ $allow_in == f ]] \
-       && (( plane_depth > original_plane_depth )); then
+    local plane_id=${plane_map[$index]} 
+    local plane_depth=${plane_depth_map[$index]}
+    local log_string=${log_array[$index]}
+    local out_string=${output_array[$index]}
+
+    if [[ "$log_file" == "$original_log_file" ]]; then
+      if [[ $allow_in == f ]] \
+         && (( plane_depth > original_plane_depth )); then
+        found_matching_line=f
+      elif [[ $allow_out == f ]] \
+         && (( plane_depth < original_plane_depth )); then
+        found_matching_line=f
+      elif [[ $allow_flat == f ]] \
+         && (( plane_depth == original_plane_depth )); then
+        found_matching_line=f
+      elif [[ $allow_same_plane == f ]] \
+         && (( plane_id == original_plane_id )); then
+        found_matching_line=f
+      elif [[ $allow_diff_plane == f ]] \
+         && (( plane_id != original_plane_id )); then
+        found_matching_line=f
+      fi
+    fi
+
+    if [[ $found_matching_line == t \
+       && ( "$find_level" || "$find_action" \
+          || "$find_log_id" || "$find_function" \
+          || "$find_substring" || "$find_regex" \
+          ) \
+       ]]; then
+      local log_level log_action log_id log_function
       found_matching_line=f
-    elif [[ $allow_out == f ]] \
-       && (( plane_depth < original_plane_depth )); then
+
+      if [[ $found_matching_line == f && "$find_level" ]]; then
+        log_level=
+        vars=log_level \
+          omni_extract_vars || fail
+        if [[ "${log_level:-}" && $log_level =~ $find_level ]]; then
+          found_matching_line=t
+        fi
+      fi
+
+      if [[ $found_matching_line == f && "$find_action" ]]; then
+        log_action=${action_map[$index]}
+        if [[ "${log_action:-}" && $log_action =~ $find_action ]]; then
+          found_matching_line=t
+        fi
+      fi
+
+      if [[ $found_matching_line == f && "$find_log_id" ]]; then
+        log_id=
+        vars=log_id \
+          omni_extract_vars || fail
+        if [[ "${log_id:-}" && $log_id =~ $find_log_id ]]; then
+          found_matching_line=t
+        fi
+      fi
+
+      if [[ $found_matching_line == f && "$find_function" ]]; then
+        log_function=
+        vars=log_function \
+          omni_extract_vars || fail
+        if [[ "${log_function:-}" && $log_function =~ $find_function ]]; then
+          found_matching_line=t
+        fi
+      fi
+
+      if [[ $found_matching_line == f && "$find_substring" ]]; then
+        local sub=${find_substring// /\\ /}
+        if [[ "$log_string" == *$sub* ]]; then
+          found_matching_line=t
+        fi
+      fi
+
+      if [[ $found_matching_line == f && "$find_regex" ]]; then
+        local find_regex=$find_regex
+        escape_regex find_regex
+        if [[ "$log_string" =~ $find_regex ]]; then
+          found_matching_line=t
+        fi
+      fi
+
+    fi
+
+    # Skip blank lines
+    if [[ $found_matching_line == t && -z "$out_string" ]]; then
       found_matching_line=f
-    elif [[ $allow_flat == f ]] \
-       && (( plane_depth == original_plane_depth )); then
-      found_matching_line=f
-    elif [[ $allow_same_plane == f ]] \
-       && (( plane_id == original_plane_id )); then
-      found_matching_line=f
-    elif [[ $allow_diff_plane == f ]] \
-       && (( plane_id != original_plane_id )); then
-      found_matching_line=f
     fi
-  fi
-
-  if [[ $found_matching_line == t \
-     && ( "$find_level" || "$find_action" \
-        || "$find_log_id" || "$find_function" \
-        || "$find_substring" || "$find_regex" \
-        ) \
-     ]]; then
-    local log_level log_action log_id log_function
-    found_matching_line=f
-
-    if [[ $found_matching_line == f && "$find_level" ]]; then
-      log_level=
-      vars=log_level \
-        omni_extract_vars || fail
-      if [[ "${log_level:-}" && $log_level =~ $find_level ]]; then
-        found_matching_line=t
-      fi
-    fi
-
-    if [[ $found_matching_line == f && "$find_action" ]]; then
-      log_action=${action_map[$index]}
-      if [[ "${log_action:-}" && $log_action =~ $find_action ]]; then
-        found_matching_line=t
-      fi
-    fi
-
-    if [[ $found_matching_line == f && "$find_log_id" ]]; then
-      log_id=
-      vars=log_id \
-        omni_extract_vars || fail
-      if [[ "${log_id:-}" && $log_id =~ $find_log_id ]]; then
-        found_matching_line=t
-      fi
-    fi
-
-    if [[ $found_matching_line == f && "$find_function" ]]; then
-      log_function=
-      vars=log_function \
-        omni_extract_vars || fail
-      if [[ "${log_function:-}" && $log_function =~ $find_function ]]; then
-        found_matching_line=t
-      fi
-    fi
-
-    if [[ $found_matching_line == f && "$find_substring" ]]; then
-      local sub=${find_substring// /\\ /}
-      if [[ "$log_string" == *$sub* ]]; then
-        found_matching_line=t
-      fi
-    fi
-
-    if [[ $found_matching_line == f && "$find_regex" ]]; then
-      local find_regex=$find_regex
-      escape_regex find_regex
-      if [[ "$log_string" =~ $find_regex ]]; then
-        found_matching_line=t
-      fi
-    fi
-
-  fi
-
-  # Skip blank lines
-  if [[ $found_matching_line == t && -z "$out_string" ]]; then
-    found_matching_line=f
-  fi
    
+  end_function
+  handle_return
 }
 
 omni_copy_cursor() {
   local from=$1 to=$2
 
   local log_show_vars="from to"
-  begin_function
+  begin_function_flat
 
     if [[ $from != $to ]]; then
       local -n \
@@ -867,30 +871,33 @@ omni_copy_cursor() {
 #   from_cursor=      cursor to copy to move_cursor. Determines starting point of search
 #   move_cursosr=s    which cursor is changed in the process
 omni_search() {
-  local log_vars='from_log from_index move_cursor count deep'
-  begin_function
+  local \
+    from_cursor=${from_cursor:-} \
+    original_cursor=${cursor:-} \
+    move_cursor=${move_cursor:-s} \
+    each_match=${each_match:-} \
+    find_level=${find_level:-} \
+    find_action=${find_action:-} \
+    find_log_id=${find_log_id:-} \
+    find_function=${find_function:-} \
+    find_substring=${find_substring:-} \
+    find_regex=${find_regex:-} \
+    allow_in=${allow_in:-f} \
+    allow_out=${allow_out:-f} \
+    allow_in_log=${allow_in_log:-f} \
+    allow_out_log=${allow_out_log:-f} \
+    allow_flat=${allow_flat:-f} \
+    allow_same_plane=${allow_same_plane:-f} \
+    allow_diff_plane=${allow_diff_plane:-f} \
+    allow_all=${allow_all:-f} \
+    allow_all_in_same_log=${allow_all_in_same_log:-f} \
+    count=${count:-1} 
 
-    local \
-      from_cursor=${from_cursor:-} \
-      original_cursor=${cursor:-} \
-      move_cursor=${move_cursor:-s} \
-      each_match=${each_match:-} \
-      find_level=${find_level:-} \
-      find_action=${find_action:-} \
-      find_log_id=${find_log_id:-} \
-      find_function=${find_function:-} \
-      find_substring=${find_substring:-} \
-      find_regex=${find_regex:-} \
-      allow_in=${allow_in:-f} \
-      allow_out=${allow_out:-f} \
-      allow_in_log=${allow_in_log:-f} \
-      allow_out_log=${allow_out_log:-f} \
-      allow_flat=${allow_flat:-f} \
-      allow_same_plane=${allow_same_plane:-f} \
-      allow_diff_plane=${allow_diff_plane:-f} \
-      allow_all=${allow_all:-f} \
-      allow_all_in_same_log=${allow_all_in_same_log:-f} \
-      count=${count:-1} 
+  local log_show_vars='from_log from_index move_cursor count deep' \
+    log_vars='cursor from_cursor each_match find_level find_action find_log_id find_function
+      find_substring find_regex'
+  begin_function_flat
+
     local -n log_file=cursor_${move_cursor}_log_file
 
     # implications
@@ -1253,7 +1260,7 @@ omni_show_context() {
 
 # inputs: 
 #   log_file
-omni_navigator() (
+omni_navigator() {
   begin_function_flat
 
     apad_min[log_id]=6 apad_max[log_id]=12
@@ -1297,9 +1304,11 @@ omni_navigator() (
 
       local log_id=${log_id_array[$log_array_index]}
       echo -n "${YELLOW}job_id=$log_job_id log_id=$log_id line=$((log_array_index+1)) ${GREEN}omni-log-navigator> $RESET" >&$fd_original_err
+      log_debug "Waiting for command"
       local debug_c
       read -rs -n1 debug_c <&$fd_original_in
 
+      log_debug "Command: $debug_c"
       case "$debug_c" in
         b)
           echo "# Step back, until next function call" >&$fd_original_err
@@ -1697,5 +1706,5 @@ omni_navigator() (
   end_function
 
   handle_return
-)
+}
 
