@@ -12,7 +12,7 @@ wild_sub_path=_
 pretend=${pretend:-f}
 
 parallel_default=t 
-[[ ${debug:-} == t ]] && parallel_default=f
+[[ ${debug:-f} == t ]] && parallel_default=f
 parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
 # Whether we should show logging for each seperate branch or only for leaves
@@ -24,98 +24,13 @@ downstream_cell_stack=( )
 disable_log=${disable_log:-}
 export debug_ignore+=" apad cell_close_log_file cell_open_log_file change_log_file debug_start defer echo_align fd_unlock fd_write_lock find1 fork fork_bg fork_fg fork_inside get_new_fork_id get_new_reply_file load_log_vars load_log_vars_and_write_to_log log_debug log_error log_fatal log_info log_trace log_warn out parallel_loop pause_tee safe_link save_log_vars setup_exit_trap shell_quote_var snapshot_source_location tee_output_to_log unpause_tee unrealpath untee_output write_to_log write_to_log_console_out write_to_log_log_var write_to_log_update_cooked "
 
-setup_cyto_out() {
-  local from=$1 to=$2
-  begin_function_flat
-    local contents=$(find1 $from) || fail
-    begin_for item in $contents; doo
-      if [[ -d $item ]]; then
-        local last_part=${item##*/}
-        if [[ ! -d $to/$last_part ]]; then
-          mkdir $to/$last_part || fail
-        fi
-        # recursive
-        setup_cyto_out $from/$last_part $to/$last_part || fail
-      elif [[ $item == *.safe ]]; then
-        local target_file=${item##*/}
-        target_file=${target_file%.safe}
-        from=$item to=$to/$target_file decrypt_file_with_shared_key || fail
-      else
-        safe_link $item $to/ || fail
-      fi
-    end_for
-  end_function
-  handle_return
-}
-
-copy_cyto_template() {
-  local from=$1 to=$2
-  local parent=${from%/*}
-  if [[ ${#parent} -gt 1 && -d "$parent" ]]; then
-    copy_cyto_template $parent $to || return 1
-  fi
-  if [[ -d $from/.dna/cyto-template ]]; then
-    rcp $from/.dna/cyto-template/ $to/ >/dev/null || return 1
-  fi
-  return 0
-}
-
-record_context_before() {
-  local cell=$1
-  local parent=${cell%/*}
-  if [[ ${#parent} -gt 1 ]]; then
-    record_context_before $parent || return 1
-  fi
-  local context_before_path=$cell/.dna/context-before
-  if [[ -f $context_before_path ]]; then
-    echo "# generated from: $context_before_path" >>$new_context || return 1
-    echo | cat $context_before_path - >>$new_context || return 1
-  fi
-  return 0
-}
-
-record_context_after() {
-  local cell=$1
-  local parent=${cell%/*}
-  local context_after_path=$cell/.dna/context-after
-  if [[ -f $context_after_path ]]; then
-    echo "# generated from: $context_after_path" >>$new_context || return 1
-    echo | cat $context_after_path - >>$new_context || return 1
-  fi
-  if [[ ${#parent} -gt 1 ]]; then
-    record_context_after $parent || return 1
-  fi
-  return 0
-}
-
-record_context() {
-  local cell=$1
-  local parent=${cell%/*}
-  local new_context=$new_cyto/context
-
-  record_context_before $cell || return 1
-
-  local context_local_path=$cell/.dna/context-local
-  local dna_path=$cell/.dna
-
-  if [[ -f $context_local_path ]]; then
-    echo "# generated from: $context_local_path" >>$new_context || return 1
-    echo | cat $context_local_path - >>$new_context || return 1
-  elif [[ -f $dna_path ]]; then
-    echo "# generated from: $dna_path" >>$new_context || return 1
-    echo | cat $dna_path - >>$new_context || return 1
-  fi
-
-  record_context_after $cell || return 1
-
-  return 0
-}
-
 # This is run if cell hasn't been initialized = missing .cyto folder
 make_cyto() {
-  local new_cyto=$cell_path/.cyto.new \
-    log_vars=cell_path log_show_vars=short_cell
+  local log_vars=cell_path log_show_vars=short_cell
   begin_function
+
+    local new_cyto=$cell_path/.cyto.new
+    mkdir $new_cyto/job || fail
 
     if [[ -e $cell_path/.cyto ]]; then
       log_fatal "$cell_path/.cyto already exists. make_cyto should not be called unless it doesn't."
@@ -123,58 +38,39 @@ make_cyto() {
       fail1
     fi
 
-    timeout=0 \
-      folder_to_lock=$new_cyto \
-      folder_lock || {
-        log_warn "Waiting for new cyto lock"
-        local i=0
-        begin_while [[ -d $new_cyto ]]; doo
-          (( i++ ))
-          if (( i > 50 )); then
-            log_fatal "Waited too long for new cyto lock, aborting"
-            fail1
-          fi
-          sleep 0.5
-        end_while
-      }
-
-    copy_cyto_template $cell_path $new_cyto || fail
-    record_context $cell_path || fail
-
-    get_top_cell $cell_path || fail
-    if [[ -d $top_cell/.dna/command ]]; then
-      safe_link $top_cell/.dna/command $new_cyto/command || fail
-    else
-      log_fatal "Top cell doesn't have a command folder ($top_cell/.dna/command missing)"
+    mkdir $new_cyto || {
+      log_fatal "Failed to obtain new cyto lock. Maybe another update is happening to this cell, or the cell needs to be cleaned first."
       fail1
-    fi
-    if [[ -d $top_cell/.dna/lib ]]; then
-      safe_link $top_cell/.dna/lib $new_cyto/lib || fail
-    fi
+    }
 
-    #   more powerful, but more fragile way
-    # mkdir -p $new_cyto/command || fail
-    # mkdir -p $new_cyto/lib || fail
-    # inherit_lib $cell_path || fail
+    local context_path=$new_cyto/context \
+      dna_path=$cell_path/.dna \
+      dna_folder dna_full_folder
+    local dna_folders=$(find1 $dna_path -type d) || fail
+    begin_for dna_full_folder in $dna_folders; doo
+      dna_folder=${dna_full_folder##*/}
+      case $dna_folder in
+        dim)
+          ;;
+        fun)
+          ;;
+        op)
+          ;;
+        out)
+          mkdir $new_cyto/out || fail
+          safe_link $dna_full_folder/* $new_cyto/out/ || fail
+          ;;
+        sub)
+          ;;
+        up)
+          ;;
+        var)
+          ;;
+        *)
+          ;;
+      esac
+    end_for
 
-    local context_path=$new_cyto/context
-    if [[ -f "$context_path" ]]; then
-      source $context_path || fail
-    fi
-
-    local dna_path=$cell_path/.dna
-
-    if [[ -d $dna_path/out && $cell_is_leaf == t ]]; then
-      local item
-      local out_path=$cell_path
-      local key_path=$dna_path/key
-      setup_cyto_out $dna_path/out $out_path || fail
-    fi
-
-    mkdir $new_cyto/job || fail
-
-    folder_to_unlock=$new_cyto \
-      folder_unlock || fail
     mv $new_cyto $cell_path/.cyto || fail
 
   end_function
@@ -218,8 +114,7 @@ setup_cell_path_vars() {
     fi
 
     dna_path=$cell_path/.dna \
-      cyto_path=$cell_path/.cyto \
-      command_path=$cyto_path/command
+      cyto_path=$cell_path/.cyto 
 
     key_path=$cyto_path/key
     if [[ ! -d $key_path ]]; then
@@ -1385,15 +1280,7 @@ execute_command_internal() {
 
     fi
 
-    local command_path=$cell_path/.cyto/command/$current_command
-
-    if [[ ! -e $command_path && ! -e $cell_path/.cyto ]]; then
-      local dna_command=
-      command=$current_command get_dna_command || fail
-      if [[ "$dna_command" ]]; then
-        command_path=$dna_command
-      fi
-    fi
+    local command_path=$path_to_commands/$current_command
 
     if [[ ! -e $command_path ]]; then
       log_fatal "Command $current_command doesn't exist in $command_path or as a function"

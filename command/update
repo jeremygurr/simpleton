@@ -413,6 +413,10 @@ no_change_in_dirs() {
 update_self_move_out_path() {
   begin_function_flat
 
+    if [[ -e $out_path.old ]]; then
+      rm -rf $out_path.old || fail
+    fi
+
     if [[ -e $out_path/.dna ]]; then
       if [[ ! -e $out_path.new/.dna ]]; then
         mv $out_path/.dna $out_path.new/.dna || fail
@@ -429,10 +433,6 @@ update_self_move_out_path() {
         log_fatal "Target .cyto folder already exists, when it shouldn't"
         fail1
       fi
-    fi
-
-    if [[ -e $out_path.old ]]; then
-      rm -rf $out_path.old || fail
     fi
 
     if [[ -d $out_path ]]; then
@@ -1205,6 +1205,29 @@ find_seed_dna() {
   return 0
 }
 
+setup_cyto_out() {
+  local from=$1 to=$2
+  begin_function_flat
+    local contents=$(find1 $from) || fail
+    begin_for item in $contents; doo
+      if [[ -d $item ]]; then
+        local last_part=${item##*/}
+        if [[ ! -d $to/$last_part ]]; then
+          mkdir $to/$last_part || fail
+        fi
+        setup_cyto_out $from/$last_part $to/$last_part || fail
+      elif [[ $item == *.safe ]]; then
+        local target_file=${item##*/}
+        target_file=${target_file%.safe}
+        from=$item to=$to/$target_file decrypt_file_with_shared_key || fail
+      else
+        safe_link $item $to/ || fail
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
 update() {
   begin_function_flat
     local leave_loop=0 needs_update= something_changed=f
@@ -1219,6 +1242,9 @@ update() {
       update_successful=
       update_members || fail
       create_sub_cells || fail
+      if [[ -d $cyto_path/out ]]; then
+        setup_cyto_out $cyto_path/out $out_path || fail
+      fi
       update_self_retry_loop || fail
       check_results || fail
     fi
