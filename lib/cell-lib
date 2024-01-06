@@ -84,7 +84,7 @@ make_cyto() {
     begin_for dna_full_folder in $dna_folders; doo
       dna_folder=${dna_full_folder##*/}
       case $dna_folder in
-        dim|sub)
+        dim|sub|down)
           ;;
         fun)
           make_cyto_functions || fail
@@ -184,11 +184,6 @@ setup_cell_path_vars() {
     fi
 
     # context can override these as needed
-    # could be a relative path
-    in_path=${in_path:-}
-    if [[ "$in_path" && "$in_path" != /* ]]; then
-      in_path=$cell_path/$in_path
-    fi
 
     status_path=$cyto_path/status
     if [[ ! -d $status_path ]]; then
@@ -217,64 +212,72 @@ setup_cell_path_vars() {
   handle_return
 }
 
-# if dims var is localized, last_cell_dims_loaded should also be localized
-load_dims() {
-  local dims_path=$1 dim_path dim 
-  local log_show_vars=^dims_path
-  begin_function
-    if [[ ${last_cell_dims_loaded:-} != $dims_path ]]; then
-      log_debug "Loading dims"
-      dim_array=()
-      if [[ -d $dims_path ]]; then
-        local contents=$(find1 $dims_path -not -name ".*" | sort -g) || return 1
-        for dim_path in $contents; do
-          source $dim_path || return 1
-          dim=${dim_path##*/}
-          if [[ $dim =~ [0-9]+-(.*) ]]; then
-            dim=${BASH_REMATCH[1]}
-          fi
-          get_plural $dim
-          dims=$plural
-          local ddim=d_$dim ddims=d_$dims
-          dim_array+=( $dim )
-          localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
-        done
-        if [[ "$dim_array" ]]; then
-          log_debug "Found dims: ${dim_array[*]}"
-        fi
-      fi
-      dims=( ${dim_array[*]} )
-      last_cell_dims_loaded=$dims_path
-    else
-      log_debug "Already loaded dims: ${dims[*]}"
-    fi
-  end_function
-  handle_return
-}
-
 setup_dims() {
 
-  local cell_path=$1
+  local cell_path=$1 dim dims
 
-  load_dims $cell_path/.dna/dim || return 1
-  leaf_dims=( ${dims[*]:-} )
+  for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
+    get_plural $dim
+    dims=$plural
+    local ddim=d_$dim ddims=d_$dims
+    localize_dim_vars+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
+  done
+
   if [[ "${leaf_dims:-}" ]]; then
     log_debug "Leaf dims found: ${leaf_dims[*]}"
   fi
 
-  load_dims $cell_path/.dna/sub-dim || return 1
-  sub_dims=( ${dims[*]:-} )
   if [[ "${sub_dims:-}" ]]; then
     log_debug "Sub dims found: ${sub_dims[*]}"
   fi
 
-  props=()
-  load_props $cell_path/.dna/prop || return 1
-  load_props $cell_path/.dna/leaf/prop || return 1
   if [[ "${props:-}" ]]; then
     log_debug "Props found: ${props[*]}"
   fi
 
+}
+
+# returns array of dims, which may be empty if there are no dims
+get_leaf_dims() {
+  local -r cell=$1
+  if [[ -f $var_path/leaf_dims ]]; then
+    leaf_dims=( $(<$var_path/leaf_dims) )
+  else
+    leaf_dims=()
+  fi
+  return 0
+}
+
+# returns:
+#   branch_dims
+#   branch_dim_count
+#   trunk_dims
+#   trunk_dim_count
+setup_branch_dims() {
+  local cell_path=$1 \
+    trunk_cell leaf_dims
+
+  get_trunk_cell $cell_path || return 1
+  get_leaf_dims $trunk_cell || return 1
+  trunk_dims=( ${leaf_dims[*]} )
+  trunk_dim_count=${#trunk_dims[*]}
+
+  branch_dims=() 
+  local dim
+  for dim in ${leaf_dims[*]}; do
+    if [[ $cell_path =~ .dim ]]; then
+      cell_path=${cell_path%/.dim/*}
+      branch_dims+=( $dim )
+    else
+      break
+    fi
+  done
+  branch_dim_count=${#branch_dims[*]}
+  if [[ "${branch_dims:-}" ]]; then
+    log_debug "Branch dims found: ${branch_dims[*]}"
+  fi
+
+  return 0
 }
 
 cell_context_load() {
@@ -305,10 +308,6 @@ cell_context_load() {
         cell_is_leaf=t
       fi
 
-      if [[ -e $cyto_path && $dna_path/context-local -nt $cyto_path/context ]]; then
-        rm -rf $cyto_path || fail
-      fi
-
       init_context || fail
       local context_path=$cyto_path/context
       if [[ ! -e $cyto_path ]]; then
@@ -321,7 +320,7 @@ cell_context_load() {
         source $context_path || fail
       fi
 
-      setup_context_defaults || fail
+      setup_dep_defaults || return 1
       setup_dims $cell_path || fail
       setup_cell_path_vars $cell_path || fail
       setup_branch_dims $cell_path || fail
@@ -607,8 +606,7 @@ get_needs_update() {
 
     local dims localize_dim_vars=local leaf_dims \
       last_cell_dims_loaded
-    load_dims $cell_path/.dna/dim || fail
-    leaf_dims=( ${dims[*]:-} )
+    setup_dims || fail
     if [[ "$localize_dim_vars" != local ]]; then
       eval "$localize_dim_vars" || fail
     fi
@@ -1948,7 +1946,6 @@ get_bottom_cell2() {
 }
 
 setup_context_defaults() {
-  setup_dep_defaults || return 1
   return 0
 }
 
@@ -1990,61 +1987,10 @@ init_context() {
   props= \
   leaf_dims= \
   sub_dims= \
-  in_path= \
   update_cost=1 \
   refresh_less_than=${refresh_less_than:-1} 
   return 0
 }
-
-# returns:
-#   branch_dims
-#   branch_dim_count
-#   trunk_dims
-#   trunk_dim_count
-setup_branch_dims() {
-  local cell_path=$1 \
-    trunk_cell dims
-
-  get_trunk_cell $cell_path || return 1
-  get_dims $trunk_cell || return 1
-  trunk_dims=( ${dims[*]} )
-  trunk_dim_count=${#trunk_dims[*]}
-
-  branch_dims=() 
-  local dim
-  for dim in ${dims[*]}; do
-    if [[ $cell_path =~ .dim ]]; then
-      cell_path=${cell_path%/.dim/*}
-      branch_dims+=( $dim )
-    else
-      break
-    fi
-  done
-  branch_dim_count=${#branch_dims[*]}
-  if [[ "${branch_dims:-}" ]]; then
-    log_debug "Branch dims found: ${branch_dims[*]}"
-  fi
-
-  return 0
-}
-
-# returns array of dims, which may be empty if there are no dims
-get_dims() {
-  local -r cell=$1
-  if [[ -d $cell/.dna/dim ]]; then
-    dims=( $( \
-      find1 $cell/.dna/dim \
-      -not -name '.*' \
-      -printf '%f\n' \
-      | sort -g \
-      | sed -E 's/^[0-9]+-(.*)/\1/' \
-      ) ) || return 1
-  else
-    dims=()
-  fi
-  return 0
-}
-
 
 update_cell_value_file() {
   begin_function_flat
