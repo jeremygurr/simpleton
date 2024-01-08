@@ -322,7 +322,8 @@ update_upstreams() {
 update_members() {
   begin_function
     if [[ "${leaf_dims:-}" ]]; then
-      par=t fork=t function=update_member for_each_member "${leaf_dims[0]}" || fail
+      par=t fork=f function=update_member for_each_member "${leaf_dims[0]}" || fail
+      load_context || fail
     fi
   end_function
   handle_return
@@ -353,7 +354,7 @@ update_member() {
       elif [[ "$downstream_ref_path" ]]; then
         log_debug "Only one member found, passing downstream_ref_path: $downstream_ref_path"
       fi
-      fork_fg execute_command $member_path update || fail
+      execute_command $member_path update || fail
 
       if [[ $update_successful == f ]]; then
         error "Failed to update member cell $member"
@@ -814,7 +815,7 @@ promote_dep_cell() {
         if [[ ! -d $from ]]; then
           eval "$dep_dim_var=\"$values\""
           log_debug "Creating sub for $from"
-          fork_fg "load_context_and_create_sub $old_from $from" || fail
+          load_context_and_create_sub $old_from $from || fail
         fi
       else
         log_debug "Did not promote $dep_dim because no value is found for it yet"
@@ -822,11 +823,11 @@ promote_dep_cell() {
       fi
 
     end_for
+    load_context || fail
   end_function
   handle_return
 }
 
-# should be forked because dims will be altered
 # from and to are paths to up/choices/{upstream} which must be a cell
 migrate_cell() {
   local -r dep_link=$1 to=$2
@@ -863,7 +864,7 @@ migrate_dep2() {
 
     elif [[ -d $from/.dna ]]; then
       # recursive
-      fork_fg "migrate_cell $from $to" || fail
+      migrate_cell $from $to || fail
 
     elif [[ -d $from ]]; then
       log_fatal "Directory inside of dependency not supported yet"
