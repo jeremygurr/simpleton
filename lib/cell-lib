@@ -331,6 +331,8 @@ cell_context_load() {
   handle_return
 }
 
+alias load_context='{ setup_dims && eval "$localize_dim_vars" && cell_context_load; }'
+
 plant_seed() {
   local from=$1 to=$2 contents x x_part
   begin_function_flat
@@ -566,9 +568,221 @@ get_upstream_needs_update() {
       end_for
     fi
 
+    # restore context
+    load_context || fail
+
   end_function
   handle_return
 
+}
+
+get_leaf_needs_update() {
+  needs_update=
+  if [[ ! "${leaf_path:-}" ]]; then
+    log_fatal "leaf_path is missing"
+    return 1
+  fi
+  local leaf_cell_path=$cell_path$leaf_path
+
+  if [[ -d $leaf_cell_path ]]; then
+    # recursive
+    get_needs_update $leaf_cell_path || return 1
+  else
+    needs_update=t
+  fi
+
+  if [[ $needs_update == t ]]; then
+    leave_loop=1
+  fi
+  return 0
+}
+
+# same as for_each_leaf but faster but can't divide into parallel processes or fork
+# use for simple cases
+for_each_leaf_flat() {
+local dim_array=( $* ) multi_cell \
+  leaf_function=$function
+
+begin_function_flat
+
+  log_debug "Checking leaves of $short_cell"
+  if [[ "$localize_dim_vars" != local ]]; then
+    eval "$localize_dim_vars" || fail
+  fi
+  local member_index_stack \
+    member_index_stack_count \
+    member_stack \
+    member_stack_count \
+    leaf_path_stack \
+    branch_values \
+    member_index \
+    dim dim_index dim_count=${#dim_array[*]} \
+    leave_loop=${leave_loop:-0} \
+    branch_values \
+    leaf_path \
+    i value
+  local last_row_index=$((dim_count-1))
+
+  begin_loop
+
+    if [[ "${member_index_stack:-}" ]]; then
+      member_index_stack_count=${#member_index_stack[*]}
+    else
+      member_index_stack_count=0
+    fi
+
+    local -n member_row
+    local member_row_count
+    if [[ "${member_stack:-}" ]]; then
+      member_row=${member_stack[$last_row_index]}
+      member_row_count=${#member_row[*]}
+    fi
+
+    if (( member_index_stack_count < dim_count )); then
+      for_each_leaf_flat_expand_members || fail
+    elif (( member_index == member_row_count - 1 )); then
+      begin_while (( member_index == member_row_count - 1 )); doo
+        unset member_index_stack[-1] \
+          leaf_path_stack[-1] \
+          branch_values[-1] \
+          member_stack[-1]
+        if [[ ${#member_index_stack[*]} == 0 ]]; then
+          succeed
+        fi
+        member_index=${member_index_stack[-1]}
+        member_row=${member_stack[-1]}
+        member_row_count=${#member_row[*]}
+      end_while
+      let member_index++ || true
+      for_each_leaf_flat_expand_members || fail
+    elif [[ ! "${member_index:-}" ]]; then
+      member_index=0
+    else
+      let member_index++ || true
+    fi
+
+    member_row=${member_stack[$last_row_index]}
+    if [[ "${#member_row[*]}" -gt 1 ]]; then
+      multi_cell=t
+    else
+      multi_cell=f
+    fi
+
+    value=${member_row[$member_index]}
+    get_sane_value "$value"
+
+    if (( ${#leaf_path_stack[*]} > 1 )); then
+      leaf_path=${leaf_path_stack[-2]}/.dim/$sane_value
+    else
+      leaf_path=/.dim/$sane_value
+    fi
+
+    branch_values[-1]=$value
+    eval "local d_$dim=\$value"
+
+    $leaf_function || fail
+
+    if [[ $leave_loop -gt 0 ]]; then
+      let leave_loop-- || true
+      break
+    fi
+    
+  end_loop
+
+end_function
+handle_return
+}
+
+for_each_leaf_flat_expand_members() {
+begin_function_flat
+local row 
+if [[ "${member_stack:-}" ]]; then
+  member_stack_count=${#member_stack[*]}
+else
+  member_stack_count=0
+fi
+begin_for ((row=member_stack_count; row < dim_count; row++)); doo
+
+  dim=${dim_array[$row]}
+  expand_values || fail
+  value=$values
+  eval "local d_$dim=\$value"
+  branch_values+=( "$value" )
+
+  eval "members$row=( \"\${values[@]}\" )"
+  member_stack+=( members$row )
+
+  if [[ "${member_index_stack:-}" ]]; then
+    member_index_stack[-1]=$member_index
+  fi
+  member_index=0
+  member_index_stack+=( 0 )
+
+  local previous_leaf_stack
+  if (( row > 0 )); then
+    previous_leaf_path=${leaf_path_stack[-1]}
+  else
+    previous_leaf_path=
+  fi
+
+  get_sane_value "$value"
+  leaf_path_stack+=( $previous_leaf_path/.dim/$sane_value )
+
+end_for
+
+end_function
+handle_return
+}
+
+# will construct cell_values array with current set of values of the
+#   cell dims, which can be used in branch or leaf functions
+for_each_leaf() {
+
+local dim_array=( $* ) multi_cell=f \
+  leaf_function=$function leave_loop=${leave_loop:-0} \
+  fork=${fork:-t} \
+  par=${par:-t}
+
+local dim=${dim_array[0]} \
+  remaining_dims=( ${dim_array[*]:1} ) \
+  function= \
+  branch_values=${branch_values[*]:-()} \
+  leaf_path=${leaf_path:-}
+
+local log_vars='dim fork par function'
+begin_function_flat
+
+  expand_values || fail
+
+  if [[ "${#values[*]}" -gt 1 ]]; then
+    multi_cell=t
+  fi
+
+  local loop_function=$leaf_function
+  if [[ "${remaining_dims:-}" ]]; then
+    loop_function="function=\"$leaf_function\" for_each_leaf ${remaining_dims[*]}"
+  fi
+
+  branch_values+=()
+  local parent_leaf_path=$leaf_path
+  loop_over_var=values \
+    head="local member=\$value
+      branch_values[-1]=\$value
+      get_sane_value \"\$value\"
+      leaf_path=$parent_leaf_path/.dim/\$sane_value
+      eval \"local d_$dim=\$member\"
+      par=\$par2 fork=\$fork2
+      " \
+    body=$loop_function \
+    tail='
+      if [[ $leave_loop -gt 0 ]]; then
+        break
+      fi
+      ' \
+    parallel_loop || fail
+
+end_function
+handle_return
 }
 
 # returns needs_update
@@ -579,17 +793,17 @@ get_needs_update() {
     return 1
   fi
 
-  local cell_path=$(realpath $1)
-  local status_path=$cell_path/.cyto/status \
-    cyto_up_path=$cell_path/.cyto/up \
-    log_message="No update needed" \
-    check_upstream_depth=${check_upstream_depth:-1}
+  local cell_path=$(realpath $1) short_cell
 
-  local short_cell
-  get_short_cell $cell_path
-
-  local log_vars=cell_path log_show_vars=short_cell
+  local log_show_vars=^cell_path
   begin_function
+
+    load_context || fail
+
+    local status_path=$cell_path/.cyto/status \
+      cyto_up_path=$cell_path/.cyto/up \
+      log_message="No update needed" \
+      check_upstream_depth=${check_upstream_depth:-1}
 
     if [[ "$needs_update" ]]; then
       # needs_update is already known, don't need to compute it again
@@ -606,10 +820,6 @@ get_needs_update() {
 
     local dims localize_dim_vars=local leaf_dims \
       last_cell_dims_loaded
-    setup_dims || fail
-    if [[ "$localize_dim_vars" != local ]]; then
-      eval "$localize_dim_vars" || fail
-    fi
 
     if [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
       needs_update=t
@@ -644,6 +854,9 @@ get_needs_update() {
            function=get_leaf_needs_update \
              for_each_leaf_flat ${leaf_dims[*]} || fail 
          } \
+         && { 
+           load_context || fail
+         } \
          && [[ $needs_update == t ]]
     then
       log_message="Needs update because at least one leaf cell is out of date"
@@ -677,27 +890,6 @@ get_needs_update() {
   fi
 
   handle_return
-}
-
-get_leaf_needs_update() {
-  needs_update=
-  if [[ ! "${leaf_path:-}" ]]; then
-    log_fatal "leaf_path is missing"
-    return 1
-  fi
-  local leaf_cell_path=$cell_path$leaf_path
-
-  if [[ -d $leaf_cell_path ]]; then
-    # recursive
-    get_needs_update $leaf_cell_path || return 1
-  else
-    needs_update=t
-  fi
-
-  if [[ $needs_update == t ]]; then
-    leave_loop=1
-  fi
-  return 0
 }
 
 get_prop_changed() {
@@ -1005,60 +1197,6 @@ already_in_dep_stack() {
     fi
   done
   return 1
-}
-
-inherit_lib() {
-  local cell_from=$1
-  local parent=${cell_from%/*}
-  begin_function_flat
-    if [[ "${#parent}" -gt 1 ]]; then
-      # recursive
-      inherit_lib $parent || fail
-    fi
-    if [[ -d $cell_from/.dna ]]; then
-      local lib
-      if [[ -d $cell_from/.dna/lib ]]; then
-        inherit_lib_folder $cell_from/.dna/lib $new_cyto/lib || fail
-      fi
-      if [[ -d $cell_from/.dna/command ]]; then
-        inherit_lib_folder $cell_from/.dna/command $new_cyto/command || fail
-      fi
-    fi
-  end_function
-  handle_return
-}
-
-inherit_lib_folder() {
-  local from=$1 to=$2
-  begin_function_flat
-    local folder_name lib
-    mkdir -p $to || fail
-    local from_contents=$(find1 $from -not -name '.*') || fail
-    begin_for lib in $from_contents; doo
-      if [[ -f $lib ]]; then
-        local source_path=${lib%/*} target_file=${lib##*/} base prefix
-        if [[ ! $target_file =~ ([0-9]+)-(.*) ]]; then
-          base=$target_file
-          found=( $(find1 $to -regex '[0-9]+-'$base'$' | sort -g) ) || fail
-          if [[ "${found:-}" ]]; then
-            target_file=$found
-            if [[ "${#found[*]}" -gt 1 ]]; then
-              log_warn "Found more than one match for $lib in $to. Will use $target_file."
-            fi
-          fi
-        fi
-        safe_link $lib $to/$target_file || fail
-      elif [[ -d $lib ]]; then
-        folder_name=${lib##*/}
-        inherit_lib_folder $lib $to/$folder_name || fail
-      fi
-    end_for
-  end_function
-  handle_return
-}
-
-gather_leaf_cells() {
-  leaf_cells+=( $leaf_path )
 }
 
 # executes a step of the folder language
@@ -1393,8 +1531,11 @@ execute_command() {
     local job_path=$cell_path/.cyto/job
 
     local omni_log_job_id=${omni_log_job_id:-}
-    change_log=t \
-      fork_fg execute_command_internal || fail_later
+    # change_log=t \
+    #   fork_fg execute_command_internal || fail_later
+    cell_open_log_file || fail
+    execute_command_internal || fail_later
+    cell_close_log_file || fail
 
   end_function
   handle_return
@@ -2244,194 +2385,6 @@ for_each_member() {
 
   end_function
   handle_return
-}
-
-# same as for_each_leaf but faster but can't divide into parallel processes or fork
-# use for simple cases
-for_each_leaf_flat() {
-local dim_array=( $* ) multi_cell \
-  leaf_function=$function
-
-begin_function_flat
-
-  log_debug "Checking leaves of $short_cell"
-  if [[ "$localize_dim_vars" != local ]]; then
-    eval "$localize_dim_vars" || fail
-  fi
-  local member_index_stack \
-    member_index_stack_count \
-    member_stack \
-    member_stack_count \
-    leaf_path_stack \
-    branch_values \
-    member_index \
-    dim dim_index dim_count=${#dim_array[*]} \
-    leave_loop=${leave_loop:-0} \
-    branch_values \
-    leaf_path \
-    i value
-  local last_row_index=$((dim_count-1))
-
-  begin_loop
-
-    if [[ "${member_index_stack:-}" ]]; then
-      member_index_stack_count=${#member_index_stack[*]}
-    else
-      member_index_stack_count=0
-    fi
-
-    local -n member_row
-    local member_row_count
-    if [[ "${member_stack:-}" ]]; then
-      member_row=${member_stack[$last_row_index]}
-      member_row_count=${#member_row[*]}
-    fi
-
-    if (( member_index_stack_count < dim_count )); then
-      for_each_leaf_flat_expand_members || fail
-    elif (( member_index == member_row_count - 1 )); then
-      begin_while (( member_index == member_row_count - 1 )); doo
-        unset member_index_stack[-1] \
-          leaf_path_stack[-1] \
-          branch_values[-1] \
-          member_stack[-1]
-        if [[ ${#member_index_stack[*]} == 0 ]]; then
-          succeed
-        fi
-        member_index=${member_index_stack[-1]}
-        member_row=${member_stack[-1]}
-        member_row_count=${#member_row[*]}
-      end_while
-      let member_index++ || true
-      for_each_leaf_flat_expand_members || fail
-    elif [[ ! "${member_index:-}" ]]; then
-      member_index=0
-    else
-      let member_index++ || true
-    fi
-
-    member_row=${member_stack[$last_row_index]}
-    if [[ "${#member_row[*]}" -gt 1 ]]; then
-      multi_cell=t
-    else
-      multi_cell=f
-    fi
-
-    value=${member_row[$member_index]}
-    get_sane_value "$value"
-
-    if (( ${#leaf_path_stack[*]} > 1 )); then
-      leaf_path=${leaf_path_stack[-2]}/.dim/$sane_value
-    else
-      leaf_path=/.dim/$sane_value
-    fi
-
-    branch_values[-1]=$value
-    eval "local d_$dim=\$value"
-
-    $leaf_function || fail
-
-    if [[ $leave_loop -gt 0 ]]; then
-      let leave_loop-- || true
-      break
-    fi
-    
-  end_loop
-
-end_function
-handle_return
-}
-
-for_each_leaf_flat_expand_members() {
-begin_function_flat
-local row 
-if [[ "${member_stack:-}" ]]; then
-  member_stack_count=${#member_stack[*]}
-else
-  member_stack_count=0
-fi
-begin_for ((row=member_stack_count; row < dim_count; row++)); doo
-
-  dim=${dim_array[$row]}
-  expand_values || fail
-  value=$values
-  eval "local d_$dim=\$value"
-  branch_values+=( "$value" )
-
-  eval "members$row=( \"\${values[@]}\" )"
-  member_stack+=( members$row )
-
-  if [[ "${member_index_stack:-}" ]]; then
-    member_index_stack[-1]=$member_index
-  fi
-  member_index=0
-  member_index_stack+=( 0 )
-
-  local previous_leaf_stack
-  if (( row > 0 )); then
-    previous_leaf_path=${leaf_path_stack[-1]}
-  else
-    previous_leaf_path=
-  fi
-
-  get_sane_value "$value"
-  leaf_path_stack+=( $previous_leaf_path/.dim/$sane_value )
-
-end_for
-
-end_function
-handle_return
-}
-
-# will construct cell_values array with current set of values of the
-#   cell dims, which can be used in branch or leaf functions
-for_each_leaf() {
-
-local dim_array=( $* ) multi_cell=f \
-  leaf_function=$function leave_loop=${leave_loop:-0} \
-  fork=${fork:-t} \
-  par=${par:-t}
-
-local dim=${dim_array[0]} \
-  remaining_dims=( ${dim_array[*]:1} ) \
-  function= \
-  branch_values=${branch_values[*]:-()} \
-  leaf_path=${leaf_path:-}
-
-local log_vars='dim fork par function'
-begin_function_flat
-
-  expand_values || fail
-
-  if [[ "${#values[*]}" -gt 1 ]]; then
-    multi_cell=t
-  fi
-
-  local loop_function=$leaf_function
-  if [[ "${remaining_dims:-}" ]]; then
-    loop_function="function=\"$leaf_function\" for_each_leaf ${remaining_dims[*]}"
-  fi
-
-  branch_values+=()
-  local parent_leaf_path=$leaf_path
-  loop_over_var=values \
-    head="local member=\$value
-      branch_values[-1]=\$value
-      get_sane_value \"\$value\"
-      leaf_path=$parent_leaf_path/.dim/\$sane_value
-      eval \"local d_$dim=\$member\"
-      par=\$par2 fork=\$fork2
-      " \
-    body=$loop_function \
-    tail='
-      if [[ $leave_loop -gt 0 ]]; then
-        break
-      fi
-      ' \
-    parallel_loop || fail
-
-end_function
-handle_return
 }
 
 expand_values_single() {
