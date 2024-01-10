@@ -63,8 +63,8 @@ make_cyto() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
 
-    local new_cyto=$cell_path/.cyto.new
-    mkdir $new_cyto/job || fail
+    local cyto=$cell_path/.cyto
+    mkdir $cyto/job || fail
 
     if [[ -e $cell_path/.cyto ]]; then
       log_fatal "$cell_path/.cyto already exists. make_cyto should not be called unless it doesn't."
@@ -72,12 +72,7 @@ make_cyto() {
       fail1
     fi
 
-    mkdir $new_cyto || {
-      log_fatal "Failed to obtain new cyto lock. Maybe another update is happening to this cell, or the cell needs to be cleaned first."
-      fail1
-    }
-
-    mv $new_cyto $cell_path/.cyto || fail
+    mkdir $cyto || fail
 
   end_function
   handle_return
@@ -86,9 +81,16 @@ make_cyto() {
 make_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
-    local context_path=$new_cyto/context \
-      dna_path=$cell_path/.dna \
+    local dna_path=$cell_path/.dna \
       dna_folder dna_full_folder
+    local context_path=$cyto_path/context 
+
+    touch $context_path || fail
+    local lock_fd
+    timeout=$lock_timeout \
+      lock_path=$context_path \
+      fd_write_lock || fail
+
     local dna_folders=$(find1 $dna_path -type d | sort -g) || fail
     begin_for dna_full_folder in $dna_folders; doo
       dna_folder=${dna_full_folder##*/}
@@ -99,20 +101,22 @@ make_context() {
           make_cyto_functions || fail
           ;;
         out)
-          mkdir $new_cyto/out || fail
-          safe_link $dna_full_folder/* $new_cyto/out/ || fail
+          mkdir $cyto_path/out || fail
+          safe_link $dna_full_folder/* $cyto_path/out/ || fail
           ;;
         up)
-          mkdir $new_cyto/up || fail
+          mkdir $cyto_path/up || fail
           ;;
         var)
           make_cyto_vars || fail
           ;;
         op|*)
-          safe_link $dna_full_folder $new_cyto/$dna_folder || fail
+          safe_link $dna_full_folder $cyto_path/$dna_folder || fail
           ;;
       esac
     end_for
+
+    fd_unlock
 
   end_function
   handle_return
