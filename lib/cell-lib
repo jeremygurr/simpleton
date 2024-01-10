@@ -1424,11 +1424,6 @@ execute_command_internal() {
 
     if [[ $disable_log == f ]]; then
 
-      local current_job_path=$job_path/$omni_log_job_id
-      if [[ ! -d $current_job_path ]]; then
-        mkdir $current_job_path || fail
-      fi
-
       local running_job_path=$job_path/running
 
       local link_target
@@ -1438,16 +1433,6 @@ execute_command_internal() {
         fi
         safe_link $current_job_path $job_path/last-$link_target || fail
       end_for
-
-      # only set this for the first cell in the job, all other cells should 
-      #   use the same fork_id log so that they all have unique ids across the job
-      if [[ ! "${fork_id_log:-}" ]]; then
-        fork_id_log=$current_job_path/fork-id-log
-      fi
-
-      previous_log_pos=$omni_log_pos
-      cell_open_log_file || fail
-      (( previous_log_pos++ ))
 
     fi
 
@@ -1513,21 +1498,35 @@ execute_command() {
 
     : ${disable_log:=f}
 
-    local job_path omni_log_job_id log_path
+    local job_path omni_log_job_id log_path current_job_path
 
     if [[ $disable_log == t ]]; then
       log_debug "Logging disabled."
     else
+
       job_path=$cell_path/.cyto/job
       if [[ ! "${omni_log_job_id:-}" ]]; then
         job_start_time=${EPOCHREALTIME//./}
         command_to_log="${original_cmd#* }" \
           get_job_id || fail
       fi
+
+      current_job_path=$job_path/$omni_log_job_id
+      if [[ ! -d $current_job_path ]]; then
+        mkdir $current_job_path || fail
+      fi
+
       log_path=$current_job_path/log
       if [[ ! -d $log_path ]]; then
         mkdir $log_path || fail
       fi
+
+      # only set this for the first cell in the job, all other cells should 
+      #   use the same fork_id log so that they all have unique ids across the job
+      if [[ ! "${fork_id_log:-}" ]]; then
+        fork_id_log=$current_job_path/fork-id-log
+      fi
+
     fi
 
     if [[ $current_command != edit \
@@ -1544,8 +1543,13 @@ execute_command() {
 
     # change_log=t \
     #   fork_fg execute_command_internal || fail_later
+
+    previous_log_pos=$omni_log_pos
     cell_open_log_file || fail
+    (( previous_log_pos++ ))
+
     execute_command_internal || fail_later
+
     cell_close_log_file || fail
 
   end_function
