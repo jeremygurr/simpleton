@@ -1,34 +1,47 @@
 #!/usr/bin/env bash
 
+debug_id_current=0
+debug_id_inc() {
+  (( debug_id_current++ ))
+  if [[ "${debug_id:-}" && $debug_id != t && $debug_id_current -ge $debug_id ]]; then
+    debug_id=t
+    debug_immediate=t
+    debug_ignore_remove ${FUNCNAME[1]}
+    debug_start \\
+  fi
+}
+
 setup_log_block_aliases() {
 
   alias begin_function='
     local return_value=0 break_out=f deep_function=t
     write_to_log_and_save 
-    if (( log_depth_current++ )); then :; fi
+    (( log_depth_current++ ))
     log_vars= log_show_vars=
+    debug_id_inc
     while true; do
   '
 
   alias end_function='
     break; done;
+    debug_id_inc
   '
 
   alias handle_return='
     if [[ "${deep_function:-}" ]]; then
       load_log_vars_and_write_to_log
-      if (( log_depth_current-- )); then :; fi
+      (( log_depth_current-- ))
     fi
     return $return_value
   '
 
-  alias  begin_function_flat='local return_value=0 break_out=f deep_function; while true; do'
-  alias          begin_while='break_out=f; while'
-  alias            begin_for='break_out=f; for'
-  alias           begin_loop='break_out=f; while true; do'
-  alias            end_while='done; [[ $break_out == t ]] && break; true'
-  alias              end_for='done; [[ $break_out == t ]] && break; true'
-  alias             end_loop='done; [[ $break_out == t ]] && break; true'
+  alias  begin_function_flat='local return_value=0 break_out=f deep_function; debug_id_inc; while true; do'
+  alias          begin_while='break_out=f; debug_id_inc; while'
+  alias            begin_for='break_out=f; debug_id_inc; for'
+  alias           begin_loop='break_out=f; debug_id_inc; while true; do'
+  alias            end_while='done; [[ $break_out == t ]] && break; debug_id_inc'
+  alias              end_for='done; [[ $break_out == t ]] && break; debug_id_inc'
+  alias             end_loop='done; [[ $break_out == t ]] && break; debug_id_inc'
 
   alias handle_exit='exit $return_value'
 
