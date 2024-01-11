@@ -75,7 +75,7 @@ make_context() {
     begin_for dna_full_folder in $dna_folders; doo
       dna_folder=${dna_full_folder##*/}
       case $dna_folder in
-        dim|sub|down)
+        dim|sub)
           ;;
         fun)
           make_cyto_functions || fail
@@ -84,8 +84,8 @@ make_context() {
           mkdir $cyto_path/out || fail
           safe_link $dna_full_folder/* $cyto_path/out/ || fail
           ;;
-        up)
-          mkdir $cyto_path/up || fail
+        up|down)
+          mkdir $cyto_path/$dna_folder || fail
           ;;
         var)
           make_cyto_vars || fail
@@ -141,14 +141,14 @@ setup_cell_path_vars() {
     dna_path=$cell_path/.dna \
       cyto_path=$cell_path/.cyto 
 
-    var_path=$cell_path/var
+    var_path=$dna_path/var
     if [[ ! -d $var_path ]]; then
-      var_path=$dna_path/var
+      var_path=
     fi
 
-    fun_path=$cell_path/fun
+    fun_path=$dna_path/fun
     if [[ ! -d $fun_path ]]; then
-      fun_path=$dna_path/fun
+      fun_path=
     fi
 
     key_path=$cyto_path/key
@@ -159,11 +159,11 @@ setup_cell_path_vars() {
 
     lock_path=$cyto_path/lock 
 
-    op_path=$dna_path/op
+    op_path=$cyto_path/op
 
     dna_up_path=$dna_path/up
     if [[ ! -d $dna_up_path ]]; then
-      unset dna_up_path
+      dna_up_path=
     fi
 
     # create this folder as needed
@@ -173,7 +173,7 @@ setup_cell_path_vars() {
 
     dna_down_path=$dna_path/down
     if [[ ! -d $dna_down_path ]]; then
-      unset dna_down_path
+      dna_down_path=
     fi
 
     # create this folder as needed
@@ -181,10 +181,8 @@ setup_cell_path_vars() {
 
     sub_path=$dna_path/sub
     if [[ ! -d $sub_path ]]; then
-      unset sub_path
+      sub_path=
     fi
-
-    # context can override these as needed
 
     status_path=$cyto_path/status
     if [[ ! -d $status_path ]]; then
@@ -193,12 +191,12 @@ setup_cell_path_vars() {
 
     debug_path=$cyto_path/debug
     if [[ ! -d $debug_path ]]; then
-      unset debug_path
+      debug_path=
     fi
 
     req_path=$cyto_path/req
     if [[ ! -d $req_path ]]; then
-      unset req_path
+      req_path=
     fi
 
     source_path=$cyto_path/source
@@ -213,9 +211,15 @@ setup_cell_path_vars() {
   handle_return
 }
 
-setup_dims() {
+load_dims() {
 
-  local cell_path=$1 dim dims
+  local dim dims v
+
+  for v in leaf_dims sub_dims props; do
+    if [[ -e $var_path/$v ]]; then
+      source $var_path/$v || return 1
+    fi
+  done
 
   for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
     get_plural $dim
@@ -235,6 +239,8 @@ setup_dims() {
   if [[ "${props:-}" ]]; then
     log_debug "Props found: ${props[*]}"
   fi
+
+  return 0
 
 }
 
@@ -326,7 +332,6 @@ cell_context_load() {
       source $context_path || fail
 
       setup_dep_defaults || return 1
-      setup_dims $cell_path || fail
       setup_cell_path_vars $cell_path || fail
       setup_branch_dims $cell_path || fail
 
@@ -336,7 +341,7 @@ cell_context_load() {
   handle_return
 }
 
-alias load_context='{ setup_dims && eval "$localize_dim_vars" && cell_context_load; }'
+alias load_context='{ load_dims && eval "$localize_dim_vars" && cell_context_load; }'
 
 plant_seed() {
   local from=$1 to=$2 contents x x_part
@@ -1405,14 +1410,10 @@ execute_command_internal() {
         :
       ;;
       *)
-        cell_context_load || {
+        load_context || {
           log_fatal "Context failed to load for $cell_path"
           fail1
-          }
-
-        if [[ "$localize_dim_vars" != local ]]; then
-          eval "$localize_dim_vars" || fail
-        fi
+        }
       ;;
     esac
 
@@ -1596,7 +1597,7 @@ execute_command_step_file() {
         local function_name=${base%.bash}
         function_name=${function_name##*/}
         function_name=${function_name//-/_}
-        local function_exists=$(type -t $function_name &>/dev/null && echo true)
+        local function_exists=$(type -t $function_name &>/dev/null && echo t)
         if [[ "$function_exists" ]]; then
           $function_name || fail
         else
