@@ -75,7 +75,7 @@ make_context() {
     begin_for dna_full_folder in $dna_folders; doo
       dna_folder=${dna_full_folder##*/}
       case $dna_folder in
-        dim|sub)
+        dim|sub|leaf)
           ;;
         fun)
           make_cyto_functions || fail
@@ -213,24 +213,25 @@ setup_cell_path_vars() {
 
 load_dims() {
 
-  local dim dims v
+  local -r cell=$1
+  local dim dim_plural v var_path=$cell/.dna/var
 
-  for v in leaf_dims sub_dims props; do
+  for v in dims sub_dims props; do
     if [[ -e $var_path/$v ]]; then
-      source $var_path/$v || return 1
+      $v=( $(<$var_path/$v) ) || return 1
     fi
   done
 
   localize_dims=
-  for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
+  for dim in ${dims[*]} ${sub_dims[*]} ${props[*]}; do
     get_plural $dim
-    dims=$plural
-    local ddim=d_$dim ddims=d_$dims
-    localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
+    dim_plural=$plural
+    local ddim=d_$dim ddims=d_$dim_plural
+    localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
   done
 
-  if [[ "${leaf_dims:-}" ]]; then
-    log_debug "Leaf dims found: ${leaf_dims[*]}"
+  if [[ "${dims:-}" ]]; then
+    log_debug "Dims found: ${dims[*]}"
   fi
 
   if [[ "${sub_dims:-}" ]]; then
@@ -245,17 +246,6 @@ load_dims() {
 
 }
 
-# returns array of dims, which may be empty if there are no dims
-get_leaf_dims() {
-  local -r cell=$1
-  if [[ -v var_path && -f $var_path/leaf_dims ]]; then
-    leaf_dims=( $(<$var_path/leaf_dims) )
-  else
-    leaf_dims=()
-  fi
-  return 0
-}
-
 # returns:
 #   branch_dims
 #   branch_dim_count
@@ -263,16 +253,16 @@ get_leaf_dims() {
 #   trunk_dim_count
 setup_branch_dims() {
   local cell_path=$1 \
-    trunk_cell leaf_dims
+    trunk_cell dims
 
   get_trunk_cell $cell_path || return 1
-  get_leaf_dims $trunk_cell || return 1
-  trunk_dims=( ${leaf_dims[*]} )
+  load_dims $trunk_cell || return 1
+  trunk_dims=( ${dims[*]} )
   trunk_dim_count=${#trunk_dims[*]}
 
   branch_dims=() 
   local dim
-  for dim in ${leaf_dims[*]}; do
+  for dim in ${dims[*]}; do
     if [[ $cell_path =~ .dim ]]; then
       cell_path=${cell_path%/.dim/*}
       branch_dims+=( $dim )
@@ -342,7 +332,7 @@ cell_context_load() {
   handle_return
 }
 
-dim_vars='leaf_dims sub_dims props'
+dim_vars='dims sub_dims props'
 alias load_context='{ local $dim_vars && load_dims && eval "$localize_dims" && cell_context_load; }'
 
 plant_seed() {
@@ -859,10 +849,10 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because cell is stale"
-    elif [[ -v leaf_dims ]] \
+    elif [[ -v dims ]] \
          && { 
            function=get_leaf_needs_update \
-             for_each_leaf_flat ${leaf_dims[*]} || fail 
+             for_each_leaf_flat ${dims[*]} || fail 
          } \
          && { 
            load_context || fail
@@ -1809,7 +1799,7 @@ get_cell_path() {
 
 validate_dims() {
   local dim
-  for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; do
+  for dim in ${dims[*]} ${sub_dims[*]} ${props[*]}; do
     if dim_is_required $dim; then
       local plural
       get_plural $dim
@@ -2146,7 +2136,7 @@ init_context() {
   reuse_existing_out=f \
   branch_dims= \
   props= \
-  leaf_dims= \
+  dims= \
   sub_dims= \
   update_cost=1 \
   refresh_less_than=${refresh_less_than:-1} 
@@ -2338,7 +2328,7 @@ decrypt_file_with_shared_key() {
 expand_values() {
   begin_function_flat
 
-    local dims=${dim}s 
+    local dim_plural=${dim}s 
     local ddims=d_$dims \
           ddim=d_$dim \
           new_value_list= new_values= value \
@@ -2413,7 +2403,7 @@ begin_function_flat
 
   if [[ "${#values[*]}" -gt 1 ]]; then
     log_fatal "Too many values for a singular dim $dim." \
-      "Use plural dim $dims if you intend to have multiple values."
+      "Use plural dim $dim_plural if you intend to have multiple values."
     fail1
   fi
 
@@ -2428,7 +2418,7 @@ begin_function_flat
     fi
     if [[ "${#values[*]}" -gt 1 ]]; then
       log_fatal "Too many values for a singular dim $dim." \
-        "Use plural dim $dims if you intend to have multiple values."
+        "Use plural dim $dim_plural if you intend to have multiple values."
       fail1
     fi
   fi
@@ -2465,7 +2455,7 @@ begin_function_flat
         fi
         value=$value ${dim}_member_expand || fail
         if [[ ! "${values:-}" ]]; then
-          log_fatal "Dim $dims has invalid value '$value'"
+          log_fatal "Dim $dim_plural has invalid value '$value'"
           fail1
         fi
         new_values+=( "${values[@]}" )
@@ -2553,10 +2543,10 @@ if [[ -d $prop_path ]]; then
     eval "$dim=\$value" || return 1
 
     get_plural $dim
-    local dims=$plural
+    local dim_plural=$plural
     local ddim=d_$dim ddims=d_$dims
 
-    localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dims:-\${$ddim:-\${$dim:-}}}}"
+    localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
   done
 fi
 }
