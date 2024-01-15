@@ -26,12 +26,14 @@ export debug_ignore+=" apad cell_close_log_file cell_open_log_file change_log_fi
 
 make_cyto_functions() {
   begin_function_flat
-    local function function_path content \
-      functions=$(find1 $fun_path -type f | sort -g) || fail
+    local function function_path content 
+    local functions=$(find1 $fun_path -type f | sort -g) || fail
     begin_for function_path in $functions; doo
       function=${function_path##*/}
-      content=$(sed 's/^/    /' $function_path)
-      echo "
+      content=$(<$function_path)
+      trim_ws content
+      content=$(echo -n "$content" | sed 's/^/    /')
+      echo -n "
 $function() {
   begin_function_flat
 $content
@@ -50,8 +52,10 @@ make_cyto_vars() {
       vars=$(find1 $dna_full_folder -type f | sort -g) || fail
     begin_for var_path in $vars; doo
       var=${var_path##*/}
-      echo "
-local $var=$(<$var_path)
+      content=$(<$var_path)
+      trim_ws content
+      echo -n "
+local $var=\"$content\"
 " >>$context_path || fail
     end_for
   end_function
@@ -75,7 +79,7 @@ make_context() {
     begin_for dna_full_folder in $dna_folders; doo
       dna_folder=${dna_full_folder##*/}
       case $dna_folder in
-        dim|sub|leaf)
+        dim|sub)
           ;;
         fun)
           make_cyto_functions || fail
@@ -139,73 +143,25 @@ setup_cell_path_vars() {
     fi
 
     dna_path=$cell_path/.dna \
-      cyto_path=$cell_path/.cyto 
+    cyto_path=$cell_path/.cyto \
 
-    var_path=$dna_path/var
-    if [[ ! -d $var_path ]]; then
-      var_path=
-    fi
-
-    fun_path=$dna_path/fun
-    if [[ ! -d $fun_path ]]; then
-      fun_path=
-    fi
-
-    key_path=$cyto_path/key
-    if [[ ! -d $key_path ]]; then
-      # create this as needed
-      key_path=$dna_path/key
-    fi
-
-    lock_path=$cyto_path/lock 
-
-    op_path=$cyto_path/op
-
-    dna_up_path=$dna_path/up
-    if [[ ! -d $dna_up_path ]]; then
-      dna_up_path=
-    fi
-
-    # create this folder as needed
-    cyto_up_path=$cyto_path/up
-    # to make update ops simpler
-    up_path=$cyto_up_path
-
-    dna_down_path=$dna_path/down
-    if [[ ! -d $dna_down_path ]]; then
-      dna_down_path=
-    fi
-
-    # create this folder as needed
-    down_path=$cyto_path/down
-
-    sub_path=$dna_path/sub
-    if [[ ! -d $sub_path ]]; then
-      sub_path=
-    fi
-
-    status_path=$cyto_path/status
-    if [[ ! -d $status_path ]]; then
-      mkdir $status_path || fail
-    fi
-
-    debug_path=$cyto_path/debug
-    if [[ ! -d $debug_path ]]; then
-      debug_path=
-    fi
-
-    req_path=$cyto_path/req
-    if [[ ! -d $req_path ]]; then
-      req_path=
-    fi
-
-    source_path=$cyto_path/source
-    if [[ ! -d $source_path ]]; then
-      mkdir $source_path || fail
-    fi
-
-    # create this when needed
-    tmp_path=$cyto_path/tmp
+    context_path=$cyto_path/context \
+    cyto_up_path=$cyto_path/up \
+    dna_down_path=$dna_path/down \
+    dna_up_path=$dna_path/up \
+    down_path=$cyto_path/down \
+    fun_path=$dna_path/fun \
+    key_path=$dna_path/key \
+    lock_path=$cyto_path/context \
+    op_path=$cyto_path/op \
+    out_path=$cell_path \
+    req_path=$cyto_path/req \
+    source_path=$cyto_path/source \
+    status_path=$cyto_path/status \
+    sub_path=$dna_path/sub \
+    tmp_path=$cyto_path/tmp \
+    up_path=$cyto_up_path \
+    var_path=$dna_path/var \
 
   end_function
   handle_return
@@ -218,7 +174,7 @@ load_dims() {
 
   for v in dims sub_dims props; do
     if [[ -e $var_path/$v ]]; then
-      $v=( $(<$var_path/$v) ) || return 1
+      eval "$v=( $(<$var_path/$v) )" || return 1
     fi
   done
 
@@ -292,13 +248,10 @@ cell_context_load() {
     last_context_loaded=${last_context_loaded:-}
     if [[ "$last_context_loaded" != $cell_path ]]; then
 
-      log_debug "Loading context of $short_cell"
       last_context_loaded=$cell_path
+      log_debug "Loading context of $short_cell"
 
-      dna_path=$cell_path/.dna
-      cyto_path=$cell_path/.cyto
-      sub_path=$dna_path/sub
-      out_path=$cell_path
+      setup_cell_path_vars $cell_path || fail
 
       if [[ -d $dna_path/dim ]]; then
         cell_is_leaf=f
@@ -307,7 +260,6 @@ cell_context_load() {
       fi
 
       init_context || fail
-      local context_path=$cyto_path/context
       if [[ ! -e $cyto_path ]]; then
         mkdir $cyto_path || fail
       fi
@@ -323,7 +275,6 @@ cell_context_load() {
       source $context_path || fail
 
       setup_dep_defaults || return 1
-      setup_cell_path_vars $cell_path || fail
       setup_branch_dims $cell_path || fail
 
     fi
@@ -333,7 +284,7 @@ cell_context_load() {
 }
 
 dim_vars='dims sub_dims props'
-alias load_context='{ local $dim_vars && load_dims && eval "$localize_dims" && cell_context_load; }'
+alias load_context='{ local $dim_vars && load_dims $cell_path && eval "$localize_dims" && cell_context_load; }'
 
 plant_seed() {
   local from=$1 to=$2 contents x x_part
