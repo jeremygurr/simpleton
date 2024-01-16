@@ -15,10 +15,10 @@ break_if_not_changed() {
 pre_update() {
   begin_function
 
-    update_successful=
-    something_changed=f
-    member_count=0
-    cell_locks=
+    update_successful= \
+    something_changed=f \
+    member_count=0 \
+    cell_locks= \
 
     write_lock=t \
       timeout=$lock_timeout \
@@ -312,6 +312,197 @@ update_upstreams() {
   handle_return
 }
 
+# given a cell, find the nearest seed searching it's ancestors
+# returns: seed
+find_seed() {
+  local cell=$1
+  begin_function_flat
+    seed=
+    begin_while [[ ! "$seed" ]]; doo
+      if [[ -d $cell/.dna/sub ]]; then
+        seed=$cell
+      else
+        local parent=${cell%/*}
+        if [[ "${#parent}" -gt 1 && "$parent" != $cell ]]; then
+          cell=$parent
+        else
+          break
+        fi
+      fi
+    end_while
+  end_function
+  handle_return
+}
+
+create_sub_branch() {
+  local log_show_vars=^sub_dna_path
+  begin_function
+
+    mkdir $sub_dna_path/dim || fail
+
+    local from_dim
+    begin_for from_dim in ${super_dims[*]:1}; doo
+      local to_dim=$sub_dna_path/dim/${from_dim##*/}
+      safe_link $(realpath $from_dim) $to_dim || fail
+    end_for
+
+    local contents=$(find1 $dna_path -not -name '.*') || fail
+    begin_for part in $contents; doo
+      if [[ "$part" == */dim \
+         || "$part" == */context* \
+         || "$part" == */up \
+         || "$part" == */down \
+         || "$part" == */leaf \
+         || "$part" == */cyto-template \
+         ]]; then
+        continue
+      fi
+      safe_link $(realpath $part) $sub_dna_path/ || fail
+    end_for 
+
+    if [[ -d $dna_path/leaf ]]; then
+      local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
+      mkdir $sub_dna_path/leaf || fail
+      begin_for part in $contents; doo
+        if [[ "$part" == */up \
+           || "$part" == */down \
+           ]]; then
+          continue
+        fi
+        safe_link $(realpath $part) $sub_dna_path/leaf/ || fail
+      end_for 
+    fi
+
+  end_function
+  handle_return
+}
+
+create_sub_leaf() {
+  local log_show_vars=^sub_dna_path
+  begin_function
+
+    if [[ -d $dna_path/leaf ]]; then
+      local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
+      local part
+      begin_for part in $contents; doo
+        if [[ "$part" == */up \
+           || "$part" == */down \
+           ]]; then
+          continue
+        fi
+        safe_link $(realpath $part) $sub_dna_path/ || fail
+      end_for 
+    fi
+
+    if [[ -d $dna_path/key ]]; then
+      safe_link $(realpath $dna_path/key) $sub_dna_path/ || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+create_sub_branch_or_leaf() {
+  local seed=$seed cell=$cell 
+  local log_vars=cell log_show_vars=short_cell
+  begin_function
+    if [[ -d $cell ]]; then
+      log_fatal "Cell already exists $cell"
+      fail1
+    fi
+    mkdir -p $cell || fail
+    if [[ "$seed" ]]; then
+      local seed_dna
+      find_seed_dna $seed ${cell#$seed/} || fail
+    fi
+    if [[ "$seed_dna" ]]; then
+      safe_link $(realpath $seed_dna) $cell/ || fail
+    else
+      local branch_dims=( ${branch_dims[*]} )
+      if (( branch_dim_count >= trunk_dim_count )); then
+        log_fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
+        fail1
+      fi
+      branch_dims+=( ${trunk_dims[$branch_dim_count]} )
+      
+      local sub_dna_path=$cell/.dna 
+      mkdir $sub_dna_path || fail
+      local -r super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
+      local -r super_dim_count=${#super_dims[*]}
+      if [[ "$super_dims" ]]; then
+        local is_branch=f
+        if (( super_dim_count > 1 )); then
+          is_branch=t
+          create_sub_branch || fail
+        else
+          create_sub_leaf || fail
+        fi
+        append_dim_var_to_context ${super_dims[0]} || fail
+        migrate_deps || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
+create_sub_cell_with_seed() {
+  # seed is allowed to be empty, meaning no seed exists at this location
+  local seed=$1 sub_cell=$2
+
+  local log_show_vars='^seed ^sub_cell'
+  begin_function
+
+    if [[ "$sub_cell" =~ .dna ]]; then
+      log_fatal "Internal error: Invalid sub_cell $sub_cell."
+      log_fatal "We should not be creating a sub cell inside of a dna folder"
+      fail1
+    fi
+
+    if [[ ! -d $sub_cell ]]; then
+
+      local short_cell
+      get_short_cell $sub_cell 
+      log_debug "Creating sub cell $short_cell"
+
+      if [[ -d $sub_cell.new ]]; then
+        rm -rf $sub_cell.new || fail
+      fi
+
+      local parent=${sub_cell%/*}
+      if [[ "$parent" == "$sub_cell" ]]; then
+        log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
+        stack_trace
+        fail1
+      fi
+
+      local parent_part=${parent##*/}
+      if [[ "$parent_part" == .dim ]]; then
+        seed=$seed \
+          cell=$sub_cell.new \
+          create_sub_branch_or_leaf || fail
+      else
+        mkdir -p $sub_cell.new || fail
+        seed=${seed:-$parent}
+        find_seed_dna $seed ${sub_cell#$seed/} || fail
+        if [[ "$seed_dna" ]]; then
+          safe_link $(realpath $seed_dna) $sub_cell.new/.dna || fail
+        fi
+      fi
+      mv $sub_cell.new $sub_cell || fail
+    
+    fi
+
+  end_function
+  handle_return
+}
+
+create_sub_cell() {
+  local sub_cell=$1
+  find_seed $sub_cell || return 1
+  create_sub_cell_with_seed $seed $sub_cell || return 1
+  return 0
+}
+
 update_member() {
   local sane_value member_path \
     log_vars=member log_show_vars=member \
@@ -357,8 +548,8 @@ update_member() {
 
 update_members() {
   begin_function
-    if [[ "${dims:-}" ]]; then
-      par=t fork=f function=update_member for_each_member "${dims[0]}" || fail
+    if [[ "${leaf_dims:-}" ]]; then
+      par=t fork=f function=update_member for_each_member "${leaf_dims[0]}" || fail
       load_context || fail
     fi
   end_function
@@ -622,74 +813,6 @@ post_update() {
 
     if [[ -v running_job_path ]]; then
       rm $running_job_path || fail
-    fi
-
-  end_function
-  handle_return
-}
-
-create_sub_branch() {
-  local log_show_vars=^sub_dna_path
-  begin_function
-
-    mkdir $sub_dna_path/dim || fail
-
-    local from_dim
-    begin_for from_dim in ${super_dims[*]:1}; doo
-      local to_dim=$sub_dna_path/dim/${from_dim##*/}
-      safe_link $(realpath $from_dim) $to_dim || fail
-    end_for
-
-    local contents=$(find1 $dna_path -not -name '.*') || fail
-    begin_for part in $contents; doo
-      if [[ "$part" == */dim \
-         || "$part" == */context* \
-         || "$part" == */up \
-         || "$part" == */down \
-         || "$part" == */leaf \
-         || "$part" == */cyto-template \
-         ]]; then
-        continue
-      fi
-      safe_link $(realpath $part) $sub_dna_path/ || fail
-    end_for 
-
-    if [[ -d $dna_path/leaf ]]; then
-      local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
-      mkdir $sub_dna_path/leaf || fail
-      begin_for part in $contents; doo
-        if [[ "$part" == */up \
-           || "$part" == */down \
-           ]]; then
-          continue
-        fi
-        safe_link $(realpath $part) $sub_dna_path/leaf/ || fail
-      end_for 
-    fi
-
-  end_function
-  handle_return
-}
-
-create_sub_leaf() {
-  local log_show_vars=^sub_dna_path
-  begin_function
-
-    if [[ -d $dna_path/leaf ]]; then
-      local contents=$(find1 $dna_path/leaf -not -name '.*') || fail
-      local part
-      begin_for part in $contents; doo
-        if [[ "$part" == */up \
-           || "$part" == */down \
-           ]]; then
-          continue
-        fi
-        safe_link $(realpath $part) $sub_dna_path/ || fail
-      end_for 
-    fi
-
-    if [[ -d $dna_path/key ]]; then
-      safe_link $(realpath $dna_path/key) $sub_dna_path/ || fail
     fi
 
   end_function
@@ -968,98 +1091,39 @@ migrate_deps() {
   handle_return
 }
 
-create_sub_branch_or_leaf() {
-  local seed=$seed cell=$cell 
-  local log_vars=cell log_show_vars=short_cell
-  begin_function
-    if [[ -d $cell ]]; then
-      log_fatal "Cell already exists $cell"
-      fail1
-    fi
-    mkdir -p $cell || fail
-    if [[ "$seed" ]]; then
-      local seed_dna
-      find_seed_dna $seed ${cell#$seed/} || fail
-    fi
-    if [[ "$seed_dna" ]]; then
-      safe_link $(realpath $seed_dna) $cell/ || fail
-    else
-      local branch_dims=( ${branch_dims[*]} )
-      if (( branch_dim_count >= trunk_dim_count )); then
-        log_fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
-        fail1
-      fi
-      branch_dims+=( ${trunk_dims[$branch_dim_count]} )
-      
-      local sub_dna_path=$cell/.dna 
-      mkdir $sub_dna_path || fail
-      local -r super_dims=( $(find1 $dna_path/dim -not -name '.*' | sort -g) ) || fail
-      local -r super_dim_count=${#super_dims[*]}
-      if [[ "$super_dims" ]]; then
-        local is_branch=f
-        if (( super_dim_count > 1 )); then
-          is_branch=t
-          create_sub_branch || fail
+# returns seed_dna
+find_seed_dna() {
+  local seed=$1
+  local parent=${seed%/*}
+  local path_to_cell=$2
+  path_to_cell=${path_to_cell%.new}
+  seed_dna=$seed/.dna/sub/$path_to_cell/.dna
+  if [[ ! -e $seed_dna ]]; then
+    seed_dna=
+    if [[ -d $seed/.dna/sub ]]; then
+      seed_dna=$seed/.dna/sub
+      local path_array=( ${path_to_cell//\// } ) \
+        failed=f
+      for path_part in "${path_array[@]}"; do
+        if [[ -d $seed_dna/$path_part ]]; then
+          seed_dna+=/$path_part
+        elif [[ -d $seed_dna/$wild_sub_path ]]; then
+          seed_dna+=/$wild_sub_path
         else
-          create_sub_leaf || fail
+          failed=t
+          break
         fi
-        append_dim_var_to_context ${super_dims[0]} || fail
-        migrate_deps || fail
+      done
+      seed_dna+=/.dna
+      if [[ $failed == t || ! -d $seed_dna ]]; then
+        seed_dna=
       fi
+    elif [[ ${#parent} -gt 1 ]]; then
+      # recursive
+      find_seed_dna $parent ${seed#$parent/}/$path_to_cell || return 1
     fi
-  end_function
-  handle_return
-}
-
-create_sub_cell_with_seed() {
-  # seed is allowed to be empty, meaning no seed exists at this location
-  local seed=$1 sub_cell=$2
-
-  local log_show_vars='^seed ^sub_cell'
-  begin_function
-
-    if [[ "$sub_cell" =~ .dna ]]; then
-      log_fatal "Internal error: Invalid sub_cell $sub_cell."
-      log_fatal "We should not be creating a sub cell inside of a dna folder"
-      fail1
-    fi
-
-    if [[ ! -d $sub_cell ]]; then
-
-      local short_cell
-      get_short_cell $sub_cell 
-      log_debug "Creating sub cell $short_cell"
-
-      if [[ -d $sub_cell.new ]]; then
-        rm -rf $sub_cell.new || fail
-      fi
-
-      local parent=${sub_cell%/*}
-      if [[ "$parent" == "$sub_cell" ]]; then
-        log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
-        stack_trace
-        fail1
-      fi
-
-      local parent_part=${parent##*/}
-      if [[ "$parent_part" == .dim ]]; then
-        seed=$seed \
-          cell=$sub_cell.new \
-          create_sub_branch_or_leaf || fail
-      else
-        mkdir -p $sub_cell.new || fail
-        seed=${seed:-$parent}
-        find_seed_dna $seed ${sub_cell#$seed/} || fail
-        if [[ "$seed_dna" ]]; then
-          safe_link $(realpath $seed_dna) $sub_cell.new/.dna || fail
-        fi
-      fi
-      mv $sub_cell.new $sub_cell || fail
-    
-    fi
-
-  end_function
-  handle_return
+  fi
+  return 0
 }
 
 # seed must not be empty here
@@ -1100,14 +1164,6 @@ create_sub_cells() {
   return 0
 }
 
-create_sub_cell() {
-  local sub_cell=$1
-  find_seed $sub_cell || return 1
-  # recursive
-  create_sub_cell_with_seed $seed $sub_cell || return 1
-  return 0
-}
-
 load_context_and_create_sub() {
   local parent_cell=$1 sub_cell=$2 cell_path
   local log_show_vars='^parent_cell ^sub_cell'
@@ -1143,57 +1199,6 @@ get_dep_member() {
   fi
 
   dep_member=${!dep_dim}
-  return 0
-}
-
-# given a cell, find the nearest seed searching it's ancestors
-# returns: seed
-find_seed() {
-  local cell=$1
-  seed=
-  if [[ -d $cell/.dna/sub ]]; then
-    seed=$cell
-  else
-    local parent=${cell%/*}
-    if [[ "${#parent}" -gt 1 && "$parent" != $cell ]]; then
-      find_seed $parent || return 1
-    fi
-  fi
-  return 0
-}
-
-# returns seed_dna
-find_seed_dna() {
-  local seed=$1
-  local parent=${seed%/*}
-  local path_to_cell=$2
-  path_to_cell=${path_to_cell%.new}
-  seed_dna=$seed/.dna/sub/$path_to_cell/.dna
-  if [[ ! -e $seed_dna ]]; then
-    seed_dna=
-    if [[ -d $seed/.dna/sub ]]; then
-      seed_dna=$seed/.dna/sub
-      local path_array=( ${path_to_cell//\// } ) \
-        failed=f
-      for path_part in "${path_array[@]}"; do
-        if [[ -d $seed_dna/$path_part ]]; then
-          seed_dna+=/$path_part
-        elif [[ -d $seed_dna/$wild_sub_path ]]; then
-          seed_dna+=/$wild_sub_path
-        else
-          failed=t
-          break
-        fi
-      done
-      seed_dna+=/.dna
-      if [[ $failed == t || ! -d $seed_dna ]]; then
-        seed_dna=
-      fi
-    elif [[ ${#parent} -gt 1 ]]; then
-      # recursive
-      find_seed_dna $parent ${seed#$parent/}/$path_to_cell || return 1
-    fi
-  fi
   return 0
 }
 

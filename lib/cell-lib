@@ -199,6 +199,7 @@ load_trunk_dims() {
     v dim dim_plural plural
 
   local var_path=$cell_path/.dna/var
+  localize_dims=local
 
   for v in dims sub_dims props; do
     if [[ -e $var_path/$v ]]; then
@@ -212,12 +213,18 @@ load_trunk_dims() {
     local ddim=d_$dim ddims=d_$dim_plural
     localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
   done
+
+  if [[ "$localize_dims" == local ]]; then
+    localize_dims=
+  fi
+
 }
 
 load_dims() {
 
   local cell=$1
-  local dim dim_plural v var_path=$cell/.dna/var
+  local dim dim_plural v \
+    var_path=$cell/.dna/var 
 
   begin_function_flat
 
@@ -228,7 +235,6 @@ load_dims() {
       trunk_dims=() \
       branch_dims=()  \
       leaf_dims=() \
-      localize_dims= \
 
       trunk_cell=$cell_path depth=0
       begin_while [[ $trunk_cell == */.dim/* ]]; doo
@@ -594,97 +600,97 @@ get_leaf_needs_update() {
 # same as for_each_leaf but faster but can't divide into parallel processes or fork
 # use for simple cases
 for_each_leaf_flat() {
-local dim_array=( $* ) multi_cell \
-  leaf_function=$function
+  local dim_array=( $* ) multi_cell \
+    leaf_function=$function
 
-begin_function_flat
+  begin_function_flat
 
-  log_debug "Checking leaves of $short_cell"
-  if [[ "$localize_dims" != local ]]; then
-    eval "$localize_dims" || fail
-  fi
-  local member_index_stack \
-    member_index_stack_count \
-    member_stack \
-    member_stack_count \
-    leaf_path_stack \
-    branch_values \
-    member_index \
-    dim dim_index dim_count=${#dim_array[*]} \
-    leave_loop=${leave_loop:-0} \
-    branch_values \
-    leaf_path \
-    i value
-  local last_row_index=$((dim_count-1))
-
-  begin_loop
-
-    if [[ "${member_index_stack:-}" ]]; then
-      member_index_stack_count=${#member_index_stack[*]}
-    else
-      member_index_stack_count=0
+    log_debug "Checking leaves of $short_cell"
+    if [[ "$localize_dims" != local ]]; then
+      eval "$localize_dims" || fail
     fi
+    local member_index_stack \
+      member_index_stack_count \
+      member_stack \
+      member_stack_count \
+      leaf_path_stack \
+      branch_values \
+      member_index \
+      dim dim_index dim_count=${#dim_array[*]} \
+      leave_loop=${leave_loop:-0} \
+      branch_values \
+      leaf_path \
+      i value
+    local last_row_index=$((dim_count-1))
 
-    local -n member_row
-    local member_row_count
-    if [[ "${member_stack:-}" ]]; then
-      member_row=${member_stack[$last_row_index]}
-      member_row_count=${#member_row[*]}
-    fi
+    begin_loop
 
-    if (( member_index_stack_count < dim_count )); then
-      for_each_leaf_flat_expand_members || fail
-    elif (( member_index == member_row_count - 1 )); then
-      begin_while (( member_index == member_row_count - 1 )); doo
-        unset member_index_stack[-1] \
-          leaf_path_stack[-1] \
-          branch_values[-1] \
-          member_stack[-1]
-        if [[ ${#member_index_stack[*]} == 0 ]]; then
-          succeed
-        fi
-        member_index=${member_index_stack[-1]}
-        member_row=${member_stack[-1]}
+      if [[ "${member_index_stack:-}" ]]; then
+        member_index_stack_count=${#member_index_stack[*]}
+      else
+        member_index_stack_count=0
+      fi
+
+      local -n member_row
+      local member_row_count
+      if [[ "${member_stack:-}" ]]; then
+        member_row=${member_stack[$last_row_index]}
         member_row_count=${#member_row[*]}
-      end_while
-      let member_index++ || true
-      for_each_leaf_flat_expand_members || fail
-    elif [[ ! "${member_index:-}" ]]; then
-      member_index=0
-    else
-      let member_index++ || true
-    fi
+      fi
 
-    member_row=${member_stack[$last_row_index]}
-    if [[ "${#member_row[*]}" -gt 1 ]]; then
-      multi_cell=t
-    else
-      multi_cell=f
-    fi
+      if (( member_index_stack_count < dim_count )); then
+        for_each_leaf_flat_expand_members || fail
+      elif (( member_index == member_row_count - 1 )); then
+        begin_while (( member_index == member_row_count - 1 )); doo
+          unset member_index_stack[-1] \
+            leaf_path_stack[-1] \
+            branch_values[-1] \
+            member_stack[-1]
+          if [[ ${#member_index_stack[*]} == 0 ]]; then
+            succeed
+          fi
+          member_index=${member_index_stack[-1]}
+          member_row=${member_stack[-1]}
+          member_row_count=${#member_row[*]}
+        end_while
+        let member_index++ || true
+        for_each_leaf_flat_expand_members || fail
+      elif [[ ! "${member_index:-}" ]]; then
+        member_index=0
+      else
+        let member_index++ || true
+      fi
 
-    value=${member_row[$member_index]}
-    get_sane_value "$value"
+      member_row=${member_stack[$last_row_index]}
+      if [[ "${#member_row[*]}" -gt 1 ]]; then
+        multi_cell=t
+      else
+        multi_cell=f
+      fi
 
-    if (( ${#leaf_path_stack[*]} > 1 )); then
-      leaf_path=${leaf_path_stack[-2]}/.dim/$sane_value
-    else
-      leaf_path=/.dim/$sane_value
-    fi
+      value=${member_row[$member_index]}
+      get_sane_value "$value"
 
-    branch_values[-1]=$value
-    eval "local d_$dim=\$value"
+      if (( ${#leaf_path_stack[*]} > 1 )); then
+        leaf_path=${leaf_path_stack[-2]}/.dim/$sane_value
+      else
+        leaf_path=/.dim/$sane_value
+      fi
 
-    $leaf_function || fail
+      branch_values[-1]=$value
+      eval "local d_$dim=\$value"
 
-    if [[ $leave_loop -gt 0 ]]; then
-      let leave_loop-- || true
-      break
-    fi
-    
-  end_loop
+      $leaf_function || fail
 
-end_function
-handle_return
+      if [[ $leave_loop -gt 0 ]]; then
+        let leave_loop-- || true
+        break
+      fi
+      
+    end_loop
+
+  end_function
+  handle_return
 }
 
 for_each_leaf_flat_expand_members() {
@@ -792,7 +798,7 @@ get_needs_update() {
   local log_show_vars=^cell_path
   begin_function
 
-    local localize_dims=local $dim_vars
+    local localize_dims=${localize_dims:-} $dim_vars
 
     load_context || fail
 
@@ -2081,7 +2087,7 @@ init_context() {
   #   these cells must detect for themselves whether a change has happened in an
   #     update and set something_changed=t accordingly. 
 
-  localize_dims=local \
+  localize_dims= \
   default_freshness= \
   retry_max=1 \
   retry_delay=1 \
@@ -2393,50 +2399,51 @@ handle_return
 
 expand_values_plural() {
 
-begin_function_flat
+  begin_function_flat
 
-  values=( ${!ddims:-} )
+    values=( ${!ddims:-} )
 
-  if [[ ! "${values:-}" ]]; then
+    if [[ ! "${values:-}" ]]; then
 
-    if [[ $has_member_expand_function == t ]]; then
-      value= ${dim}_member_expand || fail
-      new_values=( "${values[@]}" )
+      if [[ $has_member_expand_function == t ]]; then
+        value= ${dim}_member_expand || fail
+        new_values=( "${values[@]}" )
+      else
+        log_fatal "Missing value for dimension: $RESET$dim"
+        fail1
+      fi
+
     else
-      log_fatal "Missing value for dimension: $RESET$dim"
-      fail1
+
+      if [[ $has_member_expand_function == t ]]; then
+        begin_for value in "${values[@]}"; doo
+          if [[ "$value" == $empty_member ]]; then
+            value=
+          fi
+          value=$value ${dim}_member_expand || fail
+          if [[ ! "${values:-}" ]]; then
+            log_fatal "Dim $dim_plural has invalid value '$value'"
+            fail1
+          fi
+          new_values+=( "${values[@]}" )
+        end_for
+      else
+        new_values=( "${values[@]}" )
+      fi
+
     fi
 
-  else
+    # remove duplicate values
+    local new_value
+    for new_value in "${new_values[@]}"; do
+      if [[ ! $new_value_list =~ \ $new_value\  ]]; then
+        new_value_list+=" $new_value "
+      fi
+    done
 
-    if [[ $has_member_expand_function == t ]]; then
-      begin_for value in "${values[@]}"; doo
-        if [[ "$value" == $empty_member ]]; then
-          value=
-        fi
-        value=$value ${dim}_member_expand || fail
-        if [[ ! "${values:-}" ]]; then
-          log_fatal "Dim $dim_plural has invalid value '$value'"
-          fail1
-        fi
-        new_values+=( "${values[@]}" )
-      end_for
-    else
-      new_values=( "${values[@]}" )
-    fi
+  end_function
+  handle_return
 
-  fi
-
-  # remove duplicate values
-  local new_value
-  for new_value in "${new_values[@]}"; do
-    if [[ ! $new_value_list =~ \ $new_value\  ]]; then
-      new_value_list+=" $new_value "
-    fi
-  done
-
-end_function
-handle_return
 }
 
 get_sane_value() {
@@ -2472,44 +2479,6 @@ else
   done
 fi
 return 1
-}
-
-load_props() {
-local prop_path=$1 dim_path dim
-if [[ -d $prop_path ]]; then
-  local contents=$(find1 $prop_path -not -name ".*" | sort -g) || return 1
-  for dim_path in $contents; do
-    source $dim_path || return 1
-    dim=${dim_path##*/}
-    if [[ $dim =~ [0-9]+-(.*) ]]; then
-      dim=${BASH_REMATCH[1]}
-    fi
-    props+=( $dim )
-
-    local value= values=
-    if [[ -v $dim ]]; then
-      value=${!dim}
-      if [[ $value == $empty_member ]]; then
-        value=
-      fi
-    fi
-    local f=${dim}_member_expand 
-    if type -t $f &>/dev/null; then
-      $f || true
-    fi
-    if [[ "$values" ]]; then
-      value=$values
-    fi
-
-    eval "$dim=\$value" || return 1
-
-    get_plural $dim
-    local dim_plural=$plural
-    local ddim=d_$dim ddims=d_$dim_plural
-
-    localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
-  done
-fi
 }
 
 get_plural() {
