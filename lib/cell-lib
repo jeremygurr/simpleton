@@ -165,27 +165,89 @@ setup_cell_path_vars() {
   handle_return
 }
 
-load_dims() {
+get_trunk_cell() {
+  local cell=$1
+  local parent=${cell%/*}
+  local parent_part=${parent##*/}
+  if [[ $parent_part == .dim ]]; then
+    local grandparent=${parent%/*}
+    if [[ "$grandparent" != "$parent" ]]; then
+      # recursive
+      get_trunk_cell $grandparent || return 1
+    else
+      return 1
+    fi
+  elif [[ ! -e $cell/.dna ]]; then
+    if [[ "$parent" != "$cell" ]]; then
+      # recursive
+      get_trunk_cell $parent || return 1
+    else
+      return 1
+    fi
+  else
+    trunk_cell=$cell
+  fi
+  return 0
+}
 
-  local -r cell=$1
-  local dim dim_plural v var_path=$cell/.dna/var
+load_trunk_dims() {
+  local cell_path=$1 \
+    v dim dim_plural plural
+
+  local var_path=$cell_path/.dna/var
 
   for v in dims sub_dims props; do
     if [[ -e $var_path/$v ]]; then
-      eval "$v=( $(<$var_path/$v) )" || return 1
+      eval "$v=( \$(<$var_path/$v) )" || return 1
     fi
   done
 
-  localize_dims=
   for dim in ${dims[*]} ${sub_dims[*]} ${props[*]}; do
     get_plural $dim
     dim_plural=$plural
     local ddim=d_$dim ddims=d_$dim_plural
     localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
   done
+}
 
-  if [[ "${dims:-}" ]]; then
-    log_debug "Dims found: ${dims[*]}"
+load_dims() {
+
+  local cell=$1
+  local dim dim_plural v var_path=$cell/.dna/var
+
+  trunk_dims=() \
+  branch_dims=()  \
+  leaf_dims=() \
+  localize_dims= \
+
+  trunk_cell=$cell_path depth=0
+  while [[ $trunk_cell == */.dim/* ]]; do
+    trunk_cell=${trunk_cell%/.dim/*}
+    (( depth++ ))
+  done
+
+  load_trunk_dims $trunk_cell || return 1
+  trunk_dims=( ${dims[*]} )
+  trunk_dim_count=${#trunk_dims[*]}
+
+  local i=0
+  for dim in ${dims[*]}; do
+    if (( i++ < depth )); then
+      leaf_dims+=( $dim )
+    else
+      branch_dims+=( $dim )
+    fi
+  done
+
+  leaf_dim_counts=${#leaf_dims[*]}
+  branch_dim_count=${#branch_dims[*]}
+
+  if [[ "${branch_dims:-}" ]]; then
+    log_debug "Branch dims found: ${branch_dims[*]}"
+  fi
+
+  if [[ "${leaf_dims:-}" ]]; then
+    log_debug "Leaf dims found: ${leaf_dims[*]}"
   fi
 
   if [[ "${sub_dims:-}" ]]; then
@@ -198,38 +260,6 @@ load_dims() {
 
   return 0
 
-}
-
-# returns:
-#   branch_dims
-#   branch_dim_count
-#   trunk_dims
-#   trunk_dim_count
-setup_branch_dims() {
-  local cell_path=$1 \
-    trunk_cell dims
-
-  get_trunk_cell $cell_path || return 1
-  load_dims $trunk_cell || return 1
-  trunk_dims=( ${dims[*]} )
-  trunk_dim_count=${#trunk_dims[*]}
-
-  branch_dims=() 
-  local dim
-  for dim in ${dims[*]}; do
-    if [[ $cell_path =~ .dim ]]; then
-      cell_path=${cell_path%/.dim/*}
-      branch_dims+=( $dim )
-    else
-      break
-    fi
-  done
-  branch_dim_count=${#branch_dims[*]}
-  if [[ "${branch_dims:-}" ]]; then
-    log_debug "Branch dims found: ${branch_dims[*]}"
-  fi
-
-  return 0
 }
 
 cell_context_load() {
@@ -273,7 +303,6 @@ cell_context_load() {
       source $context_path || fail
 
       setup_dep_defaults || return 1
-      setup_branch_dims $cell_path || fail
 
     fi
 
@@ -282,7 +311,7 @@ cell_context_load() {
 }
 
 dim_vars='dims sub_dims props'
-alias load_context='{ local $dim_vars && load_dims $cell_path && eval "$localize_dims" && cell_context_load; }'
+alias load_context='local $dim_vars; load_dims $cell_path && eval "$localize_dims" && cell_context_load'
 
 plant_seed() {
   local from=$1 to=$2 contents x x_part
@@ -1110,31 +1139,6 @@ propagate_change_to_downstream() {
 
   end_function
   handle_return
-}
-
-get_trunk_cell() {
-  local cell=$1
-  local parent=${cell%/*}
-  local parent_part=${parent##*/}
-  if [[ $parent_part == .dim ]]; then
-    local grandparent=${parent%/*}
-    if [[ "$grandparent" != "$parent" ]]; then
-      # recursive
-      get_trunk_cell $grandparent || return 1
-    else
-      return 1
-    fi
-  elif [[ ! -e $cell/.dna ]]; then
-    if [[ "$parent" != "$cell" ]]; then
-      # recursive
-      get_trunk_cell $parent || return 1
-    else
-      return 1
-    fi
-  else
-    trunk_cell=$cell
-  fi
-  return 0
 }
 
 already_in_dep_stack() {
