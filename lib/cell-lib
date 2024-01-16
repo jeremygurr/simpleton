@@ -54,7 +54,7 @@ make_cyto_vars() {
       var=${var_path##*/}
       content=$(<$var_path)
       trim_ws content
-      echo "local $var=\"$content\"" >>$context_path || fail
+      echo "${NL}local $var=\"$content\"" >>$context_path || fail
     end_for
   end_function
   handle_return
@@ -223,23 +223,23 @@ load_dims() {
     localize_dims= \
 
     trunk_cell=$cell_path depth=0
-    while [[ $trunk_cell == */.dim/* ]]; do
+    begin_while [[ $trunk_cell == */.dim/* ]]; doo
       trunk_cell=${trunk_cell%/.dim/*}
       (( depth++ ))
-    done
+    end_while
 
     load_trunk_dims $trunk_cell || fail
     trunk_dims=( ${dims[*]} )
     trunk_dim_count=${#trunk_dims[*]}
 
     local i=0
-    for dim in ${dims[*]}; do
+    begin_for dim in ${dims[*]}; doo
       if (( i++ < depth )); then
         leaf_dims+=( $dim )
       else
         branch_dims+=( $dim )
       fi
-    done
+    end_for
 
     leaf_dim_counts=${#leaf_dims[*]}
     branch_dim_count=${#branch_dims[*]}
@@ -313,7 +313,7 @@ cell_context_load() {
   handle_return
 }
 
-dim_vars='dims sub_dims props'
+dim_vars='leaf_dims branch_dims sub_dims props'
 alias load_context='local $dim_vars; load_dims $cell_path && eval "$localize_dims" && cell_context_load'
 
 plant_seed() {
@@ -781,6 +781,8 @@ get_needs_update() {
   local log_show_vars=^cell_path
   begin_function
 
+    local localize_dims=local $dim_vars
+
     load_context || fail
 
     local status_path=$cell_path/.cyto/status \
@@ -798,9 +800,6 @@ get_needs_update() {
       log_fatal "Attempted to run get_needs_update on folder that is not a cell: $cell_path"
       fail1
     fi
-
-    local dims localize_dims=local $dim_vars \
-      last_cell_dims_loaded
 
     if [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
       needs_update=t
@@ -830,10 +829,10 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because cell is stale"
-    elif [[ -v dims ]] \
+    elif [[ -v leaf_dims ]] \
          && { 
            function=get_leaf_needs_update \
-             for_each_leaf_flat ${dims[*]} || fail 
+             for_each_leaf_flat ${leaf_dims[*]} || fail 
          } \
          && { 
            load_context || fail
@@ -1754,25 +1753,27 @@ get_cell_path() {
 }
 
 validate_dims() {
-  local dim
-  for dim in ${dims[*]} ${sub_dims[*]} ${props[*]}; do
-    if dim_is_required $dim; then
-      local plural
-      get_plural $dim
-      local value=
-      if [[ -v d_$dim ]]; then
-        eval "local d_value=\${d_$dim}"
-        if [[ "$d_value" ]]; then
-          eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim}}}}"
+  begin_function_flat
+    local dim
+    begin_for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; doo
+      if dim_is_required $dim; then
+        local plural
+        get_plural $dim
+        local value=
+        if [[ -v d_$dim ]]; then
+          eval "local d_value=\${d_$dim}"
+          if [[ "$d_value" ]]; then
+            eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim}}}}"
+          fi
+        fi
+        if [[ ! "$value" ]]; then
+          log_fatal "Missing required parameter: $dim"
+          fail1
         fi
       fi
-      if [[ ! "$value" ]]; then
-        log_fatal "Missing required parameter: $dim"
-        return 1
-      fi
-    fi
-  done
-  return 0
+    end_for
+  end_function
+  handle_return
 }
 
 log_and_run() {
@@ -2092,7 +2093,7 @@ init_context() {
   reuse_existing_out=f \
   branch_dims= \
   props= \
-  dims= \
+  leaf_dims= \
   sub_dims= \
   update_cost=1 \
   refresh_less_than=${refresh_less_than:-1} 
@@ -2285,7 +2286,7 @@ expand_values() {
   begin_function_flat
 
     local dim_plural=${dim}s 
-    local ddims=d_$dims \
+    local ddims=d_$dim_plural \
           ddim=d_$dim \
           new_value_list= new_values= value \
           has_member_expand_function=f
@@ -2500,7 +2501,7 @@ if [[ -d $prop_path ]]; then
 
     get_plural $dim
     local dim_plural=$plural
-    local ddim=d_$dim ddims=d_$dims
+    local ddim=d_$dim ddims=d_$dim_plural
 
     localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
   done
