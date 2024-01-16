@@ -221,48 +221,54 @@ load_dims() {
 
   begin_function_flat
 
-    trunk_dims=() \
-    branch_dims=()  \
-    leaf_dims=() \
-    localize_dims= \
+    last_dims_loaded=${last_dims_loaded:-}
+    if [[ "$last_dims_loaded" != $cell_path ]]; then
 
-    trunk_cell=$cell_path depth=0
-    begin_while [[ $trunk_cell == */.dim/* ]]; doo
-      trunk_cell=${trunk_cell%/.dim/*}
-      (( depth++ ))
-    end_while
+      last_dims_loaded=$cell_path \
+      trunk_dims=() \
+      branch_dims=()  \
+      leaf_dims=() \
+      localize_dims= \
 
-    load_trunk_dims $trunk_cell || fail
-    trunk_dims=( ${dims[*]} )
-    trunk_dim_count=${#trunk_dims[*]}
+      trunk_cell=$cell_path depth=0
+      begin_while [[ $trunk_cell == */.dim/* ]]; doo
+        trunk_cell=${trunk_cell%/.dim/*}
+        (( depth++ ))
+      end_while
 
-    local i=0
-    begin_for dim in ${dims[*]}; doo
-      if (( i < depth )); then
-        branch_dims+=( $dim )
-      else
-        leaf_dims+=( $dim )
+      load_trunk_dims $trunk_cell || fail
+      trunk_dims=( ${dims[*]} )
+      trunk_dim_count=${#trunk_dims[*]}
+
+      local i=0
+      begin_for dim in ${dims[*]}; doo
+        if (( i < depth )); then
+          branch_dims+=( $dim )
+        else
+          leaf_dims+=( $dim )
+        fi
+        (( i++ ))
+      end_for
+
+      leaf_dim_count=${#leaf_dims[*]}
+      branch_dim_count=${#branch_dims[*]}
+
+      if [[ "${branch_dims:-}" ]]; then
+        log_debug "Branch dims found: ${branch_dims[*]}"
       fi
-      (( i++ ))
-    end_for
 
-    leaf_dim_count=${#leaf_dims[*]}
-    branch_dim_count=${#branch_dims[*]}
+      if [[ "${leaf_dims:-}" ]]; then
+        log_debug "Leaf dims found: ${leaf_dims[*]}"
+      fi
 
-    if [[ "${branch_dims:-}" ]]; then
-      log_debug "Branch dims found: ${branch_dims[*]}"
-    fi
+      if [[ "${sub_dims:-}" ]]; then
+        log_debug "Sub dims found: ${sub_dims[*]}"
+      fi
 
-    if [[ "${leaf_dims:-}" ]]; then
-      log_debug "Leaf dims found: ${leaf_dims[*]}"
-    fi
+      if [[ "${props:-}" ]]; then
+        log_debug "Props found: ${props[*]}"
+      fi
 
-    if [[ "${sub_dims:-}" ]]; then
-      log_debug "Sub dims found: ${sub_dims[*]}"
-    fi
-
-    if [[ "${props:-}" ]]; then
-      log_debug "Props found: ${props[*]}"
     fi
 
   end_function
@@ -1758,21 +1764,21 @@ validate_dims() {
   begin_function_flat
     local dim
     begin_for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; doo
-      if dim_is_required $dim; then
-        local plural
-        get_plural $dim
-        local value=
-        if [[ -v d_$dim ]]; then
-          eval "local d_value=\${d_$dim}"
-          if [[ "$d_value" ]]; then
-            eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim}}}}"
-          fi
-        fi
-        if [[ ! "$value" ]]; then
-          log_fatal "Missing required parameter: $dim"
-          fail1
-        fi
+
+      local plural value failed=f problem=
+      get_plural $dim
+      eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim:-}}}}"
+
+      ${dim}_member_expand || {
+        log_fatal "${dim}_member_expand failed to execute"
+        fail1
+      }
+
+      if [[ "$problem" ]]; then
+        log_fatal "$problem"
+        fail1
       fi
+
     end_for
   end_function
   handle_return
@@ -2514,12 +2520,6 @@ get_plural() {
     plural=${dim}s
   fi
   return 0
-}
-
-dim_is_required() {
-  local dim=$1 values= problem=
-  value= ${dim}_member_expand || return 0
-  return 1
 }
 
 load_parent_context() {
