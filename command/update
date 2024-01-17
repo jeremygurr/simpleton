@@ -341,6 +341,7 @@ link_dim_parts() {
     begin_for part in $contents; doo
       if [[ "$part" == */up \
          || "$part" == */down \
+         || "$part" == */out \
          ]]; then
         continue
       elif [[ "$part" == */var \
@@ -379,13 +380,13 @@ create_sub_branch() {
       fi
     end_for
 
-    local all_path=$dna_path/dim/_all
+    local all_path=$dim_path/_all
     if [[ -d $all_path ]]; then
       from_path=$all_path to_path=$sub_dna_path link_dim_parts || fail
       safe_link $(realpath $all_path) $to_path/ || fail
     fi
 
-    local leaf_path=$dna_path/dim/_leaf
+    local leaf_path=$dim_path/_leaf
     if [[ -d $leaf_path ]]; then
       safe_link $(realpath $leaf_path) $sub_dim/ || fail
     fi
@@ -838,14 +839,7 @@ post_update() {
 append_dim_var_to_context() {
   local dim=$1
   begin_function_flat
-    dim=${dim##*/}
-    dim=${dim#*-}
-
-    local plural
-    get_plural $dim
-    local dim_plural=$plural
-    local ddim=d_$dim ddims=d_$dim_plural
-
+    local ddim=d_$dim
     if [[ ! -v $ddim ]]; then
       log_fatal "Internal error: While trying to create a branch sub cell, required dim value $dim is missing."
       fail1
@@ -855,7 +849,6 @@ append_dim_var_to_context() {
       value=
     fi
     echo "$value" >$sub_var/$dim || fail
-    log_debug "Appending dim $dim=$value to $sub_var/$dim"
   end_function
   handle_return
 }
@@ -1092,13 +1085,14 @@ migrate_deps() {
     migrate_out $dna_path/out $sub_dna_path/out || fail
 
     if [[ $is_branch == t ]]; then
-      migrate_dep $dna_path/leaf/up $sub_dna_path/leaf/up || fail
-      migrate_dep $dna_path/leaf/down $sub_dna_path/leaf/down || fail
-      migrate_out $dna_path/leaf/out $sub_dna_path/leaf/out || fail
+      mkdir -p $sub_dna_path/_leaf || fail
+      migrate_dep $dim_path/_leaf/up $sub_dna_path/_leaf/up || fail
+      migrate_dep $dim_path/_leaf/down $sub_dna_path/_leaf/down || fail
+      migrate_out $dim_path/_leaf/out $sub_dna_path/_leaf/out || fail
     else
-      migrate_dep $dna_path/leaf/up $sub_dna_path/up || fail
-      migrate_dep $dna_path/leaf/down $sub_dna_path/down || fail
-      migrate_out $dna_path/leaf/out $sub_dna_path/out || fail
+      migrate_dep $dim_path/_leaf/up $sub_dna_path/up || fail
+      migrate_dep $dim_path/_leaf/down $sub_dna_path/down || fail
+      migrate_out $dim_path/_leaf/out $sub_dna_path/out || fail
     fi
 
   end_function
