@@ -872,43 +872,54 @@ update_members() {
   handle_return
 }
 
-no_change_in_dirs() {
+compare_files_or_dirs() {
   local left=$1 right=$2
-  if [[ -d $left ]]; then
-    if [[ -d $right ]]; then
-      local sub_full sub already_checked
+  begin_function_flat
+    if [[ -d $left ]]; then
+      if [[ -d $right ]]; then
+        local sub_full sub already_checked files
 
-      for sub_full in $(find1 $left -not -name .dna -not -name .cyto); do
-        sub=${sub_full##*/}
-        if ! no_change_in_dirs $left/$sub $right/$sub; then
-          return 1
-        fi
-        already_checked+=" $sub"
-      done
-      already_checked+=' '
+        files=$(find1 $left -not -name '.*') || fail
+        begin_for sub_full in $files; doo
+          sub=${sub_full##*/}
+          compare_files_or_dirs $left/$sub $right/$sub || fail
+          if [[ $changed == t ]]; then
+            succeed
+          fi
+          already_checked+=" $sub"
+        end_for
+        already_checked+=' '
 
-      for sub_full in $(find1 $right -not -name .dna -not -name .cyto); do
-        sub=${sub_full##*/}
-        if [[ "$already_checked" =~ \ $sub\  ]]; then
-          continue
-        fi
-        if ! no_change_in_dirs $right/$sub $left/$sub; then
-          return 1
-        fi
-      done
+        files=$(find1 $right -not -name '.*') || fail
+        begin_for sub_full in $files; doo
+          sub=${sub_full##*/}
+          if [[ "$already_checked" =~ \ $sub\  ]]; then
+            continue
+          fi
+          compare_files_or_dirs $right/$sub $left/$sub || fail
+          if [[ $changed == t ]]; then
+            succeed
+          fi
+        end_for
 
+      else
+        changed=t
+      fi
+    elif [[ -f $left ]]; then
+      if [[ -f $right ]]; then
+        if files_are_different $left $right &>/dev/null; then
+          changed=t
+        else
+          changed=f
+        fi
+      else
+        changed=t
+      fi
     else
-      return 1
+      changed=f
     fi
-  elif [[ -f $left ]]; then
-    if [[ -f $right ]]; then
-      diff $left $right &>/dev/null
-    else
-      return 1
-    fi
-  else
-    return 0
-  fi
+  end_function
+  handle_return
 }
 
 update_self_move_out_path() {
@@ -918,23 +929,17 @@ update_self_move_out_path() {
       rm -rf $out_path.old || fail
     fi
 
-    if [[ -e $out_path/.dna ]]; then
-      if [[ ! -e $out_path.new/.dna ]]; then
-        mv $out_path/.dna $out_path.new/.dna || fail
-      else
-        log_fatal "Target .dna folder already exists, when it shouldn't"
-        fail1
+    local f
+    begin_for f in .dna .cyto .dim; doo
+      if [[ -e $out_path/$f ]]; then
+        if [[ ! -e $out_path.new/$f ]]; then
+          mv $out_path/$f $out_path.new/$f || fail
+        else
+          log_fatal "Target $f folder already exists, when it shouldn't"
+          fail1
+        fi
       fi
-    fi
-
-    if [[ -e $out_path/.cyto ]]; then
-      if [[ ! -e $out_path.new/.cyto ]]; then
-        mv $out_path/.cyto $out_path.new/.cyto || fail
-      else
-        log_fatal "Target .cyto folder already exists, when it shouldn't"
-        fail1
-      fi
-    fi
+    end_for
 
     if [[ -d $out_path ]]; then
       mv $out_path $out_path.old || fail
@@ -982,7 +987,9 @@ update_self() {
       if [[ $reuse_existing_out == f ]]; then
         out_path=$cell_path
         if [[ $update_successful == t ]]; then
-          if no_change_in_dirs $out_path $out_path.new; then
+          local changed
+          compare_files_or_dirs $out_path $out_path.new || fail
+          if [[ $changed == f ]]; then
             rm -rf $out_path.new || fail
           else
             update_self_move_out_path || fail
