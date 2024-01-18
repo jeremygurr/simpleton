@@ -1,7 +1,7 @@
 post_update() {
   local result_string
 
-  begin_function_flat
+  begin_function
 
     completion_time=${completion_time:-$EPOCHSECONDS}
     if [[ $update_successful == t ]]; then

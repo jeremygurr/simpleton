@@ -1,5 +1,5 @@
 pre_update() {
-  begin_function_flat
+  begin_function
 
     update_successful=
     something_changed=f

@@ -1,6 +1,6 @@
 check_results() {
 
-begin_function_flat
+begin_function
 
 if [[ $can_update == t ]]; then
   if [[ $update_successful == t && $post_validate == t ]]; then

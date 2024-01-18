@@ -3,7 +3,7 @@ update_member() {
     log_vars=member log_show_vars=member \
     downstream_ref_path=${downstream_ref_path:-}
 
-  begin_function
+  begin_function_hi
     get_sane_value "$member" || fail
     member_path=$cell_path/.dim/$sane_value
     if [[ ! -d $member_path ]]; then

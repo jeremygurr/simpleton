@@ -5,7 +5,7 @@ update_upstream() {
     default_freshness=$default_freshness up_dna=$upstream
 
   local log_show_vars=^up_dna 
-  begin_function
+  begin_function_hi
 
     if [[ "${localize_dim_vars:-}" ]]; then
       eval "$localize_dim_vars"
