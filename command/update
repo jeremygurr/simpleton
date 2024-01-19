@@ -474,9 +474,8 @@ promote_dep_cell() {
   local log_show_vars=^from
   begin_function
 
-    local trunk_cell=
     local leaf_dims= last_cell_dims_loaded
-    load_dims $trunk_cell || fail
+    load_dims $from || fail
 
     local dep_dim already_promoted_path=$from
 
@@ -619,50 +618,44 @@ migrate_dep() {
 
   local log_show_vars='^from ^to'
   begin_function
-    if [[ -d $from ]]; then
 
-      if [[ ! -d $to ]]; then
-        mkdir $to || fail
+    local dep deps
+    deps=$(find1 $from -type d -not -name '.*') || fail
+    begin_for dep in $deps; doo
+
+      local dep_name=${dep##*/}
+
+      if [[ ! -d $to/$dep_name ]]; then
+        mkdir $to/$dep_name || fail
       fi
 
-      local dep deps
-      deps=$(find1 $from -type d -not -name '.*') || fail
-      begin_for dep in $deps; doo
+      if [[ -f $dep/prep ]]; then
+        safe_link $dep/prep $to/$dep_name/prep || fail
+      fi
 
-        local dep_name=${dep##*/}
-
-        if [[ ! -d $to/$dep_name ]]; then
-          mkdir $to/$dep_name || fail
+      if [[ -d $dep/cell ]]; then
+        migrate_dep2 $dep/cell $to/$dep_name/cell || fail 
+      elif [[ -d $dep/choices ]]; then
+        local choice choices
+        if [[ ! -d $to/$dep_name/choices ]]; then
+          mkdir $to/$dep_name/choices || fail
         fi
-
-        if [[ -f $dep/prep ]]; then
-          safe_link $dep/prep $to/$dep_name/prep || fail
-        fi
-
-        if [[ -d $dep/cell ]]; then
-          migrate_dep2 $dep/cell $to/$dep_name/cell || fail 
-        elif [[ -d $dep/choices ]]; then
-          local choice choices
-          if [[ ! -d $to/$dep_name/choices ]]; then
-            mkdir $to/$dep_name/choices || fail
+        choices=$(find1 $dep/choices -not -name '.*') || fail
+        begin_for choice in $choices; doo
+          local choice_name=${choice##*/}
+          if [[ ! -d "$choice" ]]; then
+            log_fatal "Invalid config for $dep: $choice_name is not a folder"
+            fail1
           fi
-          choices=$(find1 $dep/choices -not -name '.*') || fail
-          begin_for choice in $choices; doo
-            local choice_name=${choice##*/}
-            if [[ ! -d "$choice" ]]; then
-              log_fatal "Invalid config for $dep: $choice_name is not a folder"
-              fail1
-            fi
-            migrate_dep2 $choice $to/$dep_name/choices/$choice_name || fail
-          end_for
-        else
-          log_fatal "Dependency is missing choices or cell folder: $dep"
-          fail1
-        fi
+          migrate_dep2 $choice $to/$dep_name/choices/$choice_name || fail
+        end_for
+      else
+        log_fatal "Dependency is missing choices or cell folder: $dep"
+        fail1
+      fi
 
-      end_for
+    end_for
 
-    fi
   end_function
   handle_return
 }
@@ -695,22 +688,31 @@ migrate_out() {
 migrate_deps() {
   local log_show_vars='^dna_path ^sub_dna_path'
   begin_function
+    mkdir -p $sub_dna_path/_leaf || fail
+    local x y target
+    begin_for x in _leaf _all; doo
+      begin_for y in up down out; doo
+        if [[ -d $dim_path/$x/$y ]]; then
 
-    migrate_dep $dna_path/up $sub_dna_path/up || fail
-    migrate_dep $dna_path/down $sub_dna_path/down || fail
-    migrate_out $dna_path/out $sub_dna_path/out || fail
+          if [[ $is_branch == t ]]; then
+            target=$x/$y
+          else
+            target=$y
+          fi
 
-    if [[ $is_branch == t ]]; then
-      mkdir -p $sub_dna_path/_leaf || fail
-      migrate_dep $dim_path/_leaf/up $sub_dna_path/_leaf/up || fail
-      migrate_dep $dim_path/_leaf/down $sub_dna_path/_leaf/down || fail
-      migrate_out $dim_path/_leaf/out $sub_dna_path/_leaf/out || fail
-    else
-      migrate_dep $dim_path/_leaf/up $sub_dna_path/up || fail
-      migrate_dep $dim_path/_leaf/down $sub_dna_path/down || fail
-      migrate_out $dim_path/_leaf/out $sub_dna_path/out || fail
-    fi
+          if [[ ! -d $sub_dna_path/$target ]]; then
+            mkdir $sub_dna_path/$target || fail
+          fi
 
+          if [[ $y == out ]]; then
+            migrate_out $dim_path/$x/$y $sub_dna_path/$target || fail
+          else
+            migrate_dep $dim_path/$x/$y $sub_dna_path/$target || fail
+          fi
+
+        fi
+      end_for
+    end_for
   end_function
   handle_return
 }
