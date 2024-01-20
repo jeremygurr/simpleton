@@ -551,107 +551,6 @@ fork_bg() {
   background=t fork "$@"
 }
 
-# checks one particular folder in .dna/up that is not a cell
-# each sub folder needs to be searched for cells. 
-# If one cell is found which is fresh, the whole folder is considered fresh.
-get_upstream_needs_update2() {
-
-  local up_folder=$1
-  begin_function
-
-      log_debug "Checking upstream folder of $short_cell: ${up_folder##*/}"
-      local -r upstream_cells=( 
-        $(find1 $up_folder -not -name '.*' | sort -g) 
-        ) || fail
-      begin_for up in ${upstream_cells[*]}; doo
-
-        log_debug "Checking $up"
-
-        if [[ -d $up/.dna ]]; then
-          # recursive
-          check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto || fail
-        elif [[ -d $up ]]; then
-          get_upstream_needs_update2 $up || fail
-        fi
-
-        if [[ $needs_update == f ]]; then
-          succeed
-        fi
-
-      end_for
-
-  end_function
-  handle_return
-
-}
-
-get_upstream_needs_update() {
-
-  local cell_path=$1
-  local short_cell \
-    cyto_up_path=$cell_path/.cyto/up \
-    dna_up_path=$cell_path/.dna/up 
-  get_short_cell $cell_path
-
-  local log_show_vars=short_cell log_vars=cell_path
-  begin_function_hi
-    if [[ "${dna_up_path:-}" && -d "$dna_up_path" ]] \
-       && (( check_upstream_depth > 0 )); then
-      #log_debug "Checking upstream of $short_cell"
-      local -r upstream_cells=( 
-        $(find1 $dna_up_path -not -name '.*' | sort -g) 
-        ) || fail
-      local up up_part
-      begin_for up in ${upstream_cells[*]}; doo
-
-        up_part=${up##*/}
-        log_debug "Checking $up_part"
-        up_cyto=$cyto_up_path/$up_part/chosen
-        if [[ ! -e $up_cyto ]]; then
-          log_debug "Cyto up is missing, needs update"
-          needs_update=t
-          break
-        fi
-
-        # recursive
-        check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto || fail
-
-        if [[ $needs_update == t ]]; then
-          break
-        fi
-
-      end_for
-    fi
-
-    # restore context
-    load_context || fail
-
-  end_function
-  handle_return
-
-}
-
-get_leaf_needs_update() {
-  needs_update=
-  if [[ ! "${leaf_path:-}" ]]; then
-    log_fatal "leaf_path is missing"
-    return 1
-  fi
-  local leaf_cell_path=$cell_path$leaf_path
-
-  if [[ -d $leaf_cell_path ]]; then
-    # recursive
-    get_needs_update $leaf_cell_path || return 1
-  else
-    needs_update=t
-  fi
-
-  if [[ $needs_update == t ]]; then
-    leave_loop=1
-  fi
-  return 0
-}
-
 # same as for_each_leaf but faster but can't divide into parallel processes or fork
 # use for simple cases
 for_each_leaf_flat() {
@@ -749,198 +648,94 @@ for_each_leaf_flat() {
 }
 
 for_each_leaf_flat_expand_members() {
-begin_function
-local row 
-if [[ "${member_stack:-}" ]]; then
-  member_stack_count=${#member_stack[*]}
-else
-  member_stack_count=0
-fi
-begin_for ((row=member_stack_count; row < dim_count; row++)); doo
-
-  dim=${dim_array[$row]}
-  expand_values || fail
-  value=$values
-  eval "local d_$dim=\$value"
-  branch_values+=( "$value" )
-
-  eval "members$row=( \"\${values[@]}\" )"
-  member_stack+=( members$row )
-
-  if [[ "${member_index_stack:-}" ]]; then
-    member_index_stack[-1]=$member_index
-  fi
-  member_index=0
-  member_index_stack+=( 0 )
-
-  local previous_leaf_stack
-  if (( row > 0 )); then
-    previous_leaf_path=${leaf_path_stack[-1]}
+  begin_function
+  local row 
+  if [[ "${member_stack:-}" ]]; then
+    member_stack_count=${#member_stack[*]}
   else
-    previous_leaf_path=
+    member_stack_count=0
   fi
+  begin_for ((row=member_stack_count; row < dim_count; row++)); doo
 
-  get_sane_value "$value"
-  leaf_path_stack+=( $previous_leaf_path/.dim/$sane_value )
+    dim=${dim_array[$row]}
+    expand_values || fail
+    value=$values
+    eval "local d_$dim=\$value"
+    branch_values+=( "$value" )
 
-end_for
+    eval "members$row=( \"\${values[@]}\" )"
+    member_stack+=( members$row )
 
-end_function
-handle_return
+    if [[ "${member_index_stack:-}" ]]; then
+      member_index_stack[-1]=$member_index
+    fi
+    member_index=0
+    member_index_stack+=( 0 )
+
+    local previous_leaf_stack
+    if (( row > 0 )); then
+      previous_leaf_path=${leaf_path_stack[-1]}
+    else
+      previous_leaf_path=
+    fi
+
+    get_sane_value "$value"
+    leaf_path_stack+=( $previous_leaf_path/.dim/$sane_value )
+
+  end_for
+
+  end_function
+  handle_return
 }
 
 # will construct cell_values array with current set of values of the
 #   cell dims, which can be used in branch or leaf functions
 for_each_leaf() {
 
-local dim_array=( $* ) multi_cell=f \
-  leaf_function=$function leave_loop=${leave_loop:-0} \
-  fork=${fork:-t} \
-  par=${par:-t}
+  local dim_array=( $* ) multi_cell=f \
+    leaf_function=$function leave_loop=${leave_loop:-0} \
+    fork=${fork:-t} \
+    par=${par:-t}
 
-local dim=${dim_array[0]} \
-  remaining_dims=( ${dim_array[*]:1} ) \
-  function= \
-  branch_values=${branch_values[*]:-()} \
-  leaf_path=${leaf_path:-}
+  local dim=${dim_array[0]} \
+    remaining_dims=( ${dim_array[*]:1} ) \
+    function= \
+    branch_values=${branch_values[*]:-()} \
+    leaf_path=${leaf_path:-}
 
-local log_vars='dim fork par function'
-begin_function
+  local log_vars='dim fork par function'
+  begin_function
 
-  expand_values || fail
+    expand_values || fail
 
-  if [[ "${#values[*]}" -gt 1 ]]; then
-    multi_cell=t
-  fi
-
-  local loop_function=$leaf_function
-  if [[ "${remaining_dims:-}" ]]; then
-    loop_function="function=\"$leaf_function\" for_each_leaf ${remaining_dims[*]}"
-  fi
-
-  branch_values+=()
-  local parent_leaf_path=$leaf_path
-  loop_over_var=values \
-    head="local member=\$value
-      branch_values[-1]=\$value
-      get_sane_value \"\$value\"
-      leaf_path=$parent_leaf_path/.dim/\$sane_value
-      eval \"local d_$dim=\$member\"
-      par=\$par2 fork=\$fork2
-      " \
-    body=$loop_function \
-    tail='
-      if [[ $leave_loop -gt 0 ]]; then
-        break
-      fi
-      ' \
-    parallel_loop || fail
-
-end_function
-handle_return
-}
-
-# returns needs_update
-get_needs_update() {
-  if [[ ! -e $1 ]]; then
-    log_fatal "Cell doesn't exist: $1"
-    stack_trace
-    return 1
-  fi
-
-  local cell_path=$(realpath $1) short_cell
-
-  local log_show_vars=^cell_path
-  begin_function_hi
-
-    local localize_dims=${localize_dims:-} $dim_vars
-
-    load_context || fail
-
-    local status_path=$cell_path/.cyto/status \
-      cyto_up_path=$cell_path/.cyto/up \
-      log_message="No update needed" \
-      check_upstream_depth=${check_upstream_depth:-1}
-
-    if [[ "$needs_update" ]]; then
-      # needs_update is already known, don't need to compute it again
-      log_message="needs_update is already set."
-      succeed
+    if [[ "${#values[*]}" -gt 1 ]]; then
+      multi_cell=t
     fi
 
-    if [[ ! -d $cell_path/.dna ]]; then
-      log_fatal "Attempted to run get_needs_update on folder that is not a cell: $cell_path"
-      fail1
+    local loop_function=$leaf_function
+    if [[ "${remaining_dims:-}" ]]; then
+      loop_function="function=\"$leaf_function\" for_each_leaf ${remaining_dims[*]}"
     fi
 
-    if [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
-      needs_update=t
-      log_message="Needs update because output file doesn't exist"
-    elif [[ "${downstream_ref_path:-}" && ! -e "$downstream_ref_path/chosen" ]]; then
-      needs_update=t
-      log_message="Needs update because downstream_ref_path hasn't been linked yet"
-    elif (( refresh_less_than > update_cost ))
-    then
-      needs_update=t
-      log_message="Needs update because update_cost ($update_cost) < refresh_less_than ($refresh_less_than)"
-    elif [[ ! -e $status_path/last-good-update-end ]]
-    then
-      needs_update=t
-      log_message="Needs update because cell has never been updated successfully"
-    elif [[ ! -e $status_path/up-to-date ]]
-    then
-      needs_update=t
-      log_message="Needs update because something changed"
-    elif get_prop_changed $cell_path || fail
-         [[ $prop_changed == t ]]
-    then
-      needs_update=t
-      log_message="Needs update because properties have changed"
-    elif get_is_stale $status_path || fail
-         [[ $is_stale == t ]]
-    then
-      needs_update=t
-      log_message="Needs update because cell is stale"
-    elif [[ -v leaf_dims ]] \
-         && { 
-           function=get_leaf_needs_update \
-             for_each_leaf_flat ${leaf_dims[*]} || fail 
-         } \
-         && { 
-           load_context || fail
-         } \
-         && [[ $needs_update == t ]]
-    then
-      log_message="Needs update because at least one leaf cell is out of date"
-    elif [[ -v dna_up_path ]] \
-         && { get_upstream_needs_update $cell_path || fail; } \
-         && [[ $needs_update == t ]]
-    then
-      log_message="Needs update because at least one upstream cell is out of date"
-    elif local data_valid=t
-      ignore_missing=t execute_op check || fail
-      [[ $data_valid == f ]]
-    then
-      needs_update=t
-      log_message="Needs update because current value does not match intended value"
-    fi
+    branch_values+=()
+    local parent_leaf_path=$leaf_path
+    loop_over_var=values \
+      head="local member=\$value
+        branch_values[-1]=\$value
+        get_sane_value \"\$value\"
+        leaf_path=$parent_leaf_path/.dim/\$sane_value
+        eval \"local d_$dim=\$member\"
+        par=\$par2 fork=\$fork2
+        " \
+      body=$loop_function \
+      tail='
+        if [[ $leave_loop -gt 0 ]]; then
+          break
+        fi
+        ' \
+      parallel_loop || fail
 
   end_function
-
-  if succeeded; then
-    local level=log_verbose
-    if [[ ${cell_is_leaf:-t} == t || $show_branches == t || $top_level_command == t ]]; then
-      level=log_info
-    fi
-    action=update_check $level "$log_message ($short_cell)"
-  else
-    action=update_check log_fatal "Failed to check update need"
-  fi
-
-  if [[ ! "$needs_update" ]]; then
-    needs_update=f
-  fi
-
   handle_return
 }
 
