@@ -251,7 +251,7 @@ update_upstream() {
       needs_update=t
     fi
 
-    if [[ "${localize_dims:-}" ]]; then
+    if [[ "${localize_dims:-local}" != local ]]; then
       eval "$localize_dims"
     fi
 
@@ -474,6 +474,8 @@ promote_dep_cell() {
   local log_show_vars=^from
   begin_function
 
+    extra_dims+=( ${branch_dims[*]} )
+
     local leaf_dims= last_cell_dims_loaded
     load_dims $from || fail
 
@@ -495,20 +497,20 @@ promote_dep_cell() {
         continue
       fi
 
-      local branch_dim found_branch_dim=f
+      local available_dim found_available_dim=f
       # extra_dims will include all branch_dims from the downstream cell
       # upstream prep script can add extra_dims as needed
       # leaf_dims is the full set of dims for the upstream cell being promoted
-      begin_for branch_dim in ${branch_dims[*]} ${extra_dims[*]}; doo
-        if [[ $branch_dim == $dep_dim ]]; then
-          log_debug "Found branch dim for $dep_dim"
-          found_branch_dim=t
+      begin_for available_dim in ${extra_dims[*]}; doo
+        if [[ $available_dim == $dep_dim ]]; then
+          log_debug "Found available dim for $dep_dim"
+          found_available_dim=t
           break
         fi
       end_for
 
       local values=
-      if [[ $found_branch_dim == f ]]; then
+      if [[ $found_available_dim == f ]]; then
         # can't promote if dep dim doesn't exist on the branch 
         log_debug "Upstream dim not found in base branch dims: $dep_dim"
         if [[ $cell_is_leaf == t ]]; then
@@ -600,6 +602,9 @@ migrate_dep2() {
       safe_link $(realpath $from) $to || fail
 
     elif [[ -d $from/.dna ]]; then
+      # used to hold branch_dims later, but may also be passed in
+      #   by upstream prep scripts when this is called from upstream migration code
+      local extra_dims=
       migrate_cell $from $to || fail
 
     elif [[ -d $from ]]; then
