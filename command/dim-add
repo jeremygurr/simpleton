@@ -2,82 +2,91 @@
 
 dim_add() {
   begin_function
-  local shared_dim_folder= d=$cell_path
-  setup_cell_path_vars $cell_path || fail
+    local shared_dim_folder= d=$cell_path
+    setup_cell_path_vars $cell_path || fail
 
-  while [[ ${#d} -gt 3 ]]; do
-    if [[ -d $d/.dna/shared/dim ]]; then
-      shared_dim_folder=$d/.dna/shared/dim
-      break
-    fi
-    d=${d%/*}
-  done
+    while [[ ${#d} -gt 3 ]]; do
+      if [[ -d $d/.dna/shared/dim ]]; then
+        shared_dim_folder=$d/.dna/shared/dim
+        break
+      fi
+      d=${d%/*}
+    done
 
-  if [[ ! "${dim:-}" ]]; then
-    if [[ "$shared_dim_folder" ]]; then
-      echo "Choose a dim:" >&2
-      echo "(to create a new one, you'll need to specify the dim parameter directly)" >&2
-      select dim in \
-        $(find $shared_dim_folder -maxdepth 1 -mindepth 1 -type d -printf "%f\n")
-        do break; done
-      if [[ ! "$dim" ]]; then
-        log_fatal "Invalid dim selected"
+    local dims=${dims:-${dim:-}} dim
+    if [[ ! "${dim:-}" ]]; then
+      if [[ "$shared_dim_folder" ]]; then
+        echo "Choose a dim:" >&2
+        echo "(to create a new one, you'll need to specify the dim parameter directly)" >&2
+        select dims in \
+          $(find $shared_dim_folder -maxdepth 1 -mindepth 1 -type d -printf "%f\n")
+          do break; done
+        if [[ ! "$dims" ]]; then
+          log_fatal "Invalid dim selected"
+          fail1
+        fi
+      else
+        log_fatal "Must specify a dim parameter containing the dim to add."
         fail1
       fi
-    else
-      log_fatal "Must specify a dim parameter containing the dim to add."
-      fail1
     fi
-  fi
 
-  if [[ -d $shared_dim_folder/$dim ]]; then
-    local dim_name= head_part tail_part description_found=f member_expand_found=f file
-    begin_for d in $(find1 $shared_dim_folder/$dim -type f); doo
+    begin_for dim in $dims; doo
 
-      file=${d##*/}
-      head_part=${file%%_*}
-      tail_part=${file#*_}
+      log_info "Adding dim $dim"
 
-      if [[ ! "$dim_name" ]]; then
-        dim_name=$head_part
-      elif [[ $dim_name != $head_part ]]; then
-        log_warn "Found inconsistent dim name in $shared_dim_folder/$dim: $dim_name != $head_part"
-        log_warn "Will ignore"
-        continue
+      if [[ -d $shared_dim_folder/$dim ]]; then
+        local dim_name= head_part tail_part description_found=f member_expand_found=f file
+        begin_for d in $(find1 $shared_dim_folder/$dim -type f); doo
+
+          file=${d##*/}
+          head_part=${file%%_*}
+          tail_part=${file#*_}
+
+          if [[ ! "$dim_name" ]]; then
+            dim_name=$head_part
+          elif [[ $dim_name != $head_part ]]; then
+            log_warn "Found inconsistent dim name in $shared_dim_folder/$dim: $dim_name != $head_part"
+            log_warn "Will ignore"
+            continue
+          fi
+
+          case $tail_part in
+            description|examples)
+              description_found=t
+              if [[ ! -d $dim_all_path/var ]]; then
+                mkdir -p $dim_all_path/var || fail
+              fi
+              force=t safe_link $d $dim_all_path/var/ || fail
+            ;;
+            member_expand)
+              member_expand_found=t
+              if [[ ! -d $dim_all_path/fun ]]; then
+                mkdir -p $dim_all_path/fun || fail
+              fi
+              force=t safe_link $d $dim_all_path/fun/ || fail
+            ;;
+            *)
+              log_warn "Unknown dim file type: $tail_part found in $shared_dim_folder/dim. Ignoring"
+            ;;
+          esac
+          
+        end_for
+
+        if grep "$dim_name" $var_path/dims &>/dev/null; then
+          log_fatal "dim $dim_name has already been added here: $var_path/dims"
+          fail1
+        fi
+        echo "$dim_name" >>$var_path/dims || fail
+
+        log_info "Added $dim_name"
+      else
+        log_fatal "Dim not found: $dim in $shared_dim_folder"
+        log_fatal "You can run this command without specifying dim to get a list of options"
+        fail1
       fi
 
-      case $tail_part in
-        description)
-          description_found=t
-          if [[ ! -d $dim_all_path/var ]]; then
-            mkdir -p $dim_all_path/var || fail
-          fi
-          force=t safe_link $d $dim_all_path/var/ || fail
-        ;;
-        member_expand)
-          member_expand_found=t
-          if [[ ! -d $dim_all_path/fun ]]; then
-            mkdir -p $dim_all_path/fun || fail
-          fi
-          force=t safe_link $d $dim_all_path/fun/ || fail
-        ;;
-        *)
-          log_warn "Unknown dim file type: $tail_part found in $shared_dim_folder/dim. Ignoring"
-        ;;
-      esac
-      
     end_for
-
-    if grep "$dim_name" $var_path/dims &>/dev/null; then
-      log_fatal "dim $dim_name has already been added here: $var_path/dims"
-      fail1
-    fi
-    echo "$dim_name" >>$var_path/dims || fail
-  else
-    log_fatal "dim not found: $dim in $shared_dim_folder"
-    log_fatal "You can run this command without specifying dim to get a list of options"
-    fail1
-  fi
 
   end_function
   handle_return
