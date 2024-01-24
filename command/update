@@ -520,6 +520,9 @@ link_dim_parts() {
         contents=$(find1 $part -not -name '.*') || fail
         local folder=${part##*/} part2
         begin_for part2 in $contents; doo
+          if [[ ! -d $to_path/$folder ]]; then
+            mkdir $to_path/$folder || fail
+          fi
           safe_link $(realpath $part2) $to_path/$folder/ || fail
         end_for
       else
@@ -530,34 +533,9 @@ link_dim_parts() {
   handle_return
 }
 
-create_sub_branch() {
-  local log_show_vars=^sub_dna_path
-  begin_function
-
-    mkdir $sub_var $sub_fun $sub_dim || fail
-
-    echo "${super_dims[*]:1}" >$sub_var/dims || fail
-
-    local all_path=$dim_path/_all
-    if [[ -d $all_path ]]; then
-      from_path=$all_path to_path=$sub_dna_path link_dim_parts || fail
-      safe_link $(realpath $all_path) $sub_dim/ || fail
-    fi
-
-    local leaf_path=$dim_path/_leaf
-    if [[ -d $leaf_path ]]; then
-      safe_link $(realpath $leaf_path) $sub_dim/_leaf || fail
-    fi
-
-  end_function
-  handle_return
-}
-
 create_sub_leaf() {
   local log_show_vars=^sub_dna_path
   begin_function
-
-    mkdir $sub_var $sub_fun || fail
 
     local all_path=$dna_path/dim/_all
     if [[ -d $all_path ]]; then
@@ -774,7 +752,7 @@ migrate_dep2() {
   handle_return
 }
 
-# migrates a dependency given a .dna/up or .dna/leaf/up or .dna/down folder
+# migrates a dependency given a .dna/up or .dna/dim/_leaf/up or .dna/down folder
 migrate_dep() {
   local -r from=$1 to=$2
 
@@ -822,6 +800,9 @@ migrate_dep() {
   handle_return
 }
 
+# inputs example: 
+#   from=.../.dna/dim/_leaf/out
+#   to=.../.dna/out
 migrate_out() {
   local from=$1
   local -r to=$2
@@ -829,19 +810,17 @@ migrate_out() {
   local log_show_vars='^from ^to'
   begin_function_hi
 
-    if [[ -d $from ]]; then
-      local -r dim_var=d_${leaf_dims}
-      local -r value=${!dim_var}
-      local sane_value
-      get_sane_value "$values" || fail
-      from+=/$sane_value
-      from=$(realpath $from)
-      if [[ ! -d $from ]]; then
-        log_fatal "dna out dim path is missing: $from"
-        fail1
-      fi
-      safe_link $from $to || fail
+    local -r dim_var=d_${leaf_dims}
+    local -r value=${!dim_var}
+    local sane_value
+    get_sane_value "$values" || fail
+    from+=/$sane_value
+    from=$(realpath $from)
+    if [[ ! -d $from ]]; then
+      log_fatal "dna out dim path is missing: $from"
+      fail1
     fi
+    safe_link $from $to || fail
 
   end_function
   handle_return
@@ -857,7 +836,13 @@ migrate_deps() {
         if [[ -d $dim_path/$x/$y ]]; then
 
           if [[ $is_branch == t ]]; then
-            target=$x/$y
+            target=dim/$x/$y
+            if [[ ! -d $sub_dna_path/dim ]]; then
+              mkdir $sub_dna_path/dim || fail
+            fi
+            if [[ ! -d $sub_dna_path/dim/$x ]]; then
+              mkdir $sub_dna_path/dim/$x || fail
+            fi
           else
             target=$y
           fi
@@ -904,7 +889,6 @@ create_sub_branch_or_leaf() {
       
       local sub_dna_path=$cell/.dna 
       local sub_var=$sub_dna_path/var \
-        sub_fun=$sub_dna_path/fun \
         sub_dim=$sub_dna_path/dim 
 
       mkdir $sub_dna_path || fail
@@ -914,7 +898,8 @@ create_sub_branch_or_leaf() {
         local is_branch=f
         if (( super_dim_count > 1 )); then
           is_branch=t
-          create_sub_branch || fail
+          mkdir $sub_var $sub_dim || fail
+          echo "${super_dims[*]:1}" >$sub_var/dims || fail
         else
           create_sub_leaf || fail
         fi
