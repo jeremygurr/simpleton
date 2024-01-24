@@ -533,19 +533,46 @@ link_dim_parts() {
   handle_return
 }
 
+create_sub_branch() {
+  local log_show_vars=^sub_dna_path
+  begin_function
+
+    mkdir $sub_var $sub_dim || fail
+    echo "${super_dims[*]:1}" >$sub_var/dims || fail
+
+    local from_path to_path p
+
+    begin_for p in _all _leaf; doo
+      from_path=$dna_path/dim/$p \
+      to_path=$sub_dna_path/dim/$p
+      if [[ -d $from_path ]]; then
+        if [[ ! -d $to_path ]]; then
+          mkdir $to_path || fail
+        fi
+        link_dim_parts || fail
+      fi
+    end_for
+
+  end_function
+  handle_return
+}
+
 create_sub_leaf() {
   local log_show_vars=^sub_dna_path
   begin_function
 
-    local all_path=$dna_path/dim/_all
-    if [[ -d $all_path ]]; then
-      from_path=$all_path to_path=$sub_dna_path link_dim_parts || fail
-    fi
+    local from_path to_path p
 
-    local leaf_path=$dna_path/dim/_leaf
-    if [[ -d $leaf_path ]]; then
-      from_path=$leaf_path to_path=$sub_dna_path link_dim_parts || fail
-    fi
+    begin_for p in _all _leaf; doo
+      from_path=$dna_path/dim/$p \
+      to_path=$sub_dna_path
+      if [[ -d $from_path ]]; then
+        if [[ ! -d $to_path ]]; then
+          mkdir $to_path || fail
+        fi
+        link_dim_parts || fail
+      fi
+    end_for
 
   end_function
   handle_return
@@ -702,7 +729,8 @@ promote_dep_cell() {
   handle_return
 }
 
-# from and to are paths to up/choices/{upstream} which must be a cell
+# from and to are paths to up/{dep name}/choices/{upstream} or up/{dep name}/cell 
+#   which must be a cell
 migrate_cell() {
   local -r dep_link=$1 to=$2
   local from=$(realpath $dep_link) 
@@ -712,8 +740,7 @@ migrate_cell() {
     if [[ "$from" == */.dna/sub/* ]]; then
       local fixed_from=${from//.dna\/sub\//}
       if [[ -d $fixed_from ]]; then
-        rm $dep_link || fail
-        safe_link $fixed_from $dep_link || fail
+        force=t safe_link $fixed_from $dep_link || fail
         from=$fixed_from
       else
         log_fatal "Dependencies must link to planted cells, not seeds: $from"
@@ -829,7 +856,6 @@ migrate_out() {
 migrate_deps() {
   local log_show_vars='^dna_path ^sub_dna_path'
   begin_function
-    mkdir -p $sub_dna_path/_leaf || fail
     local x y target
     begin_for x in _leaf _all; doo
       begin_for y in up down out; doo
@@ -898,8 +924,7 @@ create_sub_branch_or_leaf() {
         local is_branch=f
         if (( super_dim_count > 1 )); then
           is_branch=t
-          mkdir $sub_var $sub_dim || fail
-          echo "${super_dims[*]:1}" >$sub_var/dims || fail
+          create_sub_branch || fail
         else
           create_sub_leaf || fail
         fi
