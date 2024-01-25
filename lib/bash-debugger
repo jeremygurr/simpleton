@@ -81,25 +81,27 @@ debug_output_reversed_line() {
 }
 
 debug_display_source() {
+  if (( debug_list_stack_pos > 0 )); then
+    raw_debug_path_to_source_file=${saved_bash_source[$debug_list_stack_pos]}
+    debug_line_num=${saved_bash_lineno[$((debug_list_stack_pos-1))]}
+  fi
+  debug_source_update
   if [[ "$debug_path_to_source_file" == none ]]; then
     return 0
   fi
-  # side_log "debug_display_source()"
-  # side_log "  debug_list_offset=$debug_list_offset debug_line_num=$debug_line_num"
   local debug_start_line=$((debug_list_offset+debug_line_num))
-  # side_log "  debug_start_line=$debug_start_line"
-  if [[ $debug_start_line -lt 1 ]]; then
+  if (( debug_start_line < 1 )); then
     (( debug_list_offset += -debug_start_line + 1 ))
     debug_start_line=1
   fi
   local debug_end_line=$((debug_start_line+debug_list_window-1))
 
-  if [[ $debug_start_line -le $debug_line_num && $debug_line_num -le $debug_end_line ]]; then
-    if [[ $debug_start_line -lt $debug_line_num ]]; then
+  if (( debug_start_line <= debug_line_num && debug_line_num <= debug_end_line )); then
+    if (( debug_start_line < debug_line_num )); then
       sed -n "$debug_start_line,$((debug_line_num-1))p;$((debug_line_num-1))q" "$debug_path_to_source_file" >&$fd_original_err
     fi
     debug_output_reversed_line
-    if [[ $debug_line_num -lt $debug_end_line ]]; then
+    if (( debug_line_num < debug_end_line )); then
       sed -n "$((debug_line_num+1)),${debug_end_line}p;${debug_end_line}q" "$debug_path_to_source_file" >&$fd_original_err
     fi
   else
@@ -170,9 +172,36 @@ debug_ignore_remove() {
   done
 }
 
+debug_source_update() {
+  debug_path_to_source_file=$raw_debug_path_to_source_file
+  if [[ $debug_path_to_source_file == /dev/fd/* ]]; then
+    debug_path_to_source_file=none
+  fi
+
+  if [[ $debug_full_path == t ]]; then
+    debug_source_file=$debug_path_to_source_file
+  else
+    debug_source_file=${debug_path_to_source_file##*/}
+  fi
+
+  if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
+
+    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
+    local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
+    if [ ! -f "$highlighted_source" ]; then
+      mkdir -p "${highlighted_source%/*}"
+      #cat "$debug_path_to_source_file" | highlight -S shellscript -O ansi >"$highlighted_source"
+      cat "$debug_path_to_source_file" | source-highlight -s bash -f esc >"$highlighted_source"
+    fi
+    debug_path_to_source_file=$highlighted_source
+
+  fi
+}
+
 debug_trap() {
 
-  local debug_path_to_source_file=$1 \
+  local debug_path_to_source_file \
+    raw_debug_path_to_source_file=$1 \
     debug_line_num=$2 \
     debug_current_function=$3 \
     debug_command=$4 \
@@ -192,10 +221,6 @@ debug_trap() {
   # debug_command=$debug_command
   # debug_current_depth=$debug_current_depth"
 
-  if [[ $debug_path_to_source_file == /dev/fd/* ]]; then
-    debug_path_to_source_file=none
-  fi
-
   if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
     return 0
@@ -211,14 +236,14 @@ debug_trap() {
     set -u
   fi
 
-  debug_rewind=f
   local IFS=$'\n'$'\t'" " \
     debug_full_path=${debug_full_path:-f} \
-    debug_source_file=${debug_path_to_source_file##*/} \
-    raw_debug_path_to_source_file=$debug_path_to_source_file
-  if [[ $debug_full_path == t ]]; then
-    debug_source_file=$debug_path_to_source_file
-  fi
+    debug_source_file \
+    raw_debug_path_to_source_file
+
+  debug_rewind=f
+
+  debug_source_update
 
   # if code inside the debug trap is changed, you may need to adjust this offset to ensure the code displayed in the debugger lines up with what is actually being executed.
   # the number being subtracted is the number of source lines in the trap which are executed before this function is called
@@ -391,19 +416,6 @@ debug_trap() {
   local debug_r=-1
 
   debug_last_location="$debug_path_to_source_file $debug_line_num"
-
-  if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
-
-    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
-    local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
-    if [ ! -f "$highlighted_source" ]; then
-      mkdir -p "${highlighted_source%/*}"
-      #cat "$debug_path_to_source_file" | highlight -S shellscript -O ansi >"$highlighted_source"
-      cat "$debug_path_to_source_file" | source-highlight -s bash -f esc >"$highlighted_source"
-    fi
-    debug_path_to_source_file=$highlighted_source
-
-  fi
 
   local backlog=
   if [[ $debug_path_to_source_file != none && "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
@@ -894,13 +906,13 @@ debug_trap() {
         #   debug_save_state
         # fi
         ;;
-      r)
+      R)
         echo "# Rewinding..." >&$fd_original_err
         debug_rewind=t
         debug_stepping=t
         debug_r=0
         ;;
-      R)
+      r)
         echo "# Show raw call stack" >&$fd_original_err
         start_frame=2 stack_trace
         no_follow_once=t
@@ -991,6 +1003,19 @@ debug_trap() {
         fi
         debug_save_state
         no_follow_once=t
+        ;;
+      -)
+        if (( debug_list_stack_pos >= ${#saved_bash_lineno[*]} )); then
+          echo "# Already at top of stack trace" >&$fd_original_err
+        else
+          echo >&$fd_original_err
+          (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
+          (( debug_list_stack_pos++ )) 
+          debug_display_source
+          debug_list_dir=forwards
+          (( debug_list_offset += debug_list_window ))
+          no_follow_once=t
+        fi
         ;;
       =)
         echo "# Running until this line is reached again" >&$fd_original_err
@@ -1124,8 +1149,8 @@ debug_trap() {
         echo "p  print variables in current line" >&$fd_original_err
         echo "P  print conditional test results of current line" >&$fd_original_err
         echo "q  quit: exit the program entirely" >&$fd_original_err
-        echo "r  rewind: go back to the start of the last looping / try block" >&$fd_original_err
-        echo "R  show raw call stack" >&$fd_original_err
+        echo "r  show raw call stack" >&$fd_original_err
+        echo "R  rewind: go back to the start of the last looping / try block" >&$fd_original_err
         echo "s  execute next small statement, even if multiple statements are on a line," >&$fd_original_err
         echo "   not stepping into function calls" >&$fd_original_err
         echo "t  show cooked call stack" >&$fd_original_err
@@ -1141,6 +1166,7 @@ debug_trap() {
         echo "^  toggle source following (displays source context after every command)" >&$fd_original_err
         echo "(  toggle expanded command mode. If on, will expand each *short* command that is executed" >&$fd_original_err
         echo ")  toggle extended expanded command mode. If on, will expand *all* commands that are executed" >&$fd_original_err
+        echo "-  move up stack one position and show source" >&$fd_original_err
         echo "=  continue until the current line is reached again" >&$fd_original_err
         echo "[  continue until a given [[ ]] or (( )) condition is met" >&$fd_original_err
         echo "]  continue until we reach a different function" >&$fd_original_err
@@ -1258,6 +1284,7 @@ debugger_init() {
     exec {fd_original_trace}>&${fd_trace:-2}
   fi
 
+  debug_output=${debug_output:-f}
   debug_ignore=${debug_ignore:-}
   tracing_depth=${tracing_depth:-0}
   tmp_folder=${tmp_folder:-/tmp}
@@ -1330,6 +1357,7 @@ debug_start() {
       debug_line_old=${debug_line_old:-} \
       debug_list_dir=${debug_list_dir:-none} \
       debug_list_offset=${debug_list_offset:-0} \
+      debug_list_stack_pos=${debug_list_stack_pos:-0} \
       debug_list_window=${debug_list_window:-20} \
       debug_long_command=${debug_long_command:-f} \
       debug_max_depth=${debug_max_depth:-999} \
