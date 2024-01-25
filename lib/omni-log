@@ -122,8 +122,10 @@ omni_log_init() {
 
 save_log_vars() {
   local entry entries= var value quoted_value
-  for var in $log_vars; do
+  for var in ${log_vars:-} ${log_show_vars:-}; do
     value=
+    var=${var#^}
+    var=${var##*=}
     if [[ -v $var && "${!var:-}" ]]; then
       value=${!var}
       shell_quote_var value
@@ -164,8 +166,8 @@ auto_shorten() {
 }
 
 write_to_log_process_vars() {
-  local var var_name value
-  for var in $log_vars $show_vars2 $trace_var; do
+  local var var_name value added=
+  for var in $trace_var $show_vars2 $log_vars; do
 
     if [[ $var == *=* ]]; then
       var_name=${var%%=*}
@@ -187,23 +189,26 @@ write_to_log_process_vars() {
     local quoted_value=$value
     shell_quote_var quoted_value
 
-    if [[ " $trace_var " =~ \ $var\  ]]; then
+    if [[ ! "$added" =~ \ $var\  ]]; then
+      if [[ " $trace_var " =~ \ $var\  ]]; then
 
-      if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
-        trace_vars+="$CYAN"
+        if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
+          trace_vars+="$CYAN"
+        fi
+
+        trace_vars+=" $var_name=$quoted_value"
+
+        if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
+          trace_vars+="$RESET"
+          trace_var_value[$var]=$value
+        fi
+
+      else
+        if [[ "$value" ]]; then
+          new_vars+=" $var_name=$quoted_value"
+        fi
       fi
-
-      trace_vars+=" $var_name=$quoted_value"
-
-      if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
-        trace_vars+="$RESET"
-        trace_var_value[$var]=$value
-      fi
-
-    else
-      if [[ "$value" ]]; then
-        new_vars+=" $var_name=$quoted_value"
-      fi
+      added+=" $var "
     fi
 
   done
@@ -226,10 +231,7 @@ write_to_log_process_vars() {
 
 write_to_log_log_var() {
   local quoted
-  to_log="= ts=$time pid=$pid"
-  to_log+=" debug_id=$debug_id_current"
-  to_log+=" log_id=$log_id"
-  to_log+=" log_level=$level"
+  to_log="= ts=$time pid=$pid debug_id=$debug_id_current log_id=$log_id log_level=$level"
 
   if [[ "$action" ]]; then
     local quoted=$action
