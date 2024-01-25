@@ -181,11 +181,24 @@ write_to_log_process_vars() {
       var_name=${var_name#^}
     fi
 
-    if [[ $var =~ \$ ]]; then
-      eval "value=\"$var\""
+    if [[ -v $var ]]; then
+      local count=0
+      set +u
+      eval "count=\${#$var[*]}"
+      set -u
+      if (( count > 1 )); then
+        eval "value=\${$var[*]}"
+      else
+        if [[ $var =~ \$ ]]; then
+          eval "value=\"$var\""
+        else
+          eval "value=\${$var:-}"
+        fi
+      fi
     else
-      eval "value=\${$var:-}"
+      value=
     fi
+
     local quoted_value=$value
     shell_quote_var quoted_value
 
@@ -317,8 +330,8 @@ write_to_log_console_out() {
       hide=t
     fi
 
-    local level_num=${log_level_num_map[$level]}
-    local log_level_num=${log_level_num_map[${log_level_filter:=info}]}
+    local level_num=${log_level_num_map[$level]} \
+      log_level_num=${log_level_num_map[${log_level_filter:=info}]}
     if (( level_num < log_level_num )); then
       hide=t
     fi
@@ -328,13 +341,15 @@ write_to_log_console_out() {
       level_color=
     fi
 
-    function=" $function"
-    action=" $action"
-    message=" $message"
-    local log_vars="$new_vars"
-    time=" $time"
-    pid=" pid=$pid"
-    log_id=" log_id=$log_id"
+    local function=" $function" \
+      action=" $action" \
+      message=" $message" \
+      log_vars="$new_vars" \
+      time=" $time" \
+      pid=" pid=$pid" \
+      log_id=" log_id=$log_id" \
+      debug_id=" debug_id=$debug_id_current"
+
     eval "local to_terminal=\"$log_format\""
     out_line="$to_terminal$trace_vars"
 
