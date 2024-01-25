@@ -81,10 +81,13 @@ debug_output_reversed_line() {
 }
 
 debug_display_source() {
+  raw_debug_path_to_source_file=${saved_bash_source[$debug_list_stack_pos]}
   if (( debug_list_stack_pos > 0 )); then
-    raw_debug_path_to_source_file=${saved_bash_source[$debug_list_stack_pos]}
     debug_line_num=${saved_bash_lineno[$((debug_list_stack_pos-1))]}
+  else
+    debug_line_num=$debug_saved_lineno
   fi
+
   debug_source_update
   if [[ "$debug_path_to_source_file" == none ]]; then
     return 0
@@ -244,10 +247,6 @@ debug_trap() {
   debug_rewind=f
 
   debug_source_update
-
-  # if code inside the debug trap is changed, you may need to adjust this offset to ensure the code displayed in the debugger lines up with what is actually being executed.
-  # the number being subtracted is the number of source lines in the trap which are executed before this function is called
-  (( debug_line_num -= 1 ))
 
   local line_part=$debug_line file_part=
   if [[ "$debug_line" ]]; then
@@ -596,9 +595,9 @@ debug_trap() {
         if [[ $debug_path_to_source_file == none ]]; then
           echo "# Source not available" >&$fd_original_err
         else
-          echo >&$fd_original_err
-          echo >&$fd_original_err
+          echo "$NL" >&$fd_original_err
           (( debug_list_offset = -debug_list_window / 2 + 1 ))
+          debug_list_stack_pos=0
           debug_display_source
           debug_list_dir=forwards
           (( debug_list_offset += debug_list_window ))
@@ -1017,6 +1016,19 @@ debug_trap() {
           no_follow_once=t
         fi
         ;;
+      _)
+        if (( debug_list_stack_pos == 0 )); then
+          echo "# Already at bottom of stack trace" >&$fd_original_err
+        else
+          echo >&$fd_original_err
+          (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
+          (( debug_list_stack_pos-- )) 
+          debug_display_source
+          debug_list_dir=forwards
+          (( debug_list_offset += debug_list_window ))
+          no_follow_once=t
+        fi
+        ;;
       =)
         echo "# Running until this line is reached again" >&$fd_original_err
         debug_stop_at="$raw_debug_path_to_source_file $debug_line_num"
@@ -1167,6 +1179,7 @@ debug_trap() {
         echo "(  toggle expanded command mode. If on, will expand each *short* command that is executed" >&$fd_original_err
         echo ")  toggle extended expanded command mode. If on, will expand *all* commands that are executed" >&$fd_original_err
         echo "-  move up stack one position and show source" >&$fd_original_err
+        echo "_  move down stack one position and show source" >&$fd_original_err
         echo "=  continue until the current line is reached again" >&$fd_original_err
         echo "[  continue until a given [[ ]] or (( )) condition is met" >&$fd_original_err
         echo "]  continue until we reach a different function" >&$fd_original_err
@@ -1421,7 +1434,7 @@ debug_start() {
           set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
         fi
         [[ $debug_debug == t ]] && log_debug_debug "debug_id=$debug_id_current ${BASH_SOURCE[0]:-no_source}:$((debug_trap_first_line-1))/${BASH_LINENO[0]:-no_line} ${FUNCNAME[0]:-no_func} ${BASH_COMMAND}" 
-        debug_trap "${BASH_SOURCE[0]:-none}" "$debug_trap_first_line" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
+        debug_trap "${BASH_SOURCE[0]:-none}" "$debug_saved_lineno" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
         if [[ "$debug_var" ]]; then
           set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
         fi
