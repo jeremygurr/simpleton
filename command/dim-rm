@@ -6,39 +6,56 @@ dim_rm_command() {
     setup_cell_path_vars $cell_path || fail
     local dims=${dims:-${dim:-}} dim
 
-    if [[ ! "${dims:-}" ]]; then
-      log_fatal "dim must be specified"
+    if [[ ! -f "$var_path/dims" ]]; then
+      log_fatal "This cell has no dimensions."
       fail1
+    fi
+
+    if [[ ! "$dims" ]]; then
+      local available_dims=$(<$var_path/dims)
+      if [[ "$available_dims" ]]; then
+        local PS3="Remove which dim? " 
+        select dims in $available_dims 
+          do break; done
+      fi
+      if [[ ! $dims ]]; then
+        log_fatal "dim must be specified"
+        fail1
+      fi
     fi
     
     begin_for dim in $dims; doo
 
       log_verbose "Removing dim $dim"
-
       local found_something=f
+      local file
+      
+      begin_for file in $dim_all_path/var/${dim}_description \
+        $dim_all_path/var/${dim}_examples \
+        $dim_all_path/fun/${dim}_member_expand; doo
+        if [[ -e $file || -L $file ]]; then
+          rm $file || fail
+          found_something=t
+        fi
+      end_for
 
-      if [[ -f $dim_all_path/var/${dim}_description ]]; then
-        rm $dim_all_path/var/${dim}_description || fail
-        found_something=t
-      fi
-
-      if [[ -f $dim_all_path/var/${dim}_examples ]]; then
-        rm $dim_all_path/var/${dim}_examples || fail
-        found_something=t
-      fi
-
-      if [[ -f $dim_all_path/fun/${dim}_member_expand ]]; then
-        rm $dim_all_path/fun/${dim}_member_expand || fail
-        found_something=t
+      if [[ -e $var_path/dims ]]; then
+        grep -v "$dim" $var_path/dims >$var_path/dims.new
+        if files_are_different $var_path/dims $var_path/dims.new >/dev/null; then
+          found_something=t
+          local new_dims=( $(<$var_path/dims.new) )
+          if [[ "${new_dims:-}" ]]; then
+            mv $var_path/dims.new $var_path/dims || fail
+          else
+            rm $var_path/dims $var_path/dims.new || fai
+          fi
+        else
+          rm $var_path/dims.new || fail
+        fi
       fi
 
       if [[ $found_something == f ]]; then
         log_warn "Dim not found: $dim"
-      else
-        if [[ -e $var_path/dims ]]; then
-          grep -v "$dim" $var_path/dims >$var_path/dims.new || fail
-          mv $var_path/dims.new $var_path/dims || fail
-        fi
       fi
 
     end_for

@@ -78,8 +78,12 @@ debug_ignore=" ${debug_ignore[*]} "
 make_cyto_functions() {
   begin_function
     local function function_path content 
-    local functions=$(find1 $dna_full_folder -type f | sort -g) || fail
+    local functions=$(find1 $dna_full_folder | sort -g) || fail
     begin_for function_path in $functions; doo
+      if [[ ! -f $function_path ]]; then
+        log_fatal "Invalid function file: $function_path"
+        fail1
+      fi
       function=${function_path##*/}
       content=$(<$function_path)
       trim_ws content
@@ -100,8 +104,12 @@ $content
 make_cyto_vars() {
   begin_function
     local var var_path content \
-      vars=$(find1 $dna_full_folder -type f | sort -g) || fail
+      vars=$(find1 $dna_full_folder | sort -g) || fail
     begin_for var_path in $vars; doo
+      if [[ ! -f $var_path ]]; then
+        log_fatal "Invalid var file: $var_path"
+        fail1
+      fi
       var=${var_path##*/}
       content=$(<$var_path)
       trim_ws content
@@ -132,11 +140,15 @@ make_context() {
       lock_path=$context_path \
       fd_write_lock || fail
 
-    local dna_folders=$(find1 $dna_path -type d | sort -g) || fail
+    local dna_folders=$(find1 $dna_path | sort -g) || fail
     if [[ -d $dna_path/dim/_all ]]; then
-      dna_folders+="$NL$(find1 $dna_path/dim/_all -type d | sort -g)" || fail
+      dna_folders+="$NL$(find1 $dna_path/dim/_all | sort -g)" || fail
     fi
     begin_for dna_full_folder in $dna_folders; doo
+      if [[ ! -d $dna_full_folder ]]; then
+        log_fatal "Invalid dna folder: $dna_full_folder"
+        fail1
+      fi
       dna_folder=${dna_full_folder##*/}
       case $dna_folder in
         dim|sub)
@@ -1293,10 +1305,11 @@ execute_command_internal() {
     fi
 
     source $command_path || fail
-    if type -t ${current_command}_command &>/dev/null; then
-      ${current_command}_command || fail
+    local command_function=${current_command//-/_}_command
+    if type -t $command_function &>/dev/null; then
+      $command_function || fail
     else
-      log_fatal "Missing command function ${current_command}_command which should be in $command_path"
+      log_fatal "Missing command function $command_function which should be in $command_path"
       fail1
     fi
 
@@ -1645,6 +1658,13 @@ validate_dims() {
       local plural value failed=f problem=
       get_plural $dim
       eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim:-}}}}"
+
+      local t=
+      read t < <(type -t ${dim}_member_expand)
+      if [[ "$t" != function ]]; then
+        log_fatal "Missing function ${dim}_member_expand which should be in .dna folder"
+        fail1
+      fi
 
       ${dim}_member_expand || {
         log_fatal "${dim}_member_expand failed to execute"
