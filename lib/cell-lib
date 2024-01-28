@@ -75,20 +75,16 @@ export debug_ignore+="
 debug_ignore=( $debug_ignore )
 debug_ignore=" ${debug_ignore[*]} "
 
-make_cyto_functions() {
-  begin_function
-    local function function_path content 
-    local functions=$(find1 $dna_full_folder | sort -g) || fail
-    begin_for function_path in $functions; doo
-      if [[ ! -f $function_path ]]; then
-        log_fatal "Invalid function file: $function_path"
-        fail1
-      fi
-      function=${function_path##*/}
-      content=$(<$function_path)
-      trim_ws content
-      content=$(echo -n "$content" | sed 's/^/    /')
-      echo -n "
+make_cyto_bash_function() {
+  local log_show_vars="function postfix"
+  begin_function_hi
+    content=$(echo -n "$content" | sed 's/^/    /')
+    if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
+      echo "$content" >>$context_path || fail
+    else
+
+# outdented for clarity
+echo -n "
 $function() {
   begin_function
 $content
@@ -96,6 +92,42 @@ $content
   handle_return
 }
 " >>$context_path || fail
+
+    fi
+  end_function
+  handle_return
+}
+
+make_cyto_functions() {
+  begin_function
+    local function function2 function_path content postfix=
+    local functions=$(find1 $dna_full_folder | sort -g) || fail
+    begin_for function_path in $functions; doo
+      if [[ ! -f $function_path ]]; then
+        log_fatal "Invalid function file: $function_path"
+        fail1
+      fi
+      function2=${function_path##*/}
+      function=${function2%.*}
+
+      postfix=${function2#$function}
+      if [[ ! "$postfix" ]]; then
+        postfix=bash
+      else
+        postfix=${postfix#.}
+      fi
+
+      content=$(<$function_path)
+      trim_ws content
+      case $postfix in
+        bash)
+          make_cyto_bash_function || fail
+        ;;
+        *)
+          log_fatal "Function type $postfix not supported yet in file $function_path"
+          fail1
+        ;;
+      esac
     end_for
   end_function
   handle_return
@@ -1669,7 +1701,10 @@ validate_dims() {
       fi
 
       ${dim}_member_expand || {
-        log_fatal "${dim}_member_expand failed to execute"
+        log_fatal "${dim}_member_expand failed to execute: "
+        if [[ "$problem" ]]; then
+          log_fatal "$problem"
+        fi
         fail1
       }
 
