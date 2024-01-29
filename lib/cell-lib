@@ -77,11 +77,11 @@ debug_ignore=" ${debug_ignore[*]} "
 
 make_cyto_bash_function() {
   local log_show_vars="function postfix"
-  begin_function_hi
-    content=$(echo -n "$content" | sed 's/^/    /')
+  begin_function
     if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
       echo "$content" >>$context_path || fail
     else
+      content=$(echo -n "$content" | sed 's/^/    /')
 
 # outdented for clarity
 echo -n "
@@ -1150,25 +1150,20 @@ trace_op=${trace_op:-}
 # Usage: execute_op {op name}
 # returns 1 if no op found
 execute_op() {
-  local op_name=$1 op ignore_missing=${ignore_missing:-f} \
-    found_op= found_op_function=
+  local op_name=$1 op_function= ignore_missing=${ignore_missing:-f}
 
   local log_vars='cell_path op_name'
   begin_function
 
-    find_op_or_function $op_name || fail
+    op_function=${op_name}_op
 
-    if [[ "$found_op" || "$found_op_function" ]]; then
+    if type -t $op_function &>/dev/null; then
 
       if [[ $trace_op == $op_name ]]; then
         trace_step_execution=t
       fi
 
-      if [[ "$found_op_function" ]]; then
-        $found_op_function || fail
-      else
-        execute_command_step $found_op || fail
-      fi
+      $op_function || fail
 
       if [[ $trace_op == $op_name ]]; then
         trace_step_execution=f
@@ -1177,9 +1172,9 @@ execute_op() {
     else
 
       if [[ $ignore_missing == t ]]; then
-        log_debug "No $op_name operation found in $op_path, ignoring"
+        log_debug "No ${op_name}_op function found, ignoring"
       else
-        log_fatal "No $op_name operation found in $op_path"
+        log_fatal "No ${op_name}_op function found"
         fail1
       fi
 
@@ -1187,22 +1182,6 @@ execute_op() {
 
   end_function
   handle_return
-}
-
-# returns either found_op_function or found_op
-find_op_or_function() {
-  local op_name=$1 op
-  found_op_function= found_op=
-  if type -t ${op_name}_op &>/dev/null; then
-    found_op_function=${op_name}_op
-  else
-    for op in $op_path/$op_name $op_path/$op_name.*; do
-      if [[ -e $op ]]; then
-        found_op=$op
-        break
-      fi
-    done
-  fi
 }
 
 # inputs: fork_id_log 
