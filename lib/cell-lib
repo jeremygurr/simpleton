@@ -251,6 +251,7 @@ setup_cell_path_vars() {
     dna_path=$cell_path/.dna \
     cyto_path=$cell_path/.cyto \
 
+    background_log=$log_path/background \
     context_path=$cyto_path/context \
     cyto_up_path=$cyto_path/up \
     dim_path=$dna_path/dim \
@@ -2613,10 +2614,11 @@ cell_unlock() {
 }
 
 # input:
-#   line        command to send to pipe
+#   line             command to send to pipe
 #   pipe_in
 #   pipe_out
-#   timeout_to  number of seconds for timeout
+#   timeout_to       number of seconds for timeout
+#   background_log   (optional) file to write all input/output to 
 # output:
 #   
 to_background_process_single() {
@@ -2630,7 +2632,11 @@ to_background_process_single() {
     if (( timeout_ms == 0 )); then
       log_debug "Sending output to process without timeout: $command"
       if [[ $pretend == f ]]; then
-        echo -n "$command" >$pipe_in || fail
+        if [[ "${background_log:-}" ]]; then
+          echo -n "$command" | tee -a $background_log >$pipe_in || fail
+        else
+          echo -n "$command" >$pipe_in || fail
+        fi
       fi
     else
 
@@ -2646,7 +2652,11 @@ to_background_process_single() {
       timed_out=f wait_time=0
       if [[ $pretend == f ]]; then
 
-        echo -n "$command" >$pipe_in & 
+        if [[ "${background_log:-}" ]]; then
+          echo -n "$command" | tee -a $background_log >$pipe_in &
+        else
+          echo -n "$command" >$pipe_in &
+        fi
         pid=$!
 
         begin_while ps $pid &>/dev/null; doo
@@ -2763,6 +2773,9 @@ from_background_process__record_line() {
     log_debug "Recording line to replay file: $line"
   else
     log_debug "Replaying line: $line"
+  fi
+  if [[ "${background_log:-}" ]]; then
+    echo "$line" >>$background_log || fail
   fi
   return 0
 }
@@ -3131,6 +3144,10 @@ run_pipe_command() {
     from_var=command \
       to_background_process || fail
 
+    if [[ $timed_out == t ]]; then
+      break
+    fi
+
     escape_regex shell_prompt
     shell_prompt=${shell_prompt%%*($NL| |$TAB)}
     shell_prompt=${shell_prompt##*($NL| |$TAB)}
@@ -3139,18 +3156,22 @@ run_pipe_command() {
       fail_after="^[1-9][0-9]*\ $shell_prompt" \
       from_background_process || fail
 
-    if [[ "$timed_out" == t ]]; then
-      log_vars=result \
-        log_error "Timed out waiting for prompt from remote ssh session"
-    elif [[ "$failed" == t ]]; then
-      log_vars=result \
-        log_error "Failed to execute command on remote ssh session"
-    else 
-      log_debug "Command was successful"
-      command_successful=t
-    fi
-
   end_function
+
+  if [[ $timed_out == t ]]; then
+    log_vars=result \
+      log_error "Timed out waiting for prompt from remote ssh session"
+  elif [[ "$failed" == t ]]; then
+    log_vars=result \
+      log_error "Command execution on remote ssh session returned a failure"
+  elif failed; then
+    log_vars=result \
+      log_fatal "Internal error while trying to execute remote command"
+  else 
+    log_debug "Command was successful"
+    command_successful=t
+  fi
+
   handle_return
 }
 
