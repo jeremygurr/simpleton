@@ -265,6 +265,7 @@ setup_cell_path_vars() {
     lock_path=$cyto_path/context \
     op_path=$cyto_path/op \
     out_path=$cell_path \
+    replay_path=$job_path/pipe_replay \
     req_path=$cyto_path/req \
     source_path=$cyto_path/source \
     status_path=$cyto_path/status \
@@ -481,7 +482,8 @@ setup_dep_defaults() {
 
 cell_open_log_file() {
   if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
-    local previous_fork_id=$omni_log_fork_id
+    cell_log_file_stack+=( $logging_to_file )
+    previous_fork_id=$omni_log_fork_id
     get_new_fork_id || return 1
     local new_log_file=$log_path/$omni_log_job_id:$new_fork_id.olog
     local first_log_path=${new_log_file%/*}/first.olog
@@ -498,6 +500,7 @@ cell_open_log_file() {
 cell_close_log_file() {
   if [[ "${cell_log_file_stack:-}" ]]; then
     local previous_log=${cell_log_file_stack[-1]}
+    omni_log_fork_id=$previous_fork_id
     unset cell_log_file_stack[-1]
     log_function=${FUNCNAME[1]} \
       new_log_file=$previous_log \
@@ -1175,6 +1178,7 @@ execute_op() {
       if [[ $ignore_missing == t ]]; then
         log_debug "No ${op_name}_op function found, ignoring"
       else
+        debug_start
         log_fatal "No ${op_name}_op function found"
         fail1
       fi
@@ -1237,8 +1241,14 @@ get_job_id() {
   handle_return
 }
 
-# is run in a subshell since it loads the context
 execute_command_internal() {
+
+  local logging_to_file=${logging_to_file:-} \
+    omni_log_job_id=${omni_log_job_id:-} \
+    omni_log_fork_id=${omni_log_fork_id:-} \
+    previous_fork_id=${previous_fork_id:-} \
+    log_var_entries_stack \
+    log_var_show_vars_stack \
 
   local log_vars='cell_path' \
     log_show_vars='short_cell current_command' 
@@ -2697,10 +2707,14 @@ to_background_process_single() {
 setup_replay_file() {
   local from="$*"
   local pipe_replay_hash=$(echo -n "$from" | sha1sum | awk '{print $1}') || return 1
-  replay_file=$job_path/pipe_replay.$pipe_replay_hash
+  replay_file=$replay_path/pipe_replay.$pipe_replay_hash
+  if [[ ! -d $replay_path ]]; then
+    mkdir -p $replay_path || fail
+  fi
+
   replay_counter=${replay_counter:-0}
   (( replay_counter++ ))
-  local replay_counter_file=$job_path/pipe_replay-$replay_counter
+  local replay_counter_file=$replay_path/pipe_replay-$replay_counter
   ln -sf $replay_file $replay_counter_file || true
 }
 
