@@ -2655,18 +2655,18 @@ start_background_process() {
     fi
 
     pipe_replay=${pipe_replay:-${replay:-f}}
-    # pipe_replay may be: playback recording disabled
+    # pipe_replay may be: replaying recording disabled
     if [[ $pipe_replay == t ]]; then
-      pipe_replay_state=playback
+      pipe_replay_state=replaying
     else
       pipe_replay_state=${pipe_replay_state:-recording}
     fi
     pipe_replay_hash=none
     case $pipe_replay_state in
-      recording|playback)
+      recording|replaying)
         update_replay_hash "$command" || fail
       ;&
-      playback)
+      replaying)
         log_verbose "Replaying pre-recorded $masked_command responses"
       ;;
       recording|disabled)
@@ -2709,10 +2709,10 @@ to_background_process_single() {
         if [[ "${background_log:-}" ]]; then
           echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
         fi
-        case $pipe_replay_state in recording|playback)
+        case $pipe_replay_state in recording|replaying)
           update_replay_hash "$command" || fail
         esac
-        if [[ $pipe_replay_state != playback ]]; then
+        if [[ $pipe_replay_state != replaying ]]; then
           echo -n "$command" >$pipe_in || fail
         fi
       fi
@@ -2733,7 +2733,7 @@ to_background_process_single() {
           echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
         fi
 
-        if [[ $pipe_replay_state != playback ]]; then
+        if [[ $pipe_replay_state != replaying ]]; then
           echo -n "$command" >$pipe_in &
           pid=$!
 
@@ -2830,7 +2830,7 @@ from_background_process__record_line() {
       echo "$line" >>$replay_file || return 1
       log_debug "Recording line to replay file: $line"
     ;;
-    playback)
+    replaying)
       log_debug "Replaying line: $line"
     ;;
   esac
@@ -2864,6 +2864,10 @@ from_background_process__check_line() {
           local output=${interact_out[$i]}
           pretend=$pretend secret="$secret" from_var=output to_background_process || fail
           interacted=t
+          undefer "exec $back_fd>&-" || fail
+          get_replay_file || fail
+          exec {back_fd}<>$replay_file || fail
+          defer "exec $back_fd>$-"
           break
         fi
       end_for
@@ -2948,7 +2952,7 @@ from_background_process__prep() {
 
   if [[ ! -p $pipe_out ]]; then
     log_fatal "Invalid FIFO: $pipe_out"
-    fail1
+    return 1
   fi
 
 }
@@ -3030,7 +3034,6 @@ from_background_process() {
       secret=${secret:-} \
       pretend_out=${pretend_out:-} \
       pretending=f \
-      replay_file=${replay_file:-} \
       timeout=${timeout:-0}
 
     local -n to=$to_var
@@ -3040,10 +3043,11 @@ from_background_process() {
       fail1
     fi
 
-    timed_out=f
-    failed=f
-    succeeded=f
-    interacted=f
+    timed_out=f \
+    failed=f \
+    succeeded=f \
+    interacted=f \
+
     if [[ "$pretend_out" ]]; then
       pretending=t
     fi
@@ -3055,25 +3059,26 @@ from_background_process() {
 
     from_background_process__prep || fail
 
+    get_replay_file || fail
+
     local back_fd
-    if [[ $pipe_replay == t ]]; then
+    if [[ $pretending == t ]]; then
+      log_debug "Pretending to read background job output"
+    elif [[ $pipe_replay_state == replaying ]]; then
       if [[ -f $replay_file ]]; then
         log_debug "Replaying background interaction from $replay_file"
-        #replay_content=$(<$replay_file)
         exec {back_fd}<>$replay_file || fail
+        defer "exec $back_fd>$-"
       else
         log_fatal "Missing replay file, can't replay background process."
         fail1
       fi
-    elif [[ $pretending == t ]]; then
-      log_debug "Pretending to read background job output"
     else
       log_vars=pipe_out \
         log_debug "Waiting for background job output"
       exec {back_fd}<>$pipe_out || fail
+      defer "exec $back_fd>$-"
     fi
-
-    get_replay_file || fail
 
     if [[ $buffering == line ]]; then
 
@@ -3092,9 +3097,6 @@ from_background_process() {
           else
             line=
           fi
-        # elif [[ $pipe_replay == t ]]; then
-        #   line=${replay_content%%$NL*}
-        #   replay_content=${replay_content#*$NL}
         else
           IFS=$NL read -r -t $timeout -u $back_fd line
           if (( $? > 128 )); then 
@@ -3127,9 +3129,6 @@ from_background_process() {
           else
             char=
           fi
-        # elif [[ $pipe_replay == t ]]; then
-        #   char=${replay_content:0:1}
-        #   replay_content=${replay_content:1}
         else
           IFS= read -N1 -r -t $timeout -u $back_fd char 
         fi
@@ -3180,7 +3179,7 @@ from_background_process() {
   end_function
 
   if [[ "$back_fd" ]]; then
-    exec {back_fd}>&-
+    undefer "exec $back_fd>&-"
   fi
 
   handle_return
