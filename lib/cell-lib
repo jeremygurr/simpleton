@@ -1709,8 +1709,14 @@ validate_dims() {
 }
 
 log_and_run() {
-  local command=$*
-  echo "$command" >&2
+  local command=$* secret=${secret:-}
+
+  local masked_command=$command
+  if [[ "$secret" ]]; then
+    masked_command="${masked_command//$secret/****}"
+  fi
+
+  log_info "$masked_command"
   eval "$command"
 }
 
@@ -2623,6 +2629,59 @@ cell_unlock() {
   return 0
 }
 
+get_replay_file() {
+  replay_file=$replay_path/pipe_replay.$pipe_replay_hash
+  if [[ ! -d $replay_path ]]; then
+    mkdir -p $replay_path || fail
+  fi
+
+  replay_counter=${replay_counter:-0}
+  (( replay_counter++ ))
+  local replay_counter_file=$replay_path/pipe_replay-$replay_counter
+  ln -sf $replay_file $replay_counter_file || true
+}
+
+update_replay_hash() {
+  pipe_replay_hash=$(echo -n "$command" | sha1sum | awk '{print $1}')
+}
+
+start_background_process() {
+  local command="$*" secret=${secret:-}
+  begin_function
+
+    local masked_command=$command
+    if [[ "$secret" ]]; then
+      masked_command="${masked_command//$secret/****}"
+    fi
+
+    pipe_replay=${pipe_replay:-${replay:-f}}
+    # pipe_replay may be: playback recording disabled
+    if [[ $pipe_replay == t ]]; then
+      pipe_replay_state=playback
+    else
+      pipe_replay_state=${pipe_replay_state:-recording}
+    fi
+    pipe_replay_hash=none
+    case $pipe_replay_state in
+      recording|playback)
+        update_replay_hash "$command" || fail
+      ;&
+      playback)
+        log_verbose "Replaying pre-recorded $masked_command responses"
+      ;;
+      recording|disabled)
+        log_and_run "$command" || fail
+      ;;
+      *)
+        log_fatal "Unknown pipe_replay_state: $pipe_replay_state"
+        fail1
+      ;;
+    esac
+  end_function
+  handle_return
+}
+
+# should not be called outside of to_background_process
 # input:
 #   line             command to send to pipe
 #   pipe_in
@@ -2639,14 +2698,21 @@ to_background_process_single() {
     local timeout_ms=$(dc -e "$timeout 1000 * p")
     timeout_ms=${timeout_ms%.*}
 
+    local masked_command=$command
+    if [[ "$secret" ]]; then
+      masked_command="${masked_command//$secret/****}"
+    fi
+
     if (( timeout_ms == 0 )); then
-      log_debug "Sending output to process without timeout: $command"
+      log_debug "Sending output to process without timeout: $masked_command"
       if [[ $pretend == f ]]; then
         if [[ "${background_log:-}" ]]; then
-          echo -n "$YELLOW" >>$background_log
-          echo -n "$command" | tee -a $background_log >$pipe_in || fail
-          echo -n "$RESET" >>$background_log
-        else
+          echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
+        fi
+        case $pipe_replay_state in recording|playback)
+          update_replay_hash "$command" || fail
+        esac
+        if [[ $pipe_replay_state != playback ]]; then
           echo -n "$command" >$pipe_in || fail
         fi
       fi
@@ -2658,44 +2724,46 @@ to_background_process_single() {
         delay_ms=250
       local delay_s=$(dc -e "$delay_ms 1000 3 k / p")
 
-      log_debug "Sending output to process with ${timeout}s timeout: $command"
+      log_debug "Sending output to process with ${timeout}s timeout: $masked_command"
 
       timed_out=f wait_time=0
       if [[ $pretend == f ]]; then
 
         if [[ "${background_log:-}" ]]; then
-          echo -n "$command" | tee -a $background_log >$pipe_in &
-        else
-          echo -n "$command" >$pipe_in &
+          echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
         fi
-        pid=$!
 
-        begin_while ps $pid &>/dev/null; doo
+        if [[ $pipe_replay_state != playback ]]; then
+          echo -n "$command" >$pipe_in &
+          pid=$!
 
-          log_debug "Waiting $command sec for background process to be running"
-          sleep $delay_s || fail
+          begin_while ps $pid &>/dev/null; doo
 
-          (( time_left -= delay_ms 
-           , wait_time += delay_ms ))
+            log_debug "Waiting $delay_s sec for background process to be running"
+            sleep $delay_s || fail
 
-          if (( time_left <= 0 )); then
-            log_debug "Timed out trying to execute: $command"
-            timed_out=t
-            kill $pid || log_warn "Failed to kill $pid"
-            break
-          fi
+            (( time_left -= delay_ms 
+             , wait_time += delay_ms ))
 
-          if (( wait_time > 4000 )) && [[ $wait_message == f ]]; then
-            log_warn "${NL}Waiting for pipe to be open (time_left=$time_left)"
-            wait_message=t
-          fi
+            if (( time_left <= 0 )); then
+              log_debug "Timed out trying to execute: $masked_command"
+              timed_out=t
+              kill $pid || log_warn "Failed to kill $pid"
+              break
+            fi
 
-        end_while
+            if (( wait_time > 4000 )) && [[ $wait_message == f ]]; then
+              log_warn "${NL}Waiting for pipe to be open (time_left=$time_left)"
+              wait_message=t
+            fi
+
+          end_while
+          local wait_time_s=$(dc -e "$wait_time 1000 / p")
+          log_debug "Finished waiting. Took ${wait_time_s}s."
+
+        fi
 
       fi
-
-      local wait_time_s=$(dc -e "$wait_time 1000 / p")
-      log_debug "Finished waiting. Took ${wait_time_s}s."
 
     fi
 
@@ -2703,31 +2771,11 @@ to_background_process_single() {
   handle_return
 }
 
-setup_replay_file() {
-  local from="$*"
-  local pipe_replay_hash=$(echo -n "$from" | sha1sum | awk '{print $1}') || return 1
-  replay_file=$replay_path/pipe_replay.$pipe_replay_hash
-  if [[ ! -d $replay_path ]]; then
-    mkdir -p $replay_path || fail
-  fi
-
-  replay_counter=${replay_counter:-0}
-  (( replay_counter++ ))
-  local replay_counter_file=$replay_path/pipe_replay-$replay_counter
-  ln -sf $replay_file $replay_counter_file || true
-}
-
 to_background_process() {
 
-  local pipe_in=${pipe}_in pipe_out=${pipe}_out \
-    secret=${secret:-none} \
-    pretend=${pretend:-f} \
-    sleep_between_lines=${sleep_between_lines:-0} \
-    timeout_to=${timeout_to:-0.5} \
-    pipe_replay=${pipe_replay:-${replay:-f}}
   local -n from=$from_var
   local masked_from=$from
-  if [[ "$secret" != none ]]; then
+  if [[ "$secret" ]]; then
     masked_from=${from//$secret/****}
   fi
 
@@ -2735,43 +2783,36 @@ to_background_process() {
     log_vars='pipe pretend'
   begin_function_hi
 
-    setup_replay_file "$from" || fail
+    if [[ ! "${pipe_replay_state:-}" ]]; then
+      log_fatal "to_background_process was called without running start_background_process first"
+      fail1
+    fi
 
-    if [[ $pipe_replay == f ]]; then
+    local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+      secret=${secret:-} \
+      pretend=${pretend:-f} \
+      sleep_between_lines=${sleep_between_lines:-0} \
+      timeout_to=${timeout_to:-0.5} \
 
-      if [[ ! -p $pipe_in ]]; then
-        log_fatal "Invalid FIFO: $pipe_in"
-        fail1
-      fi
+    if [[ ! -p $pipe_in ]]; then
+      log_fatal "Invalid FIFO: $pipe_in"
+      fail1
+    fi
 
-      from="${from%%*($NL| |$TAB)}$NL"
+    from="${from%%*([$NL $TAB])}$NL"
 
-      if (( sleep_between_lines > 0 )); then
-        local line
-        while IFS= read -r line || [[ "$line" ]]; do
-          to_background_process_single "$line" || fail
-          if [[ $timed_out == t ]]; then
-            succeed
-          fi
-          sleep $sleep_between_lines
-        done <<<"$from"
-        handle_break
-      else
-        to_background_process_single "$from" || fail
-      fi
-
-      if [[ -f $replay_file ]]; then
-        rm $replay_file || fail
-      fi
-
-    else # pipe_replay == t 
-
-      if [[ ! -f $replay_file ]]; then
-        log_fatal "Can't replay session since replay file doesn't exist."
-        log_fatal "Run this command without replay=t first to record the session."
-        fail1
-      fi
-      
+    if (( sleep_between_lines > 0 )); then
+      local line
+      while IFS= read -r line || [[ "$line" ]]; do
+        to_background_process_single "$line" || fail
+        if [[ $timed_out == t ]]; then
+          succeed
+        fi
+        sleep $sleep_between_lines
+      done <<<"$from"
+      handle_break
+    else
+      to_background_process_single "$from" || fail
     fi
 
   end_function
@@ -2783,15 +2824,21 @@ from_background_process__record_line() {
   local result=$line
   [[ "$no_newline" == f ]] && result=$result$NL
   to+=$result
-  if [[ $pipe_replay == f ]]; then
-    echo "$line" >>$replay_file || return 1
-    log_debug "Recording line to replay file: $line"
-  else
-    log_debug "Replaying line: $line"
-  fi
+
+  case $pipe_replay_state in
+    recording)
+      echo "$line" >>$replay_file || return 1
+      log_debug "Recording line to replay file: $line"
+    ;;
+    playback)
+      log_debug "Replaying line: $line"
+    ;;
+  esac
+
   if [[ "${background_log:-}" ]]; then
-    echo "$line" >>$background_log || fail
+    echo "$line" >>$background_log || return 1
   fi
+
   return 0
 }
 
@@ -2922,6 +2969,8 @@ flush_background_process() {
       log_debug "Flushing background output with no timeout"
     fi
 
+    get_replay_file || fail
+
     line=
     case "$buffering" in
       char)
@@ -2968,28 +3017,26 @@ flush_background_process() {
 #   timed_out 
 #   failed
 from_background_process() {
-  local pipe_in=${pipe}_in pipe_out=${pipe}_out \
-    buffering=${buffering:-line} \
-    succeed_after=${succeed_after:-} \
-    fail_after=${fail_after:-} \
-    required_output=${required_output:-} \
-    interact=${interact:-} \
-    secret=${secret:-none} \
-    pretend_out=${pretend_out:-} \
-    pretending=f \
-    pipe_replay=${pipe_replay:-${replay:-f}} \
-    replay_file=${replay_file:-} \
-    timeout=${timeout:-0}
-
-  local -n to=$to_var
-
   local log_vars='pipe interact pipe_replay' \
     log_show_vars='timeout required_output succeed_after fail_after'
   begin_function_hi
 
-    if [[ ! "$replay_file" ]]; then
-      log_fatal "replay_file has not been set up before from_background_process was called. "
-      log_fatal "To fix: either call to_background_process before from_background_process, or use setup_replay_file."
+    local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+      buffering=${buffering:-line} \
+      succeed_after=${succeed_after:-} \
+      fail_after=${fail_after:-} \
+      required_output=${required_output:-} \
+      interact=${interact:-} \
+      secret=${secret:-} \
+      pretend_out=${pretend_out:-} \
+      pretending=f \
+      replay_file=${replay_file:-} \
+      timeout=${timeout:-0}
+
+    local -n to=$to_var
+
+    if [[ ! "${pipe_replay_state:-}" ]]; then
+      log_fatal "from_background_process was called without running start_background_process first"
       fail1
     fi
 
@@ -3025,6 +3072,8 @@ from_background_process() {
         log_debug "Waiting for background job output"
       exec {back_fd}<>$pipe_out || fail
     fi
+
+    get_replay_file || fail
 
     if [[ $buffering == line ]]; then
 
