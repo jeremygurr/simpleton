@@ -67,6 +67,32 @@ cd() {
 back() {
   popd >/dev/null
 }
+
+# reverse link
+#   rln {from} {to}
+# will move the file {from} to {to} and then link {from} to {to}
+rln() {
+  local from=$1 to=$2
+  local to_parent=${to%/*}
+  if [[ ! -e $from ]]; then
+    echo "$from doesn't exist" >&2
+    return 1
+  fi
+  if [[ ! -d $to_parent ]]; then
+    echo "Target folder $to_parent doesn't exist" >&2
+    return 1
+  fi
+  if [[ $to == */ ]]; then
+    to=$to${from##*/}
+  fi
+  if [[ -e $to ]]; then
+    echo "Target $to already exists exist" >&2
+    return 1
+  fi
+  mv $from $to || return 1
+  ln -s $to $from || return 1
+}
+
 alias b=back
 alias bb='back; back;'
 alias bbb='back; back; back;'
@@ -338,16 +364,16 @@ parse_git_branch() {
 
 RED="\[\033[0;31m\]"
 LIGHT_RED="\[\033[1;31m\]"
-NO_COLOUR="\[\033[0m\]"
+RESET="\[\033[0m\]"
 BLUE="\[\033[0;34m\]"
 LIGHT_BLUE="\[\033[1;34m\]"
 PURPLE="\[\033[0;35m\]"
 LIGHT_PURPLE="\[\033[1;35m\]"
 CYAN="\[\033[0;36m\]"
-GREEN=$'\033[0;32m'
-LIGHT_GREEN=$'\033[1;32m'
-YELLOW=$'\033[0;33m'
-LIGHT_YELLOW=$'\033[1;33m'
+GREEN="\[\033[0;32m\]"
+LIGHT_GREEN="\[\033[1;32m\]"
+YELLOW="\[\033[0;33m\]"
+LIGHT_YELLOW="\[\033[1;33m\]"
 
 get_cell_location_string() {
   local p=
@@ -495,18 +521,18 @@ big_prompt() {
   fi
 
   export PS1="
-| $LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $RED\$(prompt_error_string)$YELLOW\$(pid_path)$CYAN\$(custom_prompt_status 2>/dev/null)$NO_COLOUR
-| $LIGHT_YELLOW\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+| $LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $RED\$(prompt_error_string)$YELLOW\$(pid_path)$CYAN\$(custom_prompt_status 2>/dev/null)$RESET
+| $LIGHT_YELLOW\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
   export PS2='> '
   export PS4='+ '
 }
 
 medium_prompt() {
-  export PS1="$LIGHT_GREEN\$prompt_name $YELLOW\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+  export PS1="$LIGHT_GREEN\$prompt_name $YELLOW\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
 }
 
 small_prompt() {
-  export PS1="$YELLOW\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$NO_COLOUR\\\$ "
+  export PS1="$YELLOW\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
 }
 
 big_prompt

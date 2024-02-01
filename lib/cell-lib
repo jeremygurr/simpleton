@@ -251,7 +251,6 @@ setup_cell_path_vars() {
     dna_path=$cell_path/.dna \
     cyto_path=$cell_path/.cyto \
 
-    background_log=$log_path/background \
     context_path=$cyto_path/context \
     cyto_up_path=$cyto_path/up \
     dim_path=$dna_path/dim \
@@ -273,6 +272,12 @@ setup_cell_path_vars() {
     tmp_path=$cyto_path/tmp \
     up_path=$cyto_up_path \
     var_path=$dna_path/var \
+
+    if [[ "${log_path:-}" ]]; then
+      background_log=$log_path/background \
+    else
+      unset background_log
+    fi
 
   end_function
   handle_return
@@ -1358,7 +1363,7 @@ execute_command() {
       fail1
     fi
 
-    case $current_command in log|edit)
+    case $current_command in log|edit|dim-*)
       disable_log=${disable_log:-t}
     esac
 
@@ -1404,17 +1409,13 @@ execute_command() {
 
     fi
 
-    if [[ $current_command != edit \
-       && $cell_path == */.dna/sub/* 
-       ]]; then
-      local new_cell=${cell_path//\/.dna\/sub\//\/}
-      if [[ -d $new_cell ]]; then
-        cell=$new_cell
-      else
+    case $current_command in
+      edit|dim-*) ;;
+      *)
         log_fatal "You can't run this command within a seed."
         fail1
-      fi
-    fi
+      ;;
+    esac
 
     previous_log_pos=$omni_log_pos
     cell_open_log_file || fail
@@ -1684,14 +1685,14 @@ validate_dims() {
       eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim:-}}}}"
 
       local t=
-      read t < <(type -t ${dim}_member_expand)
+      read t < <(type -t ${dim}_expand)
       if [[ "$t" != function ]]; then
-        log_fatal "Missing function ${dim}_member_expand which should be in .dna folder"
+        log_fatal "Missing function ${dim}_expand which should be in .dna folder"
         fail1
       fi
 
-      ${dim}_member_expand || {
-        log_fatal "${dim}_member_expand failed to execute: "
+      ${dim}_expand || {
+        log_fatal "${dim}_expand failed to execute: "
         if [[ "$problem" ]]; then
           log_fatal "$problem"
         fi
@@ -2232,10 +2233,10 @@ expand_values() {
     local ddims=d_$dim_plural \
           ddim=d_$dim \
           new_value_list= new_values= value \
-          has_member_expand_function=f
+          has_expand_function=f
 
     values=( ${!ddim:-} )
-    type -t ${dim}_member_expand >/dev/null && has_member_expand_function=t
+    type -t ${dim}_expand >/dev/null && has_expand_function=t
 
     local problem= failed=f
     if [[ ! "${values:-}" ]]; then
@@ -2307,11 +2308,11 @@ begin_function
     fail1
   fi
 
-  if [[ $has_member_expand_function == t ]]; then
+  if [[ $has_expand_function == t ]]; then
     if [[ "$values" == $empty_member ]]; then
       values=
     fi
-    value=$values ${dim}_member_expand || fail
+    value=$values ${dim}_expand || fail
     if [[ ! "${values:-}" ]]; then
       log_fatal "Dim $dim has invalid value '$value'"
       fail1
@@ -2338,8 +2339,8 @@ expand_values_plural() {
 
     if [[ ! "${values:-}" ]]; then
 
-      if [[ $has_member_expand_function == t ]]; then
-        value= ${dim}_member_expand || fail
+      if [[ $has_expand_function == t ]]; then
+        value= ${dim}_expand || fail
         new_values=( "${values[@]}" )
       else
         log_fatal "Missing value for dimension: $RESET$dim"
@@ -2348,12 +2349,12 @@ expand_values_plural() {
 
     else
 
-      if [[ $has_member_expand_function == t ]]; then
+      if [[ $has_expand_function == t ]]; then
         begin_for value in "${values[@]}"; doo
           if [[ "$value" == $empty_member ]]; then
             value=
           fi
-          value=$value ${dim}_member_expand || fail
+          value=$value ${dim}_expand || fail
           if [[ ! "${values:-}" ]]; then
             log_fatal "Dim $dim_plural has invalid value '$value'"
             fail1
