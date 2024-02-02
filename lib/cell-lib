@@ -75,30 +75,39 @@ export debug_ignore+="
 debug_ignore=( $debug_ignore )
 debug_ignore=" ${debug_ignore[*]} "
 
-make_cyto_bash_function() {
-  local log_show_vars="function postfix"
+compute_cyto_bash_function() {
   begin_function
     if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
-      echo "$content" >>$context_path || fail
+      fun="$content"
     else
       content=$(echo -n "$content" | sed 's/^/    /')
 
 # outdented for clarity
-echo -n "
+fun="
 $function() {
   begin_function
 $content
   end_function
   handle_return
 }
-" >>$context_path || fail
+"
 
     fi
   end_function
   handle_return
 }
 
-make_cyto_functions() {
+make_or_load_cyto_bash_function() {
+  local fun
+  compute_cyto_bash_function || return 1
+  if [[ $make_or_load == make ]]; then
+    echo -n "$fun" >>$context_path || return 1
+  else
+    eval "$fun" || return 1
+  fi
+}
+
+make_or_load_cyto_functions() {
   begin_function
     local function function2 function_path content postfix=
     local functions=$(find1 $dna_full_folder | sort -g) || fail
@@ -121,7 +130,7 @@ make_cyto_functions() {
       trim_ws content
       case $postfix in
         bash)
-          make_cyto_bash_function || fail
+          make_or_load_cyto_bash_function || fail
         ;;
         *)
           log_fatal "Function type $postfix not supported yet in file $function_path"
@@ -133,7 +142,7 @@ make_cyto_functions() {
   handle_return
 }
 
-make_cyto_vars() {
+make_or_load_cyto_vars() {
   begin_function
     local var var_path content \
       vars=$(find1 $dna_full_folder | sort -g) || fail
@@ -153,7 +162,11 @@ make_cyto_vars() {
           content="'${content//\'/\'\\\'\'}'"
         ;;
       esac
-      echo "${NL}$var=$content" >>$context_path || fail
+      if [[ $make_or_load == make ]]; then
+        echo "${NL}$var=$content" >>$context_path || fail
+      else
+        eval "$var=$content" || fail
+      fi
     end_for
   end_function
   handle_return
@@ -163,7 +176,8 @@ make_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function_hi
     local dna_path=$cell_path/.dna \
-      dna_folder dna_full_folder
+      dna_folder dna_full_folder \
+      make_or_load=make
 
     touch $context_path || fail
     local lock_fd
@@ -185,7 +199,7 @@ make_context() {
         dim|sub)
           ;;
         fun)
-          make_cyto_functions || fail
+          make_or_load_cyto_functions || fail
           ;;
         out)
           mkdir $cyto_path/out || fail
@@ -195,7 +209,7 @@ make_context() {
           mkdir $cyto_path/$dna_folder || fail
           ;;
         var)
-          make_cyto_vars || fail
+          make_or_load_cyto_vars || fail
           ;;
         op|*)
           safe_link $dna_full_folder $cyto_path/$dna_folder || fail
@@ -209,6 +223,39 @@ make_context() {
   if failed; then
     rm $context_path
   fi
+  handle_return
+}
+
+load_context() {
+  local log_vars=cell_path log_show_vars=short_cell
+  begin_function_hi
+    local dna_path=$cell_path/.dna \
+      dna_folder dna_full_folder \
+      make_or_load=load
+
+    local dna_folders=$(find1 $dna_path | sort -g) || fail
+    if [[ -d $dna_path/dim/_all ]]; then
+      dna_folders+="$NL$(find1 $dna_path/dim/_all | sort -g)" || fail
+    fi
+    begin_for dna_full_folder in $dna_folders; doo
+      if [[ ! -d $dna_full_folder ]]; then
+        log_fatal "Invalid dna folder: $dna_full_folder"
+        fail1
+      fi
+      dna_folder=${dna_full_folder##*/}
+      case $dna_folder in
+        fun)
+          make_or_load_cyto_functions || fail
+          ;;
+        var)
+          make_or_load_cyto_vars || fail
+          ;;
+        *)
+          ;;
+      esac
+    end_for
+
+  end_function
   handle_return
 }
 
@@ -264,7 +311,6 @@ setup_cell_path_vars() {
     lock_path=$cyto_path/context \
     op_path=$cyto_path/op \
     out_path=$cell_path \
-    replay_path=$job_path/pipe_replay \
     req_path=$cyto_path/req \
     source_path=$cyto_path/source \
     status_path=$cyto_path/status \
@@ -274,9 +320,15 @@ setup_cell_path_vars() {
     var_path=$dna_path/var \
 
     if [[ "${log_path:-}" ]]; then
-      background_log=$log_path/background \
+      background_log=$log_path/background
     else
       unset background_log
+    fi
+
+    if [[ "${job_path:-}" ]]; then
+      replay_path=$job_path/pipe_replay
+    else
+      unset replay_path
     fi
 
   end_function
@@ -424,25 +476,31 @@ cell_context_load() {
       fi
 
       init_context || fail
-      if [[ ! -e $cyto_path ]]; then
-        mkdir $cyto_path || fail
-      fi
-
-      if [[ ! -d $status_path ]]; then
-        mkdir $status_path || fail
-      fi
-
-      if [[ ! -e $context_path ]]; then
-        if [[ -d $sub_path ]]; then
-          log_debug "Planting seeds"
-          plant_seed $sub_path $cell_path || fail
+      if [[ $can_create_cyto == t ]]; then
+        if [[ ! -e $cyto_path ]]; then
+          mkdir $cyto_path || fail
         fi
-        make_context || fail
+
+        if [[ ! -d $status_path ]]; then
+          mkdir $status_path || fail
+        fi
+
+        if [[ ! -e $context_path ]]; then
+          if [[ -d $sub_path ]]; then
+            log_debug "Planting seeds"
+            plant_seed $sub_path $cell_path || fail
+          fi
+          make_context || fail
+        fi
+
+        if [[ -e $context_path ]]; then
+          source $context_path || fail
+        fi
+      else # $can_create_cyto == f
+        load_context || fail
       fi
 
-      source $context_path || fail
-
-      setup_dep_defaults || return 1
+      setup_dep_defaults || fail
 
     fi
 
@@ -450,7 +508,7 @@ cell_context_load() {
   handle_return
 }
 
-alias load_context='local leaf_dim_count=${leaf_dim_count:-0} '\
+alias switch_context='local leaf_dim_count=${leaf_dim_count:-0} '\
 'branch_dim_count=${branch_dim_count:-0} trunk_dim_count=${trunk_dim_count:-0} '\
 'leaf_dims=( ${leaf_dims[*]:-} ) branch_dims=( ${branch_dims[*]:-} ) '\
 'sub_dims=( ${sub_dims[*]:-} ) props=( ${props[*]:-} ) last_dims_loaded;'\
@@ -1266,6 +1324,7 @@ execute_command_internal() {
 
     command_history+="$current_command $short_cell "
 
+    can_create_cyto=t
     case $current_command in
       edit)
         if [[ ! "$cell_path" ]]; then
@@ -1284,7 +1343,7 @@ execute_command_internal() {
       ;;
       *)
         var_path=$cell_path/.dna/var
-        load_context || {
+        switch_context || {
           log_fatal "Context failed to load for $cell_path"
           fail1
         }
