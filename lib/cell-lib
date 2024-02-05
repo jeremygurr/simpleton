@@ -8,7 +8,6 @@ cell_lib_loaded=t
 umask 0077
 
 empty_member=_ 
-wild_sub_path=_ 
 pretend=${pretend:-f}
 
 parallel_default=t 
@@ -179,43 +178,50 @@ make_context() {
       dna_folder dna_full_folder \
       make_or_load=make
 
-    touch $context_path || fail
+    echo "#!/bin/bash
+# WARNING: This file is auto-generated from $dna_path" >$context_path || fail
     local lock_fd
     timeout=$lock_timeout \
       lock_path=$context_path \
       fd_write_lock || fail
 
-    local dna_folders=$(find1 $dna_path | sort -g) || fail
-    if [[ -d $dna_path/dim/_all ]]; then
-      dna_folders+="$NL$(find1 $dna_path/dim/_all | sort -g)" || fail
-    fi
-    begin_for dna_full_folder in $dna_folders; doo
-      if [[ ! -d $dna_full_folder ]]; then
-        log_warn "Unrecognized dna folder: $dna_full_folder. Ignoring"
-        continue
+    if [[ -d $dna_path ]]; then
+      local dna_folders=$(find1 $dna_path | sort -g) || fail
+      if [[ -d $dna_path/dim/_all ]]; then
+        dna_folders+="$NL$(find1 $dna_path/dim/_all | sort -g)" || fail
       fi
-      dna_folder=${dna_full_folder##*/}
-      case $dna_folder in
-        dim|sub)
-          ;;
-        fun)
-          make_or_load_cyto_functions || fail
-          ;;
-        out)
-          mkdir $cyto_path/out || fail
-          safe_link $dna_full_folder/* $cyto_path/out/ || fail
-          ;;
-        up|down)
-          mkdir $cyto_path/$dna_folder || fail
-          ;;
-        var)
-          make_or_load_cyto_vars || fail
-          ;;
-        op|*)
-          safe_link $dna_full_folder $cyto_path/$dna_folder || fail
-          ;;
-      esac
-    end_for
+      begin_for dna_full_folder in $dna_folders; doo
+        if [[ ! -d $dna_full_folder ]]; then
+          log_warn "Unrecognized dna folder: $dna_full_folder. Ignoring"
+          continue
+        fi
+        dna_folder=${dna_full_folder##*/}
+        case $dna_folder in
+          dim|sub)
+            ;;
+          fun)
+            make_or_load_cyto_functions || fail
+            ;;
+          out)
+            mkdir $cyto_path/out || fail
+            safe_link $dna_full_folder/* $cyto_path/out/ || fail
+            ;;
+          up|down)
+            mkdir $cyto_path/$dna_folder || fail
+            ;;
+          var)
+            make_or_load_cyto_vars || fail
+            ;;
+          op|*)
+            safe_link $dna_full_folder $cyto_path/$dna_folder || fail
+            ;;
+        esac
+      end_for
+    elif [[ -f $dna_path ]]; then
+      cat $dna_path >>$context_path || fail
+    else
+      log_vars=dna_path log_warn "dna path not found, ignoring"
+    fi
 
     fd_unlock
 
@@ -450,6 +456,27 @@ load_dims() {
 
 }
 
+plant_seed() {
+  local from=$1 to=$2 from contents x x_part
+  begin_function
+    if [[ -d $from ]]; then
+      contents=( $(find1 $from | sort) ) || fail
+      begin_for x in ${contents[*]}; doo
+        x_part=${x##*/}
+        if [[ ! -e $to/$x_part ]]; then
+          if [[ -f $x || $x == */.dna ]]; then
+            safe_link $(realpath $x) $to/ || fail
+          elif [[ -d $x ]]; then
+            mkdir $to/$x_part || fail
+            plant_seed $x $to/$x_part || fail
+          fi
+        fi
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
 cell_context_load() {
 
   get_short_cell $cell_path
@@ -486,10 +513,6 @@ cell_context_load() {
         fi
 
         if [[ ! -e $context_path ]]; then
-          if [[ -d $sub_path ]]; then
-            log_debug "Planting seeds"
-            plant_seed $sub_path $cell_path || fail
-          fi
           make_context || fail
         fi
 
@@ -515,25 +538,6 @@ alias switch_context='local leaf_dim_count=${leaf_dim_count:-0} '\
 'load_dims $cell_path && '\
 'if [[ "${#localize_dims}" -gt 6 ]]; then eval "$localize_dims"; fi '\
 '&& cell_context_load'
-
-plant_seed() {
-  local from=$1 to=$2 contents x x_part
-  begin_function
-    contents=( $(find1 $from -not -name "$wild_sub_path") ) || fail
-    begin_for x in ${contents[*]}; doo
-      x_part=${x##*/}
-      if [[ ! -e $to/$x_part ]]; then
-        if [[ -f $x || $x == */.dna ]]; then
-          safe_link $(realpath $x) $to/ || fail
-        elif [[ -d $x ]]; then
-          mkdir $to/$x_part || fail
-          plant_seed $x $to/$x_part || fail
-        fi
-      fi
-    end_for
-  end_function
-  handle_return
-}
 
 setup_dep_defaults() {
   required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \

@@ -573,43 +573,6 @@ create_sub_leaf() {
   handle_return
 }
 
-# returns seed_dna
-find_seed_dna() {
-  local seed=$1
-  local parent=${seed%/*}
-  local path_to_cell=$2
-  begin_function
-    path_to_cell=${path_to_cell%.new}
-    seed_dna=$seed/.dna/sub/$path_to_cell/.dna
-    if [[ ! -e $seed_dna ]]; then
-      seed_dna=
-      if [[ -d $seed/.dna/sub ]]; then
-        seed_dna=$seed/.dna/sub
-        local path_array=( ${path_to_cell//\// } ) \
-          failed=f
-        begin_for path_part in "${path_array[@]}"; doo
-          if [[ -d $seed_dna/$path_part ]]; then
-            seed_dna+=/$path_part
-          elif [[ -d $seed_dna/$wild_sub_path ]]; then
-            seed_dna+=/$wild_sub_path
-          else
-            failed=t
-            break
-          fi
-        end_for
-        seed_dna+=/.dna
-        if [[ $failed == t || ! -d $seed_dna ]]; then
-          seed_dna=
-        fi
-      elif [[ ${#parent} -gt 1 ]]; then
-        # recursive
-        find_seed_dna $parent ${seed#$parent/}/$path_to_cell || fail
-      fi
-    fi
-  end_function
-  handle_return
-}
-
 append_dim_var_to_context() {
   local -r dim=$dim target_folder=$target_folder
   begin_function
@@ -894,43 +857,35 @@ create_sub_branch_or_leaf() {
       fail1
     fi
     mkdir -p $cell || fail
-    if [[ "$seed" ]]; then
-      local seed_dna
-      find_seed_dna $seed ${cell#$seed/} || fail
+    local branch_dims=( ${branch_dims[*]} )
+    if (( branch_dim_count >= trunk_dim_count )); then
+      log_fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
+      fail1
     fi
-    if [[ "$seed_dna" ]]; then
-      safe_link $(realpath $seed_dna) $cell/ || fail
-    else
-      local branch_dims=( ${branch_dims[*]} )
-      if (( branch_dim_count >= trunk_dim_count )); then
-        log_fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
-        fail1
-      fi
-      branch_dims+=( ${trunk_dims[$branch_dim_count]} )
-      
-      local sub_dna_path=$cell/.dna 
-      local sub_var=$sub_dna_path/var \
-        sub_dim=$sub_dna_path/dim 
+    branch_dims+=( ${trunk_dims[$branch_dim_count]} )
+    
+    local sub_dna_path=$cell/.dna 
+    local sub_var=$sub_dna_path/var \
+      sub_dim=$sub_dna_path/dim 
 
-      mkdir $sub_dna_path || fail
-      local -r super_dims=( ${leaf_dims[*]} ) || fail
-      local -r super_dim_count=${#super_dims[*]}
-      if [[ "$super_dims" ]]; then
-        local is_branch=f
-        if (( super_dim_count > 1 )); then
-          is_branch=t
-          create_sub_branch || fail
-          local target_folder=$sub_dim/_all/var
-          if [[ ! -d $target_folder ]]; then
-            mkdir $target_folder || fail
-          fi
-          target_folder=$target_folder dim=${super_dims[0]} append_dim_var_to_context  || fail
-        else
-          create_sub_leaf || fail
-          target_folder=$sub_var dim=${super_dims[0]} append_dim_var_to_context  || fail
+    mkdir $sub_dna_path || fail
+    local -r super_dims=( ${leaf_dims[*]} ) || fail
+    local -r super_dim_count=${#super_dims[*]}
+    if [[ "$super_dims" ]]; then
+      local is_branch=f
+      if (( super_dim_count > 1 )); then
+        is_branch=t
+        create_sub_branch || fail
+        local target_folder=$sub_dim/_all/var
+        if [[ ! -d $target_folder ]]; then
+          mkdir $target_folder || fail
         fi
-        migrate_deps || fail
+        target_folder=$target_folder dim=${super_dims[0]} append_dim_var_to_context  || fail
+      else
+        create_sub_leaf || fail
+        target_folder=$sub_var dim=${super_dims[0]} append_dim_var_to_context  || fail
       fi
+      migrate_deps || fail
     fi
   end_function
   handle_return
@@ -974,10 +929,6 @@ create_sub_cell_with_seed() {
       else
         mkdir -p $sub_cell.new || fail
         seed=${seed:-$parent}
-        find_seed_dna $seed ${sub_cell#$seed/} || fail
-        if [[ "$seed_dna" ]]; then
-          safe_link $(realpath $seed_dna) $sub_cell.new/.dna || fail
-        fi
       fi
       mv $sub_cell.new $sub_cell || fail
     
