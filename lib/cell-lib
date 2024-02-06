@@ -392,6 +392,40 @@ load_trunk_dims() {
 
 }
 
+validate_dims() {
+  begin_function
+    local dim
+    begin_for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; doo
+
+      local plural value failed=f problem=
+      get_plural $dim
+      eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim:-}}}}"
+
+      local t=
+      read t < <(type -t ${dim}_expand)
+      if [[ "$t" != function ]]; then
+        log_fatal "Missing function ${dim}_expand which should be in .dna folder"
+        fail1
+      fi
+
+      ${dim}_expand || {
+        log_fatal "${dim}_expand failed to execute: "
+        if [[ "$problem" ]]; then
+          log_fatal "$problem"
+        fi
+        fail1
+      }
+
+      if [[ "$problem" ]]; then
+        log_fatal "$problem"
+        fail1
+      fi
+
+    end_for
+  end_function
+  handle_return
+}
+
 load_dims() {
 
   local cell_path=$1
@@ -448,6 +482,8 @@ load_dims() {
       if [[ "${props:-}" ]]; then
         log_debug "Props found: ${props[*]}"
       fi
+
+      validate_dims || fail
 
     fi
 
@@ -1331,6 +1367,7 @@ execute_command_internal() {
     command_history+="$current_command $short_cell "
 
     can_create_cyto=t
+
     case $current_command in
       edit)
         if [[ ! "$cell_path" ]]; then
@@ -1344,7 +1381,7 @@ execute_command_internal() {
           mkdir $key_path || fail
         fi
       ;;
-      log|dim-*)
+      log|dim-*|plant)
         :
       ;;
       *)
@@ -1386,10 +1423,6 @@ execute_command_internal() {
         fail1
       fi
       ${current_command}_prep || fail
-    fi
-
-    if [[ ${skip_dim_validation:-f} == f ]]; then
-      validate_dims || fail
     fi
 
     if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
@@ -1444,27 +1477,27 @@ execute_command() {
 
     get_short_cell $cell_path
 
-    case $current_command in log|edit|dim-*)
+    case $current_command in log|edit|dim-*|plant)
       disable_log=${disable_log:-t}
     esac
 
     : ${disable_log:=f}
 
-    local job_path omni_log_job_id log_path current_job_path
-
-    local cyto_path=$cell_path/.cyto
-    if [[ ! -d $cyto_path ]]; then
-      mkdir $cyto_path || fail
-    fi
-
-    job_path=$cell_path/.cyto/job
-    if [[ ! -d $job_path ]]; then
-      mkdir $job_path || fail
-    fi
+    local job_path omni_log_job_id log_path current_job_path cyto_path
 
     if [[ $disable_log == t ]]; then
       log_debug "Logging disabled."
     else
+
+      cyto_path=$cell_path/.cyto
+      if [[ ! -d $cyto_path ]]; then
+        mkdir $cyto_path || fail
+      fi
+
+      job_path=$cell_path/.cyto/job
+      if [[ ! -d $job_path ]]; then
+        mkdir $job_path || fail
+      fi
 
       if [[ ! "${omni_log_job_id:-}" ]]; then
         job_start_time=${EPOCHREALTIME//./}
@@ -1490,7 +1523,7 @@ execute_command() {
 
     fi
 
-    if [[ $cell_path == */.dna/sub/* ]]; then
+    if [[ $cell_path == /seed/* ]]; then
       case $current_command in
         edit|dim-*) ;;
         *)
@@ -1743,40 +1776,6 @@ get_cell_id() {
     cell_id+=_$v
   done
   cell_id=${cell_id#_}
-}
-
-validate_dims() {
-  begin_function
-    local dim
-    begin_for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; doo
-
-      local plural value failed=f problem=
-      get_plural $dim
-      eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim:-}}}}"
-
-      local t=
-      read t < <(type -t ${dim}_expand)
-      if [[ "$t" != function ]]; then
-        log_fatal "Missing function ${dim}_expand which should be in .dna folder"
-        fail1
-      fi
-
-      ${dim}_expand || {
-        log_fatal "${dim}_expand failed to execute: "
-        if [[ "$problem" ]]; then
-          log_fatal "$problem"
-        fi
-        fail1
-      }
-
-      if [[ "$problem" ]]; then
-        log_fatal "$problem"
-        fail1
-      fi
-
-    end_for
-  end_function
-  handle_return
 }
 
 log_and_run() {
