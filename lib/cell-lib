@@ -1411,22 +1411,38 @@ execute_command_internal() {
   handle_return
 }
 
+get_cell_path() {
+  local subject=$1
+  cell_path=
+  while [[ "$subject" == */* ]]; do
+    if [[ -e $subject/.dna ]]; then
+      cell_path=$subject
+      break
+    fi
+    subject=${subject%/*}
+  done
+}
+
 execute_command() {
 
   local starting_point=$(realpath $1) current_command=$2 \
     short_cell disable_log=${disable_log:-} cell_path
 
-  get_cell_path $starting_point
-  get_short_cell $cell_path
-
-  local log_vars='cell_path' \
-    log_show_vars='short_cell current_command' 
+  local log_show_vars='^starting_point current_command' 
   begin_function_hi
 
     if [[ ! -e "$starting_point" ]]; then
       log_fatal "Folder doesn't exist: $starting_point"
       fail1
     fi
+
+    get_cell_path $starting_point
+    if [[ ! "$cell_path" ]]; then
+      log_fatal "Not in a cell: $starting_point"
+      fail1
+    fi
+
+    get_short_cell $cell_path
 
     case $current_command in log|edit|dim-*)
       disable_log=${disable_log:-t}
@@ -1727,19 +1743,6 @@ get_cell_id() {
     cell_id+=_$v
   done
   cell_id=${cell_id#_}
-}
-
-get_cell_path() {
-  local subject=$1
-  cell_path=
-  if [[ -d $subject/.cyto || -d $subject/.dna ]]; then
-    cell_path=$subject
-  else
-    subject=${subject%/*}
-    if [[ "$subject" =~ / ]]; then
-      get_cell_path $subject
-    fi
-  fi
 }
 
 validate_dims() {
