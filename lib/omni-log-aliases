@@ -29,10 +29,25 @@ debug_id_inc() {
 setup_log_block_aliases() {
 
   alias begin_function_hi='
-    local return_value=0 break_out=f deep_function=t
+    local return_value=0 break_out=f function_level=2
     write_to_log_and_save 
     (( log_depth_current++ ))
     log_vars= log_show_vars=
+    warm_stack+=( "${FUNCNAME[0]} debug_id=$((debug_id_current+1))" )
+    debug_id_inc
+    while true; do
+  '
+
+  alias begin_function='
+    local return_value=0 break_out=f function_level=1
+    warm_stack+=( "${FUNCNAME[0]} debug_id=$((debug_id_current+1))" )
+    debug_id_inc
+    while true; do
+  '
+    
+  alias begin_function_lo='
+    (( no_trace_depth++ == 0 && tracing_depth > 0 )) && set +x
+    local return_value=0 break_out=f function_level=0
     warm_stack+=( "${FUNCNAME[0]} debug_id=$((debug_id_current+1))" )
     debug_id_inc
     while true; do
@@ -45,17 +60,21 @@ setup_log_block_aliases() {
   '
 
   alias handle_return='
-    if [[ "${deep_function:-}" ]]; then
-      load_log_vars_and_write_to_log
-      (( log_depth_current-- ))
-    fi
+    case $function_level in
+      2)
+        load_log_vars_and_write_to_log
+        (( log_depth_current-- ))
+      ;;
+      0)
+        if (( --no_trace_depth <= 0 )); then 
+          no_trace_depth=0
+          (( tracing_depth > 0 )) && set -x
+        fi
+      ;;
+    esac
     return $return_value
   '
 
-  alias begin_function='local return_value=0 break_out=f deep_function;'\
-'warm_stack+=( "${FUNCNAME[0]} debug_id=$((debug_id_current+1))" );'\
-'debug_id_inc; while true; do'
-    
   alias    begin_while='break_out=f; debug_id_inc; while'
   alias      begin_for='break_out=f; debug_id_inc; for'
   alias     begin_loop='break_out=f; debug_id_inc; while true; do'
