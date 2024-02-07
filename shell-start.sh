@@ -302,12 +302,12 @@ ff() {
 
 unset grepr
 grepr() {
-grep -D skip -n -s -r -I "$@" *
+  grep -D skip -n -s -r -I "$@" *
 }
 
 unset grepri
 grepri() {
-grep -D skip -n -s -r -i -I "$@" *
+  grep -D skip -n -s -r -i -I "$@" *
 }
 
 alias cutf='cut -d " " -f'
@@ -321,27 +321,82 @@ export SHELL="/bin/bash"
 export LS_OPTIONS='--color=auto'
 export EDITOR=vim
 
+cd_to_leaf() {
+  while true; do
+    local members=( $(find1 -type d -name "*:*" | sort -g) ) || return 1
+    if [[ "$members" ]]; then
+      cd $members || return 1
+    else
+      break
+    fi
+  done
+  return 0
+}
+
+cd_to_trunk() {
+  local d=$PWD last_cell=$PWD
+  while [[ $d =~ : ]]; do
+    d=${d%/*}
+    if [[ -e $d/.dna ]]; then
+      last_cell=$d
+    fi
+    if [[ $d != */* ]]; then
+      break
+    fi
+  done
+  if [[ $last_cell != $PWD ]]; then
+    cd $last_cell || return 1
+  fi
+  return 0
+}
+
+cd_to_seed() {
+  local seed=/seed${PWD#/work}
+
+  while [[ ! -d $seed && ${#seed} -gt 5 ]]; do
+    seed=${seed%/*}
+  done
+
+  if [[ -d $seed ]]; then
+    cd $seed || return 1
+  else
+    echo "Failed to find seed." >&2
+    return 1
+  fi
+   
+  return 0
+}
+
+cd_to_plant() {
+  local plant=/work${PWD#/seed}
+
+  while [[ ! -d $plant && ${#plant} -gt 5 ]]; do
+    plant=${plant%/*}
+  done
+
+  if [[ -d $plant ]]; then
+    cd $plant || return 1
+  else
+    echo "Failed to find plant." >&2
+    return 1
+  fi
+   
+  return 0
+}
+
 leaf() {
-  source $SIMPLETON_REPO/lib/bash-lib
-  source $SIMPLETON_REPO/lib/cell-lib
   cd_to_leaf
 }
 
 trunk() {
-  source $SIMPLETON_REPO/lib/bash-lib
-  source $SIMPLETON_REPO/lib/cell-lib
   cd_to_trunk
 }
 
 seed() {
-  source $SIMPLETON_REPO/lib/bash-lib
-  source $SIMPLETON_REPO/lib/cell-lib
   cd_to_seed
 }
 
 plant() {
-  source $SIMPLETON_REPO/lib/bash-lib
-  source $SIMPLETON_REPO/lib/cell-lib
   cd_to_plant
 }
 
@@ -378,42 +433,38 @@ LIGHT_YELLOW="\[\033[1;33m\]"
 get_cell_location_string() {
   local p=
   if [[ $PWD == /work/* ]]; then
+    p+="[plant"
 
-    if [[ $PWD == */.dna/sub/* ]]; then
-      p+="[seed"
-    else
-      p+="[plant"
-    fi
-
-    if [[ -d .dna ]]; then
-      p+=" cell"
-    fi
-
-    if [[ $PWD == */.dim/* ]]; then
-      if [[ -d .dim ]]; then
-        p+=" branch"
-      else
-        p+=" leaf"
-      fi
-    elif [[ -d .dim ]]; then
-      p+=" trunk"
-    fi
-
-    local without_seed=${PWD##*/.dna/sub}
-    if [[ $without_seed == */.dna/* ]]; then
-      p+=" dna"
-    elif [[ $PWD == */.cyto/* ]]; then
-      p+=" cyto"
-    fi
-
-    if [[ $PWD == */up/* ]]; then
-      p+=" up"
-    elif [[ $PWD == */down/* ]]; then
-      p+=" down"
-    fi
-
-    p+="] "
+  elif [[ $PWD == /seed/* ]]; then
+    p+="[seed"
   fi
+
+  if [[ $PWD == */.cyto || $PWD == */.cyto/* ]]; then
+    p+=" cyto"
+  fi
+
+  if [[ $PWD == */.dna || $PWD == */.dna/* ]]; then
+    p+=" dna"
+  fi
+
+  local sub_branches=( $(find1 -name "*:*") ) || return 1
+  if [[ $PWD =~ : ]]; then
+    if [[ "$sub_branches" ]]; then
+      p+=" branch"
+    else
+      p+=" leaf"
+    fi
+  elif [[ "$sub_branches" ]]; then
+    p+=" trunk"
+  fi
+
+  if [[ $PWD == */up/* ]]; then
+    p+=" up"
+  elif [[ $PWD == */down/* ]]; then
+    p+=" down"
+  fi
+
+  p+="] "
   cell_location_string=$p
 }
 

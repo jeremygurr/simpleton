@@ -994,6 +994,7 @@ update_member() {
 
 update_members() {
   begin_function_hi
+    plant_seed $seed_path $cell_path || fail
     if [[ "${leaf_dims:-}" ]]; then
       par=t fork=f function=update_member for_each_member "${leaf_dims[0]}" || fail
       switch_context || fail
@@ -1263,50 +1264,6 @@ post_update() {
   handle_return
 }
 
-# seed must not be empty here
-create_sub_cells2() {
-  begin_function
-    local seed=$1 relative_path=$2 sub_full sub 
-    [[ "$relative_path" ]] && relative_path=/$relative_path
-    local sub_path=$seed/.dna/sub$relative_path
-    local subs=$(find1 $sub_path -not -name ".*" -not -name "$wild_sub_path" | sort -g) || fail
-    begin_for sub_full in $subs; doo
-      sub=${sub_full##*/}
-      if [[ -f $sub_full ]]; then
-        safe_link $(realpath $sub_full) $seed$relative_path/$sub || fail
-      elif [[ -L $sub_full ]]; then
-        cp $sub_full $seed$relative_path/$sub || fail
-      elif [[ -d $sub_full ]]; then
-        create_sub_cell_with_seed $seed $seed$relative_path/$sub || fail
-        if [[ "$relative_path" ]]; then
-          # recursive
-          create_sub_cells2 $seed ${relative_path#/}/$sub || fail
-        else
-          # recursive
-          create_sub_cells2 $seed $sub || fail
-        fi
-      fi
-    end_for
-  end_function
-  handle_return
-}
-
-create_sub_cells() {
-  begin_function
-    if [[ -f "$status_path/subs-up-to-date" ]]; then
-      succeed
-    fi
-    if [[ -d "$sub_path" ]]; then
-      create_sub_cells2 $cell_path '' || fail
-    fi
-    if [[ "$status_path" ]]; then
-      touch $status_path/subs-up-to-date || fail
-    fi
-    succeed
-  end_function
-  handle_return
-}
-
 switch_context_and_create_sub() {
   local parent_cell=$1 sub_cell=$2 cell_path
   local log_show_vars='^parent_cell ^sub_cell'
@@ -1345,29 +1302,6 @@ get_dep_member() {
   return 0
 }
 
-setup_cyto_out() {
-  local from=$1 to=$2
-  begin_function
-    local contents=$(find1 $from) || fail
-    begin_for item in $contents; doo
-      if [[ -d $item ]]; then
-        local last_part=${item##*/}
-        if [[ ! -d $to/$last_part ]]; then
-          mkdir $to/$last_part || fail
-        fi
-        setup_cyto_out $from/$last_part $to/$last_part || fail
-      elif [[ $item == *.safe ]]; then
-        local target_file=${item##*/}
-        target_file=${target_file%.safe}
-        from=$item to=$to/$target_file decrypt_file_with_shared_key || fail
-      else
-        safe_link $item $to/ || fail
-      fi
-    end_for
-  end_function
-  handle_return
-}
-
 update_command() {
   begin_function
 
@@ -1393,10 +1327,6 @@ update_command() {
       if [[ $update_successful == f ]]; then
         log_fatal "Failed to update some member(s)"
         fail1
-      fi
-      create_sub_cells || fail
-      if [[ -d $cyto_path/out ]]; then
-        setup_cyto_out $cyto_path/out $out_path || fail
       fi
       update_self_retry_loop || fail
       check_results || fail

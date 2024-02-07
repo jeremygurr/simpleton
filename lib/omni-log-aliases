@@ -29,6 +29,7 @@ debug_id_inc() {
 setup_log_block_aliases() {
 
   alias begin_function_hi='
+    (( no_trace_depth++ ))
     local return_value=0 break_out=f function_level=2
     write_to_log_and_save 
     (( log_depth_current++ ))
@@ -36,17 +37,20 @@ setup_log_block_aliases() {
     warm_stack+=( "${FUNCNAME[0]} debug_id=$((debug_id_current+1))" )
     debug_id_inc
     while true; do
+    (( --no_trace_depth == 0 && tracing_depth > 0 )) && set -x
   '
 
   alias begin_function='
+    (( no_trace_depth++ ))
     local return_value=0 break_out=f function_level=1
     warm_stack+=( "${FUNCNAME[0]} debug_id=$((debug_id_current+1))" )
     debug_id_inc
     while true; do
+    (( --no_trace_depth == 0 && tracing_depth > 0 )) && set -x
   '
     
   alias begin_function_lo='
-    (( no_trace_depth++ == 0 && tracing_depth > 0 )) && set +x
+    (( no_trace_depth++ ))
     local return_value=0 break_out=f function_level=0
     warm_stack+=( "${FUNCNAME[0]} debug_id=$((debug_id_current+1))" )
     debug_id_inc
@@ -54,33 +58,36 @@ setup_log_block_aliases() {
   '
 
   alias end_function='
+    (( no_trace_depth++ ))
     break; done;
     unset warm_stack[-1]
     debug_id_inc
+    (( --no_trace_depth == 0 && tracing_depth > 0 )) && set -x
   '
 
   alias handle_return='
+    (( no_trace_depth++ ))
     case $function_level in
       2)
         load_log_vars_and_write_to_log
         (( log_depth_current-- ))
       ;;
       0)
-        if (( --no_trace_depth <= 0 )); then 
+        if (( no_trace_depth-- <= 0 )); then 
           no_trace_depth=0
-          (( tracing_depth > 0 )) && set -x
         fi
       ;;
     esac
+    (( --no_trace_depth == 0 && tracing_depth > 0 )) && set -x
     return $return_value
   '
 
-  alias    begin_while='break_out=f; debug_id_inc; while'
-  alias      begin_for='break_out=f; debug_id_inc; for'
-  alias     begin_loop='break_out=f; debug_id_inc; while true; do'
-  alias      end_while='done; debug_id_inc; [[ $break_out == t ]] && break'
-  alias        end_for='done; debug_id_inc; [[ $break_out == t ]] && break'
-  alias       end_loop='done; debug_id_inc; [[ $break_out == t ]] && break'
+  alias    begin_while='break_out=f; while'
+  alias      begin_for='break_out=f; for'
+  alias     begin_loop='break_out=f; while true; do'
+  alias      end_while='done; [[ $break_out == t ]] && break'
+  alias        end_for='done; [[ $break_out == t ]] && break'
+  alias       end_loop='done; [[ $break_out == t ]] && break'
 
   alias handle_exit='exit $return_value'
 

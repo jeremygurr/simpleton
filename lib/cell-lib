@@ -265,14 +265,29 @@ load_context() {
   handle_return
 }
 
+get_branch_dims_from_path() {
+  local path=$1 part dim member
+  branch_dims=() \
+  branch_members=()
+  while [[ $path == *:* ]]; do
+    part=${path##*/}
+    path=${path%/*}
+    if [[ $part == *:* ]]; then
+      dim=${part%%:*}
+      member=${part#*:}
+      branch_dims+=( $dim )
+      branch_members+=( $member )
+      # maybe lookup non-hashed member value?
+    fi
+  done
+}
+
 get_short_cell() {
-  local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string=
-  if [[ "$trunk_cell" =~ .dim ]]; then
-    x=${trunk_cell//\/.dim\// }
-    dim_string=" ${x#* }"
-    dim_string=${dim_string/ /:}
-    dim_string=${dim_string// /\/}
-    trunk_cell=${x%% *}
+  local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string= branch_dims=
+  if [[ "$trunk_cell" =~ : ]]; then
+    get_branch_dims_from_path $top_cell
+    dim_string="${branch_dims[*]}"
+    dim_string=:${dim_string// /\/}
   fi
   if x=${trunk_cell#$PWD/}
      [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
@@ -318,9 +333,9 @@ setup_cell_path_vars() {
     op_path=$cyto_path/op \
     out_path=$cell_path \
     req_path=$cyto_path/req \
+    seed_path=/seed${cell_path#/work} \
     source_path=$cyto_path/source \
     status_path=$cyto_path/status \
-    sub_path=$dna_path/sub \
     tmp_path=$cyto_path/tmp \
     up_path=$cyto_up_path \
     var_path=$dna_path/var \
@@ -2576,77 +2591,6 @@ get_cell_name() {
   get_short_cell $cell_path || fail
   cell_name=${short_cell//\//_}
   cell_name=${cell_name// /:}
-}
-
-cd_to_leaf() {
-  while true; do
-    local last_part=${PWD##*/}
-    if [[ -d .dim ]]; then
-      cd .dim || return 1
-    elif [[ "$last_part" == .dim ]]; then
-      if [[ "${1:-}" && -d "$1" ]]; then
-        cd "$1" || return 1
-        shift || true
-      else
-        local files=( $(find -mindepth 1 -maxdepth 1 -type d -not -name ".*") )
-        if [[ -d "$files/.dim" ]]; then
-          cd $files/.dim || return 1
-        elif [[ -d "$files/.dna" ]]; then
-          cd $files || return 1
-          break
-        else
-          break
-        fi
-      fi
-    else
-      break
-    fi
-  done
-  return 0
-}
-
-cd_to_trunk() {
-  local trunk_cell
-  get_trunk_cell $PWD || return 1
-  if [[ "$trunk_cell" ]]; then
-    cd "$trunk_cell" 
-  else
-    echo "No trunk found" >&2
-    return 1
-  fi
-  return 0
-}
-
-cd_to_seed() {
-  local seed from=$PWD
-  find_seed $from || return 1
-  if [[ "$seed" ]]; then
-    local path=${from#$seed/}
-    local to=$seed/.dna/sub/$path 
-    while [[ ! -d $to ]]; do
-      to=${to%/*}
-    done
-    cd $to || return 1
-  else
-    echo "No seed found" >&2
-    return 1
-  fi
-  return 0
-}
-
-cd_to_plant() {
-  local from=$PWD
-  local to=${from//.dna\/sub\//}
-  if [[ "$from" != "$to" ]]; then
-    while [[ ! -d $to ]]; do
-      to=${to%/*}
-    done
-    cd $to || return 1
-  else
-    echo "No plant found" >&2
-    return 1
-  fi
-  return 0
 }
 
 # locks the given cell, or fails if it can't obtain a lock
