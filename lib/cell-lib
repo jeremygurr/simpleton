@@ -179,7 +179,7 @@ make_context_dna_contents() {
   handle_return
 }
 
-make_context_load_dims() {
+load_dims() {
   begin_function
 
     trunk_dims=()
@@ -219,6 +219,38 @@ make_context_load_dims() {
       fi
     end_while
 
+    trunk_dim_count=${#trunk_dims[*]}
+    leaf_dim_count=${#leaf_dims[*]}
+    branch_dim_count=${#branch_dims[*]}
+
+    if [[ "${branch_dims:-}" ]]; then
+      log_debug "Branch dims found: ${branch_dims[*]}"
+    fi
+
+    if [[ "${leaf_dims:-}" ]]; then
+      log_debug "Leaf dims found: ${leaf_dims[*]}"
+    fi
+
+    if [[ "${sub_dims:-}" ]]; then
+      log_debug "Sub dims found: ${sub_dims[*]}"
+    fi
+
+    if [[ "${props:-}" ]]; then
+      log_debug "Props found: ${props[*]}"
+    fi
+
+  end_function
+  handle_return
+}
+
+make_context_dims() {
+  begin_function
+    load_dims || fail
+    echo "
+trunk_dims=( ${trunk_dims[*]} )
+branch_dims=( ${branch_dims[*]} )
+leaf_dims=( ${leaf_dims[*]} )
+" >$context_path || fail
   end_function
   handle_return
 }
@@ -245,7 +277,10 @@ make_context() {
       fail1
     fi
 
-    make_context_load_dims || fail
+    source $context_path || fail
+    if [[ ! "$trunk_dims" ]]; then
+      make_context_dims || fail
+    fi
 
     fd_unlock
 
@@ -464,71 +499,6 @@ validate_dims() {
 }
 
 # deprecated, will come from context instead
-load_dims() {
-
-  local cell_path=$1
-  local dim dim_plural v \
-    log_vars \
-    log_show_vars='^cell_path'
-  begin_function_hi
-
-    last_dims_loaded=${last_dims_loaded:-}
-    if [[ "$last_dims_loaded" != $cell_path ]]; then
-
-      last_dims_loaded=$cell_path \
-      trunk_dims=() \
-      branch_dims=()  \
-      leaf_dims=() \
-      trunk_cell=$cell_path \
-      depth=0 \
-
-      begin_while [[ $trunk_cell == */.dim/* ]]; doo
-        trunk_cell=${trunk_cell%/.dim/*}
-        (( depth++ ))
-      end_while
-
-      load_trunk_dims $trunk_cell || fail
-      trunk_dims=( ${dims[*]} )
-      trunk_dim_count=${#trunk_dims[*]}
-
-      local i=0
-      begin_for dim in ${dims[*]}; doo
-        if (( i < depth )); then
-          branch_dims+=( $dim )
-        else
-          leaf_dims+=( $dim )
-        fi
-        (( i++ ))
-      end_for
-
-      leaf_dim_count=${#leaf_dims[*]}
-      branch_dim_count=${#branch_dims[*]}
-
-      if [[ "${branch_dims:-}" ]]; then
-        log_debug "Branch dims found: ${branch_dims[*]}"
-      fi
-
-      if [[ "${leaf_dims:-}" ]]; then
-        log_debug "Leaf dims found: ${leaf_dims[*]}"
-      fi
-
-      if [[ "${sub_dims:-}" ]]; then
-        log_debug "Sub dims found: ${sub_dims[*]}"
-      fi
-
-      if [[ "${props:-}" ]]; then
-        log_debug "Props found: ${props[*]}"
-      fi
-
-      validate_dims || fail
-
-    fi
-
-  end_function
-  handle_return
-
-}
-
 plant_seed() {
   local from=$1 to=$2 from contents x x_part deep=${deep:-t}
   begin_function
