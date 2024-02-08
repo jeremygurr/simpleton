@@ -74,8 +74,11 @@ export debug_ignore+="
 debug_ignore=( $debug_ignore )
 debug_ignore=" ${debug_ignore[*]} "
 
-compute_cyto_bash_function() {
+make_or_load_cyto_fun() {
   begin_function
+    local full_path=$1 name=$2 content fun
+    content=$(<$full_path)
+    trim_ws content
     if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
       fun="$content"
     else
@@ -83,90 +86,139 @@ compute_cyto_bash_function() {
 
 # outdented for clarity
 fun="
-$function() {
+$name() {
   begin_function
 $content
   end_function
   handle_return
 }
 "
-
+    if [[ $make_or_load == make ]]; then
+      echo -n "$fun" >>$context_path || return 1
+    else
+      eval "$fun" || return 1
     fi
   end_function
   handle_return
 }
 
-make_or_load_cyto_bash_function() {
-  local fun
-  compute_cyto_bash_function || return 1
-  if [[ $make_or_load == make ]]; then
-    echo -n "$fun" >>$context_path || return 1
-  else
-    eval "$fun" || return 1
-  fi
+load_var() {
+  local from=$1
+  local -n to_var=$2
+  to_var=$(<$from)
+  trim_ws to_var
+  case "$to_var" in
+    \"*|\'*|\(*)
+      :
+    ;;
+    *)
+      to_var="'${to_var//\'/\'\\\'\'}'"
+    ;;
+  esac
 }
 
-make_or_load_cyto_functions() {
+make_or_load_cyto_var() {
   begin_function
-    local function function2 function_path content postfix=
-    local functions=$(find1 $dna_full_folder | sort -g) || fail
-    begin_for function_path in $functions; doo
-      if [[ ! -f $function_path ]]; then
-        log_fatal "Invalid function file: $function_path"
-        fail1
-      fi
-      function2=${function_path##*/}
-      function=${function2%.*}
+    local var_full_path=$1 var=$2 content 
+    load_var $var_full_path content
+    if [[ $make_or_load == make ]]; then
+      echo "${NL}$var=$content" >>$context_path || fail
+    else
+      eval "$var=$content" || fail
+    fi
+  end_function
+  handle_return
+}
 
-      postfix=${function2#$function}
-      if [[ ! "$postfix" ]]; then
-        postfix=bash
-      else
-        postfix=${postfix#.}
+make_or_load_cyto_raw() {
+  begin_function
+    local full_path=$1 name=$2 content 
+    content=$(<$full_path)
+    trim_ws content
+    if [[ $make_or_load == make ]]; then
+      echo "${NL}$content" >>$context_path || fail
+    else
+      eval "$content" || fail
+    fi
+  end_function
+  handle_return
+}
+
+make_context_dna_contents() {
+  begin_function
+    local dna_contents=$(find1 $dna_path | sort -g) || fail
+    begin_for dna_full_item in $dna_contents; doo
+      last_part=${dna_full_item##*/}
+      item_name=${last_part#*([0-9])-}
+
+      suffix=
+      if [[ $item_name == *.* ]]; then
+        suffix=${item_name##*.}
+        item_name=${item_name%.*}
       fi
 
-      content=$(<$function_path)
-      trim_ws content
-      case $postfix in
-        bash)
-          make_or_load_cyto_bash_function || fail
-        ;;
-        *)
-          log_fatal "Function type $postfix not supported yet in file $function_path"
-          fail1
-        ;;
-      esac
+      if [[ -f $dna_full_item ]]; then
+        case $suffix in
+          var)
+            make_or_load_cyto_var $dna_full_item $item_name || fail
+          ;;
+          fun)
+            make_or_load_cyto_fun $dna_full_item $item_name || fail
+          ;;
+          '')
+            make_or_load_cyto_raw $dna_full_item $item_name || fail
+          ;;
+            log_fatal "Unknown dna object: $dna_full_item"
+            fail1
+          *)
+          ;;
+        esac
+      fi
     end_for
   end_function
   handle_return
 }
 
-make_or_load_cyto_vars() {
+make_context_load_dims() {
   begin_function
-    local var var_path content \
-      vars=$(find1 $dna_full_folder | sort -g) || fail
-    begin_for var_path in $vars; doo
-      if [[ ! -f $var_path ]]; then
-        log_fatal "Invalid var file: $var_path"
-        fail1
+
+    trunk_dims=()
+    branch_dims=()
+    branch_mems=()
+    leaf_dims=()
+
+    local c=$cell_path p d m
+    begin_while [[ $c == *:* ]]; doo
+      p=${c%%*/}
+      if [[ $p == *:* ]]; then
+        d=${p%%:*}
+        trunk_dims=( $d ${trunk_dims[*]} )
+        branch_dims=( $d ${branch_dims[*]} )
+
+        local member_var_path=$c/.dna/member_value.var
+        if [[ -f $member_var_path ]]; then
+          load_var $member_var_path m
+        else
+          m=${p#*:}
+        fi
+        branch_mems=( $m ${branch_mems[*]} )
       fi
-      var=${var_path##*/}
-      content=$(<$var_path)
-      trim_ws content
-      case "$content" in
-        \"*|\'*|\(*)
-          :
-        ;;
-        *)
-          content="'${content//\'/\'\\\'\'}'"
-        ;;
-      esac
-      if [[ $make_or_load == make ]]; then
-        echo "${NL}$var=$content" >>$context_path || fail
+      c=${c%/*}
+    end_while
+
+    local branch c=$seed_path d
+    begin_while true; doo
+      branch=$(find1 $c -name "*:*" -type d | head -n 1) || fail
+      if [[ "$branch" ]]; then
+        d=${branch%%:*}
+        trunk_dims+=( $d )
+        leaf_dims+=( $d )
+        c=$branch
       else
-        eval "$var=$content" || fail
+        break
       fi
-    end_for
+    end_while
+
   end_function
   handle_return
 }
@@ -174,11 +226,10 @@ make_or_load_cyto_vars() {
 make_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function_hi
-    local dna_path=$cell_path/.dna \
-      dna_folder dna_full_folder \
+    local item_name last_part dna_full_item suffix \
       make_or_load=make
 
-    echo "#!/bin/bash
+    echo "#!/usr/env bash
 # WARNING: This file is auto-generated from $dna_path" >$context_path || fail
     local lock_fd
     timeout=$lock_timeout \
@@ -186,42 +237,15 @@ make_context() {
       fd_write_lock || fail
 
     if [[ -d $dna_path ]]; then
-      local dna_folders=$(find1 $dna_path | sort -g) || fail
-      if [[ -d $dna_path/dim/_all ]]; then
-        dna_folders+="$NL$(find1 $dna_path/dim/_all | sort -g)" || fail
-      fi
-      begin_for dna_full_folder in $dna_folders; doo
-        if [[ ! -d $dna_full_folder ]]; then
-          log_warn "Unrecognized dna folder: $dna_full_folder. Ignoring"
-          continue
-        fi
-        dna_folder=${dna_full_folder##*/}
-        case $dna_folder in
-          dim|sub)
-            ;;
-          fun)
-            make_or_load_cyto_functions || fail
-            ;;
-          out)
-            mkdir $cyto_path/out || fail
-            safe_link $dna_full_folder/* $cyto_path/out/ || fail
-            ;;
-          up|down)
-            mkdir $cyto_path/$dna_folder || fail
-            ;;
-          var)
-            make_or_load_cyto_vars || fail
-            ;;
-          op|*)
-            safe_link $dna_full_folder $cyto_path/$dna_folder || fail
-            ;;
-        esac
-      end_for
+      make_context_dna_contents || fail
     elif [[ -f $dna_path ]]; then
       cat $dna_path >>$context_path || fail
     else
-      log_vars=dna_path log_warn "dna path not found, ignoring"
+      log_vars=dna_path log_fatal "dna path not found"
+      fail1
     fi
+
+    make_context_load_dims || fail
 
     fd_unlock
 
@@ -338,7 +362,6 @@ setup_cell_path_vars() {
     status_path=$cyto_path/status \
     tmp_path=$cyto_path/tmp \
     up_path=$cyto_up_path \
-    var_path=$dna_path/var \
 
     if [[ "${log_path:-}" ]]; then
       background_log=$log_path/background
@@ -385,7 +408,6 @@ load_trunk_dims() {
   local cell_path=$1 \
     v dim dim_plural plural
 
-  local var_path=$cell_path/.dna/var
   localize_dims=local
 
   for v in dims sub_dims props; do
@@ -441,11 +463,11 @@ validate_dims() {
   handle_return
 }
 
+# deprecated, will come from context instead
 load_dims() {
 
   local cell_path=$1
   local dim dim_plural v \
-    var_path=$cell_path/.dna/var \
     log_vars \
     log_show_vars='^cell_path'
   begin_function_hi
@@ -1400,7 +1422,6 @@ execute_command_internal() {
         :
       ;;
       *)
-        var_path=$cell_path/.dna/var
         switch_context || {
           log_fatal "Context failed to load for $cell_path"
           fail1
