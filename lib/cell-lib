@@ -305,7 +305,6 @@ make_context_expand_handle_default() {
       fun+="
     '')
       problem=\"Missing required parameter: $dim\"
-      return 1
     ;;"
 
     fi
@@ -318,7 +317,6 @@ make_context_expand_members_unknown() {
     fun+="
     all)
       problem=\"'all' member not available for this dim: $dim\"
-      return 1
     ;;
     *)
       values=( \$value )
@@ -354,7 +352,6 @@ make_context_expand_members_known() {
     ;;
     *)
       problem=\"Invalid $dim: \$value\"
-      return 1
     ;;
   esac
 }"
@@ -599,9 +596,7 @@ validate_dims() {
       get_plural $dim
       eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim:-}}}}"
 
-      local t=
-      read t < <(type -t ${dim}_expand)
-      if [[ "$t" != function ]]; then
+      if function_exists ${dim}_expand; then
         log_fatal "Missing function ${dim}_expand which should be in .dna folder"
         fail1
       fi
@@ -620,30 +615,6 @@ validate_dims() {
       fi
 
     end_for
-  end_function
-  handle_return
-}
-
-# deprecated, will come from context instead
-plant_seed() {
-  local from=$1 to=$2 from contents x x_part deep=${deep:-t}
-  begin_function
-    if [[ -d $from ]]; then
-      contents=( $(find1 $from | sort) ) || fail
-      begin_for x in ${contents[*]}; doo
-        x_part=${x##*/}
-        if [[ ! -e $to/$x_part ]]; then
-          if [[ -f $x || $x == */.dna ]]; then
-            safe_link $(realpath $x) $to/ || fail
-          elif [[ -d $x ]]; then
-            mkdir $to/$x_part || fail
-            if [[ $deep == t ]]; then
-              plant_seed $x $to/$x_part || fail
-            fi
-          fi
-        fi
-      end_for
-    fi
   end_function
   handle_return
 }
@@ -685,9 +656,9 @@ cell_context_load() {
 
         if [[ ! -e $context_path ]]; then
           make_context || fail
-        else
-          source $context_path || fail
         fi
+
+        source $context_path || fail
 
       else # $can_create_cyto == f
         load_context || fail
@@ -708,9 +679,9 @@ cell_context_load() {
       fi
 
       if [[ "$leaf_dims" ]]; then
-        cell_is_leaf=t
-      else
         cell_is_leaf=f
+      else
+        cell_is_leaf=t
       fi
 
     fi
@@ -1574,7 +1545,7 @@ execute_command_internal() {
 
     source $command_path || fail
     local command_function=${current_command//-/_}_command
-    if type -t $command_function &>/dev/null; then
+    if function_exists $command_function; then
       $command_function || fail
     else
       log_fatal "Missing command function $command_function which should be in $command_path"
@@ -2442,11 +2413,9 @@ expand_values() {
     local dim_plural=${dim}s 
     local ddims=d_$dim_plural \
           ddim=d_$dim \
-          new_value_list= new_values= value \
-          has_expand_function=f
+          new_value_list= new_values= value
 
     values=( ${!ddim:-} )
-    type -t ${dim}_expand >/dev/null && has_expand_function=t
 
     local problem= failed=f
     if [[ ! "${values:-}" ]]; then
@@ -2518,11 +2487,16 @@ begin_function
     fail1
   fi
 
-  if [[ $has_expand_function == t ]]; then
+  if function_exists ${dim}_expand; then
     if [[ "$values" == $empty_member ]]; then
       values=
     fi
+    local problem=
     value=$values ${dim}_expand || fail
+    if [[ "$problem" ]]; then
+      log_fatal "$problem"
+      fail1
+    fi
     if [[ ! "${values:-}" ]]; then
       log_fatal "Dim $dim has invalid value '$value'"
       fail1
@@ -2549,8 +2523,12 @@ expand_values_plural() {
 
     if [[ ! "${values:-}" ]]; then
 
-      if [[ $has_expand_function == t ]]; then
+      if function_exists ${dim}_expand; then
         value= ${dim}_expand || fail
+        if [[ "$problem" ]]; then
+          log_fatal "$problem"
+          fail1
+        fi
         new_values=( "${values[@]}" )
       else
         log_fatal "Missing value for dimension: $RESET$dim"
@@ -2559,12 +2537,16 @@ expand_values_plural() {
 
     else
 
-      if [[ $has_expand_function == t ]]; then
+      if function_exists ${dim}_expand; then
         begin_for value in "${values[@]}"; doo
           if [[ "$value" == $empty_member ]]; then
             value=
           fi
           value=$value ${dim}_expand || fail
+          if [[ "$problem" ]]; then
+            log_fatal "$problem"
+            fail1
+          fi
           if [[ ! "${values:-}" ]]; then
             log_fatal "Dim $dim_plural has invalid value '$value'"
             fail1
