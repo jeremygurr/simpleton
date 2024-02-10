@@ -189,10 +189,10 @@ make_context_dna_contents() {
 load_dims() {
   begin_function
 
-    trunk_dims=()
-    branch_dims=()
-    branch_mems=()
-    leaf_dims=()
+    trunk_dims=() \
+    branch_dims=() \
+    branch_mems=() \
+    leaf_dims=() \
 
     local c=$cell_path p d m
     begin_while [[ $c == *:* ]]; doo
@@ -218,6 +218,7 @@ load_dims() {
       branch=$(find1 $c -name "*:*" -type d | head -n 1) || fail
       if [[ "$branch" ]]; then
         d=${branch%%:*}
+        d=${d##*/}
         trunk_dims+=( $d )
         leaf_dims+=( $d )
         c=$branch
@@ -257,7 +258,7 @@ make_context_dims() {
 trunk_dims=( ${trunk_dims[*]} )
 branch_dims=( ${branch_dims[*]} )
 leaf_dims=( ${leaf_dims[*]} )
-" >$context_path || fail
+" >>$context_path || fail
   end_function
   handle_return
 }
@@ -281,7 +282,7 @@ make_context_expand_find_members() {
       fi
     end_for
 
-    if [[ "$members" && $all_found == f ]]; then
+    if [[ "$member_paths" && $all_found == f ]]; then
       has_explicit_member_list=t
     fi
 
@@ -293,9 +294,10 @@ make_context_expand_handle_default() {
   begin_function
     if [[ -v ${dim}_default ]]; then
 
+      eval "local default=\"\$${dim}_default\""
       fun+="
     '')
-      values=( ${dim}_default )
+      values=( \"$default\" )
     ;;"
 
     else
@@ -313,7 +315,7 @@ make_context_expand_handle_default() {
 
 make_context_expand_members_unknown() {
   begin_function
-    fun="
+    fun+="
     all)
       problem=\"'all' member not available for this dim: $dim\"
       return 1
@@ -343,7 +345,7 @@ make_context_expand_members_known() {
 
     local members_with_pipes=${members_with_pipes// /\|}
 
-    fun="
+    fun+="
     all)
       values=( $quoted_members )
     ;;
@@ -390,7 +392,7 @@ make_context_expand() {
         make_context_expand_members_known || fail
       fi
 
-      echo "$fun" >$context_path || fail
+      echo "$fun" >>$context_path || fail
     fi
 
   end_function
@@ -421,7 +423,7 @@ make_context() {
     fi
 
     source $context_path || fail
-    if [[ ! "$trunk_dims" ]]; then
+    if [[ ! "${trunk_dims:-}" ]]; then
       make_context_dims || fail
     fi
 
