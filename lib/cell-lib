@@ -76,16 +76,15 @@ debug_ignore=" ${debug_ignore[*]} "
 
 make_or_load_cyto_fun() {
   begin_function
-    local full_path=$1 name=$2 content fun
+    local full_path=$1 name=$prefix$2 content fun
     content=$(<$full_path)
     trim_ws content
+
     if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
       fun="$content"
     else
       content=$(echo -n "$content" | sed 's/^/    /')
-
-# outdented for clarity
-fun="
+      fun="
 $name() {
   begin_function
 $content
@@ -93,10 +92,12 @@ $content
   handle_return
 }
 "
+    fi
+
     if [[ $make_or_load == make ]]; then
-      echo -n "$fun" >>$context_path || return 1
+      echo -n "$fun" >>$context_path || fail
     else
-      eval "$fun" || return 1
+      eval "$fun" || fail
     fi
   end_function
   handle_return
@@ -119,7 +120,7 @@ load_var() {
 
 make_or_load_cyto_var() {
   begin_function
-    local var_full_path=$1 var=$2 content 
+    local var_full_path=$1 var=$prefix$2 content 
     load_var $var_full_path content
     if [[ $make_or_load == make ]]; then
       echo "${NL}$var=$content" >>$context_path || fail
@@ -145,6 +146,7 @@ make_or_load_cyto_raw() {
 }
 
 make_context_dna_contents() {
+  local dna_path=$1
   begin_function
     local dna_contents=$(find1 $dna_path | sort -g) || fail
     begin_for dna_full_item in $dna_contents; doo
@@ -168,11 +170,16 @@ make_context_dna_contents() {
           '')
             make_or_load_cyto_raw $dna_full_item $item_name || fail
           ;;
+          *)
             log_fatal "Unknown dna object: $dna_full_item"
             fail1
-          *)
           ;;
         esac
+      elif [[ -d $dna_full_item ]]; then
+        if [[ $item_name == *_ ]]; then
+          prefix+=$item_name
+        fi
+        make_context_dna_contents $dna_full_item || fail
       fi
     end_for
   end_function
@@ -255,6 +262,141 @@ leaf_dims=( ${leaf_dims[*]} )
   handle_return
 }
 
+make_context_expand_find_members() {
+  begin_function
+
+    local branch all_found=f
+    local member_paths=$(find1 $seed_path -name "$dim:*" -type d | sort -g) || fail
+
+    begin_for branch in $member_paths; doo
+      m=${branch#*:}
+      if [[ $m == all ]]; then
+        all_found=t
+      else
+        local value_path=$branch/.dna/member_value.var
+        if [[ -e $value_path ]]; then
+          load_var $value_path m
+        fi
+        members+=( "$m" )
+      fi
+    end_for
+
+    if [[ "$members" && $all_found == f ]]; then
+      has_explicit_member_list=t
+    fi
+
+  end_function
+  handle_return
+}
+
+make_context_expand_handle_default() {
+  begin_function
+    if [[ -v ${dim}_default ]]; then
+
+      fun+="
+    '')
+      values=( ${dim}_default )
+    ;;"
+
+    else
+
+      fun+="
+    '')
+      problem=\"Missing required parameter: $dim\"
+      return 1
+    ;;"
+
+    fi
+  end_function
+  handle_return
+}
+
+make_context_expand_members_unknown() {
+  begin_function
+    fun="
+    all)
+      problem=\"'all' member not available for this dim: $dim\"
+      return 1
+    ;;
+    *)
+      values=( \$value )
+    ;;
+  esac
+}"
+  end_function
+  handle_return
+}
+
+make_context_expand_members_known() {
+  begin_function
+    local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
+    begin_for m in "${members[@]}"; doo
+      quoted_members+="\"$m\" "
+      if [[ $m =~ \  ]]; then
+        need_quotes=t
+      fi
+    end_for
+
+    if [[ $need_quotes == f ]]; then
+      quoted_members="${members[*]}"
+    fi
+
+    local members_with_pipes=${members_with_pipes// /\|}
+
+    fun="
+    all)
+      values=( $quoted_members )
+    ;;
+    $members_with_pipes)
+      values=( \$value )
+    ;;
+    *)
+      problem=\"Invalid $dim: \$value\"
+      return 1
+    ;;
+  esac
+}"
+  end_function
+  handle_return
+}
+
+make_context_expand() {
+  begin_function
+    local dim=$leaf_dims 
+
+    if [[ ! -d $seed_path ]]; then
+      log_fatal "No configuration in seed for dim $dim at $seed_path"
+      fail1
+    fi
+
+    if ! function_exists ${dim}_expand; then
+      local members=() has_explicit_member_list=f fun
+
+      if [[ -v ${dim}_members ]]; then
+        local -n members=${dim}_members
+        has_explicit_member_list=t
+      else
+        make_context_expand_find_members
+      fi
+
+      fun="${dim}_expand() {
+  case \"\$value\" in"
+
+      make_context_expand_handle_default || fail
+
+      if [[ $has_explicit_member_list == f ]]; then
+        make_context_expand_members_unknown || fail
+      else
+        make_context_expand_members_known || fail
+      fi
+
+      echo "$fun" >$context_path || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 make_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function_hi
@@ -269,7 +411,8 @@ make_context() {
       fd_write_lock || fail
 
     if [[ -d $dna_path ]]; then
-      make_context_dna_contents || fail
+      local prefix=
+      make_context_dna_contents $dna_path || fail
     elif [[ -f $dna_path ]]; then
       cat $dna_path >>$context_path || fail
     else
@@ -281,6 +424,8 @@ make_context() {
     if [[ ! "$trunk_dims" ]]; then
       make_context_dims || fail
     fi
+
+    make_context_expand || fail
 
     fd_unlock
 
@@ -439,31 +584,6 @@ get_trunk_cell() {
   return 0
 }
 
-load_trunk_dims() {
-  local cell_path=$1 \
-    v dim dim_plural plural
-
-  localize_dims=local
-
-  for v in dims sub_dims props; do
-    if [[ -e $var_path/$v ]]; then
-      eval "$v=( \$(<$var_path/$v) )" || return 1
-    fi
-  done
-
-  for dim in ${dims[*]} ${sub_dims[*]} ${props[*]}; do
-    get_plural $dim
-    dim_plural=$plural
-    local ddim=d_$dim ddims=d_$dim_plural
-    localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
-  done
-
-  if [[ "$localize_dims" == local ]]; then
-    localize_dims=
-  fi
-
-}
-
 validate_dims() {
   begin_function
     local dim
@@ -522,6 +642,13 @@ plant_seed() {
   handle_return
 }
 
+alias switch_context='local leaf_dim_count=${leaf_dim_count:-0} '\
+'branch_dim_count=${branch_dim_count:-0} trunk_dim_count=${trunk_dim_count:-0} '\
+'leaf_dims=( ${leaf_dims[*]:-} ) branch_dims=( ${branch_dims[*]:-} ) '\
+'sub_dims=( ${sub_dims[*]:-} ) props=( ${props[*]:-} );'\
+'if [[ -v localize_dims && "${#localize_dims}" -gt 6 ]]; then eval "$localize_dims"; fi '\
+'&& cell_context_load'
+
 cell_context_load() {
 
   get_short_cell $cell_path
@@ -533,19 +660,12 @@ cell_context_load() {
       fail1
     fi
 
-    last_context_loaded=${last_context_loaded:-}
-    if [[ "$last_context_loaded" != $cell_path ]]; then
+    if [[ "${last_context_loaded:-}" != $cell_path ]]; then
 
       last_context_loaded=$cell_path
       log_debug "Loading context of $short_cell"
 
       setup_cell_path_vars $cell_path || fail
-
-      if [[ -d $dna_path/dim ]]; then
-        cell_is_leaf=f
-      else
-        cell_is_leaf=t
-      fi
 
       init_context || fail
       if [[ $can_create_cyto == t ]]; then
@@ -559,30 +679,39 @@ cell_context_load() {
 
         if [[ ! -e $context_path ]]; then
           make_context || fail
-        fi
-
-        if [[ -e $context_path ]]; then
+        else
           source $context_path || fail
         fi
+
       else # $can_create_cyto == f
         load_context || fail
       fi
 
       setup_dep_defaults || fail
 
+      localize_dims=local
+      for dim in ${trunk_dims[*]} ${sub_dims[*]} ${props[*]}; do
+        get_plural $dim
+        dim_plural=$plural
+        local ddim=d_$dim ddims=d_$dim_plural
+        localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
+      done
+
+      if [[ "$localize_dims" == local ]]; then
+        localize_dims=
+      fi
+
+      if [[ "$leaf_dims" ]]; then
+        cell_is_leaf=t
+      else
+        cell_is_leaf=f
+      fi
+
     fi
 
   end_function
   handle_return
 }
-
-alias switch_context='local leaf_dim_count=${leaf_dim_count:-0} '\
-'branch_dim_count=${branch_dim_count:-0} trunk_dim_count=${trunk_dim_count:-0} '\
-'leaf_dims=( ${leaf_dims[*]:-} ) branch_dims=( ${branch_dims[*]:-} ) '\
-'sub_dims=( ${sub_dims[*]:-} ) props=( ${props[*]:-} ) last_dims_loaded;'\
-'load_dims $cell_path && '\
-'if [[ "${#localize_dims}" -gt 6 ]]; then eval "$localize_dims"; fi '\
-'&& cell_context_load'
 
 setup_dep_defaults() {
   required_freshness=${required_freshness:-${fresh:-${default_freshness:-}}} \
@@ -1355,16 +1484,16 @@ get_job_id() {
 
 execute_command_internal() {
 
-  local logging_to_file=${logging_to_file:-} \
-    omni_log_job_id=${omni_log_job_id:-} \
-    omni_log_fork_id=${omni_log_fork_id:-} \
-    previous_fork_id=${previous_fork_id:-} \
-    log_var_entries_stack \
-    log_var_show_vars_stack \
-
   local log_vars='cell_path' \
     log_show_vars='short_cell current_command' 
   begin_function
+
+    local logging_to_file=${logging_to_file:-} \
+      omni_log_job_id=${omni_log_job_id:-} \
+      omni_log_fork_id=${omni_log_fork_id:-} \
+      previous_fork_id=${previous_fork_id:-} \
+      log_var_entries_stack \
+      log_var_show_vars_stack \
 
     if [[ " ${command_history:-}" == *" $current_command $short_cell "* ]]; then
       log_fatal "Circular dependency found: arrived at $current_command $short_cell a second time."
