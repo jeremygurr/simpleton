@@ -200,19 +200,23 @@ real() {
 # this unlinks a linked file by copying what it links to locally
 unset localize
 localize() {
-  for file in $* ; do
-    dirOfFile=`dirname $file`
-    fileName=`basename $file`
-    builtin cd "$dirOfFile"
-    description=`file $fileName`
-    target=`echo $description | grep "symbolic link" | sed "s/.*symbolic link to \(.*\)/\1/" | sed "s/'//g" | sed "s/\\\`//g"`
-  # echo "Target: $target"
-    if [ ! -z "$target" ]; then
-      rm "$fileName"
-      cp -R -a -p "${target}" "${fileName}"
-    else
-      echo "$file is not a symbolic link."
+  for file; do
+
+    local target=$(realpath $file)
+
+    if [[ ! -e "$target" ]]; then
+      echo "Target of link $file doesn't exist: $target" >&2
+      return 1
     fi
+
+    if [[ "$target" == "$file" ]]; then
+      echo "File $file is not a link" >&2
+      return 1
+    fi
+
+    rm "$file" || return 1
+    cp -R -a -p "$target" "$file" || return 1
+
   done
 }
 
