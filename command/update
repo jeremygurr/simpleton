@@ -477,28 +477,6 @@ update_upstreams() {
   handle_return
 }
 
-# given a cell, find the nearest seed searching it's ancestors
-# returns: seed
-find_seed() {
-  local cell=$1
-  begin_function
-    seed=
-    begin_while [[ ! "$seed" ]]; doo
-      if [[ -d $cell/.dna/sub ]]; then
-        seed=$cell
-      else
-        local parent=${cell%/*}
-        if [[ "${#parent}" -gt 1 && "$parent" != $cell ]]; then
-          cell=$parent
-        else
-          break
-        fi
-      fi
-    end_while
-  end_function
-  handle_return
-}
-
 link_dim_parts() {
   local from_path=$from_path to_path=$to_path
   begin_function
@@ -674,7 +652,9 @@ promote_dep_cell() {
         if [[ ! -d $from ]]; then
           eval "$dep_dim_var=\"$values\""
           log_debug "Creating sub for $from"
-          switch_context_and_create_sub $old_from $from || fail
+          cell_path=$old_from switch_context || fail
+          # recursive
+          cell_path=$old_from create_sub_cell $from || fail
         fi
       else
         log_debug "Did not promote $dep_dim because no value is found for it yet"
@@ -849,7 +829,7 @@ migrate_deps() {
 }
 
 create_sub_branch_or_leaf() {
-  local seed=$seed cell=$cell 
+  local cell=$cell 
   local log_vars=cell log_show_vars=short_cell
   begin_function
     if [[ -d $cell ]]; then
@@ -865,8 +845,6 @@ create_sub_branch_or_leaf() {
     branch_dims+=( ${trunk_dims[$branch_dim_count]} )
     
     local sub_dna_path=$cell/.dna 
-    local sub_var=$sub_dna_path/var \
-      sub_dim=$sub_dna_path/dim 
 
     mkdir $sub_dna_path || fail
     local -r super_dims=( ${leaf_dims[*]} ) || fail
@@ -891,58 +869,37 @@ create_sub_branch_or_leaf() {
   handle_return
 }
 
-create_sub_cell_with_seed() {
-  # seed is allowed to be empty, meaning no seed exists at this location
-  local seed=$1 sub_cell=$2
+create_sub_cell() {
+  local sub_cell=$1
 
-  local log_show_vars='^seed ^sub_cell'
+  local log_show_vars='^sub_cell'
   begin_function
 
-    if [[ "$sub_cell" =~ .dna ]]; then
+    if [[ "$sub_cell" == */.dna* ]]; then
       log_fatal "Internal error: Invalid sub_cell $sub_cell."
       log_fatal "We should not be creating a sub cell inside of a dna folder"
       fail1
     fi
 
-    if [[ ! -d $sub_cell ]]; then
+    local short_cell
+    get_short_cell $sub_cell 
+    log_debug "Creating sub cell $short_cell"
 
-      local short_cell
-      get_short_cell $sub_cell 
-      log_debug "Creating sub cell $short_cell"
-
-      if [[ -d $sub_cell.new ]]; then
-        rm -rf $sub_cell.new || fail
-      fi
-
-      local parent=${sub_cell%/*}
-      if [[ "$parent" == "$sub_cell" ]]; then
-        log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
-        stack_trace
-        fail1
-      fi
-
-      local parent_part=${parent##*/}
-      if [[ "$parent_part" == .dim ]]; then
-        seed=$seed \
-          cell=$sub_cell.new \
-          create_sub_branch_or_leaf || fail
-      else
-        mkdir -p $sub_cell.new || fail
-        seed=${seed:-$parent}
-      fi
-      mv $sub_cell.new $sub_cell || fail
-    
+    if [[ -d $sub_cell.new ]]; then
+      rm -rf $sub_cell.new || fail
     fi
 
-  end_function
-  handle_return
-}
+    local parent=${sub_cell%/*}
+    if [[ "$parent" == "$sub_cell" ]]; then
+      log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
+      stack_trace
+      fail1
+    fi
 
-create_sub_cell() {
-  local sub_cell=$1
-  begin_function
-    find_seed $sub_cell || fail
-    create_sub_cell_with_seed $seed $sub_cell || fail
+    cell=$sub_cell.new \
+    create_sub_branch_or_leaf || fail
+    mv $sub_cell.new $sub_cell || fail
+  
   end_function
   handle_return
 }
@@ -955,11 +912,8 @@ update_member() {
   begin_function
 
     get_sane_value "$member" || fail
-    member_path=$cell_path/.dim/$sane_value
+    member_path=$cell_path/$dim:$sane_value
     if [[ ! -d $member_path ]]; then
-      if [[ ! -d $cell_path/.dim ]]; then
-        mkdir $cell_path/.dim || fail
-      fi
       create_sub_cell $member_path || fail
     fi
     local needs_update=
@@ -1263,18 +1217,6 @@ post_update() {
       rm $running_job_path || fail
     fi
 
-  end_function
-  handle_return
-}
-
-switch_context_and_create_sub() {
-  local parent_cell=$1 sub_cell=$2 cell_path
-  local log_show_vars='^parent_cell ^sub_cell'
-  begin_function_hi
-    cell_path=$parent_cell 
-    switch_context || fail
-    # recursive
-    create_sub_cell $sub_cell || fail
   end_function
   handle_return
 }
