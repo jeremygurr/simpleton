@@ -148,7 +148,7 @@ make_or_load_cyto_raw() {
 make_context_dna_contents() {
   local dna_path=$1
   begin_function
-    local dna_contents=$(find1 $dna_path | sort -g) || fail
+    local dna_contents=$(find1 $dna_path -not -name ".*" | sort -g) || fail
     begin_for dna_full_item in $dna_contents; doo
       last_part=${dna_full_item##*/}
       item_name=${last_part#*([0-9])-}
@@ -489,7 +489,7 @@ get_short_cell() {
   local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string= branch_dims=
   if [[ "$trunk_cell" =~ : ]]; then
     get_branch_dims_from_path $top_cell
-    dim_string="${branch_dims[*]}"
+    dim_string="${branch_members[*]}"
     dim_string=:${dim_string// /\/}
   fi
   if x=${trunk_cell#$PWD/}
@@ -1568,6 +1568,107 @@ get_cell_path() {
   done
 }
 
+# input: 
+#   $1=dim
+#   function=function to execute for each member
+#   fork=whether the process should be forked before executing 
+#     the function. (optional)
+for_each_member() {
+  local dim=$1 \
+    function=$function leave_loop=${leave_loop:-0} \
+    fork=${fork:-t} \
+    par=${par:-t}
+
+  member_count=0
+  local log_vars='fork par' \
+    log_show_vars='dim function'
+  begin_function
+
+    expand_values || fail
+
+    member_count=${#values[*]}
+
+    loop_over_var=values \
+      head="local member=\$value
+        eval \"local d_$dim=\$member\"" \
+      body=$function \
+      tail='
+        if [[ $leave_loop -gt 0 ]]; then
+          break
+        fi
+        ' \
+      parallel_loop || fail
+
+  end_function
+  handle_return
+}
+
+plant_member() {
+  begin_function
+    get_sane_value "$member" || fail
+    member_path=$cell_path/$dim:$sane_value
+    if [[ ! -d $member_path ]]; then
+      mkdir $member_path || fail
+      safe_link $cell_path/.dna $member_path/ || fail
+      if [[ "$member" != "$sane_value" ]]; then
+        echo "$member" >$member_path/.member || fail
+      fi
+      # TODO move output from seed all and member folders
+      begin_for m in all $sane_value; doo
+        
+      end_for
+      if [[ $deep == t ]]; then
+        # how to handle env:all and env:e1
+        plant_seed $from/
+        
+      fi
+    fi
+  end_function
+  handle_return
+}
+
+plant_seed() {
+  local from=$1 to=$2 from contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
+  begin_function
+    if [[ ! -d $to ]]; then
+      if [[ $from == /seed/* && -d $from ]]; then
+        plant_seed ${from%/*} ${to%/*} || fail
+      else
+        log_fatal "Seed doesn't exist for $to"
+        fail1
+      fi
+    else
+      contents=( $(find1 $from | sort) ) || fail
+      local dim_found=
+      begin_for x in ${contents[*]}; doo
+        x_part=${x##*/}
+        if [[ ! -e $to/$x_part ]]; then
+          if [[ -f $x || $x == */.dna ]]; then
+            safe_link $(realpath $x) $to/ || fail
+          elif [[ $x_part == *:* ]]; then
+            local new_dim=${x_part%%:*}
+            if [[ ! "$dim_found" ]]; then
+              dim_found=${x_part%%:*}
+            elif [[ $dim_found != $new_dim ]]; then
+              log_fatal "Seed has two different dims defined, which is not allowed: $dim_found and $new_dim in $from"
+              fail1
+            fi
+          elif [[ -d $x ]]; then
+            mkdir $to/$x_part || fail
+            if [[ $deep == t ]]; then
+              plant_seed $x $to/$x_part || fail
+            fi
+          fi
+        fi
+      end_for
+      if [[ "$dim_found" ]]; then
+        par=f fork=f function=plant_member for_each_member $dim_found || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 execute_command() {
 
   local starting_point=$(realpath $1) current_command=$2 \
@@ -1577,14 +1678,26 @@ execute_command() {
   begin_function_hi
 
     if [[ ! -e "$starting_point" ]]; then
-      log_fatal "Folder doesn't exist: $starting_point"
+      local seed_path=/seed${starting_point#/work}
+      plant_seed $seed_path $starting_point || {
+        log_fatal "Not a cell: $starting_point"
+        fail1
+      }
+    fi
+
+    if [[ $starting_point != /work/* ]]; then
+      log_fatal "You must run this command from within the workspace (any subfolder of /work)"
       fail1
     fi
 
     get_cell_path $starting_point
     if [[ ! "$cell_path" ]]; then
-      log_fatal "Not in a cell: $starting_point"
-      fail1
+      local seed_path=/seed${starting_point#/work}
+      plant_seed $seed_path $starting_point || {
+        log_fatal "Not in a cell: $starting_point"
+        fail1
+      }
+      cell_path=$starting_point
     fi
 
     get_short_cell $cell_path
@@ -1633,16 +1746,6 @@ execute_command() {
         mkdir $log_path || fail
       fi
 
-    fi
-
-    if [[ $cell_path == /seed/* ]]; then
-      case $current_command in
-        edit|dim-*) ;;
-        *)
-          log_fatal "You can't run this command within a seed."
-          fail1
-        ;;
-      esac
     fi
 
     previous_log_pos=$omni_log_pos
@@ -2437,41 +2540,6 @@ expand_values() {
     fi
 
     values=( $new_value_list )
-
-  end_function
-  handle_return
-}
-
-# input: 
-#   $1=dim
-#   function=function to execute for each member
-#   fork=whether the process should be forked before executing 
-#     the function. (optional)
-for_each_member() {
-  local dim=$1 \
-    function=$function leave_loop=${leave_loop:-0} \
-    fork=${fork:-t} \
-    par=${par:-t}
-
-  member_count=0
-  local log_vars='fork par' \
-    log_show_vars='dim function'
-  begin_function
-
-    expand_values || fail
-
-    member_count=${#values[*]}
-
-    loop_over_var=values \
-      head="local member=\$value
-        eval \"local d_$dim=\$member\"" \
-      body=$function \
-      tail='
-        if [[ $leave_loop -gt 0 ]]; then
-          break
-        fi
-        ' \
-      parallel_loop || fail
 
   end_function
   handle_return
@@ -3382,27 +3450,6 @@ up_delegate() {
       safe_link $out_item $cell_path/ || fail
     end_for
 
-  end_function
-  handle_return
-}
-
-plant_seed() {
-  local from=$1 to=$2 from contents x x_part deep=${deep:-t}
-  begin_function
-    contents=( $(find1 $from | sort) ) || fail
-    begin_for x in ${contents[*]}; doo
-      x_part=${x##*/}
-      if [[ ! -e $to/$x_part ]]; then
-        if [[ -f $x || $x == */.dna ]]; then
-          safe_link $(realpath $x) $to/ || fail
-        elif [[ -d $x && $x_part != *:all ]]; then
-          mkdir $to/$x_part || fail
-          if [[ $deep == t ]]; then
-            plant_seed $x $to/$x_part || fail
-          fi
-        fi
-      fi
-    end_for
   end_function
   handle_return
 }
