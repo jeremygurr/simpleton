@@ -19,7 +19,6 @@ handle_command() {
 
   begin_function
 
-    debugger_init || fail
     command="$original_cmd" omni_log_init || fail
 
     local cell_path path_to_commands=$SIMPLETON_REPO/command
@@ -35,13 +34,8 @@ handle_command() {
 
         command=${commands[$i]}
 
-        if [[ "$cell_path" == */.dna/sub/* && $command == update ]]; then
-          log_fatal "Don't run update cell commands within sub cell dna folders. Run in the real cell folders."
-          fail1
-        fi
-
         if [[ $command == */* && -d $command/.dna ]]; then
-          cell_path=$(unrealpath $command/.dna)
+          cell_path=$(unrealpath $command)
           continue
         fi
 
@@ -64,12 +58,12 @@ handle_command() {
               )
           ;;
           clean)
-            get_bottom_cell $cell_path || fail
-            if [[ ! "$bottom_cell" ]]; then
+            get_top_cell $cell_path || fail
+            if [[ ! "$top_cell" ]]; then
               log_fatal "Not a valid cell: $cell_path"
               fail1
             fi
-            local cell_path=$bottom_cell
+            local cell_path=$top_cell
             log_info "Cleaning $cell_path..." 
             local clean_file=$cell_path/.dna/op/clean.bash
             if [[ -f $clean_file ]]; then
@@ -101,9 +95,9 @@ handle_command() {
               show_help_for_command $command
               fail1
             else
-              get_bottom_cell $cell_path || fail
-              if [[ "$bottom_cell" ]]; then
-                cell_path=$bottom_cell
+              get_top_cell $cell_path || fail
+              if [[ "$top_cell" ]]; then
+                cell_path=$top_cell
               fi
               local omni_log_job_id job_id_log=${home_job_path:-$HOME/.simpleton/job-log}
 
@@ -166,11 +160,11 @@ handle_help_command() {
 show_cell_help() {
   begin_function
 
-    get_bottom_cell $cell_path || {
+    get_top_cell $cell_path || {
       log_fatal "No cell found here: $cell_path"
       fail1
       }
-    local cell_path=$bottom_cell
+    local cell_path=$top_cell
     can_create_cyto=f
     switch_context || fail
     if [[ $multi_cell == t ]]; then
@@ -250,9 +244,9 @@ show_dimensions() {
 show_help_for_command() {
   local command=$1
   begin_function
-    get_bottom_cell $cell_path || fail
-    if [[ "$bottom_cell" ]]; then
-      local cell_path=$bottom_cell
+    get_top_cell $cell_path || fail
+    if [[ "$top_cell" ]]; then
+      local cell_path=$top_cell
       switch_context || fail
       [[ $first_command == f ]] && out ''
       out "command: $command"
@@ -308,5 +302,6 @@ show_usage() {
   return 0
 }
 
+debugger_init || exit 1
 handle_command "$@"
 

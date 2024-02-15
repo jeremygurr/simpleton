@@ -37,12 +37,12 @@ export debug_ignore+="
   fork_bg
   fork_fg
   fork_inside
-  get_bottom_cell
-  get_bottom_cell2
   get_cell_path
   get_new_fork_id
   get_new_reply_file
   get_short_cell
+  get_top_cell
+  get_top_cell2
   load_log_vars
   load_log_vars_and_write_to_log
   log_debug
@@ -477,10 +477,13 @@ get_branch_dims_from_path() {
     path=${path%/*}
     if [[ $part == *:* ]]; then
       dim=${part%%:*}
-      member=${part#*:}
       branch_dims+=( $dim )
-      branch_members+=( $member )
-      # maybe lookup non-hashed member value?
+      if [[ -f $path/.dna/member.var ]]; then
+        member=$(<$path/.dna/member.var)
+      else
+        member=${part#*:}
+      fi
+      branch_members+=( "$member" )
     fi
   done
 }
@@ -1603,24 +1606,28 @@ for_each_member() {
   handle_return
 }
 
+# inputs: parent_path seed_path member
 plant_member() {
   begin_function
     get_sane_value "$member" || fail
-    member_path=$cell_path/$dim:$sane_value
+    member_path=$parent_path/$dim:$sane_value
     if [[ ! -d $member_path ]]; then
       mkdir $member_path || fail
-      safe_link $cell_path/.dna $member_path/ || fail
+      safe_link $parent_path/.dna $member_path/ || fail
       if [[ "$member" != "$sane_value" ]]; then
-        echo "$member" >$member_path/.member || fail
+        echo "$member" >$member_path/.dna/member.var || fail
       fi
-      # TODO move output from seed all and member folders
-      begin_for m in all $sane_value; doo
-        
-      end_for
-      if [[ $deep == t ]]; then
-        # how to handle env:all and env:e1
-        plant_seed $from/
-        
+      local from=
+      if [[ -d $seed_path/$m ]]; then
+        from=$seed_path/$m
+      elif [[ -d $seed_path/_other ]]; then
+        from=$seed_path/_other
+      fi
+      if [[ "$from" ]]; then
+        safe_link $from/* $member_path/ || fail
+        if [[ $deep == t ]]; then
+          plant_seed $from $member_path || fail
+        fi
       fi
     fi
   end_function
@@ -1661,8 +1668,12 @@ plant_seed() {
           fi
         fi
       end_for
-      if [[ "$dim_found" ]]; then
-        par=f fork=f function=plant_member for_each_member $dim_found || fail
+      if [[ "$dim_found" && $plant_branches == t ]]; then
+        parent_path=$to \
+        seed_path=$from \
+        par=f fork=f \
+        function=plant_member \
+        for_each_member $dim_found || fail
       fi
     fi
   end_function
@@ -1685,7 +1696,7 @@ execute_command() {
       }
     fi
 
-    if [[ $starting_point != /work/* ]]; then
+    if [[ $starting_point != /work* ]]; then
       log_fatal "You must run this command from within the workspace (any subfolder of /work)"
       fail1
     fi
@@ -2253,29 +2264,9 @@ get_top_cell2() {
   if [[ -e $subject/.dna ]]; then
     top_cell=$subject
   fi
-  if [[ ${#parent} -gt 1 ]]; then
+  if [[ "$parent" == /*/* ]]; then
     # recursive
     get_top_cell2 $parent || return 1
-  fi
-  return 0
-}
-
-# will set bottom_cell, which will be empty if no cell cells are found
-get_bottom_cell() {
-  local subject=$1
-  bottom_cell=
-  get_bottom_cell2 $subject || return 1
-  return 0
-}
-
-get_bottom_cell2() {
-  local subject=$1
-  local parent=${subject%/*}
-  if [[ -e $subject/.dna ]]; then
-    bottom_cell=$subject
-  elif [[ ${#parent} -gt 1 ]]; then
-    # recursive
-    get_bottom_cell2 $parent || return 1
   fi
   return 0
 }
