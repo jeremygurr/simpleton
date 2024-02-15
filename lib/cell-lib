@@ -144,7 +144,8 @@ make_or_load_cyto_raw() {
   handle_return
 }
 
-make_context_dna_contents() {
+# must set prefix= before calling this
+make_or_load_dna_contents() {
   local dna_path=$1
   begin_function
     local dna_contents=$(find1 $dna_path -not -name ".*" | sort -g) || fail
@@ -178,7 +179,7 @@ make_context_dna_contents() {
         if [[ $item_name == *_ ]]; then
           prefix+=$item_name
         fi
-        make_context_dna_contents $dna_full_item || fail
+        make_or_load_dna_contents $dna_full_item || fail
       fi
     end_for
   end_function
@@ -410,7 +411,7 @@ make_context() {
 
     if [[ -d $dna_path ]]; then
       local prefix=
-      make_context_dna_contents $dna_path || fail
+      make_or_load_dna_contents $dna_path || fail
     elif [[ -f $dna_path ]]; then
       cat $dna_path >>$context_path || fail
     else
@@ -438,30 +439,16 @@ load_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function_hi
     local dna_path=$cell_path/.dna \
+      cyto_path=$cell_path/.cyto \
       dna_folder dna_full_folder \
       make_or_load=load
 
-    local dna_folders=$(find1 $dna_path | sort -g) || fail
-    if [[ -d $dna_path/dim/_all ]]; then
-      dna_folders+="$NL$(find1 $dna_path/dim/_all | sort -g)" || fail
+    if [[ -f "$cyto_path/context" ]]; then
+      source $cyto_path/context || fail
+    else
+      local prefix=
+      make_or_load_dna_contents $dna_path || fail
     fi
-    begin_for dna_full_folder in $dna_folders; doo
-      if [[ ! -d $dna_full_folder ]]; then
-        log_warn "Unrecognized dna folder: $dna_full_folder. Ignoring"
-        continue
-      fi
-      dna_folder=${dna_full_folder##*/}
-      case $dna_folder in
-        fun)
-          make_or_load_cyto_functions || fail
-          ;;
-        var)
-          make_or_load_cyto_vars || fail
-          ;;
-        *)
-          ;;
-      esac
-    end_for
 
   end_function
   handle_return
@@ -1659,6 +1646,7 @@ plant_seed() {
         fi
       end_for
       if [[ "$dim_found" && $plant_branches == t ]]; then
+        load_context $to || fail
         parent_path=$to \
         seed_path=$from \
         par=f fork=f \
@@ -1694,11 +1682,6 @@ execute_command() {
     get_bottom_cell $starting_point
     cell_path=$bottom_cell
     if [[ ! "$cell_path" ]]; then
-      local seed_path=/seed${starting_point#/work}
-      plant_seed $seed_path $starting_point || {
-        log_fatal "Not in a cell: $starting_point"
-        fail1
-      }
       cell_path=$starting_point
     fi
 
@@ -2512,10 +2495,11 @@ expand_values() {
 
     local problem= failed=f
     if [[ ! "${values:-}" ]]; then
-      expand_values_plural || failed=t
-    else
       expand_values_single || failed=t
+    else
+      expand_values_plural || failed=t
     fi
+
     if [[ "$problem" ]]; then
       log_fatal "$problem"
       fail1
@@ -2536,45 +2520,42 @@ expand_values() {
 }
 
 expand_values_single() {
+  begin_function
 
-begin_function
-
-  if [[ "${#values[*]}" -gt 1 ]]; then
-    log_fatal "Too many values for a singular dim $dim." \
-      "Use plural dim $dim_plural if you intend to have multiple values."
-    fail1
-  fi
-
-  if function_exists ${dim}_expand; then
-    if [[ "$values" == $empty_member ]]; then
-      values=
-    fi
-    local problem=
-    value=$values ${dim}_expand || fail
-    if [[ "$problem" ]]; then
-      log_fatal "$problem"
-      fail1
-    fi
-    if [[ ! "${values:-}" ]]; then
-      log_fatal "Dim $dim has invalid value '$value'"
-      fail1
-    fi
     if [[ "${#values[*]}" -gt 1 ]]; then
       log_fatal "Too many values for a singular dim $dim." \
         "Use plural dim $dim_plural if you intend to have multiple values."
       fail1
     fi
-  fi
 
-  new_value_list="$values"
+    if function_exists ${dim}_expand; then
+      if [[ "$values" == $empty_member ]]; then
+        values=
+      fi
+      local problem=
+      value=$values ${dim}_expand || fail
+      if [[ "$problem" ]]; then
+        log_fatal "$problem"
+        fail1
+      fi
+      if [[ ! "${values:-}" ]]; then
+        log_fatal "Dim $dim has invalid value '$value'"
+        fail1
+      fi
+      if [[ "${#values[*]}" -gt 1 ]]; then
+        log_fatal "Too many values for a singular dim $dim." \
+          "Use plural dim $dim_plural if you intend to have multiple values."
+        fail1
+      fi
+    fi
 
-end_function
-handle_return
+    new_value_list="$values"
 
+  end_function
+  handle_return
 }
 
 expand_values_plural() {
-
   begin_function
 
     values=( ${!ddims:-} )
@@ -2627,7 +2608,6 @@ expand_values_plural() {
 
   end_function
   handle_return
-
 }
 
 get_sane_value() {
