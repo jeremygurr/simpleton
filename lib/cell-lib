@@ -1682,26 +1682,41 @@ for_each_member() {
 # inputs: parent_path seed_path member
 plant_member() {
   begin_function
+    local deep=${deep:-f}
     get_sane_value "$member" || fail
     member_path=$parent_path/$dim:$sane_value
     if [[ ! -d $member_path ]]; then
-      mkdir $member_path || fail
-      safe_link $parent_path/.dna $member_path/ || fail
-      if [[ "$member" != "$sane_value" ]]; then
-        echo "$member" >$member_path/.dna/member.var || fail
+
+      local new_path=$member_path.new
+
+      if [[ -d $new_path ]]; then
+        rm -rf $new_path || fail
       fi
+
+      mkdir $new_path || fail
+      safe_link $parent_path/.dna $new_path/ || fail
+      if [[ "$member" != "$sane_value" ]]; then
+        echo "$member" >$new_path/.dna/member.var || fail
+      fi
+
       local from=
+
       if [[ -d $seed_path/$m ]]; then
         from=$seed_path/$m
       elif [[ -d $seed_path/_other ]]; then
         from=$seed_path/_other
       fi
+
       if [[ "$from" ]]; then
-        safe_link $from/* $member_path/ || fail
+        safe_link $from/* $new_path/ || fail
         if [[ $deep == t ]]; then
-          plant_seed $from $member_path || fail
+          # recursive
+          plant_seed $from $new_path || fail
         fi
       fi
+
+      mv $new_path $member_path || fail
+
     fi
   end_function
   handle_return
