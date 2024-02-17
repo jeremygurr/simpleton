@@ -251,14 +251,16 @@ load_dims() {
   handle_return
 }
 
-make_context_dims() {
+make_or_load_context_dims() {
   begin_function
     load_dims || fail
-    echo "
+    if [[ $make_or_load == make ]]; then
+      echo "
 trunk_dims=( ${trunk_dims[*]} )
 branch_dims=( ${branch_dims[*]} )
 leaf_dims=( ${leaf_dims[*]} )
 " >>$context_path || fail
+    fi
   end_function
   handle_return
 }
@@ -266,13 +268,16 @@ leaf_dims=( ${leaf_dims[*]} )
 make_context_expand_find_members() {
   begin_function
 
-    local branch all_found=f
+    local branch other_found=f
     local member_paths=$(find1 $seed_path -name "$dim:*" -type d | sort -g) || fail
 
     begin_for branch in $member_paths; doo
       m=${branch#*:}
-      if [[ $m == all ]]; then
-        all_found=t
+      if [[ $m == _all ]]; then
+        log_fatal "Should not have an _all as a dim member: $branch"
+        fail1
+      elif [[ $m == _other ]]; then
+        other_found=t
       else
         local value_path=$branch/.dna/member_value.var
         if [[ -e $value_path ]]; then
@@ -282,7 +287,7 @@ make_context_expand_find_members() {
       fi
     end_for
 
-    if [[ "$member_paths" && $all_found == f ]]; then
+    if [[ "$member_paths" && $other_found == f ]]; then
       has_explicit_member_list=t
     fi
 
@@ -315,8 +320,8 @@ make_context_expand_handle_default() {
 make_context_expand_members_unknown() {
   begin_function
     fun+="
-    all)
-      problem=\"'all' member not available for this dim: $dim\"
+    _all)
+      problem=\"'_all' member not available for this dim: $dim\"
     ;;
     *)
       values=( \$value )
@@ -342,9 +347,14 @@ make_context_expand_members_known() {
     fi
 
     local members_with_pipes=${members_with_pipes// /\|}
+    local all_pattern=all
+
+    if [[ ! " ${members[*]} " =~ \ all\  ]]; then
+      all_pattern="all|_all"
+    fi
 
     fun+="
-    all)
+    $all_pattern)
       values=( $quoted_members )
     ;;
     $members_with_pipes)
@@ -359,7 +369,7 @@ make_context_expand_members_known() {
   handle_return
 }
 
-make_context_expand() {
+make_or_load_context_expand() {
   begin_function
     local dim=$leaf_dims 
 
@@ -389,7 +399,11 @@ make_context_expand() {
         make_context_expand_members_known || fail
       fi
 
-      echo "$fun" >>$context_path || fail
+      if [[ $make_or_load == make ]]; then
+        echo "$fun" >>$context_path || fail
+      else
+        eval "$fun" || fail
+      fi
     fi
 
   end_function
@@ -415,16 +429,16 @@ make_context() {
     elif [[ -f $dna_path ]]; then
       cat $dna_path >>$context_path || fail
     else
-      log_vars=dna_path log_fatal "dna path not found"
+      log_vars=dna_path log_fatal "dna not found"
       fail1
     fi
 
     source $context_path || fail
     if [[ ! "${trunk_dims:-}" ]]; then
-      make_context_dims || fail
+      make_or_load_context_dims || fail
     fi
 
-    make_context_expand || fail
+    make_or_load_context_expand || fail
 
     fd_unlock
 
@@ -445,10 +459,21 @@ load_context() {
 
     if [[ -f "$cyto_path/context" ]]; then
       source $cyto_path/context || fail
-    else
+    elif [[ -d $dna_path ]]; then
       local prefix=
       make_or_load_dna_contents $dna_path || fail
+    elif [[ -f $dna_path ]]; then
+      source $dna_path || fail
+    else
+      log_vars=dna_path log_fatal "dna not found"
+      fail1
     fi
+
+    if [[ ! "${trunk_dims:-}" ]]; then
+      make_or_load_context_dims || fail
+    fi
+
+    make_or_load_context_expand || fail
 
   end_function
   handle_return
@@ -474,17 +499,22 @@ get_branch_dims_from_path() {
   done
 }
 
+get_trunk_cell() {
+  trunk_cell=$1
+  while [[ $trunk_cell == */*:* ]]; do
+    trunk_cell=${trunk_cell%/*}
+  done
+}
+
 get_short_cell() {
-  local x y top_cell=${top_cell:-} trunk_cell=$1 dim_string= branch_dims=
-  if [[ "$trunk_cell" =~ : ]]; then
-    get_branch_dims_from_path $top_cell
+  local x y cell_path=$1 dim_string= branch_dims=
+  if [[ "$cell_path" =~ : ]]; then
+    get_branch_dims_from_path $cell_path
     dim_string="${branch_members[*]}"
     dim_string=:${dim_string// /\/}
   fi
-  if x=${trunk_cell#$PWD/}
-     [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
-    trunk_cell=$x
-  elif y=${trunk_cell%/*/*/*} 
+  get_trunk_cell $cell_path
+  if   y=${trunk_cell%/*/*/*} 
        x=${trunk_cell#$y/}
        [[ $x != $trunk_cell && ${#x} -gt 0 ]]; then
     trunk_cell=$x
@@ -547,63 +577,6 @@ setup_cell_path_vars() {
       unset replay_path
     fi
 
-  end_function
-  handle_return
-}
-
-get_trunk_cell() {
-  local cell=$1
-  local parent=${cell%/*}
-  local parent_part=${parent##*/}
-  if [[ $parent_part == .dim ]]; then
-    local grandparent=${parent%/*}
-    if [[ "$grandparent" != "$parent" ]]; then
-      # recursive
-      get_trunk_cell $grandparent || return 1
-    else
-      return 1
-    fi
-  elif [[ ! -e $cell/.dna ]]; then
-    if [[ "$parent" != "$cell" ]]; then
-      # recursive
-      get_trunk_cell $parent || return 1
-    else
-      return 1
-    fi
-  else
-    trunk_cell=$cell
-  fi
-  return 0
-}
-
-validate_dims() {
-  begin_function
-    local dim
-    begin_for dim in ${leaf_dims[*]} ${sub_dims[*]} ${props[*]}; doo
-
-      local plural value failed=f problem=
-      get_plural $dim
-      eval "value=\${d_$plural:-\${$plural:-\${d_$dim:-\${$dim:-}}}}"
-
-      if function_exists ${dim}_expand; then
-        log_fatal "Missing function ${dim}_expand which should be in .dna folder"
-        fail1
-      fi
-
-      ${dim}_expand || {
-        log_fatal "${dim}_expand failed to execute: "
-        if [[ "$problem" ]]; then
-          log_fatal "$problem"
-        fi
-        fail1
-      }
-
-      if [[ "$problem" ]]; then
-        log_fatal "$problem"
-        fail1
-      fi
-
-    end_for
   end_function
   handle_return
 }
@@ -916,6 +889,128 @@ for_each_leaf_flat() {
       fi
       
     end_loop
+
+  end_function
+  handle_return
+}
+
+expand_values_single() {
+  begin_function
+
+    if [[ "${#values[*]}" -gt 1 ]]; then
+      log_fatal "Too many values for a singular dim $dim." \
+        "Use plural dim $dims if you intend to have multiple values."
+      fail1
+    fi
+
+    if function_exists ${dim}_expand; then
+      if [[ "$values" == $empty_member ]]; then
+        values=
+      fi
+      local problem=
+      value=$values ${dim}_expand || fail
+      if [[ "$problem" ]]; then
+        log_fatal "$problem"
+        fail1
+      fi
+      if [[ ! "${values:-}" ]]; then
+        log_fatal "Dim $dim has invalid value '$value'"
+        fail1
+      fi
+      if [[ "${#values[*]}" -gt 1 ]]; then
+        log_fatal "Too many values for a singular dim $dim." \
+          "Use plural dim $dims if you intend to have multiple values."
+        fail1
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
+expand_values_plural() {
+  begin_function
+
+    local new_values=()
+
+    if [[ ! "$values" ]]; then
+
+      if function_exists ${dim}_expand; then
+        value= ${dim}_expand || fail
+        if [[ "$problem" ]]; then
+          log_fatal "$problem"
+          fail1
+        fi
+        new_values=( "${values[@]}" )
+      else
+        log_fatal "Missing value for dimension: $RESET$dim"
+        fail1
+      fi
+
+    else
+
+      if function_exists ${dim}_expand; then
+        begin_for value in "${values[@]}"; doo
+          if [[ "$value" == $empty_member ]]; then
+            value=
+          fi
+          value=$value ${dim}_expand || fail
+          if [[ "$problem" ]]; then
+            log_fatal "$problem"
+            fail1
+          fi
+          if [[ ! "${values:-}" ]]; then
+            values=( $empty_member )
+          fi
+          new_values+=( "${values[@]}" )
+        end_for
+      else
+        new_values=( "${values[@]}" )
+      fi
+
+    fi
+
+    # not removing duplicates here because of potential performance issues
+    # better to just let needs_update analysis take care of avoiding extra work
+    values=( "${new_values[@]}" )
+
+  end_function
+  handle_return
+}
+
+# input: dim
+# output: values 
+expand_values() {
+  begin_function
+
+    local problem= \
+          failed=f \
+          plural \
+          dims \
+          value
+
+    get_plural $dim
+    local dims=$plural
+    eval "values=\${d_$dim:-\${$dim:-}}"
+
+    if [[ "$values" ]]; then
+      expand_values_single || failed=t
+    else
+      eval "values=\${d_$dims:-\${$dims:-}}"
+      expand_values_plural || failed=t
+    fi
+
+    if [[ $failed == t ]]; then
+      if [[ ! "$values" ]]; then
+        log_fatal "Missing required dimension: $dim"
+        fail1
+      else
+        log_fatal "Error expanding values for dimension: $dim"
+        fail1
+      fi
+    fi
+
+    branch_members=( "${values[@]}" )
 
   end_function
   handle_return
@@ -1491,6 +1586,10 @@ execute_command_internal() {
           log_fatal "Context failed to load for $cell_path"
           fail1
         }
+        if [[ "${leaf_dims:-}" ]]; then
+          dim=$leaf_dims \
+          expand_values || fail
+        fi
       ;;
     esac
 
@@ -2479,135 +2578,6 @@ decrypt_file_with_shared_key() {
   end_function
   handle_return
 
-}
-
-# input: dim
-# output: values 
-expand_values() {
-  begin_function
-
-    local dim_plural=${dim}s 
-    local ddims=d_$dim_plural \
-          ddim=d_$dim \
-          new_value_list= new_values= value
-
-    values=( ${!ddim:-} )
-
-    local problem= failed=f
-    if [[ ! "${values:-}" ]]; then
-      expand_values_single || failed=t
-    else
-      expand_values_plural || failed=t
-    fi
-
-    if [[ "$problem" ]]; then
-      log_fatal "$problem"
-      fail1
-    elif [[ $failed == t ]]; then
-      if [[ ! "$values" ]]; then
-        log_fatal "Missing required dimension: $dim"
-        fail1
-      else
-        log_fatal "Error expanding values for dimension: $dim"
-        fail1
-      fi
-    fi
-
-    values=( $new_value_list )
-
-  end_function
-  handle_return
-}
-
-expand_values_single() {
-  begin_function
-
-    if [[ "${#values[*]}" -gt 1 ]]; then
-      log_fatal "Too many values for a singular dim $dim." \
-        "Use plural dim $dim_plural if you intend to have multiple values."
-      fail1
-    fi
-
-    if function_exists ${dim}_expand; then
-      if [[ "$values" == $empty_member ]]; then
-        values=
-      fi
-      local problem=
-      value=$values ${dim}_expand || fail
-      if [[ "$problem" ]]; then
-        log_fatal "$problem"
-        fail1
-      fi
-      if [[ ! "${values:-}" ]]; then
-        log_fatal "Dim $dim has invalid value '$value'"
-        fail1
-      fi
-      if [[ "${#values[*]}" -gt 1 ]]; then
-        log_fatal "Too many values for a singular dim $dim." \
-          "Use plural dim $dim_plural if you intend to have multiple values."
-        fail1
-      fi
-    fi
-
-    new_value_list="$values"
-
-  end_function
-  handle_return
-}
-
-expand_values_plural() {
-  begin_function
-
-    values=( ${!ddims:-} )
-
-    if [[ ! "${values:-}" ]]; then
-
-      if function_exists ${dim}_expand; then
-        value= ${dim}_expand || fail
-        if [[ "$problem" ]]; then
-          log_fatal "$problem"
-          fail1
-        fi
-        new_values=( "${values[@]}" )
-      else
-        log_fatal "Missing value for dimension: $RESET$dim"
-        fail1
-      fi
-
-    else
-
-      if function_exists ${dim}_expand; then
-        begin_for value in "${values[@]}"; doo
-          if [[ "$value" == $empty_member ]]; then
-            value=
-          fi
-          value=$value ${dim}_expand || fail
-          if [[ "$problem" ]]; then
-            log_fatal "$problem"
-            fail1
-          fi
-          if [[ ! "${values:-}" ]]; then
-            log_fatal "Dim $dim_plural has invalid value '$value'"
-            fail1
-          fi
-          new_values+=( "${values[@]}" )
-        end_for
-      else
-        new_values=( "${values[@]}" )
-      fi
-
-    fi
-
-    # remove duplicate values
-    local new_value
-    for new_value in "${new_values[@]}"; do
-      if [[ ! $new_value_list =~ \ $new_value\  ]]; then
-        new_value_list+=" $new_value "
-      fi
-    done
-
-  end_function
-  handle_return
 }
 
 get_sane_value() {
