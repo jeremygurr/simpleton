@@ -258,6 +258,7 @@ make_or_load_context_dims() {
       echo "
 trunk_dims=( ${trunk_dims[*]} )
 branch_dims=( ${branch_dims[*]} )
+branch_members=( "${branch_members[@]}" )
 leaf_dims=( ${leaf_dims[*]} )
 " >>$context_path || fail
     fi
@@ -482,13 +483,15 @@ load_context() {
 get_branch_dims_from_path() {
   local path=$1 part dim member
   branch_dims=() \
-  branch_members=()
+  branch_members=() \
+  branch_hashes=()
   while [[ $path == *:* ]]; do
     part=${path##*/}
     path=${path%/*}
     if [[ $part == *:* ]]; then
       dim=${part%%:*}
       branch_dims+=( $dim )
+      branch_hashes+=( $member )
       if [[ -f $path/.member ]]; then
         member=$(<$path/.member)
       else
@@ -529,6 +532,42 @@ get_short_cell() {
   short_cell="$trunk_cell$dim_string"
 }
 
+find_seed_path() {
+  local work_path=$1 d=0 s= i h dim dim_count
+  begin_function
+    seed_path=
+
+    s=/seed${work_path#/work}
+    begin_while [[ ! -d $s && $s == *:* ]]; doo
+      s=${s%/*}
+    end_while
+
+    if [[ ! -d $s ]]; then
+      log_fatal "Couldn't find seed for $work_path"
+      fail1
+    fi
+
+    dim_count=${#branch_dims[*]}
+    begin_for (( i=0; i < dim_count; i++ )); doo
+      h=${branch_hashes[$i]}
+      dim=${branch_dims[$i]}
+      if [[ -d $s/$dim:$h ]]; then
+        s+=/$dim:$h
+      elif [[ -d $s/$dim:_other ]]; then
+        s+=/$dim:_other
+      else
+        log_fatal "Missing seed for $work_path dim $dim"
+        fail1
+      fi
+    end_for
+
+  end_function
+  if [[ "$s" && -d $s ]]; then
+    seed_path=s
+  fi
+  handle_return
+}
+
 # input must be a folder
 setup_cell_path_vars() {
   cell_path=$1
@@ -559,7 +598,6 @@ setup_cell_path_vars() {
     op_path=$cyto_path/op \
     out_path=$cell_path \
     req_path=$cyto_path/req \
-    seed_path=/seed${cell_path#/work} \
     source_path=$cyto_path/source \
     status_path=$cyto_path/status \
     tmp_path=$cyto_path/tmp \
@@ -1719,7 +1757,23 @@ plant_member() {
 }
 
 plant_seed() {
-  local from=$1 to=$2 from contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
+  local seed_path to=$1 deep=${deep:-t} plant_branches=${plant_branches:-f}
+  begin_function
+
+    find_seed_path $to || fail
+    if [[ ! "$seed_path" ]]; then
+      log_fatal "No seed is associated with this path: $starting_point"
+      fail1
+    fi
+
+    plant_seed_internal $seed_path $to || fail
+
+  end_function
+  handle_return
+}
+
+plant_seed_internal() {
+  local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
   begin_function
 
     if [[ ! -d $to ]]; then
@@ -1751,7 +1805,7 @@ plant_seed() {
           elif [[ -d $x ]]; then
             mkdir $to/$x_part || fail
             if [[ $deep == t ]]; then
-              plant_seed $x $to/$x_part || fail
+              plant_seed_internal $x $to/$x_part || fail
             fi
           fi
         fi
@@ -1779,12 +1833,15 @@ execute_command() {
   local log_show_vars='^starting_point current_command' 
   begin_function_hi
 
+    local seed_path=
+
     if [[ ! -e "$starting_point" ]]; then
-      local seed_path=/seed${starting_point#/work}
-      plant_seed $seed_path $starting_point || {
+      plant_seed $starting_point || {
         log_fatal "Not a cell: $starting_point"
         fail1
       }
+    else
+      find_seed_path $starting_point || fail
     fi
 
     if [[ $starting_point != /work* ]]; then
