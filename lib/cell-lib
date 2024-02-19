@@ -1707,11 +1707,8 @@ plant_member() {
       fi
 
       if [[ "$from" ]]; then
-        safe_link $from/.dna $from/* $new_path/ || fail
-        if [[ $deep == t ]]; then
-          # recursive
-          plant_seed $from $new_path || fail
-        fi
+        # recursive
+        plant_seed $from $new_path || fail
       fi
 
       mv $new_path $member_path || fail
@@ -1724,20 +1721,24 @@ plant_member() {
 plant_seed() {
   local from=$1 to=$2 from contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
   begin_function
+
     if [[ ! -d $to ]]; then
+
       if [[ $from == /seed/* && -d $from ]]; then
         plant_seed ${from%/*} ${to%/*} || fail
       else
         log_fatal "Seed doesn't exist for $to"
         fail1
       fi
+
     else
-      contents=( $(find1 $from -not -name ".*" | sort) ) || fail
+
+      contents=( $(find1 $from | sort) ) || fail
       local dim_found=
       begin_for x in ${contents[*]}; doo
         x_part=${x##*/}
         if [[ ! -e $to/$x_part ]]; then
-          if [[ -f $x ]]; then
+          if [[ -f $x || $x_part == .dna ]]; then
             safe_link $(realpath $x) $to/ || fail
           elif [[ $x_part == *:* ]]; then
             local new_dim=${x_part%%:*}
@@ -1749,15 +1750,13 @@ plant_seed() {
             fi
           elif [[ -d $x ]]; then
             mkdir $to/$x_part || fail
-            if [[ -e $x/.dna ]]; then
-              safe_link $(realpath $x/.dna) $to/$x_part/ || fail
-            fi
             if [[ $deep == t ]]; then
               plant_seed $x $to/$x_part || fail
             fi
           fi
         fi
       end_for
+
       if [[ "$dim_found" && $plant_branches == t ]]; then
         load_context $to || fail
         parent_path=$to \
@@ -1766,6 +1765,7 @@ plant_seed() {
         function=plant_member \
         for_each_member $dim_found || fail
       fi
+
     fi
   end_function
   handle_return
