@@ -435,12 +435,14 @@ YELLOW="\[\033[0;33m\]"
 LIGHT_YELLOW="\[\033[1;33m\]"
 
 get_cell_location_string() {
-  local p=
+  local p= close=f
+
   if [[ $PWD == /work/* ]]; then
     p+="[plant"
-
+    close=t
   elif [[ $PWD == /seed/* ]]; then
     p+="[seed"
+    close=t
   fi
 
   if [[ $PWD == */.cyto || $PWD == */.cyto/* ]]; then
@@ -468,7 +470,10 @@ get_cell_location_string() {
     p+=" down"
   fi
 
-  p+="] "
+  if [[ $close == t ]]; then
+    p+="] "
+  fi
+
   cell_location_string=$p
 }
 
@@ -498,14 +503,16 @@ relink() {
     return 1
   fi
 
-  local planted_to=${to//.dna\/sub\//}
-  local planted_from=${from//.dna\/sub\//}
+  local planted_to=${to#/seed}
+  planted_to=/work${planted_to#/work}
+  local planted_from=${from#/seed}
+  planted_from=/seed${planted_to#/work}
 
-  local link target planted_from=${from//.dna\/sub\//}
+  local link target 
   local links=( $(find "$start_at" -mindepth 1 -type l) ) || return 1
   for link in "${links[@]}"; do
     if [[ ! -e $link ]]; then
-      #echo "Broken link: $link -> $(readlink $link) : Ignoring" >&2
+      echo "Broken link: $link -> $(readlink $link) : Ignoring" >&2
       continue
     fi
     target=$(realpath $link)
