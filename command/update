@@ -4,24 +4,23 @@ get_upstream_needs_update() {
 
   local cell_path=$1
   local short_cell \
-    cyto_up_path=$cell_path/.cyto/up \
-    dna_up_path=$cell_path/.dna/up 
+    up_path=$cell_path/.cyto/up
   get_short_cell $cell_path
 
   local log_show_vars=short_cell log_vars=cell_path
   begin_function_hi
-    if [[ "${dna_up_path:-}" && -d "$dna_up_path" ]] \
+    if [[ "${up_path:-}" && -d "$up_path" ]] \
        && (( check_upstream_depth > 0 )); then
       #log_debug "Checking upstream of $short_cell"
       local -r upstream_cells=( 
-        $(find1 $dna_up_path -not -name '.*' | sort -g) 
+        $(find1 $up_path -not -name '.*' | sort -g) 
         ) || fail
       local up up_part
       begin_for up in ${upstream_cells[*]}; doo
 
         up_part=${up##*/}
         log_debug "Checking $up_part"
-        up_cyto=$cyto_up_path/$up_part
+        up_cyto=$up_path/$up_part
         if [[ ! -e $up_cyto/chosen ]]; then
           log_debug "Cyto up is missing, needs update"
           needs_update=t
@@ -85,7 +84,7 @@ get_needs_update() {
     switch_context || fail
 
     local status_path=$cell_path/.cyto/status \
-      cyto_up_path=$cell_path/.cyto/up \
+      up_path=$cell_path/.cyto/up \
       log_message="No update needed" \
       check_upstream_depth=${check_upstream_depth:-1}
 
@@ -136,7 +135,7 @@ get_needs_update() {
          && [[ $needs_update == t ]]
     then
       log_message="Needs update because at least one leaf cell is out of date"
-    elif [[ -v dna_up_path ]] \
+    elif [[ -v up_path ]] \
          && { get_upstream_needs_update $cell_path || fail; } \
          && [[ $needs_update == t ]]
     then
@@ -243,7 +242,7 @@ create_downstream_links() {
 }
 
 # inputs: 
-#   up_dna
+#   up_cyto
 prep_upstream() {
   # down_fresh may be used by prep script to propagate freshness requirements to upstream
   down_fresh=$required_freshness
@@ -254,12 +253,12 @@ prep_upstream() {
   #   exist in branch_dims
   fresh=$down_fresh required_freshness= default_freshness= extra_dims=
 
-  local log_show_vars=^up_dna
+  local log_show_vars=^up_cyto
   begin_function_hi
     unset prep
-    if [[ -f $up_dna/prep.bash ]]; then
-      log_debug "Executing upstream prep: $up_dna/prep.bash"
-      source $up_dna/prep.bash || fail
+    if [[ -f $up_cyto/prep.bash ]]; then
+      log_debug "Executing upstream prep: $up_cyto/prep.bash"
+      source $up_cyto/prep.bash || fail
       setup_dep_defaults || fail
     fi
   end_function
@@ -271,14 +270,14 @@ update_upstream_prep() {
   local log_show_vars="^up_cyto"
   begin_function_hi
 
-    if [[ ! -d $cyto_up_path ]]; then
-      mkdir $cyto_up_path || fail
+    if [[ ! -d $up_path ]]; then
+      mkdir $up_path || fail
     fi
 
     # This may be overridden by upstream prep file to customize how failure of this upstream is handled
     handle_upstream_result() {
       if [[ $update_successful == f ]]; then
-        log_error "Failed to update upstream cell $up_dna"
+        log_error "Failed to update upstream cell $up_cyto"
       fi
     }
 
@@ -310,13 +309,13 @@ update_upstream_prep() {
 update_upstream_choose() {
   begin_function_hi
 
-    if [[ -d $up_dna/cell ]]; then
-      chosen=$up_dna/cell
-    elif [[ -d $up_dna/choices ]]; then
-      local choices=$(find1 $up_dna/choices -not -name ".*" | sort -g) || fail
+    if [[ -d $up_cyto/cell ]]; then
+      chosen=$up_cyto/cell
+    elif [[ -d $up_cyto/choices ]]; then
+      local choices=$(find1 $up_cyto/choices -not -name ".*" | sort -g) || fail
 
       if [[ ! "$choices" ]]; then
-        log_fatal "No choices defined for upstream $up_dna"
+        log_fatal "No choices defined for upstream $up_cyto"
         fail1
       fi
 
@@ -339,7 +338,7 @@ update_upstream_choose() {
         needs_update=t
       fi
     else
-      log_fatal "Missing either cell or choices folder for dependency: $up_dna"
+      log_fatal "Missing either cell or choices folder for dependency: $up_cyto"
       fail1
     fi
 
@@ -387,18 +386,18 @@ update_upstream_get_locks() {
 update_upstream() {
 
   local required_freshness=$required_freshness fresh=$fresh \
-    default_freshness=$default_freshness up_dna=$upstream
+    default_freshness=$default_freshness 
 
-  if [[ -e $up_dna/.dna ]]; then
+  if [[ -e $upstream/.dna ]]; then
     log_fatal "update_upstream upstream field should be a path to a upstream spec, not a cell"
     fail1
   fi
 
-  local log_show_vars=^up_dna 
+  local log_show_vars=^upstream 
   begin_function_hi
 
-    local up_part=${up_dna##*/}
-    local up_cyto=$cyto_up_path/$up_part needs_update=
+    local up_part=${upstream##*/}
+    local up_cyto=$up_path/$up_part needs_update=
 
     update_upstream_prep || fail
 
@@ -452,11 +451,11 @@ update_upstreams() {
     update_successful=t
     touch $status_path/deps-up-to-date || fail
 
-    if [[ -d "${dna_up_path:-}" ]]; then
+    if [[ -d "${up_path:-}" ]]; then
 
       local previous_upstream_changed=f upstream upstreams
 
-      upstreams=$(find1 $dna_up_path -not -name '.*' | sort -g) || fail
+      upstreams=$(find1 $up_path -not -name '.*' | sort -g) || fail
       begin_for upstream in $upstreams; doo
         update_upstream || fail
         if [[ $update_successful == f ]]; then

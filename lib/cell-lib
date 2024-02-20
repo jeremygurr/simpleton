@@ -622,23 +622,13 @@ setup_cell_path_vars() {
     cyto_path=$cell_path/.cyto \
 
     context_path=$cyto_path/context \
-    cyto_up_path=$cyto_path/up \
-    dim_path=$dna_path/dim \
-    dim_all_path=$dna_path/dim/_all \
-    dim_leaf_path=$dna_path/dim/_leaf \
-    dna_down_path=$dna_path/down \
-    dna_up_path=$dna_path/up \
     down_path=$cyto_path/down \
-    fun_path=$dna_path/fun \
-    key_path=$dna_path/key \
     lock_path=$cyto_path/context \
-    op_path=$cyto_path/op \
     out_path=$cell_path \
     req_path=$cyto_path/req \
-    source_path=$cyto_path/source \
     status_path=$cyto_path/status \
     tmp_path=$cyto_path/tmp \
-    up_path=$cyto_up_path \
+    up_path=$cyto_path/up \
 
     if [[ "${log_path:-}" ]]; then
       background_log=$log_path/background
@@ -662,6 +652,75 @@ alias switch_context='local leaf_dim_count=${leaf_dim_count:-0} '\
 'sub_dims=( ${sub_dims[*]:-} ) props=( ${props[*]:-} );'\
 'if [[ -v localize_dims && "${#localize_dims}" -gt 6 ]]; then eval "$localize_dims"; fi '\
 '&& cell_context_load'
+
+init_context() {
+  # required_freshness:
+  #   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
+  #   1w means refresh if it's older than a week.
+  # shuffle_chance:
+  #   chance out of 1000 of not following the computed strategy order
+  # min_pause:
+  #   number of ms to wait between cycles
+  #   this number doubles each time there is nothing to do, until it reaches max_pause
+  # reuse_existing_out:
+  #   if set to t: 
+  #   new output folder won't be created when updating, but the existing one will be used
+  #   should set to true when creating a new output folder would be expensive
+  #   these cells must detect for themselves whether a change has happened in an
+  #     update and set something_changed=t accordingly. 
+
+  cell_expiration= \
+  cell_is_external=f \
+  cell_is_persistent=f \
+  current_pause=250 \
+  default_freshness= \
+  default_strategies=crl \
+  localize_dims=local \
+  lock_timeout=2 \
+  max_pause=60000 \
+  min_pause=250 \
+  out_file= \
+  post_validate=f \
+  pre_validate=f \
+  refresh_less_than=${refresh_less_than:-1} \
+  retry_delay=1 \
+  retry_max=1 \
+  retry_scale=2 \
+  reuse_existing_out=f \
+  shuffle_chance=100 \
+  up= \
+  update_cost=1 \
+
+  unset \
+    check_op \
+    update_op \
+
+  return 0
+}
+
+make_cyto_up() {
+  begin_function
+    mkdir $up_path || fail
+    local up_name
+    begin_for up_name in ${up[*]}; doo
+      local dep_path=$up_path/$up_name
+      mkdir $dep_path || fail
+      if [[ -v up_${up_name}_cell ]]; then
+        local -n from_var=up_${up_name}_cell
+        local from=${!from_var}
+        safe_link $from $dep_path/cell || fail
+      elif [[ -v up_${up_name}_choices ]]; then
+        local from
+        local -n choices=up_${up_name}_choices
+        mkdir $dep_path/choices || fail
+        begin_for from in ${choices[*]}; doo
+          safe_link $from $dep_path/choices/ || fail
+        end_for
+      fi
+    end_for
+  end_function
+  handle_return
+}
 
 cell_context_load() {
 
@@ -696,6 +755,10 @@ cell_context_load() {
         fi
 
         source $context_path || fail
+
+        if [[ "$up" && ! -d $up_path ]]; then
+          make_cyto_up || fail
+        fi
 
       else # $can_create_cyto == f
         load_context || fail
@@ -2466,50 +2529,6 @@ get_bottom_cell() {
 }
 
 setup_context_defaults() {
-  return 0
-}
-
-init_context() {
-  # required_freshness:
-  #   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
-  #   1w means refresh if it's older than a week.
-  # shuffle_chance:
-  #   chance out of 1000 of not following the computed strategy order
-  # min_pause:
-  #   number of ms to wait between cycles
-  #   this number doubles each time there is nothing to do, until it reaches max_pause
-  # reuse_existing_out:
-  #   if set to t: 
-  #   new output folder won't be created when updating, but the existing one will be used
-  #   should set to true when creating a new output folder would be expensive
-  #   these cells must detect for themselves whether a change has happened in an
-  #     update and set something_changed=t accordingly. 
-
-  cell_expiration= \
-  cell_is_external=f \
-  cell_is_persistent=f \
-  current_pause=250 \
-  default_freshness= \
-  default_strategies=crl \
-  localize_dims=local \
-  lock_timeout=2 \
-  max_pause=60000 \
-  min_pause=250 \
-  out_file= \
-  post_validate=f \
-  pre_validate=f \
-  refresh_less_than=${refresh_less_than:-1} \
-  retry_delay=1 \
-  retry_max=1 \
-  retry_scale=2 \
-  reuse_existing_out=f \
-  shuffle_chance=100 \
-  update_cost=1 \
-
-  unset \
-    check_op \
-    update_op \
-
   return 0
 }
 
