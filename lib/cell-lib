@@ -239,14 +239,6 @@ load_dims() {
       log_debug "Leaf dims found: ${leaf_dims[*]}"
     fi
 
-    if [[ "${sub_dims:-}" ]]; then
-      log_debug "Sub dims found: ${sub_dims[*]}"
-    fi
-
-    if [[ "${props:-}" ]]; then
-      log_debug "Props found: ${props[*]}"
-    fi
-
   end_function
   handle_return
 }
@@ -540,6 +532,7 @@ find_seed_path() {
     s=/seed${work_path#/work}
     begin_while [[ ! -d $s && $s == *:* ]]; doo
       s=${s%/*}
+      (( d-- ))
     end_while
 
     if [[ ! -d $s ]]; then
@@ -549,6 +542,12 @@ find_seed_path() {
 
     dim_count=${#branch_dims[*]}
     begin_for (( i=0; i < dim_count; i++ )); doo
+
+      if (( d == 0 )); then
+        log_fatal "Misaligned seed: $s"
+        fail1
+      fi
+
       h=${branch_hashes[$i]}
       dim=${branch_dims[$i]}
       if [[ -d $s/$dim:$h ]]; then
@@ -559,12 +558,17 @@ find_seed_path() {
         log_fatal "Missing seed for $work_path dim $dim"
         fail1
       fi
+
+      (( d++ ))
+
     end_for
 
   end_function
+
   if [[ "$s" && -d $s ]]; then
-    seed_path=s
+    seed_path=$s
   fi
+
   handle_return
 }
 
@@ -1833,7 +1837,8 @@ execute_command() {
   local log_show_vars='^starting_point current_command' 
   begin_function_hi
 
-    local seed_path=
+    local seed_path= branch_dims branch_members branch_hashes
+    get_branch_dims_from_path $starting_point || fail
 
     if [[ ! -e "$starting_point" ]]; then
       plant_seed $starting_point || {
