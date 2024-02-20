@@ -186,7 +186,7 @@ make_or_load_dna_contents() {
   handle_return
 }
 
-load_dims() {
+load_dims_from_path() {
   local cell_path=${1:-$cell_path}
   begin_function
 
@@ -218,8 +218,25 @@ load_dims() {
       c=${c%/*}
     end_while
 
+    trunk_dim_count=${#trunk_dims[*]}
+    branch_dim_count=${#branch_dims[*]}
+
+    if [[ "${branch_dims:-}" ]]; then
+      log_debug "Branch dims found: ${branch_dims[*]}"
+    fi
+
+  end_function
+  handle_return
+}
+
+load_dims_from_seed() {
+  local seed_path=${1:-$seed_path}
+  begin_function
+
+    leaf_dims=()
+
     local branch c=$seed_path d
-    begin_while true; doo
+    begin_loop
       branch=$(find1 $c -name "*:*" -type d | head -n 1) || fail
       if [[ "$branch" ]]; then
         d=${branch%%:*}
@@ -230,20 +247,27 @@ load_dims() {
       else
         break
       fi
-    end_while
+    end_loop
 
     trunk_dim_count=${#trunk_dims[*]}
     leaf_dim_count=${#leaf_dims[*]}
-    branch_dim_count=${#branch_dims[*]}
-
-    if [[ "${branch_dims:-}" ]]; then
-      log_debug "Branch dims found: ${branch_dims[*]}"
-    fi
 
     if [[ "${leaf_dims:-}" ]]; then
       log_debug "Leaf dims found: ${leaf_dims[*]}"
     fi
 
+  end_function
+  handle_return
+}
+
+load_dims() {
+  local cell_path=${1:-$cell_path}
+  begin_function
+    load_dims_from_path $cell_path || fail
+    if [[ ! "${seed_path:-}" ]]; then
+      find_seed_path $cell_path || fail
+    fi
+    load_dims_from_seed $seed_path || fail
   end_function
   handle_return
 }
@@ -1821,7 +1845,7 @@ execute_command() {
   begin_function_hi
 
     local seed_path= branch_dims branch_members branch_hashes
-    load_dims $starting_point || fail
+    load_dims_from_path $starting_point || fail
 
     if [[ ! -e "$starting_point" ]]; then
       plant_seed $starting_point || {
@@ -1831,6 +1855,8 @@ execute_command() {
     else
       find_seed_path $starting_point || fail
     fi
+
+    load_dims_from_seed $seed_path || fail
 
     if [[ $starting_point != /work* ]]; then
       log_fatal "You must run this command from within the workspace (any subfolder of /work)"
