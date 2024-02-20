@@ -233,6 +233,11 @@ load_dims_from_seed() {
   local seed_path=${1:-$seed_path}
   begin_function
 
+    if [[ ! "$seed_path" || ! -d $seed_path ]]; then
+      log_fatal "Invalid seed path: $seed_path"
+      fail1
+    fi
+
     leaf_dims=()
 
     local branch c=$seed_path d
@@ -1757,7 +1762,7 @@ plant_member() {
 
       if [[ "$from" ]]; then
         # recursive
-        plant_seed $from $new_path || fail
+        plant_seed_internal $from $new_path || fail
       fi
 
       mv $new_path $member_path || fail
@@ -1767,6 +1772,7 @@ plant_member() {
   handle_return
 }
 
+# inputs: $1  work path to the cell
 plant_seed() {
   local seed_path to=$1 deep=${deep:-t} plant_branches=${plant_branches:-f}
   begin_function
@@ -1790,7 +1796,7 @@ plant_seed_internal() {
     if [[ ! -d $to ]]; then
 
       if [[ $from == /seed/* && -d $from ]]; then
-        plant_seed ${from%/*} ${to%/*} || fail
+        plant_seed_internal ${from%/*} ${to%/*} || fail
       else
         log_fatal "Seed doesn't exist for $to"
         fail1
@@ -1844,20 +1850,6 @@ execute_command() {
   local log_show_vars='^starting_point current_command' 
   begin_function_hi
 
-    local seed_path= branch_dims branch_members branch_hashes
-    load_dims_from_path $starting_point || fail
-
-    if [[ ! -e "$starting_point" ]]; then
-      plant_seed $starting_point || {
-        log_fatal "Not a cell: $starting_point"
-        fail1
-      }
-    else
-      find_seed_path $starting_point || fail
-    fi
-
-    load_dims_from_seed $seed_path || fail
-
     if [[ $starting_point != /work* ]]; then
       log_fatal "You must run this command from within the workspace (any subfolder of /work)"
       fail1
@@ -1868,6 +1860,20 @@ execute_command() {
     if [[ ! "$cell_path" ]]; then
       cell_path=$starting_point
     fi
+
+    local seed_path= branch_dims branch_members branch_hashes
+    load_dims_from_path $cell_path || fail
+
+    if [[ ! -e "$cell_path" ]]; then
+      plant_seed $cell_path || {
+        log_fatal "Not a cell: $cell_path"
+        fail1
+      }
+    else
+      find_seed_path $cell_path || fail
+    fi
+
+    load_dims_from_seed $seed_path || fail
 
     get_short_cell $cell_path
 
