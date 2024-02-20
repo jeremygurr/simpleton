@@ -198,7 +198,7 @@ load_dims_from_path() {
 
     local c=$cell_path p d m
     begin_while [[ $c == *:* ]]; doo
-      p=${c%%*/}
+      p=${c##*/}
       if [[ $p == *:* ]]; then
 
         d=${p%%:*}
@@ -398,7 +398,7 @@ make_context_expand_members_known() {
 
 make_or_load_context_expand() {
   begin_function
-    local dim=$leaf_dims 
+    local dim=${leaf_dims:-}
 
     if [[ ! -d $seed_path ]]; then
       log_fatal "No configuration in seed for dim $dim at $seed_path"
@@ -461,11 +461,14 @@ make_context() {
     fi
 
     source $context_path || fail
-    if [[ ! "${trunk_dims:-}" ]]; then
+
+    if (( trunk_dim_count > 0 )); then
       make_or_load_context_dims || fail
     fi
 
-    make_or_load_context_expand || fail
+    if (( leaf_dim_count > 0 )); then
+      make_or_load_context_expand || fail
+    fi
 
     fd_unlock
 
@@ -496,11 +499,13 @@ load_context() {
       fail1
     fi
 
-    if [[ ! "${trunk_dims:-}" ]]; then
+    if (( trunk_dim_count > 0 )); then
       make_or_load_context_dims || fail
     fi
 
-    make_or_load_context_expand || fail
+    if (( leaf_dim_count > 0 )); then
+      make_or_load_context_expand || fail
+    fi
 
   end_function
   handle_return
@@ -516,7 +521,7 @@ get_trunk_cell() {
 get_short_cell() {
   local x y cell_path=$1 dim_string= branch_dims=
   if [[ "$cell_path" =~ : ]]; then
-    load_dims || fail
+    load_dims_from_path $cell_path || return 1
     dim_string="${branch_members[*]}"
     dim_string=:${dim_string// /\/}
   fi
