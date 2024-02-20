@@ -544,6 +544,16 @@ relink() {
   return 0
 }
 
+cell() { 
+  command cell "$@"
+  local rc=$? p=$PWD
+  while [[ ! -d $p ]]; do 
+    p=${p%/*}
+  done
+  builtin cd $p 
+  return $rc
+}
+
 prompt_error_string() {
   local rc=$?
   (( rc > 0 )) && echo -n "err=$rc "
