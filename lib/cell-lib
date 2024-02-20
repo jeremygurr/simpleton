@@ -187,28 +187,33 @@ make_or_load_dna_contents() {
 }
 
 load_dims() {
+  local cell_path=${1:-$cell_path}
   begin_function
 
     trunk_dims=() \
     branch_dims=() \
-    branch_mems=() \
+    branch_members=() \
+    branch_hashes=() \
     leaf_dims=() \
 
     local c=$cell_path p d m
     begin_while [[ $c == *:* ]]; doo
       p=${c%%*/}
       if [[ $p == *:* ]]; then
+
         d=${p%%:*}
         trunk_dims=( $d ${trunk_dims[*]} )
         branch_dims=( $d ${branch_dims[*]} )
 
+        m=${p#*:}
+        branch_hashes=( $m ${branch_hashes[*]} )
+
         local member_var_path=$c/.member
         if [[ -f $member_var_path ]]; then
           load_var $member_var_path m
-        else
-          m=${p#*:}
         fi
-        branch_mems=( $m ${branch_mems[*]} )
+        branch_members=( $m ${branch_members[*]} )
+
       fi
       c=${c%/*}
     end_while
@@ -472,28 +477,6 @@ load_context() {
   handle_return
 }
 
-get_branch_dims_from_path() {
-  local path=$1 part dim member
-  branch_dims=() \
-  branch_members=() \
-  branch_hashes=()
-  while [[ $path == *:* ]]; do
-    part=${path##*/}
-    path=${path%/*}
-    if [[ $part == *:* ]]; then
-      dim=${part%%:*}
-      branch_dims+=( $dim )
-      branch_hashes+=( $member )
-      if [[ -f $path/.member ]]; then
-        member=$(<$path/.member)
-      else
-        member=${part#*:}
-      fi
-      branch_members+=( "$member" )
-    fi
-  done
-}
-
 get_trunk_cell() {
   trunk_cell=$1
   while [[ $trunk_cell == */*:* ]]; do
@@ -504,7 +487,7 @@ get_trunk_cell() {
 get_short_cell() {
   local x y cell_path=$1 dim_string= branch_dims=
   if [[ "$cell_path" =~ : ]]; then
-    get_branch_dims_from_path $cell_path
+    load_dims || fail
     dim_string="${branch_members[*]}"
     dim_string=:${dim_string// /\/}
   fi
@@ -1838,7 +1821,7 @@ execute_command() {
   begin_function_hi
 
     local seed_path= branch_dims branch_members branch_hashes
-    get_branch_dims_from_path $starting_point || fail
+    load_dims $starting_point || fail
 
     if [[ ! -e "$starting_point" ]]; then
       plant_seed $starting_point || {
