@@ -325,9 +325,19 @@ export SHELL="/bin/bash"
 export LS_OPTIONS='--color=auto'
 export EDITOR=vim
 
+find1() {
+  if [[ ! -d "${1:-}" ]]; then
+    echo "find1: directory missing: ${1:-}" >&2
+    return 1
+  fi
+  local path=$1; shift
+  find -L "$path" -mindepth 1 -maxdepth 1 "$@"
+  return 0
+}
+
 cd_to_leaf() {
   while true; do
-    local members=( $(find1 -type d -name "*:*" | sort -g) ) || return 1
+    local members=( $(find1 . -type d -name "*:*" | sort -g) ) || return 1
     if [[ "$members" ]]; then
       cd $members || return 1
     else
@@ -453,7 +463,7 @@ get_cell_location_string() {
     p+=" dna"
   fi
 
-  local sub_branches=( $(find1 -name "*:*") ) || return 1
+  local sub_branches=( $(find1 . -name "*:*") ) || return 1
   if [[ $PWD =~ : ]]; then
     if [[ "$sub_branches" ]]; then
       p+=" branch"
