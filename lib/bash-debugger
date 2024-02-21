@@ -85,7 +85,7 @@ debug_display_source() {
   if (( debug_list_stack_pos > 0 )); then
     debug_line_num=${saved_bash_lineno[$((debug_list_stack_pos-1))]}
   else
-    debug_line_num=$debug_saved_lineno
+    debug_line_num=$saved_lineno
   fi
   debug_current_function=${saved_funcname[$debug_list_stack_pos]:-}
 
@@ -203,27 +203,34 @@ debug_source_update() {
 }
 
 debug_trap() {
+  set +xevT +o pipefail
+  debug_rematch=( "${BASH_REMATCH[@]}" )
+  local saved_bash_source=( "${BASH_SOURCE[@]:1}" ) \
+    saved_bash_lineno=( "${BASH_LINENO[@]:1}" ) \
+    saved_funcname=( "${FUNCNAME[@]:1}" ) \
+    saved_lineno
+
+  (( saved_lineno = debug_trap_first_line - 1 )) 
+
+  tracing_depth=0
+  local debug_r=-1
+
+  if (( ${trace_debugger:-0} > 0 )); then 
+    set -x
+    BASH_XTRACEFD=2
+    (( trace_debugger-- ))
+  fi
+
+  if [[ $debug_debug == t ]]; then
+    log_debug_debug "debug_id=$debug_id_current ${saved_bash_source[0]:-no_source}:$saved_lineno/${saved_bash_lineno[0]:-no_line} ${saved_funcname[0]:-no_func} ${BASH_COMMAND}" 
+  fi
 
   local debug_path_to_source_file \
-    raw_debug_path_to_source_file=$1 \
-    debug_line_num=$2 \
-    debug_current_function=$3 \
-    debug_command=$4 \
-    debug_current_depth=${#FUNCNAME[*]}
-
-  # side_log "debug_trap()
-  # FUNCNAME[0]=${FUNCNAME[0]:-}
-  # FUNCNAME[1]=${FUNCNAME[1]:-}
-  # FUNCNAME[2]=${FUNCNAME[2]:-}
-  # BASH_LINENO[0]=${BASH_LINENO[0]:-}
-  # BASH_LINENO[1]=${BASH_LINENO[1]:-}
-  # LINENO[0]=${LINENO[0]:-}
-  # LINENO[1]=${LINENO[1]:-}
-  # debug_path_to_source_file=$debug_path_to_source_file
-  # debug_line_num=$debug_line_num
-  # debug_current_function=$debug_current_function
-  # debug_command=$debug_command
-  # debug_current_depth=$debug_current_depth"
+    raw_debug_path_to_source_file="${saved_bash_source[0]:-none}" \
+    debug_line_num=$saved_lineno \
+    debug_current_function=${saved_funcname[0]:-none} \
+    debug_command=${BASH_COMMAND} \
+    debug_current_depth=${#saved_funcname[*]}
 
   if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
@@ -236,7 +243,7 @@ debug_trap() {
 
   if [[ "$debug_var" ]]; then
     set +u
-    echo "${CYAN}inside debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err
+    echo "${CYAN}debug_var: $debug_var=${!debug_var}${RESET}" >&$fd_original_err
     set -u
   fi
 
@@ -411,10 +418,6 @@ debug_trap() {
     fi
   fi
 
-  debug_return=${debug_return:-f}
-
-  local debug_r=-1
-
   debug_last_location="$raw_debug_path_to_source_file $debug_line_num"
 
   local backlog=
@@ -437,8 +440,6 @@ debug_trap() {
       cat "$debug_out_path" >&$fd_original_err
       [[ "${debug_expansion_pid:-}" ]] && kill $debug_expansion_pid &>/dev/null
       debug_expansion_pid=
-      (( tracing_depth-- ))
-      (( tracing_depth < 0 )) && tracing_depth=0
       BASH_XTRACEFD=$debug_original_tracefd
 
       if [[ $debug_prev_command =~ for\ (.*)\ in\  || $debug_prev_command =~ case\ \$(.*)\ in\  ]]; then
@@ -909,34 +910,9 @@ debug_trap() {
           rm "$debug_out_path"
         fi
         force_save=t debug_save_state
-        # if [[ $- != *i* ]]; then
-          # current shell is not interactive, so exit normally
-          debug_exit=t
-          debug_save_state
-          exit 0
-        # else
-        #   # current shell is interactive, which means this function was 
-        #   #   executed inline, so we don't want to exit or it will close
-        #   #   the entire interactive shell
-        #   [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
-        #   set -T
-        #   trap '
-        #     log "DEBUG ${FUNCNAME[0]:-} ${FUNCNAME[1]:-}"
-        #     # if (( ${#FUNCNAME[*]} > 0 )); then
-        #     #   set_return_code 1
-        #     #   log "Skipping: ${BASH_COMMAND}"
-        #     # else
-        #     #   log "Executing: ${BASH_COMMAND}"
-        #     # fi
-        #     ' DEBUG
-        #   # trap - DEBUG
-        #   trap '
-        #     log "RETURN $BASH_COMMAND"
-        #     ' RETURN
-        #   debug_r=1
-        #   debug_return=t
-        #   debug_save_state
-        # fi
+        debug_exit=t
+        debug_save_state
+        exit 0
         ;;
       R)
         echo "# Rewinding..." >&$fd_original_err
@@ -1005,11 +981,11 @@ debug_trap() {
         ;;
       x)
         echo >&$fd_original_err
-        local debug_var
-        read -e -p "Hex Display: " debug_var <&$fd_original_in >&$fd_original_err
+        local v
+        read -e -p "Hex Display: " v <&$fd_original_in >&$fd_original_err
         set +u
-        if [[ "$debug_var" ]]; then
-          eval 'echo -n "$'${debug_var#\$}'" | xxd' >&$fd_original_err || true
+        if [[ "$v" ]]; then
+          eval 'echo -n "$'${v#\$}'" | xxd' >&$fd_original_err || true
         fi
         set -u
         no_follow_once=t
@@ -1244,13 +1220,31 @@ debug_trap() {
     BASH_XTRACEFD=$fd_bash_trace
   fi
 
+  [[ $debug_exit == t ]] && exit 0
+  debug_tracing=f
+  if [[ $debug_expansion -gt 0 
+        && -n "${debug_expansion_pid:-}" \
+        && ${no_trace_depth:-0} -le 0 \
+     ]]; then
+    if [[ $debug_expansion == 1 \
+          && " $debug_ignore " != *" $debug_prev_command "* \
+          || $debug_expansion -gt 1 ]]; then
+      debug_tracing=t
+    fi
+  fi
+
+  [[ $debug_subshell == t ]] && set -T
+
+  if [[ $debug_saved_shell_options_short == *e* ]]; then
+    set -e
+  fi
+
+  BASH_REMATCH=( "${debug_rematch[@]}" )
   return $debug_r
 }
 
 set_return_code() {
-  if [[ $debug_tracing == t ]]; then
-    set -x
-  fi
+  [[ $debug_tracing == t ]] && set -x
   return $1
 }
 
@@ -1414,7 +1408,6 @@ debug_start() {
       debug_search_old=${debug_search_old:-} \
       debug_prev_source_file=${debug_prev_source_file:-none} \
       debug_quick_function=${debug_quick_function:-} \
-      debug_return=${debug_return:-f} \
       debug_rewind=${debug_rewind:-f} \
       debug_saved_params=${debug_saved_params:-} \
       debug_saved_shell_options=${debug_saved_shell_options:-} \
@@ -1446,65 +1439,10 @@ debug_start() {
     trap '
       debug_trap_first_line=${LINENO:-0} 
       debug_saved_shell_options_short=$-
-      set +x
       debug_saved_params=( "$@" )
-      (( debug_saved_lineno = debug_trap_first_line - 1 )) || true
-      saved_bash_source=( "${BASH_SOURCE[@]}" )
-      saved_bash_lineno=( "${BASH_LINENO[@]}" )
-      saved_funcname=( "${FUNCNAME[@]}" )
-      set +evT +o pipefail
-      [[ "${trace_debugger:-0}" -gt 0 ]] && { set -x; BASH_XTRACEFD=2; (( trace_debugger-- )); }
-      if [[ $debug_return == t ]]; then
-        debug_rc=1
-      else
-        debug_rematch=( "${BASH_REMATCH[@]}" )
-        if [[ "${FUNCNAME:-}" ]]; then 
-          debug_depth=${#FUNCNAME[*]}
-        else
-          debug_depth=0
-        fi
-        if [[ "$debug_var" ]]; then
-          set +u; echo "${CYAN}before debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
-        fi
-        [[ $debug_debug == t ]] && log_debug_debug "debug_id=$debug_id_current ${BASH_SOURCE[0]:-no_source}:$((debug_trap_first_line-1))/${BASH_LINENO[0]:-no_line} ${FUNCNAME[0]:-no_func} ${BASH_COMMAND}" 
-        debug_trap "${BASH_SOURCE[0]:-none}" "$debug_saved_lineno" "${FUNCNAME[0]:-none}" "${BASH_COMMAND}" "$@" && debug_rc=0 || debug_rc=$? 
-        if [[ "$debug_var" ]]; then
-          set +u; echo "${CYAN}after debug_trap: $debug_var=${!debug_var}${RESET}" >&$fd_original_err; set -u
-        fi
-        [[ $debug_rewind == t ]] && continue
-        [[ $debug_exit == t ]] && exit 0
-        debug_tracing=f
-        if [[ $debug_expansion -gt 0 
-              && -n "${debug_expansion_pid:-}" \
-              && ${no_trace_depth:-0} -le 0 \
-           ]]; then
-          if [[ $debug_expansion == 1 \
-                && " $debug_ignore " != *" $debug_prev_command "* \
-                || $debug_expansion -gt 1 ]]; then
-            debug_tracing=t
-          fi
-        fi
-        [[ $debug_subshell == t ]] && set -T
-        BASH_REMATCH=( "${debug_rematch[@]}" )
-        set +e # so returning 1 does not cause failure
-        if [[ $debug_return == t ]]; then
-          # log "debug_return == t at end of DEBUG trap"
-          debug_tracing=f
-          set +euExvm
-          # trap - DEBUG ERR EXIT &>/dev/null
-          return $debug_rc &>/dev/null
-        fi
-      fi
-
-      #   does not seem to work:
-      # if [[ $debug_saved_shell_options_short =~ x ]]; then
-      #   set -x
-      # fi
-
-      if [[ $debug_saved_shell_options_short =~ e ]]; then
-        set -e
-      fi
-      BASH_REMATCH=( "${debug_rematch[@]}" )
+      debug_trap
+      debug_rc=$?
+      [[ $debug_rewind == t ]] && continue
       set_return_code $debug_rc
       ' DEBUG
   else
@@ -1513,13 +1451,13 @@ debug_start() {
 }
 
 debug() {
-local function_to_debug=$*
-if [[ "$function_to_debug" ]]; then
-  debug_start
-  $function_to_debug
-else
-  debug_start
-fi
+  local function_to_debug=$*
+  if [[ "$function_to_debug" ]]; then
+    debug_start
+    $function_to_debug
+  else
+    debug_start
+  fi
 }
 
 debug_shell() {
