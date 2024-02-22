@@ -302,6 +302,7 @@ debug_inner() {
   debug_immediate=f
 
   local debug_c debug_array no_follow_once=f
+  debug_r=-1
   while [[ $debug_r == -1 ]]; do
 
     # echo >&$fd_original_err
@@ -713,7 +714,7 @@ debug_inner() {
         ;;
       r)
         echo "# Show raw call stack" >&$fd_original_err
-        start_frame=2 stack_trace
+        start_frame=3 stack_trace
         no_follow_once=t
         ;;
       s)
@@ -1011,7 +1012,7 @@ debug_trap() {
   (( saved_lineno = debug_trap_first_line - 1 )) 
 
   tracing_depth=0
-  local debug_r=-1
+  local debug_r=0
 
   if (( ${trace_debugger:-0} > 0 )); then 
     set -x
@@ -1041,7 +1042,10 @@ debug_trap() {
 
   if [[ "$debug_var" ]]; then
     set +u
-    echo "${CYAN}debug_var: $debug_var=${!debug_var}${RESET}" >&$fd_original_err
+    local v
+    for v in ${debug_var}; do
+      echo "${CYAN}debug_var: $v=${!v}${RESET}" >&$fd_original_err
+    done
     set -u
   fi
 
@@ -1077,12 +1081,6 @@ debug_trap() {
       fixed_command=${fixed_command//\*\*BS\*\*/\\}
       set +u
       eval "expanded_command=\"$fixed_command\"" &>/dev/null || true
-      # || {
-      #   fatal "Something is wrong with the debugger"
-      #   fatal "fixed_command=$fixed_command"
-      #   stack_trace
-      #   return 1
-      # }
       set -u
     fi
   fi
@@ -1446,6 +1444,7 @@ debug_start() {
       debug_trap
       debug_rc=$?
       [[ $debug_rewind == t ]] && continue
+      log_debug_debug "debug_rc=$debug_rc"
       set_return_code $debug_rc
       ' DEBUG
   else
