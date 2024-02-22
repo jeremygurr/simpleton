@@ -150,7 +150,6 @@ debug_prev_command='${debug_prev_command//\'/\'\"\'\"\'}'
 debug_prev_function='$debug_prev_function'
 debug_prev_line='$debug_prev_line'
 debug_prev_source_file='$debug_prev_source_file'
-debug_return='$debug_return'
 debug_search='$debug_search'
 debug_search_deep='$debug_search_deep'
 debug_search_old='$debug_search_old'
@@ -202,215 +201,7 @@ debug_source_update() {
   fi
 }
 
-debug_trap() {
-  set +xevT +o pipefail
-  debug_rematch=( "${BASH_REMATCH[@]}" )
-  local saved_bash_source=( "${BASH_SOURCE[@]:1}" ) \
-    saved_bash_lineno=( "${BASH_LINENO[@]:1}" ) \
-    saved_funcname=( "${FUNCNAME[@]:1}" ) \
-    saved_lineno
-
-  (( saved_lineno = debug_trap_first_line - 1 )) 
-
-  tracing_depth=0
-  local debug_r=-1
-
-  if (( ${trace_debugger:-0} > 0 )); then 
-    set -x
-    BASH_XTRACEFD=2
-    (( trace_debugger-- ))
-  fi
-
-  if [[ $debug_debug == t ]]; then
-    log_debug_debug "debug_id=$debug_id_current ${saved_bash_source[0]:-no_source}:$saved_lineno/${saved_bash_lineno[0]:-no_line} ${saved_funcname[0]:-no_func} ${BASH_COMMAND}" 
-  fi
-
-  local debug_path_to_source_file \
-    raw_debug_path_to_source_file="${saved_bash_source[0]:-none}" \
-    debug_line_num=$saved_lineno \
-    debug_current_function=${saved_funcname[0]:-none} \
-    debug_command=${BASH_COMMAND} \
-    debug_current_depth=${#saved_funcname[*]}
-
-  if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
-    return 0
-  fi
-
-  debug_load_state || return 1
-
-  [[ $debug_exit == t ]] && exit 1
-
-  if [[ "$debug_var" ]]; then
-    set +u
-    echo "${CYAN}debug_var: $debug_var=${!debug_var}${RESET}" >&$fd_original_err
-    set -u
-  fi
-
-  local IFS=$'\n'$'\t'" " \
-    debug_full_path=${debug_full_path:-f} \
-    debug_source_file \
-    raw_debug_path_to_source_file
-
-  debug_rewind=f
-
-  debug_source_update
-
-  local line_part=$debug_line file_part=
-  if [[ "$debug_line" ]]; then
-    if [[ $debug_line == *:* ]]; then
-      line_part=${debug_line##*:}
-      file_part=${debug_line%:*}
-    fi
-  fi
-
-  local expanded_command= fixed_command=
-  if [[ "$debug_search" ]]; then
-    if [ "$debug_expanded_search" == t ]; then
-      fixed_command=${debug_command}
-      fixed_command=${fixed_command//\\/**BS**}
-      fixed_command=${fixed_command//\\\$/\\\\\$}
-      # temporarily hide this so we can keep $(( but transform $(
-      fixed_command=${fixed_command//\$((/{{{}
-      fixed_command=${fixed_command//\$(/\\\$(}
-      # restore {{{ to $((
-      fixed_command=${fixed_command//{{{/\$((}
-      fixed_command=${fixed_command//\"/\\\"}
-      fixed_command=${fixed_command//\*\*BS\*\*/\\}
-      set +u
-      eval "expanded_command=\"$fixed_command\"" &>/dev/null || true
-      # || {
-      #   fatal "Something is wrong with the debugger"
-      #   fatal "fixed_command=$fixed_command"
-      #   stack_trace
-      #   return 1
-      # }
-      set -u
-    fi
-  fi
-
-  local ok_to_debug=f
-
-  if [[ $debug_immediate == t ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_immediate${RESET}" >&$fd_original_err
-    ok_to_debug=t
-    debug_immediate=f
-
-  elif [[ -n "$debug_line" \
-          && -z "$file_part" \
-          && "$debug_line_num" -eq "$line_part" \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_line${RESET}" >&$fd_original_err
-    ok_to_debug=t
-    debug_line_old=$debug_line
-    debug_line=
-
-  elif [[ -n "$debug_line" \
-          && -n "$file_part" \
-          && ( \
-             "$debug_line_num" -eq "$line_part" \
-             && "$debug_source_file" == "$file_part" \
-             ) \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_line${RESET}" >&$fd_original_err
-    ok_to_debug=t
-    debug_line_old=$debug_line
-    debug_line=
-
-  elif [[ $debug_stepping == t \
-          && $debug_current_depth -le $debug_max_depth \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_stepping${RESET}" >&$fd_original_err
-    debug_stepping=f
-    debug_max_depth=$debug_current_depth
-    ok_to_debug=t
-
-  elif [[ "$debug_condition" ]]; then
-    local condition=$debug_condition
-    if [[ "$condition" != \[* && "$condition" != \(* ]]; then
-      condition="[[ $condition ]]"
-    fi
-    condition+=" && ok_to_debug=t"
-    eval "$condition"
-    if [[ $ok_to_debug == t ]]; then
-      debug_condition=
-    fi
-
-  elif [[ "$debug_function" \
-          && $debug_function == $debug_current_function \
-          || "$debug_search" \
-          && $debug_search == $debug_current_function \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_function${RESET}" >&$fd_original_err
-    if [[ "$debug_function" ]]; then
-      debug_function_old=$debug_function
-      debug_search_old=$debug_function
-      debug_function=
-    else
-      debug_search_old=$debug_search
-      debug_search=
-    fi
-    debug_max_depth=$debug_current_depth
-    ok_to_debug=t
-
-  elif [[ "$debug_search" \
-          && ( \
-             $debug_search_deep == t \
-             || $debug_current_depth -le $debug_max_depth \
-             ) \
-          && ( " $debug_command " =~ $debug_search \
-             || " $expanded_command " =~ $debug_search \
-             ) \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_search${RESET}" >&$fd_original_err
-    debug_search=
-    debug_max_depth=$debug_current_depth
-    ok_to_debug=t
-
-  elif [[ $debug_step_to_next_line == t \
-          && "$raw_debug_path_to_source_file $debug_line_num" != "$debug_last_location" \
-          && $debug_current_depth -le $debug_max_depth \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_line${RESET}" >&$fd_original_err
-    ok_to_debug=t
-
-  elif [[ $debug_step_to_later_line == t \
-          && "$debug_line_num" -gt "$debug_prev_line" \
-          && $debug_current_function != none \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_later_line${RESET}" >&$fd_original_err
-    debug_step_to_later_line=f
-    ok_to_debug=t
-
-  elif [[ "$debug_stop_at" \
-          && "$raw_debug_path_to_source_file $debug_line_num" == "$debug_stop_at" \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_stop_at${RESET}" >&$fd_original_err
-    debug_max_depth=$debug_current_depth
-    debug_stop_at=
-    ok_to_debug=t
-
-  elif [[ $debug_step_to_next_function == t \
-          && "$debug_current_function" != "$debug_prev_function" \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_function${RESET}" >&$fd_original_err
-    debug_step_to_next_function=f
-    ok_to_debug=t
-
-  elif [[ $debug_step_to_next_file == t \
-          && "$debug_current_function" != "$debug_prev_function" \
-          && "$debug_source_file" != "$debug_prev_source_file" \
-       ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_file${RESET}" >&$fd_original_err
-    debug_step_to_next_file=f
-    ok_to_debug=t
-
-  fi
-
-  if [[ $ok_to_debug == f ]]; then
-    return 0
-  fi
-
+debug_inner() {
   if [[ $debug_skip_ignore == t ]]; then
     debug_skip_ignore=f
     if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
@@ -1207,6 +998,218 @@ debug_trap() {
         ;;
     esac
   done
+}
+
+debug_trap() {
+  set +xevT +o pipefail
+  debug_rematch=( "${BASH_REMATCH[@]}" )
+  local saved_bash_source=( "${BASH_SOURCE[@]:1}" ) \
+    saved_bash_lineno=( "${BASH_LINENO[@]:1}" ) \
+    saved_funcname=( "${FUNCNAME[@]:1}" ) \
+    saved_lineno
+
+  (( saved_lineno = debug_trap_first_line - 1 )) 
+
+  tracing_depth=0
+  local debug_r=-1
+
+  if (( ${trace_debugger:-0} > 0 )); then 
+    set -x
+    BASH_XTRACEFD=2
+    (( trace_debugger-- ))
+  fi
+
+  if [[ $debug_debug == t ]]; then
+    log_debug_debug "debug_id=$debug_id_current ${saved_bash_source[0]:-no_source}:$saved_lineno/${saved_bash_lineno[0]:-no_line} ${saved_funcname[0]:-no_func} ${BASH_COMMAND}" 
+  fi
+
+  local debug_path_to_source_file \
+    raw_debug_path_to_source_file="${saved_bash_source[0]:-none}" \
+    debug_line_num=$saved_lineno \
+    debug_current_function=${saved_funcname[0]:-none} \
+    debug_command=${BASH_COMMAND} \
+    debug_current_depth=${#saved_funcname[*]}
+
+  if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
+    return 0
+  fi
+
+  debug_load_state || return 1
+
+  [[ $debug_exit == t ]] && exit 1
+
+  if [[ "$debug_var" ]]; then
+    set +u
+    echo "${CYAN}debug_var: $debug_var=${!debug_var}${RESET}" >&$fd_original_err
+    set -u
+  fi
+
+  local IFS=$'\n'$'\t'" " \
+    debug_full_path=${debug_full_path:-f} \
+    debug_source_file \
+    raw_debug_path_to_source_file
+
+  debug_rewind=f
+
+  debug_source_update
+
+  local line_part=$debug_line file_part=
+  if [[ "$debug_line" ]]; then
+    if [[ $debug_line == *:* ]]; then
+      line_part=${debug_line##*:}
+      file_part=${debug_line%:*}
+    fi
+  fi
+
+  local expanded_command= fixed_command=
+  if [[ "$debug_search" ]]; then
+    if [ "$debug_expanded_search" == t ]; then
+      fixed_command=${debug_command}
+      fixed_command=${fixed_command//\\/**BS**}
+      fixed_command=${fixed_command//\\\$/\\\\\$}
+      # temporarily hide this so we can keep $(( but transform $(
+      fixed_command=${fixed_command//\$((/{{{}
+      fixed_command=${fixed_command//\$(/\\\$(}
+      # restore {{{ to $((
+      fixed_command=${fixed_command//{{{/\$((}
+      fixed_command=${fixed_command//\"/\\\"}
+      fixed_command=${fixed_command//\*\*BS\*\*/\\}
+      set +u
+      eval "expanded_command=\"$fixed_command\"" &>/dev/null || true
+      # || {
+      #   fatal "Something is wrong with the debugger"
+      #   fatal "fixed_command=$fixed_command"
+      #   stack_trace
+      #   return 1
+      # }
+      set -u
+    fi
+  fi
+
+  local ok_to_debug=f
+
+  if [[ $debug_immediate == t ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_immediate${RESET}" >&$fd_original_err
+    ok_to_debug=t
+    debug_immediate=f
+
+  elif [[ -n "$debug_line" \
+          && -z "$file_part" \
+          && "$debug_line_num" -eq "$line_part" \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_line${RESET}" >&$fd_original_err
+    ok_to_debug=t
+    debug_line_old=$debug_line
+    debug_line=
+
+  elif [[ -n "$debug_line" \
+          && -n "$file_part" \
+          && ( \
+             "$debug_line_num" -eq "$line_part" \
+             && "$debug_source_file" == "$file_part" \
+             ) \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_line${RESET}" >&$fd_original_err
+    ok_to_debug=t
+    debug_line_old=$debug_line
+    debug_line=
+
+  elif [[ $debug_stepping == t \
+          && $debug_current_depth -le $debug_max_depth \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_stepping${RESET}" >&$fd_original_err
+    debug_stepping=f
+    debug_max_depth=$debug_current_depth
+    ok_to_debug=t
+
+  elif [[ "$debug_condition" ]]; then
+    local condition=$debug_condition
+    if [[ "$condition" != \[* && "$condition" != \(* ]]; then
+      condition="[[ $condition ]]"
+    fi
+    condition+=" && ok_to_debug=t"
+    eval "$condition"
+    if [[ $ok_to_debug == t ]]; then
+      debug_condition=
+    fi
+
+  elif [[ "$debug_function" \
+          && $debug_function == $debug_current_function \
+          || "$debug_search" \
+          && $debug_search == $debug_current_function \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_function${RESET}" >&$fd_original_err
+    if [[ "$debug_function" ]]; then
+      debug_function_old=$debug_function
+      debug_search_old=$debug_function
+      debug_function=
+    else
+      debug_search_old=$debug_search
+      debug_search=
+    fi
+    debug_max_depth=$debug_current_depth
+    ok_to_debug=t
+
+  elif [[ "$debug_search" \
+          && ( \
+             $debug_search_deep == t \
+             || $debug_current_depth -le $debug_max_depth \
+             ) \
+          && ( " $debug_command " =~ $debug_search \
+             || " $expanded_command " =~ $debug_search \
+             ) \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_search${RESET}" >&$fd_original_err
+    debug_search=
+    debug_max_depth=$debug_current_depth
+    ok_to_debug=t
+
+  elif [[ $debug_step_to_next_line == t \
+          && "$raw_debug_path_to_source_file $debug_line_num" != "$debug_last_location" \
+          && $debug_current_depth -le $debug_max_depth \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_line${RESET}" >&$fd_original_err
+    ok_to_debug=t
+
+  elif [[ $debug_step_to_later_line == t \
+          && "$debug_line_num" -gt "$debug_prev_line" \
+          && $debug_current_function != none \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_later_line${RESET}" >&$fd_original_err
+    debug_step_to_later_line=f
+    ok_to_debug=t
+
+  elif [[ "$debug_stop_at" \
+          && "$raw_debug_path_to_source_file $debug_line_num" == "$debug_stop_at" \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_stop_at${RESET}" >&$fd_original_err
+    debug_max_depth=$debug_current_depth
+    debug_stop_at=
+    ok_to_debug=t
+
+  elif [[ $debug_step_to_next_function == t \
+          && "$debug_current_function" != "$debug_prev_function" \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_function${RESET}" >&$fd_original_err
+    debug_step_to_next_function=f
+    ok_to_debug=t
+
+  elif [[ $debug_step_to_next_file == t \
+          && "$debug_current_function" != "$debug_prev_function" \
+          && "$debug_source_file" != "$debug_prev_source_file" \
+       ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_file${RESET}" >&$fd_original_err
+    debug_step_to_next_file=f
+    ok_to_debug=t
+
+  fi
+
+  if [[ $ok_to_debug == t ]]; then
+    debug_inner
+  else
+    [[ $debug_debug == t ]] && echo "${CYAN}Not stopping.${RESET}" >&$fd_original_err
+  fi
 
   debug_list_stack_pos=0
   if [[ $debug_expansion -gt 0 ]]; then
