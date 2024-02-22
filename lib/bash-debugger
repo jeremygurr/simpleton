@@ -203,6 +203,23 @@ debug_source_update() {
   fi
 }
 
+debug_display_command_expansion_status() {
+  case $debug_expansion in
+    0)
+      echo "# Command expansion off" >&$fd_original_err
+    ;;
+    1)
+      echo "# Command expansion basic" >&$fd_original_err
+    ;;
+    2)
+      echo "# Command expansion deep" >&$fd_original_err
+    ;;
+    3)
+      echo "# Command expansion unfiltered" >&$fd_original_err
+    ;;
+  esac
+}
+
 debug_inner() {
   if [[ $debug_skip_ignore == t ]]; then
     debug_skip_ignore=f
@@ -226,10 +243,14 @@ debug_inner() {
   debug_step_to_next_function=f
   debug_step_to_next_file=f
 
-  if [[ $debug_expansion == 1 && $debug_long_command == f || $debug_expansion == 2 ]]; then
+  if (( debug_expansion > 0 )); then
     if [[ -f "$debug_out_path" && ! "$debug_buffered_commands" ]]; then
 
-      debug_expansion_clean "$debug_out_path" >&$fd_original_err
+      if (( debug_expansion > 2 )); then
+        cat $debug_out_path >&$fd_original_err
+      else
+        debug_expansion_clean $debug_out_path >&$fd_original_err
+      fi
 
       BASH_XTRACEFD=$debug_original_tracefd
 
@@ -780,23 +801,24 @@ debug_inner() {
         no_follow_once=t
         ;;
       \()
-        if [[ $debug_expansion == 1 ]]; then
-          echo "# Command expansion is now off" >&$fd_original_err
+        (( debug_expansion-- ))
+        if (( debug_expansion < 0 )); then
           debug_expansion=0
-        else
-          echo "# Short command expansion is now on" >&$fd_original_err
-          debug_expansion=1
         fi
+        debug_display_command_expansion_status
         debug_save_state
         no_follow_once=t
         ;;
       \))
-        if [[ $debug_expansion == 2 ]]; then
-          echo "# Command expansion is now off" >&$fd_original_err
-          debug_expansion=0
+        if (( no_trace_depth > 0 )); then
+          no_trace_depth=0
+          echo "# Resetting no_trace_depth to 0" >&$fd_original_err
         else
-          echo "# Extended command expansion is now on" >&$fd_original_err
-          debug_expansion=2
+          (( debug_expansion++ ))
+          if (( debug_expansion > 3 )); then
+            debug_expansion=3
+          fi
+          debug_display_command_expansion_status
         fi
         debug_save_state
         no_follow_once=t
@@ -974,8 +996,8 @@ debug_inner() {
         echo "@  show full path of file containing source being executed" >&$fd_original_err
         echo "$  enter debug shell" >&$fd_original_err
         echo "^  toggle source following (displays source context after every command)" >&$fd_original_err
-        echo "(  toggle expanded command mode. If on, will expand each *short* command that is executed" >&$fd_original_err
-        echo ")  toggle extended expanded command mode. If on, will expand *all* commands that are executed" >&$fd_original_err
+        echo "(  reduce command expansion level. Command expansion shows what the shell previously executed" >&$fd_original_err
+        echo ")  increase command expansion level. Will instead reset no_trace_depth if it is set." >&$fd_original_err
         echo "-  move up stack one position and show source" >&$fd_original_err
         echo "_  move down stack one position and show source" >&$fd_original_err
         echo "=  continue until the current line is reached again" >&$fd_original_err
@@ -1431,7 +1453,7 @@ debug_start() {
       ' PIPE
     shopt -s extdebug
     trap '
-      debug_trap_first_line=${LINENO:-0} 
+      set +x; debug_trap_first_line=${LINENO:-0} 
       debug_saved_params=( "$@" )
       debug_trap
       debug_rc=$?
