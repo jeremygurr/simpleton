@@ -117,6 +117,17 @@ load_var() {
   esac
 }
 
+load_arr() {
+  local from=$1 to_var=$2 line
+  while IFS= read -r line || [[ "$line" ]]; do
+    if [[ "$line" == \"* ]]; then
+      eval "$to_var+=( $line )"
+    else
+      eval "$to_var+=( \"$line\" )"
+    fi
+  done < <(cat "$from")
+}
+
 make_or_load_cyto_var() {
   begin_function
     local var_full_path=$1 var=$prefix$2 content 
@@ -132,13 +143,22 @@ make_or_load_cyto_var() {
 
 make_or_load_cyto_arr() {
   begin_function
-    local var_full_path=$1 var=$prefix$2 content 
-    load_var $var_full_path content
+
+    local var_full_path=$1 var=$prefix$2 arr
+    load_arr $var_full_path arr || fail
+
+    local result= v
+    begin_for v in "${arr[@]}"; doo
+      result+="\"$v\" "
+    end_for
+    result=${result% }
+
     if [[ $make_or_load == make ]]; then
-      echo "${NL}$var=( $content )" >>$context_path || fail
+      echo "${NL}$var=( $result )" >>$context_path || fail
     else
-      eval "$var=( $content )" || fail
+      eval "$var=( $result )" || fail
     fi
+
   end_function
   handle_return
 }
@@ -436,7 +456,15 @@ make_or_load_context_expand() {
       local members=() has_explicit_member_list=f fun
 
       if [[ -v ${dim}_members ]]; then
-        local -n members=${dim}_members
+        eval "members=( \"\${${dim}_members[@]}\" )" || fail
+
+        if [[ ${#members[*]} -eq 1 ]]; then
+          log_warn "There is only one member defined for $dim. This is probably a mistake. Maybe you created members.var instead of members.arr?"
+        elif [[ ${#members[*]} -eq 0 ]]; then
+          log_fatal "There are no members defined for $dim."
+          fail1
+        fi
+
         has_explicit_member_list=t
       else
         make_context_expand_find_members
@@ -489,9 +517,7 @@ make_context() {
 
     source $context_path || fail
 
-    if (( trunk_dim_count > 0 )); then
-      make_or_load_context_dims || fail
-    fi
+    make_or_load_context_dims || fail
 
     if (( leaf_dim_count > 0 )); then
       make_or_load_context_expand || fail
@@ -526,9 +552,7 @@ load_context() {
       fail1
     fi
 
-    if (( trunk_dim_count > 0 )); then
-      make_or_load_context_dims || fail
-    fi
+    make_or_load_context_dims || fail
 
     if (( leaf_dim_count > 0 )); then
       make_or_load_context_expand || fail
