@@ -166,7 +166,6 @@ debug_stepping='$debug_stepping'
 debug_stop_at='$debug_stop_at'
 debug_subshell='$debug_subshell'
 debug_watch='$debug_watch'
-debug_watch_style='$debug_watch_style'
 PS4='$PS4'" >"$debug_state_file" || return 1
   fi
   return 0
@@ -360,23 +359,7 @@ debug_inner() {
 
     set +u
     if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
-      local w v
-      for w in $debug_watch; do
-
-        w=${w#\$}
-        v='(unbound)'
-        if [[ -v $w ]]; then
-          v=${!w}
-        fi
-
-        if [[ $debug_watch_style == compact ]]; then
-          eval "echo -n \"$v \"" >&$fd_original_err
-        else
-          eval "echo -n \"\\\$$w=$v \"" >&$fd_original_err
-        fi
-
-      done
-      echo >&$fd_original_err
+      eval "echo \"$debug_watch\"" >&$fd_original_err
     fi
     set -u
 
@@ -462,9 +445,9 @@ debug_inner() {
         read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
         set +u
         if [[ "$debug_display" =~ ^[a-zA-Z_0-9]+$ ]]; then
-          eval 'echo "$'$debug_display'"' >&$fd_original_err || true
+          eval 'echo "$'$debug_display'"' >&$fd_original_err 
         else
-          eval 'echo "'$debug_display'"' >&$fd_original_err || true
+          eval 'echo "'$debug_display'"' >&$fd_original_err 
         fi
         set -u
         no_follow_once=t
@@ -785,16 +768,6 @@ debug_inner() {
         debug_save_state
         no_follow_once=t
         ;;
-      W)
-        if [[ $debug_watch_style == wide ]]; then
-          debug_watch_style=compact
-        else
-          debug_watch_style=wide
-        fi
-        echo "# Debug watch style is now $debug_watch_style" >&$fd_original_err
-        debug_save_state
-        no_follow_once=t
-        ;;
       x)
         echo >&$fd_original_err
         local v
@@ -995,8 +968,7 @@ debug_inner() {
         echo "T  show cooked call stack" >&$fd_original_err
         echo "u  unignore: remove given function from ignore list" >&$fd_original_err
         echo "U  unignore all functions" >&$fd_original_err
-        echo "w  set or clear current watched variable" >&$fd_original_err
-        echo "W  toggle debug watch style" >&$fd_original_err
+        echo "w  set or clear current watched expression. Expression can contain any string expression which can be given to echo as an argument." >&$fd_original_err
         echo "x  hex display of a variable" >&$fd_original_err
         echo "#  add timestamps to each debug trace line" >&$fd_original_err
         echo "@  show full path of file containing source being executed" >&$fd_original_err
@@ -1448,7 +1420,6 @@ debug_start() {
       debug_subshell=${debug_subshell:-f} \
       debug_var=${debug_var:-} \
       debug_watch=${debug_watch:-${trace_var:-}} \
-      debug_watch_style=${debug_watch_style:-wide} \
 
     trap '
       set +x
