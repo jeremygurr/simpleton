@@ -21,7 +21,7 @@ handle_command() {
 
     command="$original_cmd" omni_log_init || fail
 
-    local cell_path path_to_commands=$SIMPLETON_REPO/command
+    local cell_path path_to_commands=$SIMPLETON_REPO/command first_command=t
     begin_for cell_path in $cells; doo
 
       cell_path=$(unrealpath $cell_path) || {
@@ -93,7 +93,7 @@ handle_command() {
             fi
             if [[ $next == --help || $next == -h || $next == help ]]; then
               show_help_for_command $command
-              fail1
+              (( i++ ))
             else
               get_bottom_cell $cell_path || fail
               if [[ "$bottom_cell" ]]; then
@@ -134,6 +134,8 @@ handle_command() {
           ;;
         esac
 
+        first_command=f
+
       end_for
 
     end_for
@@ -143,7 +145,7 @@ handle_command() {
 }
 
 handle_help_command() {
-  local commands=( "$@" ) command first_command=t
+  local commands=( "$@" ) command 
   begin_function
     if [[ "${commands:-}" ]]; then
       begin_for command in "${commands[@]}"; doo
@@ -168,20 +170,20 @@ show_cell_help() {
     can_create_cyto=f
     switch_context || fail
     if [[ $multi_cell == t ]]; then
-      out "===================================================================================================="
-      out "Cell: $short_cell"
+      out "$hbar_equals"
     fi
 
+    out "Cell: $short_cell"
     if [[ "${cell_description:-}" ]]; then
-      out "Description: $cell_description"
+      out "  $cell_description"
     else
-      out "No description for this cell. Set cell_description variable in context file."
+      out "  No description for this cell. Set cell_description variable in context file."
     fi
 
     local required=()
 
     if [[ "${leaf_dims:-}" ]]; then
-      out "Dimension parameters:"
+      out "Dimensions:"
       show_dimensions ${leaf_dims[*]} || fail
     fi
 
@@ -246,16 +248,17 @@ show_help_for_command() {
   begin_function
     get_bottom_cell $cell_path || fail
     if [[ "$bottom_cell" ]]; then
-      local cell_path=$bottom_cell
+      local cell_path=$bottom_cell \
+        can_create_cyto=f
       switch_context || fail
       [[ $first_command == f ]] && out ''
-      out "command: $command"
+      out "Command: $command"
       if [[ -f $path_to_commands/$command.info ]]; then
         source $path_to_commands/$command.info || fail
         out "  $command_description"
         local name description default default_string i
         if [[ "${parameter_names:-}" ]]; then
-          out "parameters:"
+          out "Parameters:"
           begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
             parameter="${parameter_names[$i]}"
             description="${parameter_descriptions[$i]}"
@@ -275,7 +278,7 @@ show_usage() {
   warn "Usage: ${0##*/} {command(s)}"
   local command
   if [[ -d "$cell_path/.cyto" ]]; then
-    warn "commands:"
+    warn "Commands:"
     for command in $(find1 $cell_path/.cyto/command | sort); do
       if [[ -f $command ]]; then
         source $command || fail
