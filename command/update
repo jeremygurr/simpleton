@@ -167,18 +167,6 @@ get_needs_update() {
   handle_return
 }
 
-break_if_not_changed() {
-  begin_function
-    if [[ ! "${needs_update:-}" ]]; then
-      get_needs_update $cell_path || fail
-    fi
-    if [[ $needs_update == f ]]; then
-      leave_loop=1
-    fi
-  end_function
-  handle_return
-}
-
 pre_update() {
   begin_function_hi
 
@@ -1187,8 +1175,9 @@ get_dep_member() {
 update_command() {
   begin_function
 
-    local leave_loop=0 something_changed=f
-    needs_update= 
+    local leave_loop=0 \
+      something_changed=f \
+      needs_update=${needs_update:-}
 
     create_downstream_links || fail
     if [[ "${downstream_ref_path:-}" ]]; then
@@ -1196,10 +1185,14 @@ update_command() {
       force=t safe_link $cell_path $downstream_ref_path/chosen || fail
     fi
 
-    break_if_not_changed || fail
-    if (( leave_loop > 0 )); then
+    if [[ ! "$needs_update" ]]; then
+      get_needs_update $cell_path || fail
+    else
+      log_debug "needs_update already known ($needs_update)"
+    fi
+
+    if [[ $needs_update == f ]]; then
       update_successful=t
-      command_successful=t
       succeed
     fi
 
@@ -1217,10 +1210,12 @@ update_command() {
     fi
     post_update || fail
 
-    if [[ "$update_successful" == t ]]; then
-      command_successful=t
-    fi
   end_function
+
+  if [[ "$update_successful" == t ]]; then
+    command_successful=t
+  fi
+
   handle_return
 }
 
