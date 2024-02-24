@@ -11,155 +11,196 @@ source $SIMPLETON_REPO/lib/omni-log || exit 1
 source $SIMPLETON_REPO/lib/omni-navigator || exit 1
 source $SIMPLETON_REPO/lib/cell-lib || exit 1
 
+scan_commands() {
+  begin_function
+    local parameter leftovers=
+    begin_for parameter in ${parameters[*]}; doo
+      case $parameter in
+        help|\?|--help|-h)
+          help_mode=t
+        ;;
+        *)
+          if [[ -f "$path_to_commands/$parameter" ]]; then
+            commands+=( $parameter )
+          elif [[ -e $parameter ]]; then
+            cells+=( $parameter )
+          elif [[ -e $PWD/$parameter ]]; then
+            cells+=( $PWD/$parameter )
+          else
+            leftovers+=( $parameter )
+          fi
+        ;;
+      esac
+    end_for
+    if [[ "$leftovers" ]]; then
+      log_fatal "Unidentified commands: ${leftovers[*]}"
+      show_usage 
+      fail1
+    fi
+  end_function
+  handle_return
+}
+
 handle_command() {
-  local commands=( "$@" )
-  local cells=${cells:-${cell:-.}}
-  local multi_cell=f
-  [[ "$cells" == *\ * ]] && multi_cell=t
+  local command=$1
+
+  begin_function
+
+      case $command in
+        shell)
+          export prompt_name='cell shell'
+          bash --init-file <(
+            cat \
+            /etc/profile \
+            $SIMPLETON_REPO/lib/bash-lib \
+            $SIMPLETON_REPO/lib/omni-log \
+            $SIMPLETON_REPO/lib/omni-navigator \
+            $SIMPLETON_REPO/lib/bash-debugger \
+            $SIMPLETON_REPO/lib/cell-lib \
+            $SIMPLETON_REPO/lib/cell-shell-prep \
+            )
+        ;;
+        clean)
+          get_bottom_cell $cell_path || fail
+          if [[ ! "$bottom_cell" ]]; then
+            log_fatal "Not a valid cell: $cell_path"
+            fail1
+          fi
+          local cell_path=$bottom_cell
+          log_info "Cleaning $cell_path..." 
+          local clean_file=$cell_path/.dna/op/clean.bash
+          if [[ -f $clean_file ]]; then
+            source $clean_file || fail
+            clean || fail
+          else
+            local x
+
+            begin_for x in $cell_path/.cyto* $cell_path/*:*; doo
+              log_info "Removing ${x#$cell_path/}"
+              rm -rf $x &>/dev/null
+            end_for
+
+            begin_for x in $cell_path/*; doo
+              if [[ ! -d $x && -e $x ]]; then
+                log_info "Removing ${x#$cell_path/}"
+                rm $x &>/dev/null
+              fi
+            end_for
+            log_info "Cleaned."
+          fi
+        ;;
+        *)
+          next=
+          if [[ $((i+1)) -lt ${#commands[*]} ]]; then
+            next=${commands[$((i+1))]}
+          fi
+          if [[ $next == --help || $next == -h || $next == help ]]; then
+            show_help_for_command $command
+            (( i++ ))
+          else
+            get_bottom_cell $cell_path || fail
+            if [[ "$bottom_cell" ]]; then
+              cell_path=$bottom_cell
+            fi
+            local omni_log_job_id job_id_log=${home_job_path:-$HOME/.simpleton/job-log}
+
+            if [[ ! -d ${job_id_log%/*} ]]; then
+              mkdir -p ${job_id_log%/*} || fail
+            fi
+
+            local needs_update=${needs_update:-} \
+              command_to_log="${original_cmd#* }" \
+              top_level_command=t \
+              saved_command=$command
+
+            local command_successful=f
+            execute_command $cell_path $command || fail
+            if [[ $command_successful == f ]]; then
+              log_error "Command failed: $command"
+              fail1
+            fi
+          fi
+        ;;
+      esac
+
+  end_function
+  handle_return
+
+}
+
+handle_cell() {
+  local cell_path=$1
+
+  begin_function
+
+    cell_path=$(unrealpath $cell_path) || {
+      log_fatal "Failed to resolve path for $cell_path"
+      fail1
+      }
+
+    local next
+    if (( ${#commands[*]} == 0 )); then
+      show_cell_help $cell_path || fail
+    else
+      begin_for command in ${commands[*]}; doo
+        if [[ $help_mode == t ]]; then
+          show_help_for_command $command || fail
+        else
+          handle_command $command || fail
+        fi
+        first_command=f
+      end_for
+    fi
+
+  end_function
+  handle_return
+}
+
+top_level() {
+  local parameters=( "$@" ) \
 
   begin_function
 
     command="$original_cmd" omni_log_init || fail
 
-    local cell_path path_to_commands=$SIMPLETON_REPO/command first_command=t
-    begin_for cell_path in $cells; doo
+    local help_mode=f \
+      cell_path \
+      path_to_commands=$SIMPLETON_REPO/command \
+      first_command=t \
+      multi_cell=f \
+      commands=() \
 
-      cell_path=$(unrealpath $cell_path) || {
-        log_fatal "Failed to resolve path for $cell_path"
-        fail1
-        }
+    if [[ "${cells:-}" ]]; then
+      cells=( $cells )
+    elif [[ "${cell:-}" ]]; then
+      cells=( $cell )
+    fi
 
-      local command i next
-      begin_for ((i=0; i<${#commands[*]}; i++)); doo
+    scan_commands || fail
 
-        command=${commands[$i]}
+    if [[ ! "${cells:-}" ]]; then
+      if [[ $help_mode == t ]]; then
+        show_usage
+        succeed
+      else
+        cells=( . )
+      fi
+    fi
 
-        if [[ $command == */* && -d $command/.dna ]]; then
-          cell_path=$(unrealpath $command)
-          continue
-        fi
+    if (( ${#cells[*]} > 1 )); then
+      multi_cell=t
+    fi
 
-        case $command in
-          help|?|--help)
-            handle_help_command "${commands[@]:$((i+1))}"
-            succeed
-          ;;
-          shell)
-            export prompt_name='cell shell'
-            bash --init-file <(
-              cat \
-              /etc/profile \
-              $SIMPLETON_REPO/lib/bash-lib \
-              $SIMPLETON_REPO/lib/omni-log \
-              $SIMPLETON_REPO/lib/omni-navigator \
-              $SIMPLETON_REPO/lib/bash-debugger \
-              $SIMPLETON_REPO/lib/cell-lib \
-              $SIMPLETON_REPO/lib/cell-shell-prep \
-              )
-          ;;
-          clean)
-            get_bottom_cell $cell_path || fail
-            if [[ ! "$bottom_cell" ]]; then
-              log_fatal "Not a valid cell: $cell_path"
-              fail1
-            fi
-            local cell_path=$bottom_cell
-            log_info "Cleaning $cell_path..." 
-            local clean_file=$cell_path/.dna/op/clean.bash
-            if [[ -f $clean_file ]]; then
-              source $clean_file || fail
-              clean || fail
-            else
-              local x
-
-              begin_for x in $cell_path/.cyto* $cell_path/*:*; doo
-                log_info "Removing ${x#$cell_path/}"
-                rm -rf $x &>/dev/null
-              end_for
-
-              begin_for x in $cell_path/*; doo
-                if [[ ! -d $x && -e $x ]]; then
-                  log_info "Removing ${x#$cell_path/}"
-                  rm $x &>/dev/null
-                fi
-              end_for
-              log_info "Cleaned."
-            fi
-          ;;
-          *)
-            next=
-            if [[ $((i+1)) -lt ${#commands[*]} ]]; then
-              next=${commands[$((i+1))]}
-            fi
-            if [[ $next == --help || $next == -h || $next == help ]]; then
-              show_help_for_command $command
-              (( i++ ))
-            else
-              get_bottom_cell $cell_path || fail
-              if [[ "$bottom_cell" ]]; then
-                cell_path=$bottom_cell
-              fi
-              local omni_log_job_id job_id_log=${home_job_path:-$HOME/.simpleton/job-log}
-
-              if [[ ! -d ${job_id_log%/*} ]]; then
-                mkdir -p ${job_id_log%/*} || fail
-              fi
-
-              local needs_update= \
-                command_to_log="${original_cmd#* }" \
-                top_level_command=t \
-                saved_command=$command
-
-              begin_while [[ ! -e $path_to_commands/$command ]]; doo
-                if [[ "$next" ]]; then
-                  command+=-$next
-                  next=
-                  (( i++ ))
-                  if (( i + 1 < ${#commands[*]} )); then
-                    next=${commands[$((i+1))]}
-                  fi
-                else
-                  command=$saved_command
-                  break
-                fi
-              end_while
-
-              local command_successful=f
-              execute_command $cell_path $command || fail
-              if [[ $command_successful == f ]]; then
-                log_error "Command failed: $command"
-                fail1
-              fi
-            fi
-          ;;
-        esac
-
-        first_command=f
-
-      end_for
-
+    begin_for cell_path in ${cells[*]}; doo
+      handle_cell $cell_path || fail
     end_for
 
   end_function
   handle_return
 }
 
-handle_help_command() {
-  local commands=( "$@" ) command 
-  begin_function
-    if [[ "${commands:-}" ]]; then
-      begin_for command in "${commands[@]}"; doo
-        show_help_for_command $command || fail
-        first_command=f
-      end_for
-    else
-      show_cell_help
-    fi
-  end_function
-  handle_return
-}
-
 show_cell_help() {
+  local cell_path=$1
   begin_function
 
     get_bottom_cell $cell_path || {
@@ -207,40 +248,51 @@ show_cell_help() {
 
 show_dimensions() {
   local dims=( $* ) dim description values is_required
-  begin_for dim in ${dims[*]}; doo
-    if [[ -v ${dim}_description ]]; then
-      eval "description=\$${dim}_description" || fail
-    else
-      description='No description'
-    fi
-    out "  $dim: $description"
-    if type -t ${dim}_expand >/dev/null; then
-      values=
-      is_required=f
-      eval "value='' ${dim}_expand" &>/dev/null || is_required=t
-      if [[ "$values" ]]; then
-        if [[ "$values" == $empty_member ]]; then
-          out "    default: (empty)"
-        else
-          out "    default: ${values[*]}"
-        fi
-      elif [[ $is_required == f ]]; then
-        out "    optional"
+  begin_function
+    begin_for dim in ${dims[*]}; doo
+      if [[ -v ${dim}_description ]]; then
+        eval "description=\$${dim}_description" || fail
       else
-        required+=( $dim )
+        description='No description'
       fi
-      if [[ -v ${dim}_examples ]]; then
-        eval "local examples=( \"\${${dim}_examples[@]}\" )"
-        local example_count=${#examples[*]} i index_string=
-        for ((i=0; i<example_count; i++)); do
-          if [[ example_count -gt 1 ]]; then
-            index_string=" #$((i+1))"
+      out "  $dim: $description"
+      if function_exists ${dim}_expand; then
+        values=
+        is_required=f
+
+        local problem=
+        eval "value='' ${dim}_expand" &>/dev/null || is_required=t
+        if [[ "$problem" ]]; then
+          is_required=t
+        fi
+
+        if [[ "$values" ]]; then
+          if [[ "$values" == $empty_member ]]; then
+            out "    default: (empty)"
+          else
+            out "    default: ${values[*]}"
           fi
-          out "    example$index_string: ${examples[$i]}"
-        done
+        elif [[ $is_required == f ]]; then
+          out "    optional"
+        else
+          required+=( $dim )
+        fi
+
+        if [[ -v ${dim}_examples ]]; then
+          eval "local examples=( \"\${${dim}_examples[@]}\" )"
+          local example_count=${#examples[*]} i index_string=
+          for ((i=0; i<example_count; i++)); do
+            if [[ example_count -gt 1 ]]; then
+              index_string=" #$((i+1))"
+            fi
+            out "    example$index_string: ${examples[$i]}"
+          done
+        fi
+
       fi
-    fi
-  end_for
+    end_for
+  end_function
+  handle_return
 }
 
 show_help_for_command() {
@@ -306,5 +358,5 @@ show_usage() {
 }
 
 debugger_init || exit 1
-handle_command "$@"
+top_level "$@"
 
