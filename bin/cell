@@ -178,8 +178,12 @@ top_level() {
 
     scan_commands || fail
 
+    if [[ ! "${cells:-}" && ! "${commands:-}" ]]; then
+      help_mode=t 
+    fi
+
     if [[ ! "${cells:-}" ]]; then
-      if [[ $help_mode == t || ! "${commands:-}" ]]; then
+      if [[ $help_mode == t && ! "${commands:-}" ]]; then
         show_usage
         succeed
       else
@@ -327,34 +331,30 @@ show_help_for_command() {
 }
 
 show_usage() {
-  warn "Usage: ${0##*/} {command(s)}"
-  local command
-  if [[ -d "$cell_path/.cyto" ]]; then
-    warn "Commands:"
-    for command in $(find1 $cell_path/.cyto/command | sort); do
-      if [[ -f $command ]]; then
-        source $command || fail
-      elif [[ -d $command ]]; then
-        local first_file=$(find1 $command -type f | sort -g | head -n 1)
-        if [[ "$first_file" ]]; then
-          source $first_file || fail
-        fi
-      fi
-      local command_name=${command##*/}
-      local command_description=describe_${command_name}
-      command_description=${!command_description:-}
+  begin_function
+    out "Usage: ${0##*/} {any combinations of commands and cell paths}"
+
+    local d
+    d="The given commands are executed on each of the given cells in order. "
+    d+="If no cell path is specified, the cell path is taken from the current folder. "
+    d+="If help or -h or --help or ? is given as any of the parameters, "
+    d+="documentation for the given cells or commands is printed instead of executing commands. "
+    echo "$d" | fold -s | indent
+
+    out "${NL}Possible Commands:"
+    local command_info command_name
+    begin_for command_info in $(find1 $path_to_commands -name '*.info' | sort); doo
+      command_name=${command_info%.info}
+      command_name=${command_name##*/}
+      source $command_info || fail
       if [[ "$command_description" ]]; then
-        warn "  $command_name $COL20$command_description"
+        out "  $command_name $COL20$command_description"
       else
-        warn "  $command_name ${COL20}Please add a description to this command in $command"
+        out "  $command_name ${COL20}Please add a description to this command in $command"
       fi
-    done
-  else
-    warn "  either run this command inside of a cell folder, or specify"
-    warn "  the cell variable with the path to a cell. "
-    warn "  example: cell cell=/some/cell update"
-  fi
-  return 0
+    end_for
+  end_function
+  handle_return
 }
 
 debugger_init || exit 1
