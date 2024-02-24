@@ -446,47 +446,50 @@ make_context_expand_members_known() {
 
 make_or_load_context_expand() {
   begin_function
-    local dim=${leaf_dims:-}
 
     if [[ ! -d $seed_path ]]; then
-      log_fatal "No configuration in seed for dim $dim at $seed_path"
+      log_fatal "No configuration in seed at $seed_path"
       fail1
     fi
 
-    if ! function_exists ${dim}_expand; then
-      local members=() has_explicit_member_list=f fun
+    local dim
+    begin_for dim in ${leaf_dims[*]:-}; doo
 
-      if [[ -v ${dim}_members ]]; then
-        eval "members=( \"\${${dim}_members[@]}\" )" || fail
+      if ! function_exists ${dim}_expand; then
+        local members=() has_explicit_member_list=f fun
 
-        if [[ ${#members[*]} -eq 0 ]]; then
-          log_fatal "There are no members defined for $dim."
-          fail1
+        if [[ -v ${dim}_members ]]; then
+          eval "members=( \"\${${dim}_members[@]}\" )" || fail
+
+          if [[ ${#members[*]} -eq 0 ]]; then
+            log_fatal "There are no members defined for $dim."
+            fail1
+          fi
+
+          has_explicit_member_list=t
+        else
+          make_context_expand_find_members
         fi
 
-        has_explicit_member_list=t
-      else
-        make_context_expand_find_members
-      fi
-
-      fun="${dim}_expand() {
+        fun="${dim}_expand() {
   problem=
   case \"\$value\" in"
 
-      make_context_expand_handle_default || fail
+        make_context_expand_handle_default || fail
 
-      if [[ $has_explicit_member_list == f ]]; then
-        make_context_expand_members_unknown || fail
-      else
-        make_context_expand_members_known || fail
-      fi
+        if [[ $has_explicit_member_list == f ]]; then
+          make_context_expand_members_unknown || fail
+        else
+          make_context_expand_members_known || fail
+        fi
 
-      if [[ $make_or_load == make ]]; then
-        echo "$fun" >>$context_path || fail
-      else
-        eval "$fun" || fail
+        if [[ $make_or_load == make ]]; then
+          echo "$fun" >>$context_path || fail
+        else
+          eval "$fun" || fail
+        fi
       fi
-    fi
+    done
 
   end_function
   handle_return
