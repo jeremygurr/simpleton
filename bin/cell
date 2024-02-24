@@ -41,6 +41,37 @@ scan_commands() {
   handle_return
 }
 
+show_help_for_command() {
+  local command=$1
+  begin_function
+    get_bottom_cell $cell_path || fail
+    if [[ "$bottom_cell" ]]; then
+      local cell_path=$bottom_cell \
+        can_create_cyto=f
+      switch_context || fail
+      [[ $first_command == f ]] && out ''
+      out "Command: $command"
+      if [[ -f $path_to_commands/$command.info ]]; then
+        source $path_to_commands/$command.info || fail
+        out "  $command_description"
+        local name description default default_string i
+        if [[ "${parameter_names:-}" ]]; then
+          out "Parameters:"
+          begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
+            parameter="${parameter_names[$i]}"
+            description="${parameter_descriptions[$i]}"
+            default="${parameter_defaults[$i]}"
+            default_string=
+            [[ "$default" ]] && default_string=" default: $default"
+            out "  $parameter: $description$default_string"
+          end_for
+        fi
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 handle_command() {
   local command=$1
 
@@ -203,6 +234,65 @@ top_level() {
   handle_return
 }
 
+show_dimensions() {
+  local dims=( $* ) dim description values 
+  begin_function
+    begin_for dim in ${dims[*]}; doo
+      if [[ -v ${dim}_description ]]; then
+        eval "description=\$${dim}_description" || fail
+      else
+        description='No description'
+      fi
+      out "  $dim: $description"
+      if function_exists ${dim}_expand; then
+        values=
+
+        local problem= 
+        eval "value= ${dim}_expand" &>/dev/null || is_required=t
+        if [[ "$problem" ]]; then
+          required+=( $dim )
+        else
+          if [[ "${values:-}" ]]; then
+            if [[ "$values" == $empty_member ]]; then
+              out "    default: (empty)"
+            else
+              out "    default: ${values[*]}"
+            fi
+          else
+            out "    optional"
+          fi
+        fi
+
+        eval "value=all ${dim}_expand" &>/dev/null
+        if [[ ! "$problem" ]]; then
+          out "    members: ${values[*]}"
+        fi
+
+        if [[ -v ${dim}_examples ]]; then
+          eval "local examples=( \"\${${dim}_examples[@]}\" )"
+          local example_count=${#examples[*]} i index_string=
+          begin_for ((i=0; i<example_count; i++)); doo
+            if [[ example_count -gt 1 ]]; then
+              index_string=" #$((i+1))"
+            fi
+            out "    example$index_string: ${examples[$i]}"
+          end_for
+        fi
+
+        if [[ -v ${dim}_aliases ]]; then
+          eval "local aliases=( \"\${${dim}_aliases[@]}\" )"
+          local full_alias
+          begin_for full_alias in "${aliases[@]}"; doo
+            out "    alias: ${full_alias/ / -> /}"
+          end_for
+        fi
+
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
 show_cell_help() {
   local cell_path=$1
   begin_function
@@ -228,12 +318,12 @@ show_cell_help() {
     local required=()
 
     if [[ "${leaf_dims:-}" ]]; then
-      out "Dimensions:"
+      out "${NL}Dimensions:"
       show_dimensions ${leaf_dims[*]} || fail
     fi
 
     if [[ "${sub_dims:-}" || "${props:-}" ]]; then
-      out "Other parameters:"
+      out "${NL}Other parameters:"
       if [[ "${sub_dims:-}" ]]; then
         show_dimensions ${sub_dims[*]} || fail
       fi
@@ -243,89 +333,9 @@ show_cell_help() {
     fi
 
     if [[ "${required:-}" ]]; then
-      out "Required parameters: ${required[*]}"
+      out "${NL}Required parameters: ${required[*]}"
     fi
 
-  end_function
-  handle_return
-}
-
-show_dimensions() {
-  local dims=( $* ) dim description values is_required
-  begin_function
-    begin_for dim in ${dims[*]}; doo
-      if [[ -v ${dim}_description ]]; then
-        eval "description=\$${dim}_description" || fail
-      else
-        description='No description'
-      fi
-      out "  $dim: $description"
-      if function_exists ${dim}_expand; then
-        values=
-        is_required=f
-
-        local problem=
-        eval "value='' ${dim}_expand" &>/dev/null || is_required=t
-        if [[ "$problem" ]]; then
-          is_required=t
-        fi
-
-        if [[ "$values" ]]; then
-          if [[ "$values" == $empty_member ]]; then
-            out "    default: (empty)"
-          else
-            out "    default: ${values[*]}"
-          fi
-        elif [[ $is_required == f ]]; then
-          out "    optional"
-        else
-          required+=( $dim )
-        fi
-
-        if [[ -v ${dim}_examples ]]; then
-          eval "local examples=( \"\${${dim}_examples[@]}\" )"
-          local example_count=${#examples[*]} i index_string=
-          for ((i=0; i<example_count; i++)); do
-            if [[ example_count -gt 1 ]]; then
-              index_string=" #$((i+1))"
-            fi
-            out "    example$index_string: ${examples[$i]}"
-          done
-        fi
-
-      fi
-    end_for
-  end_function
-  handle_return
-}
-
-show_help_for_command() {
-  local command=$1
-  begin_function
-    get_bottom_cell $cell_path || fail
-    if [[ "$bottom_cell" ]]; then
-      local cell_path=$bottom_cell \
-        can_create_cyto=f
-      switch_context || fail
-      [[ $first_command == f ]] && out ''
-      out "Command: $command"
-      if [[ -f $path_to_commands/$command.info ]]; then
-        source $path_to_commands/$command.info || fail
-        out "  $command_description"
-        local name description default default_string i
-        if [[ "${parameter_names:-}" ]]; then
-          out "Parameters:"
-          begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
-            parameter="${parameter_names[$i]}"
-            description="${parameter_descriptions[$i]}"
-            default="${parameter_defaults[$i]}"
-            default_string=
-            [[ "$default" ]] && default_string=" default: $default"
-            out "  $parameter: $description$default_string"
-          end_for
-        fi
-      fi
-    fi
   end_function
   handle_return
 }
