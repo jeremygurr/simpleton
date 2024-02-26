@@ -424,7 +424,7 @@ make_context_expand_members_known() {
     local members_with_pipes=${members_with_pipes// /\|}
     local all_pattern=_all
 
-    if [[ ! " ${members[*]} " =~ \ all\  ]]; then
+    if [[ " ${members[*]} ${aliases[*]} " != *\ all\ * ]]; then
       all_pattern="all|_all"
     fi
 
@@ -444,6 +444,21 @@ make_context_expand_members_known() {
   handle_return
 }
 
+make_context_expand_handle_aliases() {
+  begin_function
+    local a_line first remaining
+    begin_for a_line in "${aliases[@]}"; doo
+      first=${a_line%% *}
+      remaining=${a_line#* }
+      fun+="
+    $first)
+      values=( $remaining )
+    ;;"
+    end_for
+  end_function
+  handle_return
+}
+
 make_or_load_context_expand() {
   begin_function
 
@@ -456,7 +471,7 @@ make_or_load_context_expand() {
     begin_for dim in ${leaf_dims[*]:-}; doo
 
       if ! function_exists ${dim}_expand; then
-        local members=() has_explicit_member_list=f fun
+        local members=() aliases=() has_explicit_member_list=f fun
 
         if [[ -v ${dim}_members ]]; then
           eval "members=( \"\${${dim}_members[@]}\" )" || fail
@@ -471,11 +486,19 @@ make_or_load_context_expand() {
           make_context_expand_find_members
         fi
 
+        if [[ -v ${dim}_aliases ]]; then
+          eval "aliases=( \"\${${dim}_aliases[@]}\" )" || fail
+        fi
+
         fun="${dim}_expand() {
   problem=
   case \"\$value\" in"
 
         make_context_expand_handle_default || fail
+
+        if (( ${#aliases[*]} > 0 )); then
+          make_context_expand_handle_aliases || fail
+        fi
 
         if [[ $has_explicit_member_list == f ]]; then
           make_context_expand_members_unknown || fail
