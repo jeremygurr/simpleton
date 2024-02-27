@@ -1001,7 +1001,8 @@ debug_inner() {
 
 debug_trap() {
   debug_saved_shell_options_short=$-
-  set +xevT +o pipefail
+  set +xevTu +o pipefail
+
   debug_rematch=( "${BASH_REMATCH[@]}" )
   local saved_bash_source=( "${BASH_SOURCE[@]:1}" ) \
     saved_bash_lineno=( "${BASH_LINENO[@]:1}" ) \
@@ -1009,6 +1010,14 @@ debug_trap() {
     saved_lineno
 
   (( saved_lineno = debug_trap_first_line - 1 )) 
+
+  if [[ "${debug_var:-}" ]]; then
+    local v=${!debug_var}
+    if [[ "${debug_var_old:-}" != "$v" ]]; then
+      echo "${CYAN}debug_id=$debug_id_current $debug_var=$v$RESET" >&$fd_original_err
+    fi
+    debug_var_old=$v
+  fi
 
   tracing_depth=0
   local debug_r=0
@@ -1038,15 +1047,6 @@ debug_trap() {
   debug_load_state || return 1
 
   [[ $debug_exit == t ]] && exit 1
-
-  if [[ "$debug_var" ]]; then
-    set +u
-    local v
-    for v in ${debug_var}; do
-      echo "${CYAN}debug_var: $v=${!v}${RESET}" >&$fd_original_err
-    done
-    set -u
-  fi
 
   local IFS=$'\n'$'\t'" " \
     debug_full_path=${debug_full_path:-f} \
@@ -1237,6 +1237,10 @@ debug_trap() {
     set -e
   fi
 
+  if [[ $debug_saved_shell_options_short == *u* ]]; then
+    set -u
+  fi
+
   BASH_REMATCH=( "${debug_rematch[@]}" )
   return $debug_r
 }
@@ -1420,7 +1424,11 @@ debug_start() {
       debug_stop_at=${debug_stop_at:-} \
       debug_subshell=${debug_subshell:-f} \
       debug_var=${debug_var:-} \
-      debug_watch=${debug_watch:-${trace_var:-}} \
+      debug_watch=${debug_watch:-${debug_var:-${trace_var:-}}} \
+
+    if [[ "$debug_watch" =~ ^[a-zA-Z_0-9]+$ ]]; then
+      debug_watch="\$$debug_watch"
+    fi
 
     trap '
       set +x
