@@ -429,6 +429,26 @@ debug_inner() {
         debug_exit=t
         exit 0
         ;;
+      B)
+        if [[ "${warm_stack[-1]:-}" ]]; then
+          local rewind_debug_id=${warm_stack[-1]}
+          rewind_debug_id=${rewind_debug_id##*=}
+          if (( rewind_debug_id == debug_id_current )) && [[ "${warm_stack[-2]:-}" ]]; then
+            rewind_debug_id=${warm_stack[-2]}
+            rewind_debug_id=${rewind_debug_id##*=}
+          fi
+          echo "# Rewinding stack to debug_id=$rewind_debug_id..." >&$fd_original_err
+          eval "${original_cmd%debug=*} debug=$rewind_debug_id" || exit 1
+          debug_exit=t
+          exit 0
+        else
+          echo "# No warm stack available"
+        fi
+        #   OLD WAY
+        # debug_rewind=t
+        # debug_stepping=t
+        # debug_r=0
+        ;;
       C)
         echo "# Continuing..." >&$fd_original_err
         [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
@@ -724,26 +744,6 @@ debug_inner() {
         debug_save_state
         exit 0
         ;;
-      R)
-        if [[ "${warm_stack[-1]:-}" ]]; then
-          local rewind_debug_id=${warm_stack[-1]}
-          rewind_debug_id=${rewind_debug_id##*=}
-          if (( rewind_debug_id == debug_id_current )) && [[ "${warm_stack[-2]:-}" ]]; then
-            rewind_debug_id=${warm_stack[-2]}
-            rewind_debug_id=${rewind_debug_id##*=}
-          fi
-          echo "# Rewinding stack to debug_id=$rewind_debug_id..." >&$fd_original_err
-          eval "${original_cmd%debug=*} debug=$rewind_debug_id" || exit 1
-          debug_exit=t
-          exit 0
-        else
-          echo "# No warm stack available"
-        fi
-        #   OLD WAY
-        # debug_rewind=t
-        # debug_stepping=t
-        # debug_r=0
-        ;;
       r)
         echo "# Show raw call stack" >&$fd_original_err
         start_frame=3 stack_trace
@@ -960,7 +960,8 @@ debug_inner() {
         echo >&$fd_original_err
         echo >&$fd_original_err
         echo "a  display array" >&$fd_original_err
-        echo "b  go back to previous debug_id (only works if the script running this is deterministic)" >&$fd_original_err
+        echo "b  restart command, going back to previous debug_id (only works if the script running this is deterministic)" >&$fd_original_err
+        echo "B  restart command, going back to previous stack frame debug_id (only works if the script running this is deterministic)" >&$fd_original_err
         echo "c  list debug_list_window/2 lines of source code before and after current line" >&$fd_original_err
         echo "C  continue execution without stopping" >&$fd_original_err
         echo "d  display an expression with variables substituted" >&$fd_original_err
