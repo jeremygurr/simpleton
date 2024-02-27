@@ -1862,6 +1862,62 @@ for_each_member() {
   handle_return
 }
 
+plant_seed_internal() {
+  local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
+  begin_function
+
+    log_debug "Planting seed from $from to $to"
+
+    if [[ ! -d $to ]]; then
+
+      if [[ $from == /seed/* && -d $from ]]; then
+        plant_seed_internal ${from%/*} ${to%/*} || fail
+      else
+        log_fatal "Seed doesn't exist for $to"
+        fail1
+      fi
+
+    else
+
+      contents=( $(find1 $from | sort) ) || fail
+      local dim_found= target
+      begin_for x in ${contents[*]}; doo
+        x_part=${x##*/}
+        target=$to/$x_part
+        if [[ ! -e $target ]]; then
+          if [[ -f $x || $x_part == .dna ]]; then
+            safe_link $(realpath $x) $to/ || fail
+          elif [[ $x_part == *:* ]]; then
+            local new_dim=${x_part%%:*}
+            if [[ ! "$dim_found" ]]; then
+              dim_found=${x_part%%:*}
+            elif [[ $dim_found != $new_dim ]]; then
+              log_fatal "Seed has two different dims defined, which is not allowed: $dim_found and $new_dim in $from"
+              fail1
+            fi
+          elif [[ -d $x ]]; then
+            mkdir $target || fail
+            if [[ $deep == t ]]; then
+              plant_seed_internal $x $target || fail
+            fi
+          fi
+        fi
+      end_for
+
+      if [[ "$dim_found" && $plant_branches == t ]]; then
+        load_context $to || fail
+        parent_path=$to \
+        seed_path=$from \
+        par=f fork=f \
+        function=plant_member \
+        for_each_member $dim_found || fail
+      fi
+
+    fi
+  end_function
+  handle_return
+}
+
 # inputs: parent_path seed_path member
 plant_member() {
   begin_function
@@ -1914,59 +1970,6 @@ plant_seed() {
 
     plant_seed_internal $seed_path $to || fail
 
-  end_function
-  handle_return
-}
-
-plant_seed_internal() {
-  local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
-  begin_function
-
-    if [[ ! -d $to ]]; then
-
-      if [[ $from == /seed/* && -d $from ]]; then
-        plant_seed_internal ${from%/*} ${to%/*} || fail
-      else
-        log_fatal "Seed doesn't exist for $to"
-        fail1
-      fi
-
-    else
-
-      contents=( $(find1 $from | sort) ) || fail
-      local dim_found=
-      begin_for x in ${contents[*]}; doo
-        x_part=${x##*/}
-        if [[ ! -e $to/$x_part ]]; then
-          if [[ -f $x || $x_part == .dna ]]; then
-            safe_link $(realpath $x) $to/ || fail
-          elif [[ $x_part == *:* ]]; then
-            local new_dim=${x_part%%:*}
-            if [[ ! "$dim_found" ]]; then
-              dim_found=${x_part%%:*}
-            elif [[ $dim_found != $new_dim ]]; then
-              log_fatal "Seed has two different dims defined, which is not allowed: $dim_found and $new_dim in $from"
-              fail1
-            fi
-          elif [[ -d $x ]]; then
-            mkdir $to/$x_part || fail
-            if [[ $deep == t ]]; then
-              plant_seed_internal $x $to/$x_part || fail
-            fi
-          fi
-        fi
-      end_for
-
-      if [[ "$dim_found" && $plant_branches == t ]]; then
-        load_context $to || fail
-        parent_path=$to \
-        seed_path=$from \
-        par=f fork=f \
-        function=plant_member \
-        for_each_member $dim_found || fail
-      fi
-
-    fi
   end_function
   handle_return
 }

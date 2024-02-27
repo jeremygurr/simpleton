@@ -969,58 +969,56 @@ update_self() {
   local log_vars='short_cell'
   begin_function
 
+    log_debug "Executing local update of $short_cell$attempt_string" 
+
     update_successful=
     can_retry=f
 
-    if [[ $can_update == t ]]; then
+    local reuse_existing_out=${reuse_existing_out:-f}
 
-      local reuse_existing_out=${reuse_existing_out:-f}
-
-      local out_path=$cell_path
-      if [[ $reuse_existing_out == f ]]; then
-        out_path=$cell_path.new
-        if [[ -d $out_path ]]; then
-          rm -rf $out_path || fail
-        fi
-        if [[ ! -d $out_path ]] && ! mkdir $out_path 2>/dev/null; then
-          log_debug "Could not make dir $out_path, falling back to $cell_path"
-          out_path=$cell_path
-        fi
-      else
-        # allow update code to set this, since we can't compare when changes are made in place
-        something_changed=
+    local out_path=$cell_path
+    if [[ $reuse_existing_out == f ]]; then
+      out_path=$cell_path.new
+      if [[ -d $out_path ]]; then
+        rm -rf $out_path || fail
       fi
-
-      local missing=t
-      tee_output_to_log || fail
-      ignore_missing=t execute_op update || fail
-      completion_time=$EPOCHSECONDS
-      untee_output || fail
-
-      if [[ $missing == t ]]; then
-        update_successful=t
-      else
-        update_successful=${update_successful:-f}
-      fi
-
-      if [[ $reuse_existing_out == f && -d $cell_path.new ]]; then
+      if [[ ! -d $out_path ]] && ! mkdir $out_path 2>/dev/null; then
+        log_debug "Could not make dir $out_path, falling back to $cell_path"
         out_path=$cell_path
-        if [[ $update_successful == t ]]; then
-          local changed
-          compare_files_or_dirs $out_path $out_path.new || fail
-          if [[ $changed == f ]]; then
-            rm -rf $out_path.new || fail
-          else
-            update_self_move_out_path || fail
-          fi
-        fi
-      else # $reuse_existing_out == t
-        # if update code didn't set this, we must assume the worst
-        if [[ ! "$something_changed" ]]; then
-          something_changed=t
+      fi
+    else
+      # allow update code to set this, since we can't compare when changes are made in place
+      something_changed=
+    fi
+
+    local missing=t
+    tee_output_to_log || fail
+    ignore_missing=t execute_op update || fail
+    completion_time=$EPOCHSECONDS
+    untee_output || fail
+
+    if [[ $missing == t ]]; then
+      update_successful=t
+    else
+      update_successful=${update_successful:-f}
+    fi
+
+    if [[ $reuse_existing_out == f && -d $cell_path.new ]]; then
+      out_path=$cell_path
+      if [[ $update_successful == t ]]; then
+        local changed
+        compare_files_or_dirs $out_path $out_path.new || fail
+        if [[ $changed == f ]]; then
+          rm -rf $out_path.new || fail
+        else
+          update_self_move_out_path || fail
         fi
       fi
-
+    else # $reuse_existing_out == t
+      # if update code didn't set this, we must assume the worst
+      if [[ ! "$something_changed" ]]; then
+        something_changed=t
+      fi
     fi
 
   end_function
@@ -1053,8 +1051,6 @@ update_self_retry_loop() {
           attempt_string=", attempt $((retry+1)) of $retry_max"
         fi
           
-        log_debug "Executing local update of $short_cell$attempt_string" 
-
         update_self || fail
 
         [[ $can_retry == f || $update_successful == t ]] && break
@@ -1202,12 +1198,16 @@ update_command() {
     fi
 
     pre_update || fail
+    plant_seed_internal $seed_path $cell_path || fail
     update_upstreams || fail
+
     if [[ $update_successful == t ]]; then
       if [[ $cell_is_leaf == t ]]; then
-        update_successful=
-        update_self_retry_loop || fail
-        check_results || fail
+        if function_exists update_op; then
+          update_successful=
+          update_self_retry_loop || fail
+          check_results || fail
+        fi
       else
         if [[ "${leaf_dims:-}" ]]; then
           update_members || fail
@@ -1217,6 +1217,7 @@ update_command() {
         fi
       fi
     fi
+
     post_update || fail
 
   end_function
