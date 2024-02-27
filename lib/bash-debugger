@@ -7,6 +7,7 @@ shopt -s expand_aliases   # make sure aliases are expanded even for non-interact
 # BASH Debugger
 # At beginning of script you wish to debug: 
 #   source this file. example: source /home/my_user/repos/bash-debugger
+#   intialize debugger in your source: debugger_init
 #   execute debug in the code where you wish to begin debugging.
 # press '?' for list of commands while debugging
 # If you want to get syntax highlighting working, install source-highlight
@@ -46,6 +47,8 @@ LIGHT_PURPLE=$'\033[0;35m'
 CLEAR_SCREEN=$'\033[2J\r\033[H'
    CURSOR_UP=$'\033[1A'
      REVERSE=$'\033[7m'
+
+original_cmd=${original_cmd:-"$0 $*"}
 
 side_log() {
   echo "$*" >>$side_log_file
@@ -419,6 +422,13 @@ debug_inner() {
         fi
         no_follow_once=t
         ;;
+      b)
+        local rewind_debug_id=$((debug_id_current-1))
+        echo "# Going back to debug_id=$rewind_debug_id..." >&$fd_original_err
+        eval "${original_cmd%debug=*} debug=$rewind_debug_id" || exit 1
+        debug_exit=t
+        exit 0
+        ;;
       C)
         echo "# Continuing..." >&$fd_original_err
         [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
@@ -715,10 +725,24 @@ debug_inner() {
         exit 0
         ;;
       R)
-        echo "# Rewinding..." >&$fd_original_err
-        debug_rewind=t
-        debug_stepping=t
-        debug_r=0
+        if [[ "${warm_stack[-1]:-}" ]]; then
+          local rewind_debug_id=${warm_stack[-1]}
+          rewind_debug_id=${rewind_debug_id##*=}
+          if (( rewind_debug_id == debug_id_current )) && [[ "${warm_stack[-2]:-}" ]]; then
+            rewind_debug_id=${warm_stack[-2]}
+            rewind_debug_id=${rewind_debug_id##*=}
+          fi
+          echo "# Rewinding stack to debug_id=$rewind_debug_id..." >&$fd_original_err
+          eval "${original_cmd%debug=*} debug=$rewind_debug_id" || exit 1
+          debug_exit=t
+          exit 0
+        else
+          echo "# No warm stack available"
+        fi
+        #   OLD WAY
+        # debug_rewind=t
+        # debug_stepping=t
+        # debug_r=0
         ;;
       r)
         echo "# Show raw call stack" >&$fd_original_err
@@ -936,6 +960,7 @@ debug_inner() {
         echo >&$fd_original_err
         echo >&$fd_original_err
         echo "a  display array" >&$fd_original_err
+        echo "b  go back to previous debug_id (only works if the script running this is deterministic)" >&$fd_original_err
         echo "c  list debug_list_window/2 lines of source code before and after current line" >&$fd_original_err
         echo "C  continue execution without stopping" >&$fd_original_err
         echo "d  display an expression with variables substituted" >&$fd_original_err
