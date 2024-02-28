@@ -2,28 +2,51 @@
 
 get_command() {
   begin_function
-    if function_exists get_op; then
-      execute_op get || fail
-    else
-      local get_show_file=${get_show_file:-}
-      if [[ ! "$get_show_file" ]]; then
-        begin_for f in $(find1 $out_path/auto -name "data.*"); doo
-        end_for
-        if [[ $multi_cell == t ]]; then
-          out "$short_cell: $(<$out_path/value)"
-        else
-          out "$(<$out_path/value)"
-        fi
-      else
-        if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-          log_warn "$short_cell: No cached value."
-        fi
-      fi
-    else
-      if [[ $cell_is_leaf == t || $show_branches == t ]]; then
-        log_debug "$short_cell: No out_path defined."
-      fi
+
+    local cell_path=${cell_path:-}
+    if [[ "${member:-}" ]]; then
+      local sane_value
+      get_sane_value "$member" || fail
+      cell_path=$parent_cell/$dim:$sane_value
     fi
+
+    switch_context || fail
+    if [[ $cell_is_leaf == t ]]; then
+      if function_exists get_op; then
+        execute_op get || fail
+      else
+
+        local get_show_file=${get_show_file:-}
+
+        if [[ ! "$get_show_file" ]]; then
+          local f
+          begin_for f in $out_path/auto/data.* $out_path/data.*; doo
+            if [[ -f $f ]]; then
+              get_show_file=$f
+              break
+            fi
+          end_for
+        fi
+
+        if [[ "$get_show_file" ]]; then
+          if [[ $multi_cell == t ]]; then
+            out -n "$short_cell: "
+          fi
+          cat $get_show_file || fail
+        else
+          log_warn "Either this cell hasn't been updated, or it doesn't have get_show_file defined. Nothing to show."
+        fi
+
+      fi
+    else
+      par=f fork=f \
+      function=get_command \
+      parent_cell=$cell_path \
+      for_each_member $leaf_dims || fail
+    fi
+
+    command_successful=t
+
   end_function
   handle_return
 }
