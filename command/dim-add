@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
 dim_add_find_shared_dim() {
+  local d=$seed_path
   while [[ ${#d} -gt 3 ]]; do
-    if [[ -d $d/.dna/shared/dim ]]; then
-      shared_dim_folder=$d/.dna/shared/dim
+    if [[ -d $d/.shared/dim ]]; then
+      shared_dim_folder=$d/.shared/dim
       break
     fi
     d=${d%/*}
@@ -31,10 +32,72 @@ dim_add_choose_dim() {
   handle_return
 }
 
+dim_add_create_branches() {
+  begin_function
+    local create_other=t create_each=f members=( )
+    if [[ -f $dim_path/members.arr ]]; then
+      load_arr $dim_path/members.arr members || fail
+      local answer
+
+      prompt_ynq "Do you want a $base_dim:_other folder created?" answer
+      case $answer in
+        n)
+          create_other=f
+        ;;
+        q)
+          out "Aborting."
+          fail1
+        ;;
+      esac
+
+      prompt_ynq "Do you want a $base_dim:* folder created for each member?" answer
+      case $answer in
+        y)
+          create_each=t
+        ;;
+        q)
+          out "Aborting."
+          fail1
+        ;;
+      esac
+    fi
+
+    local folders= real_members=( ) member
+    if [[ $create_other == t ]]; then
+      folders+="_other "
+      member+=( _other )
+    fi
+    if [[ $create_each == t ]]; then
+      begin_for member in "${members[@]}"; doo
+        local value
+        get_sane_value "$folder"
+        folders+="$value "
+        real_members+=( "$member" )
+      end_for
+    fi
+
+    local i folder target
+    begin_for (( i = 0; i < ${#folders[*]}; i++ )); doo
+      folder=${folders[$i]}
+      member=${real_members[$i]}
+      target=$seed_path/$base_dim:$folder
+      mkdir $target || fail
+      safe_link $seed_path/.dna $target/ || fail
+      if [[ "$member" != "$folder" ]]; then
+        echo "$member" >$target/.member || fail
+      fi
+    end_for
+
+  end_function
+  handle_return
+}
+
 dim_add_command() {
   begin_function
-    local shared_dim_folder= d=$cell_path
+    local shared_dim_folder= seed_path trunk_seed_path
     setup_cell_path_vars $cell_path || fail
+    find_seed_path $cell_path || fail
+    trunk_seed_path=$seed_path
 
     dim_add_find_shared_dim
 
@@ -45,20 +108,17 @@ dim_add_command() {
 
     begin_for dim in $dims; doo
 
-      log_info "Adding dim $dim"
+      local base_dim=${dim%%-*}
+      log_info "Adding dim $base_dim"
 
-      if [[ -d $shared_dim_folder/$dim ]]; then
-        local dim_name= head_part tail_part file base_dim
-        base_dim=${dim%%-*}
-        if [[ -e $seed_path/.dna/${base_dim}_ || -e $seed_path/$base_dim:all ]]; then
-          log_fatal "Dim $dim has already been added to this cell"
+      local dim_path=$shared_dim_folder/$dim
+      if [[ -d $dim_path ]]; then
+        if [[ -e $trunk_seed_path/.dna/${base_dim}_ ]]; then
+          log_fatal "Dim $base_dim has already been added to this cell"
           fail1
         fi
-        mkdir -p $seed_path/$base_dim:all/.dna || fail
-        safe_link $seed_path/.dna/* $seed_path/$base_dim:all/.dna/ || fail
-        safe_link $shared_dim_folder/$dim $seed_path/.dna/${base_dim}_ || fail
-
-        log_info "Added $dim_name"
+        safe_link $dim_path $trunk_seed_path/.dna/${base_dim}_ || fail
+        dim_add_create_branches || fail
       else
         log_fatal "Dim not found: $dim in $shared_dim_folder"
         log_fatal "You can run this command without specifying dim to get a list of options"
@@ -68,7 +128,15 @@ dim_add_command() {
     end_for
 
     command_successful=t
+
   end_function
+
+  if failed; then
+    if [[ "${base_dim:-}" && -e $trunk_seed_path/.dna/${base_dim}_ ]]; then
+      rm -rf $trunk_seed_path/.dna/${base_dim}_ 
+    fi
+  fi
+
   handle_return
 }
 
