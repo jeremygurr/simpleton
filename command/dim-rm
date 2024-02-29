@@ -1,68 +1,42 @@
 #!/usr/bin/env bash
 
+dim_rm_delete_branches() {
+  begin_function
+
+    local seed=$1 branch sub_found=f
+    local branches=$(find1 $seed -name "*:*" | sort) || fail
+
+    begin_for branch in $branches; doo
+      dim=${branch##*/}
+      dim=${dim%%:*}
+      dim_rm_delete_branches $branch || fail
+      sub_found=t
+    end_for
+
+    if [[ $sub_found == f && $seed == *:* ]]; then
+      log_info "Removing dim $dim"
+      rm -rf $seed || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 dim_rm_command() {
   begin_function
 
+    local seed_path trunk_seed_path
     setup_cell_path_vars $cell_path || fail
-    local dims=${dims:-${dim:-}} dim
+    find_seed_path $cell_path || fail
+    trunk_seed_path=$seed_path
 
-    # if [[ ! -f "$var_path/dims" ]]; then
-    #   log_fatal "This cell has no dimensions."
-    #   fail1
-    # fi
+    local dim=
+    dim_rm_delete_branches $seed_path || fail
 
-    if [[ ! "$dims" ]]; then
-      local available_dims=$(<$var_path/dims)
-      if [[ "$available_dims" ]]; then
-        local PS3="Remove dim: " 
-        select dims in $available_dims 
-          do break; done
-      fi
-      if [[ ! $dims ]]; then
-        log_fatal "dim must be specified"
-        fail1
-      fi
+    local dim_folder=$seed_path/.dna/${dim}_
+    if [[ -d $dim_folder ]]; then
+      rm -rf $dim_folder || fail
     fi
-    
-    begin_for dim in $dims; doo
-
-      log_verbose "Removing dim $dim"
-      local found_something=f
-      local file
-      
-      begin_for file in \
-        $dim_all_path/var/${dim}_description \
-        $var_path/${dim}_description \
-        $dim_all_path/var/${dim}_examples \
-        $var_path/${dim}_examples \
-        $dim_all_path/fun/${dim}_expand \
-        $fun_path/${dim}_expand; doo
-        if [[ -e $file || -L $file ]]; then
-          rm $file || fail
-          found_something=t
-        fi
-      end_for
-
-      if [[ -e $var_path/dims ]]; then
-        grep -v "$dim" $var_path/dims >$var_path/dims.new
-        if files_are_different $var_path/dims $var_path/dims.new >/dev/null; then
-          found_something=t
-          local new_dims=( $(<$var_path/dims.new) )
-          if [[ "${new_dims:-}" ]]; then
-            mv $var_path/dims.new $var_path/dims || fail
-          else
-            rm $var_path/dims $var_path/dims.new || fai
-          fi
-        else
-          rm $var_path/dims.new || fail
-        fi
-      fi
-
-      if [[ $found_something == f ]]; then
-        log_warn "Dim not found: $dim"
-      fi
-
-    end_for
 
     command_successful=t
 
