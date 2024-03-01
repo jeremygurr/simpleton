@@ -33,6 +33,39 @@ dim_add_choose_dim() {
   handle_return
 }
 
+dim_add_create_branches_at_seed() {
+  begin_function
+    local branches=$(find1 $seed_path -name "*:*" | sort) || fail
+    if [[ "$branches" ]]; then
+      local branch branch_dim
+      begin_for branch in $branches; doo
+        branch_dim=${branch##*/}
+        branch_dim=${branch_dim%%:*}
+        if [[ $branch_dim == $dim ]]; then
+          # dim is already added here
+          break
+        else
+          seed_path=$branch dim_add_create_branches_at_seed || fail
+        fi
+      end_for
+    else
+      local i folder target
+      begin_for (( i = 0; i < ${#folders[*]}; i++ )); doo
+        folder=${folders[$i]}
+        member=${real_members[$i]}
+        target=$seed_path/$base_dim:$folder
+        mkdir $target || fail
+        safe_link $(realpath $seed_path/.dna) $target/ || fail
+        if [[ "$member" != "$folder" ]]; then
+          echo "$member" >$target/.member || fail
+        fi
+        added_something=t
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
 dim_add_create_branches() {
   begin_function
     local create_other=t create_each=f members=( )
@@ -77,17 +110,7 @@ dim_add_create_branches() {
       end_for
     fi
 
-    local i folder target
-    begin_for (( i = 0; i < ${#folders[*]}; i++ )); doo
-      folder=${folders[$i]}
-      member=${real_members[$i]}
-      target=$seed_path/$base_dim:$folder
-      mkdir $target || fail
-      safe_link $seed_path/.dna $target/ || fail
-      if [[ "$member" != "$folder" ]]; then
-        echo "$member" >$target/.member || fail
-      fi
-    end_for
+    dim_add_create_branches_at_seed || fail
 
   end_function
   handle_return
@@ -95,15 +118,14 @@ dim_add_create_branches() {
 
 dim_add_command() {
   begin_function
-    local shared_dim_folder= seed_path trunk_seed_path
+    local shared_dim_folder= seed_path 
     setup_cell_path_vars $cell_path || fail
     find_seed_path $cell_path || fail
-    trunk_seed_path=$seed_path
 
     dim_add_find_shared_dim || fail
 
     local dims=${dims:-${dim:-}} dim
-    if [[ ! "${dim:-}" ]]; then
+    if [[ ! "${dims:-}" ]]; then
       dim_add_choose_dim || fail
     fi
 
@@ -112,18 +134,31 @@ dim_add_command() {
       local base_dim=${dim%%-*}
       log_info "Adding dim $dim"
 
-      local dim_path=$shared_dim_folder/$dim
-      if [[ -d $dim_path ]]; then
-        if [[ -e $trunk_seed_path/.dna/${base_dim}_ ]]; then
-          log_fatal "Dim $base_dim has already been added to this cell"
+      local added_something=f \
+        dim_path=$shared_dim_folder/$dim
+
+      if [[ ! -e $seed_path/.dna/${base_dim}_ ]]; then
+        if [[ -d $dim_path ]]; then
+          safe_link $dim_path $seed_path/.dna/${base_dim}_ || fail
+          added_something=t
+        else
+          log_fatal "Dim not found: $dim in $shared_dim_folder"
+          log_fatal "You can run this command without specifying dim to get a list of options"
           fail1
         fi
-        safe_link $dim_path $trunk_seed_path/.dna/${base_dim}_ || fail
-        dim_add_create_branches || fail
-      else
-        log_fatal "Dim not found: $dim in $shared_dim_folder"
-        log_fatal "You can run this command without specifying dim to get a list of options"
-        fail1
+      fi
+
+      if [[ ! -d $dim_path ]]; then
+        dim_path=$seed_path/.dna/${base_dim}_
+        if [[ ! -d $dim_path ]]; then
+          log_fatal "Internal error: shouldn't be possible"
+          fail1
+        fi
+      fi
+      dim_add_create_branches || fail
+
+      if [[ $added_something == f ]]; then
+        log_warn "Dim $dim already added, nothing to do."
       fi
 
     end_for
@@ -133,8 +168,8 @@ dim_add_command() {
   end_function
 
   if failed; then
-    if [[ "${base_dim:-}" && -e $trunk_seed_path/.dna/${base_dim}_ ]]; then
-      rm -rf $trunk_seed_path/.dna/${base_dim}_ 
+    if [[ "${base_dim:-}" && -L $seed_path/.dna/${base_dim}_ ]]; then
+      rm $seed_path/.dna/${base_dim}_ 
     fi
   fi
 
