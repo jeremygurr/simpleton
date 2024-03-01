@@ -55,20 +55,32 @@ side_log() {
 }
 
 debug_expansion_clean() {
-  local line shortest= plusses code plus_length from=$1
+  local line shortest= plusses code plus_length from=$1 show
   while read -r line || true; do
     if [[ "$line" =~ ^(\++)\ (.*) ]]; then
       plusses=${BASH_REMATCH[1]}
       code=${BASH_REMATCH[2]}
       plus_length=${#plusses}
+      show=f
+
       if [[ ! "$shortest" ]]; then
         shortest=$((plus_length-1))
-      elif [[ $plus_length == $shortest ]]; then
-        if [[ "$code" != "set +x" && \
-              "$code" != "set -x" ]]; then
-          echo "+ $code"
-        fi
+        show=t
+      elif [[ $plus_length == $shortest || $debug_expansion -ge 2 ]]; then
+        show=t
       fi
+
+      if [[ $show == t \
+         && "$code" != "set +x" \
+         && "$code" != "set -x" \
+         && "$code" != *"no_trace_depth"* \
+         && "$code" != "return 0" \
+         && "$code" != "break_out=f" \
+         && "$code" != "debug_id_inc" \
+         ]]; then
+        echo "${plusses:$((shortest-1))} $code"
+      fi
+
     elif [[ "$line" ]]; then
       echo "$line"
     else
@@ -1070,7 +1082,7 @@ debug_trap() {
   if [[ "${debug_var:-}" ]]; then
     local v=${!debug_var}
     if [[ "${debug_var_old:-}" != "$v" ]]; then
-      echo "${CYAN}debug_id=$debug_id_current $debug_var=$v$RESET" >&$fd_original_err
+      echo "${CYAN}debug_id=$debug_id_current $debug_var=$v ${saved_funcname[0]}$RESET" >&$fd_original_err
     fi
     debug_var_old=$v
   fi
@@ -1270,14 +1282,15 @@ debug_trap() {
   debug_list_stack_pos=0
 
   [[ $debug_exit == t ]] && exit 0
-  debug_tracing=f
+  zombie_eval debug_tracing=f
   if (( debug_expansion > 0 
         && ${no_trace_depth:-0} <= 0 \
      )); then
     if [[ $debug_expansion == 1 \
           && " $debug_ignore " != *" $debug_prev_command "* \
-          || $debug_expansion -gt 1 ]]; then
-      debug_tracing=t
+          || $debug_expansion -gt 2 ]]; then
+      zombie_eval debug_tracing=t
+      no_trace_depth=0
     fi
   fi
 
@@ -1298,9 +1311,9 @@ debug_trap() {
 }
 
 set_return_code() {
-  #if [[ $debug_tracing == t ]]; then
+  if [[ $debug_tracing == t ]]; then
     set -x
-  #fi
+  fi
   return $1
 }
 
