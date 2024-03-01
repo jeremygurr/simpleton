@@ -237,29 +237,15 @@ debug_display_command_expansion_status() {
   esac
 }
 
-debug_inner() {
-  if [[ $debug_skip_ignore == t ]]; then
-    debug_skip_ignore=f
-    if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
-      debug_ignore_remove "$debug_current_function" 
-    fi
+debug_output_stop() {
+  if [[ -e $debug_out_path ]]; then
+    BASH_XTRACEFD=$debug_original_tracefd
+    eval "exec $fd_bash_trace>&-"
+    rm $debug_out_path
   fi
+}
 
-  debug_last_location="$raw_debug_path_to_source_file $debug_line_num"
-
-  local backlog=
-  if [[ $debug_path_to_source_file != none && "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
-    local start_line=$((debug_prev_line+1))
-    local end_line=$((debug_line_num-1))
-    backlog=$(sed -n "$start_line,${end_line}p;${end_line}q" "$debug_path_to_source_file")
-  fi
-
-  debug_prev_line="$debug_line_num"
-  debug_prev_function=$debug_current_function
-  debug_prev_source_file=$debug_source_file
-  debug_step_to_next_function=f
-  debug_step_to_next_file=f
-
+debug_output_expansion() {
   if (( debug_expansion > 0 )); then
     if [[ -f "$debug_out_path" && ! "$debug_buffered_commands" ]]; then
 
@@ -268,10 +254,8 @@ debug_inner() {
       else
         debug_expansion_clean $debug_out_path >&$fd_original_err
       fi
-      rm $debug_out_path
 
-      BASH_XTRACEFD=$debug_original_tracefd
-      eval "exec $fd_bash_trace>&-"
+      debug_output_stop
 
       if [[ $debug_prev_command =~ for\ (.*)\ in\  || $debug_prev_command =~ case\ \$(.*)\ in\  ]]; then
         set +u
@@ -315,35 +299,11 @@ debug_inner() {
 
     fi
   fi
+}
 
-  if [[ $debug_prev_command =~ (\[\[.*\]\]) && ! "$debug_buffered_commands" ]]; then
-    set +u
-    local condition=${BASH_REMATCH[1]}
-    eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
-    set -u
-  fi
-
-  if [[ $debug_prev_command =~ if\ (\(\(.*\)\))\;\ then && ! "$debug_buffered_commands" ]]; then
-    set +u
-    local condition=${BASH_REMATCH[1]}
-    eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
-    set -u
-  fi
-
-  local display_command=$debug_command
-  local raw_display_command=$display_command
-  if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] \
-     && [[ $debug_current_function != none ]] \
-     && [[ $debug_path_to_source_file != none ]]; then
-    display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
-    raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
-  fi
-
-  debug_step_to_next_line=f
-  debug_prev_command=$raw_display_command
-  debug_immediate=f
-
+debug_command_loop() {
   local debug_c debug_array no_follow_once=f
+
   debug_r=-1
   while [[ $debug_r == -1 ]]; do
 
@@ -1053,6 +1013,9 @@ debug_inner() {
     esac
   done
 
+}
+
+debug_update_expansion() {
   if (( debug_expansion > 0 )); then
     if [[ ! "${fd_bash_trace:-}" ]]; then
       exec {fd_bash_trace}>"$debug_out_path"
@@ -1063,97 +1026,9 @@ debug_inner() {
     debug_original_tracefd=${BASH_XTRACEFD:-}
     BASH_XTRACEFD=$fd_bash_trace
   fi
-
-  return 0
 }
 
-debug_trap() {
-  debug_saved_shell_options_short=$-
-  set +evTu +o pipefail
-
-  debug_rematch=( "${BASH_REMATCH[@]}" )
-  local saved_bash_source=( "${BASH_SOURCE[@]:1}" ) \
-    saved_bash_lineno=( "${BASH_LINENO[@]:1}" ) \
-    saved_funcname=( "${FUNCNAME[@]:1}" ) \
-    saved_lineno
-
-  (( saved_lineno = debug_trap_first_line - 1 )) 
-
-  if [[ "${debug_var:-}" ]]; then
-    local v=${!debug_var}
-    if [[ "${debug_var_old:-}" != "$v" ]]; then
-      echo "${CYAN}debug_id=$debug_id_current $debug_var=$v ${saved_funcname[0]}$RESET" >&$fd_original_err
-    fi
-    debug_var_old=$v
-  fi
-
-  tracing_depth=0
-  local debug_r=0
-
-  if (( ${trace_debugger:-0} > 0 )); then 
-    set -x
-    BASH_XTRACEFD=2
-    (( trace_debugger-- ))
-  fi
-
-  if [[ $debug_debug == t ]]; then
-    log_debug_debug "debug_id=$debug_id_current ${saved_bash_source[0]:-no_source}:$saved_lineno/${saved_bash_lineno[0]:-no_line} ${saved_funcname[0]:-no_func} ${BASH_COMMAND}" 
-  fi
-
-  local debug_path_to_source_file \
-    raw_debug_path_to_source_file="${saved_bash_source[0]:-none}" \
-    debug_line_num=$saved_lineno \
-    debug_current_function=${saved_funcname[0]:-none} \
-    debug_command=${BASH_COMMAND} \
-    debug_current_depth=${#saved_funcname[*]}
-
-  if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
-    return 0
-  fi
-
-  debug_load_state || return 1
-
-  [[ $debug_exit == t ]] && exit 1
-
-  local IFS=$'\n'$'\t'" " \
-    debug_full_path=${debug_full_path:-f} \
-    debug_source_file \
-    raw_debug_path_to_source_file
-
-  debug_rewind=f
-
-  debug_source_update
-
-  local line_part=$debug_line file_part=
-  if [[ "$debug_line" ]]; then
-    if [[ $debug_line == *:* ]]; then
-      line_part=${debug_line##*:}
-      file_part=${debug_line%:*}
-    fi
-  fi
-
-  local expanded_command= fixed_command=
-  if [[ "$debug_search" ]]; then
-    if [ "$debug_expanded_search" == t ]; then
-      fixed_command=${debug_command}
-      fixed_command=${fixed_command//\\/**BS**}
-      fixed_command=${fixed_command//\\\$/\\\\\$}
-      # temporarily hide this so we can keep $(( but transform $(
-      fixed_command=${fixed_command//\$((/{{{}
-      fixed_command=${fixed_command//\$(/\\\$(}
-      # restore {{{ to $((
-      fixed_command=${fixed_command//{{{/\$((}
-      fixed_command=${fixed_command//\"/\\\"}
-      fixed_command=${fixed_command//\*\*BS\*\*/\\}
-      set +u
-      eval "expanded_command=\"$fixed_command\"" &>/dev/null || true
-      set -u
-    fi
-  fi
-
-  local ok_to_debug=f
-
+debug_get_ok_to_debug() {
   if [[ $debug_immediate == t ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_immediate${RESET}" >&$fd_original_err
     ok_to_debug=t
@@ -1269,9 +1144,158 @@ debug_trap() {
     ok_to_debug=t
 
   fi
+}
 
+debug_inner() {
+  if [[ $debug_skip_ignore == t ]]; then
+    debug_skip_ignore=f
+    if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
+      debug_ignore_remove "$debug_current_function" 
+    fi
+  fi
+
+  debug_last_location="$raw_debug_path_to_source_file $debug_line_num"
+
+  local backlog=
+  if [[ $debug_path_to_source_file != none && "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
+    local start_line=$((debug_prev_line+1))
+    local end_line=$((debug_line_num-1))
+    backlog=$(sed -n "$start_line,${end_line}p;${end_line}q" "$debug_path_to_source_file")
+  fi
+
+  debug_prev_line="$debug_line_num"
+  debug_prev_function=$debug_current_function
+  debug_prev_source_file=$debug_source_file
+  debug_step_to_next_function=f
+  debug_step_to_next_file=f
+
+  if [[ $debug_prev_command =~ (\[\[.*\]\]) && ! "$debug_buffered_commands" ]]; then
+    set +u
+    local condition=${BASH_REMATCH[1]}
+    eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
+    set -u
+  fi
+
+  if [[ $debug_prev_command =~ if\ (\(\(.*\)\))\;\ then && ! "$debug_buffered_commands" ]]; then
+    set +u
+    local condition=${BASH_REMATCH[1]}
+    eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
+    set -u
+  fi
+
+  local display_command=$debug_command
+  local raw_display_command=$display_command
+  if [[ $debug_step_to_next_line == t || $debug_long_command == t ]] \
+     && [[ $debug_current_function != none ]] \
+     && [[ $debug_path_to_source_file != none ]]; then
+    display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$debug_path_to_source_file")
+    raw_display_command=$(sed -E -n "${debug_line_num}{s/^ *(.*)/\\1/;p;q;}" "$raw_debug_path_to_source_file")
+  fi
+
+  debug_step_to_next_line=f
+  debug_prev_command=$raw_display_command
+  debug_immediate=f
+
+  debug_command_loop
+
+  return 0
+}
+
+debug_trap() {
+  debug_saved_shell_options_short=$-
+  set +evTu +o pipefail
+
+  debug_rematch=( "${BASH_REMATCH[@]}" )
+  local saved_bash_source=( "${BASH_SOURCE[@]:1}" ) \
+    saved_bash_lineno=( "${BASH_LINENO[@]:1}" ) \
+    saved_funcname=( "${FUNCNAME[@]:1}" ) \
+    saved_lineno
+
+  (( saved_lineno = debug_trap_first_line - 1 )) 
+
+  if [[ "${debug_var:-}" ]]; then
+    local v=${!debug_var}
+    if [[ "${debug_var_old:-}" != "$v" ]]; then
+      echo "${CYAN}debug_id=$debug_id_current $debug_var=$v ${saved_funcname[0]}$RESET" >&$fd_original_err
+    fi
+    debug_var_old=$v
+  fi
+
+  tracing_depth=0
+  local debug_r=0
+
+  if (( ${trace_debugger:-0} > 0 )); then 
+    set -x
+    BASH_XTRACEFD=2
+    (( trace_debugger-- ))
+  fi
+
+  if [[ $debug_debug == t ]]; then
+    log_debug_debug "debug_id=$debug_id_current ${saved_bash_source[0]:-no_source}:$saved_lineno/${saved_bash_lineno[0]:-no_line} ${saved_funcname[0]:-no_func} ${BASH_COMMAND}" 
+  fi
+
+  local debug_path_to_source_file \
+    raw_debug_path_to_source_file="${saved_bash_source[0]:-none}" \
+    debug_line_num=$saved_lineno \
+    debug_current_function=${saved_funcname[0]:-none} \
+    debug_command=${BASH_COMMAND} \
+    debug_current_depth=${#saved_funcname[*]}
+
+  debug_tracing=f
   local debug_out_path=$tmp_folder/debug-out.$BASHPID
+  if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
+    debug_output_stop
+    return 0
+  fi
+
+  debug_load_state || return 1
+
+  [[ $debug_exit == t ]] && exit 1
+
+  local IFS=$'\n'$'\t'" " \
+    debug_full_path=${debug_full_path:-f} \
+    debug_source_file \
+    raw_debug_path_to_source_file
+
+  debug_rewind=f
+
+  debug_source_update
+
+  local line_part=$debug_line file_part=
+  if [[ "$debug_line" ]]; then
+    if [[ $debug_line == *:* ]]; then
+      line_part=${debug_line##*:}
+      file_part=${debug_line%:*}
+    fi
+  fi
+
+  local expanded_command= fixed_command=
+  if [[ "$debug_search" ]]; then
+    if [ "$debug_expanded_search" == t ]; then
+      fixed_command=${debug_command}
+      fixed_command=${fixed_command//\\/**BS**}
+      fixed_command=${fixed_command//\\\$/\\\\\$}
+      # temporarily hide this so we can keep $(( but transform $(
+      fixed_command=${fixed_command//\$((/{{{}
+      fixed_command=${fixed_command//\$(/\\\$(}
+      # restore {{{ to $((
+      fixed_command=${fixed_command//{{{/\$((}
+      fixed_command=${fixed_command//\"/\\\"}
+      fixed_command=${fixed_command//\*\*BS\*\*/\\}
+      set +u
+      eval "expanded_command=\"$fixed_command\"" &>/dev/null || true
+      set -u
+    fi
+  fi
+
+  local ok_to_debug=f
+
+  debug_get_ok_to_debug
+
   defer "rm $debug_out_path"
+
+  debug_output_expansion
 
   if [[ $ok_to_debug == t ]]; then
     debug_inner
@@ -1279,17 +1303,18 @@ debug_trap() {
     [[ $debug_debug == t ]] && echo "${CYAN}Not stopping.${RESET}" >&$fd_original_err
   fi
 
+  debug_update_expansion
+
   debug_list_stack_pos=0
 
   [[ $debug_exit == t ]] && exit 0
-  zombie_eval debug_tracing=f
   if (( debug_expansion > 0 
         && ${no_trace_depth:-0} <= 0 \
      )); then
     if [[ $debug_expansion == 1 \
           && " $debug_ignore " != *" $debug_prev_command "* \
           || $debug_expansion -gt 2 ]]; then
-      zombie_eval debug_tracing=t
+      debug_tracing=t
       no_trace_depth=0
     fi
   fi
