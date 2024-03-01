@@ -363,7 +363,7 @@ debug_inner() {
 
     set +u
     if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
-      eval "echo \"WATCHED: $debug_watch\"" >&$fd_original_err
+      eval "echo \"+ $debug_watch\"" >&$fd_original_err
     fi
     set -u
 
@@ -789,13 +789,24 @@ debug_inner() {
         ;;
       w)
         echo >&$fd_original_err
-        local new_watch
+        local new_watch w add=f
         read -e -p "Watch: " new_watch <&$fd_original_in >&$fd_original_err
+
         if [[ "$new_watch" == +* ]]; then
-          debug_watch+=" ${new_watch#+}"
+          new_watch=${new_watch#+}
+          add=t
+        fi
+
+        if [[ "$new_watch" =~ ^[a-zA-Z0-9_]+$ ]]; then
+          new_watch="$new_watch=\$$new_watch"
+        fi
+
+        if [[ $add == t ]]; then
+          debug_watch+=" $new_watch"
         else
           debug_watch=$new_watch
         fi
+
         debug_save_state
         no_follow_once=t
         ;;
@@ -1244,7 +1255,7 @@ debug_trap() {
   fi
 
   debug_list_stack_pos=0
-  if [[ $debug_expansion -gt 0 ]]; then
+  if (( debug_expansion > 0 )); then
     exec {fd_bash_trace}>"$debug_out_path"
     (( tracing_depth++ ))
     debug_original_tracefd=${BASH_XTRACEFD:-}
@@ -1278,7 +1289,10 @@ debug_trap() {
 }
 
 set_return_code() {
-  [[ $debug_tracing == t ]] && set -x
+  #if [[ $debug_tracing == t ]]; then
+    set -x
+  #  zombie "set -x"
+  #fi
   return $1
 }
 
