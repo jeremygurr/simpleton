@@ -190,6 +190,7 @@ PS4='$PS4'" >"$debug_state_file" || return 1
 debug_ignore_remove() {
   local remove_functions="$*"
   for x in $remove_functions; do
+    [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Removing $x from debug_ignore${RESET}" >&$fd_original_err
     remove_from_string debug_ignore "$x"
   done
 }
@@ -242,6 +243,7 @@ debug_output_stop() {
     BASH_XTRACEFD=$debug_original_tracefd
     eval "exec $fd_bash_trace>&-"
     rm $debug_out_path
+    [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Stopping debug output expansion${RESET}" >&$fd_original_err
   fi
 }
 
@@ -299,6 +301,18 @@ debug_output_expansion() {
 
     fi
   fi
+}
+
+debug_get_new_command() {
+  new_command=$original_cmd
+  local pre post
+  if [[ "$new_command" =~ ^(.*)\ debug=[^\ ]+(\ .*)?$ ]]; then
+    pre=${BASH_REMATCH[1]}
+    post=${BASH_REMATCH[2]}
+    new_command="$pre$post"
+  fi
+  new_command+=" debug=$rewind_debug_id"
+  echo "Executing command: $new_command" >&$fd_original_err
 }
 
 debug_command_loop() {
@@ -376,6 +390,7 @@ debug_command_loop() {
       silent_command=t
     else
       read -rs -N1 -u $fd_original_in debug_c 
+      user_interacted=t
     fi
 
     if [[ "$debug_c" != l && "$debug_c" != L ]]; then
@@ -397,7 +412,9 @@ debug_command_loop() {
       b)
         local rewind_debug_id=$((debug_id_current-1))
         echo "# Going back to debug_id=$rewind_debug_id..." >&$fd_original_err
-        eval "${original_cmd%debug=*} debug=$rewind_debug_id" || exit 1
+        local new_command
+        debug_get_new_command
+        eval "$new_command" || exit 1
         debug_exit=t
         exit 0
         ;;
@@ -410,7 +427,9 @@ debug_command_loop() {
             rewind_debug_id=${rewind_debug_id##*=}
           fi
           echo "# Rewinding stack to debug_id=$rewind_debug_id..." >&$fd_original_err
-          eval "${original_cmd%debug=*} debug=$rewind_debug_id" || exit 1
+          local new_command
+          debug_get_new_command
+          eval "$new_command" || exit 1
           debug_exit=t
           exit 0
         else
@@ -663,7 +682,9 @@ debug_command_loop() {
         debug_save_state
         ;;
       o)
-        echo "# Stepping out" >&$fd_original_err
+        if [[ $silent_command == f ]]; then
+          echo "# Stepping out" >&$fd_original_err
+        fi
         debug_max_depth=$((debug_current_depth-1))
         debug_r=0
         debug_long_command=t
@@ -1017,6 +1038,7 @@ debug_command_loop() {
 
 debug_update_expansion() {
   if (( debug_expansion > 0 )); then
+    [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Starting debug output expansion${RESET}" >&$fd_original_err
     if [[ ! "${fd_bash_trace:-}" ]]; then
       exec {fd_bash_trace}>"$debug_out_path"
     else
@@ -1032,7 +1054,6 @@ debug_get_ok_to_debug() {
   if [[ $debug_immediate == t ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_immediate${RESET}" >&$fd_original_err
     ok_to_debug=t
-    debug_immediate=f
 
   elif [[ -n "$debug_line" \
           && -z "$file_part" \
@@ -1194,9 +1215,12 @@ debug_inner() {
 
   debug_step_to_next_line=f
   debug_prev_command=$raw_display_command
-  debug_immediate=f
 
+  local user_interacted=f
   debug_command_loop
+  if [[ $user_interacted == t ]]; then
+    debug_immediate=f
+  fi
 
   return 0
 }
@@ -1290,20 +1314,18 @@ debug_trap() {
   fi
 
   local ok_to_debug=f
-
   debug_get_ok_to_debug
 
   defer "rm $debug_out_path"
-
   debug_output_expansion
 
   if [[ $ok_to_debug == t ]]; then
     debug_inner
+    debug_update_expansion
   else
     [[ $debug_debug == t ]] && echo "${CYAN}Not stopping.${RESET}" >&$fd_original_err
+    debug_output_stop
   fi
-
-  debug_update_expansion
 
   debug_list_stack_pos=0
 
