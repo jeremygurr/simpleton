@@ -70,15 +70,25 @@ debug_expansion_clean() {
         show=t
       fi
 
-      if [[ $show == t \
-         && "$code" != "set +x" \
-         && "$code" != "set -x" \
-         && "$code" != *"no_trace_depth"* \
-         && "$code" != "return 0" \
-         && "$code" != "break_out=f" \
-         && "$code" != "debug_id_inc" \
-         ]]; then
-        echo "${plusses:$((shortest-1))} $code"
+      if [[ $show == t ]]; then
+        local new_plus=${plusses:$((shortest-1))}
+        if [[ "$code" == "return 0" ]]; then
+          if [[ "${log_return_vars:-}" ]]; then
+            local var val
+            for var in $log_return_vars; do
+              val=${!var}
+              shell_quote_var val
+              echo "$new_plus $var=$val"
+            done
+          fi
+        elif [[ "$code" != "set +x" \
+           && "$code" != "set -x" \
+           && "$code" != *"no_trace_depth"* \
+           && "$code" != "break_out=f" \
+           && "$code" != "debug_id_inc" \
+           ]]; then
+          echo "$new_plus $code"
+        fi
       fi
 
     elif [[ "$line" ]]; then
@@ -260,24 +270,19 @@ debug_output_expansion() {
       debug_output_stop
 
       if [[ $debug_prev_command =~ for\ (.*)\ in\  || $debug_prev_command =~ case\ \$(.*)\ in\  ]]; then
-        set +u
         local w=${BASH_REMATCH[1]}
         local w=${w#\$}
         eval "local s=\"+ \$w=\$$w\""
         echo "$s" >&$fd_original_err
-        set -u
       fi
 
       # if [[ $debug_prev_command =~ ^([a-zA-Z_0-9]+)=\$\( ]]; then
-      #   set +u
       #   local w=${BASH_REMATCH[1]}
       #   eval "local s=\"+ \$w=\${$w[*]}\""
       #   echo "$s" >&$fd_original_err
-      #   set -u
       # fi
 
       if [[ $debug_prev_command =~ ^\ *(\$?[a-zA-Z_0-9]+)\+?=\((.*)\) ]]; then
-        set +u
         local w=${BASH_REMATCH[1]}
         if [[ "$w" == \$* ]]; then
           w=${w#\$}
@@ -288,15 +293,12 @@ debug_output_expansion() {
           eval "local s=\"+ \$w=( \${$w[*]} )\""
           echo "$s" >&$fd_original_err
         fi
-        set -u
       fi
 
       if [[ $debug_prev_command =~ ^\ *\(\(\ *([a-zA-Z_0-9]+)(--|\+\+)\ *\)\) ]]; then
-        set +u
         local w=${BASH_REMATCH[1]}
         eval "local s=\"+ \$w=\$$w\""
         echo "$s" >&$fd_original_err
-        set -u
       fi
 
     fi
@@ -347,11 +349,9 @@ debug_command_loop() {
 #      fi
     fi
 
-    set +u
     if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
       eval "echo \"+ $debug_watch\"" >&$fd_original_err
     fi
-    set -u
 
     if [[ ! "$debug_buffered_commands" ]]; then
       local prefix=
@@ -465,21 +465,17 @@ debug_command_loop() {
       d)
         echo >&$fd_original_err
         read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
-        set +u
         if [[ "$debug_display" =~ ^[a-zA-Z_0-9]+$ ]]; then
           eval 'echo "$'$debug_display'"' >&$fd_original_err 
         else
           eval 'echo "'$debug_display'"' >&$fd_original_err 
         fi
-        set -u
         no_follow_once=t
         ;;
       D)
         if [[ "$debug_display" ]]; then
           echo "# Showing $debug_display" >&$fd_original_err
-          set +u
           eval 'echo "[${!debug_display}]"' >&$fd_original_err
-          set -u
         else
           echo "# No previous display var." >&$fd_original_err
         fi
@@ -489,17 +485,14 @@ debug_command_loop() {
         echo >&$fd_original_err
         read -er -p "Eval: " debug_expression <&$fd_original_in >&$fd_original_err
         #eval "$debug_saved_shell_options"
-        set +u
         eval "$debug_expression" >&$fd_original_err
-        set -u +evT +o pipefail
+        set +evT +o pipefail
         no_follow_once=t
         ;;
       E)
         if [[ "$debug_expression" ]]; then
           echo "# Evaluating $debug_expression" >&$fd_original_err
-          set +u
           eval "$debug_expression" >&$fd_original_err
-          set -u
         else
           echo "# No previous expression to evaluate" >&$fd_original_err
         fi
@@ -704,12 +697,10 @@ debug_command_loop() {
         fixed_command=${fixed_command//{{{/\$((}
         fixed_command=${fixed_command//\"/\\\"}
         fixed_command=${fixed_command//\*\*BS\*\*/\\}
-        set +u
         if [[ "${debug_saved_params}" ]]; then
           set "${debug_saved_params[@]}"
         fi
         eval "echo \"$fixed_command\"" >&$fd_original_err
-        set -u
         no_follow_once=t
         ;;
       P)
@@ -725,9 +716,7 @@ debug_command_loop() {
         fixed_command=${fixed_command//~~dbo~~/\$(\[\[ }
         fixed_command=${fixed_command//~~dbc~~/ ]] \&\& echo true || echo false)}
         fixed_command=${fixed_command//\*\*BS\*\*/\\}
-        set +u
         eval "echo \"$fixed_command\"" >&$fd_original_err
-        set -u
         no_follow_once=t
         ;;
       q) 
@@ -807,11 +796,9 @@ debug_command_loop() {
         echo >&$fd_original_err
         local v
         read -e -p "Hex Display: " v <&$fd_original_in >&$fd_original_err
-        set +u
         if [[ "$v" ]]; then
           eval 'echo -n "$'${v#\$}'" | xxd' >&$fd_original_err || true
         fi
-        set -u
         no_follow_once=t
         ;;
       \()
@@ -941,9 +928,7 @@ debug_command_loop() {
         ;;
       \$)
         echo "# Entering debug shell" >&$fd_original_err
-        set +u
         debug_shell
-        set -u
         no_follow_once=t
         ;;
       ^)
@@ -1205,17 +1190,13 @@ debug_inner() {
   debug_step_to_next_file=f
 
   if [[ $debug_prev_command =~ (\[\[.*\]\]) && ! "$debug_buffered_commands" ]]; then
-    set +u
     local condition=${BASH_REMATCH[1]}
     eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
-    set -u
   fi
 
   if [[ $debug_prev_command =~ if\ (\(\(.*\)\))\;\ then && ! "$debug_buffered_commands" ]]; then
-    set +u
     local condition=${BASH_REMATCH[1]}
     eval "$condition && echo \"+ => true\" || echo \"+ => false\"" >&$fd_original_err
-    set -u
   fi
 
   local display_command=$debug_command
@@ -1326,9 +1307,7 @@ debug_trap() {
       fixed_command=${fixed_command//{{{/\$((}
       fixed_command=${fixed_command//\"/\\\"}
       fixed_command=${fixed_command//\*\*BS\*\*/\\}
-      set +u
       eval "expanded_command=\"$fixed_command\"" &>/dev/null || true
-      set -u
     fi
   fi
 
