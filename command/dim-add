@@ -109,6 +109,9 @@ dim_add_create_branches() {
         real_members+=( "$member" )
       end_for
     fi
+    if [[ $create_each == f && $create_other == f ]]; then
+      warn "You have chosen not to have dim folders created automatically, which means you must create them manually in $seed_path folder."
+    fi
 
     dim_add_create_branches_at_seed || fail
 
@@ -118,7 +121,18 @@ dim_add_create_branches() {
 
 dim_add_command() {
   begin_function
-    local shared_dim_folder= seed_path 
+    local shared_dim_folder= seed_path type=${type:-dim}
+
+    case $type in
+      dim|prop|sub_dim)
+        :
+      ;;
+      *)
+        log_fatal "Invalid type $type. Must be one of: dim sub_dim prop"
+        fail1
+      ;;
+    esac
+
     setup_cell_path_vars $cell_path || fail
     find_seed_path $cell_path || fail
 
@@ -132,10 +146,23 @@ dim_add_command() {
     begin_for dim in $dims; doo
 
       local base_dim=${dim%%-*}
-      log_info "Adding dim $dim"
+      log_info "Adding $type $dim"
 
       local added_something=f \
         dim_path=$shared_dim_folder/$dim
+
+      if [[ $type != dim ]]; then
+        local var_path=$cell_path/.dna/${type}s.var
+        local vals=
+        if [[ -f $var_path ]]; then
+          vals=$(<var_path) || fail
+        fi
+        if [[ " $vals " == *" $dim "* ]]; then
+          log_fatal "$type $dim has already been added to this cell."
+          fail1
+        fi
+        echo "$base_dim" >>$var_path || fail
+      fi
 
       if [[ ! -e $seed_path/.dna/${base_dim}_ ]]; then
         if [[ -d $dim_path ]]; then
@@ -155,7 +182,10 @@ dim_add_command() {
           fail1
         fi
       fi
-      dim_add_create_branches || fail
+
+      if [[ $type == dim ]]; then
+        dim_add_create_branches || fail
+      fi
 
       if [[ $added_something == f ]]; then
         log_warn "Dim $dim already added, nothing to do."
