@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+up_add_command() {
+  begin_function
+
+    local choices=${choices:-${choice:-}} name=${name:-}
+
+    setup_cell_path_vars $cell_path || fail
+
+    if [[ ! "$choices" ]]; then
+      log_fatal "You must specify which cells to provide as choices with the choices var"
+      fail1
+    fi
+
+    local before
+    if [[ ! "$name" ]]; then
+      if [[ "$choices" == *\ * ]]; then
+        log_fatal "You must specify the name of the upstream to add with the name var if you include more than one choice"
+        fail1
+      fi
+      before=${choices%/*/*}
+      name=${choices#$before/}
+      name=${name//\//-}
+    fi
+
+    local upstream=$dna_path/up_/$name
+
+    if [[ -e $upstream ]]; then
+      log_fatal "An upstream already exists with this name: $name"
+      fail1
+    fi
+
+    mkdir -p $upstream/choices || fail
+
+    begin_for choice in $choices; doo
+      if [[ ! -d $choice/.dna ]]; then
+        log_fatal "$choice doesn't exist or is not a cell"
+        fail1
+      fi
+      before=${choice%/*/*/*}
+      local target=${choice#$before/}
+      target=${target//\//-}
+      safe_link $choice $upstream/choices/$target || fail
+    end_for
+
+    command_successful=t
+
+  end_function
+
+  if failed; then
+    if [[ -e $upstream ]]; then
+      rm -rf $upstream
+    fi
+  fi
+
+  handle_return
+}
+
