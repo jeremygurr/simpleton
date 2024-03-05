@@ -493,307 +493,10 @@ link_dim_parts() {
   handle_return
 }
 
-promote_dep_cell() {
-  local log_show_vars=^from
-  begin_function
-
-    extra_dims+=( ${branch_dims[*]} )
-
-    local leaf_dims= last_cell_dims_loaded
-    switch_context $from || fail
-
-    local dep_dim already_promoted_path=$from
-
-    # We don't need to promote all dims in target, but only the dims in the source
-    # e1 -> e1, not e1 -> e1/ods
-    # only promote what is in source + provided by prep
-    #   can't just promote because a var exists, only if it's actually used at that point
-
-    begin_for dep_dim in ${leaf_dims[*]}; doo
-
-      log_debug "Considering promotion of $dep_dim"
-
-      # is this dim already promoted?
-      if [[ $already_promoted_path == */.dim/* ]]; then
-        already_promoted_path=${already_promoted_path%/.dim/*}
-        log_debug "Already promoted: $dep_dim"
-        continue
-      fi
-
-      local available_dim found_available_dim=f
-      # extra_dims will include all branch_dims from the downstream cell
-      # upstream prep script can add extra_dims as needed
-      # leaf_dims is the full set of dims for the upstream cell being promoted
-      begin_for available_dim in ${extra_dims[*]}; doo
-        if [[ $available_dim == $dep_dim ]]; then
-          log_debug "Found available dim for $dep_dim"
-          found_available_dim=t
-          break
-        fi
-      end_for
-
-      local values=
-      if [[ $found_available_dim == f ]]; then
-        # can't promote if dep dim doesn't exist on the branch 
-        log_debug "Upstream dim not found in base branch dims: $dep_dim"
-        if [[ $cell_is_leaf == t ]]; then
-          if type -t ${dep_dim}_expand >/dev/null; then
-            value= ${dep_dim}_expand 
-            if [[ "$values" ]]; then
-              log_debug "Found default for $dep_dim = $values"
-            fi
-          fi
-          if [[ ! "$values" ]]; then
-            log_fatal "Leaf cell was unable to resolve upstream dep to a leaf also. Missing dim $dep_dim"
-            fail1
-          fi
-        else
-          break
-        fi
-      fi
-
-      local dep_dim_var=d_$dep_dim
-
-      if [[ -v $dep_dim_var ]]; then
-        values=${!dep_dim_var}
-        if type -t ${dep_dim}_expand >/dev/null; then
-          value=$values ${dep_dim}_expand
-        fi
-      fi
-
-      values=( $values )
-
-      if [[ "${#values[*]}" -gt 1 ]]; then
-        log_fatal "Multiple values in dependency dims not yet supported (dim=$dep_dim)"
-        fail1
-      fi
-
-      if [[ "${values:-}" ]]; then
-        local sane_value
-        get_sane_value "$values" || fail
-        local old_from=$from
-        from=$from/.dim/$sane_value
-        log_debug "Promoted $dep_dim"
-        if [[ ! -d $from ]]; then
-          eval "$dep_dim_var=\"$values\""
-          log_debug "Creating sub for $from"
-          cell_path=$old_from switch_context || fail
-          # recursive
-          cell_path=$old_from create_sub_cell $from || fail
-        fi
-      else
-        log_debug "Did not promote $dep_dim because no value is found for it yet"
-        break
-      fi
-
-    end_for
-    switch_context || fail
-  end_function
-  handle_return
-}
-
-# from and to are paths to up/{dep name}/choices/{upstream} or up/{dep name}/cell 
-#   which must be a cell
-migrate_cell() {
-  local -r dep_link=$1 to=$2
-  local from=$(realpath $dep_link) 
-  local log_vars=from log_show_vars="^dep_link ^to"
-  begin_function
-
-    if [[ "$from" == */.dna/sub/* ]]; then
-      local fixed_from=${from//.dna\/sub\//}
-      if [[ -d $fixed_from ]]; then
-        force=t safe_link $fixed_from $dep_link || fail
-        from=$fixed_from
-      else
-        log_fatal "Dependencies must link to planted cells, not seeds: $from"
-        fail1
-      fi
-    fi
-
-    promote_dep_cell || fail
-    safe_link $from $to || fail
-
-  end_function
-  handle_return
-}
-
-# from and to are paths to cells
-migrate_dep2() {
-  local from=$1 to=$2
-  begin_function
-
-    if [[ -f $from || -f $from/.dna ]]; then
-      safe_link $(realpath $from) $to || fail
-
-    elif [[ -d $from/.dna ]]; then
-      # used to hold branch_dims later, but may also be passed in
-      #   by upstream prep scripts when this is called from upstream migration code
-      local extra_dims=
-      migrate_cell $from $to || fail
-
-    elif [[ -d $from ]]; then
-      log_fatal "Directory inside of dependency not supported yet"
-      fail1
-    
-    fi
-
-  end_function
-  handle_return
-}
-
-# migrates a dependency given a .dna/up or .dna/dim/_leaf/up or .dna/down folder
-migrate_dep() {
-  local -r from=$1 to=$2
-
-  local log_show_vars='^from ^to'
-  begin_function
-
-    local dep deps
-    deps=$(find1 $from -type d -not -name '.*') || fail
-    begin_for dep in $deps; doo
-
-      local dep_name=${dep##*/}
-
-      if [[ ! -d $to/$dep_name ]]; then
-        mkdir $to/$dep_name || fail
-      fi
-
-      if [[ -f $dep/prep.bash ]]; then
-        safe_link $dep/prep.bash $to/$dep_name/prep.bash || fail
-      fi
-
-      if [[ -d $dep/cell ]]; then
-        migrate_dep2 $dep/cell $to/$dep_name/cell || fail 
-      elif [[ -d $dep/choices ]]; then
-        local choice choices
-        if [[ ! -d $to/$dep_name/choices ]]; then
-          mkdir $to/$dep_name/choices || fail
-        fi
-        choices=$(find1 $dep/choices -not -name '.*') || fail
-        begin_for choice in $choices; doo
-          local choice_name=${choice##*/}
-          if [[ ! -d "$choice" ]]; then
-            log_fatal "Invalid config for $dep: $choice_name is not a folder"
-            fail1
-          fi
-          migrate_dep2 $choice $to/$dep_name/choices/$choice_name || fail
-        end_for
-      else
-        log_fatal "Dependency is missing choices or cell folder: $dep"
-        fail1
-      fi
-
-    end_for
-
-  end_function
-  handle_return
-}
-
-# inputs example: 
-#   from=.../.dna/dim/_leaf/out
-#   to=.../.dna/out
-migrate_out() {
-  local from=$1
-  local -r to=$2
-
-  local log_show_vars='^from ^to'
-  begin_function_hi
-
-    local -r dim_var=d_${leaf_dims}
-    local -r value=${!dim_var}
-    local sane_value
-    get_sane_value "$values" || fail
-    from+=/$sane_value
-    from=$(realpath $from)
-    if [[ ! -d $from ]]; then
-      log_fatal "dna out dim path is missing: $from"
-      fail1
-    fi
-    safe_link $from $to || fail
-
-  end_function
-  handle_return
-}
-
-migrate_deps() {
-  local log_show_vars='^dna_path ^sub_dna_path'
-  begin_function
-    local x y target
-    begin_for x in _leaf _all; doo
-      begin_for y in up down out; doo
-        if [[ -d $dim_path/$x/$y ]]; then
-
-          if [[ $is_branch == t ]]; then
-            target=dim/$x/$y
-            if [[ ! -d $sub_dna_path/dim ]]; then
-              mkdir $sub_dna_path/dim || fail
-            fi
-            if [[ ! -d $sub_dna_path/dim/$x ]]; then
-              mkdir $sub_dna_path/dim/$x || fail
-            fi
-          else
-            target=$y
-          fi
-
-          if [[ ! -d $sub_dna_path/$target ]]; then
-            mkdir $sub_dna_path/$target || fail
-          fi
-
-          if [[ $y == out ]]; then
-            migrate_out $dim_path/$x/$y $sub_dna_path/$target || fail
-          else
-            migrate_dep $dim_path/$x/$y $sub_dna_path/$target || fail
-          fi
-
-        fi
-      end_for
-    end_for
-  end_function
-  handle_return
-}
-
-create_sub_branch_or_leaf() {
-  local cell=$cell 
-  local log_vars=cell log_show_vars=short_cell
-  begin_function
-    if [[ -d $cell ]]; then
-      log_fatal "Cell already exists $cell"
-      fail1
-    fi
-    mkdir -p $cell || fail
-    local branch_dims=( ${branch_dims[*]} )
-    if (( branch_dim_count >= trunk_dim_count )); then
-      log_fatal "Interal error: there are more branch dims than trunk dims defined for this cell: $cell_path"
-      fail1
-    fi
-    branch_dims+=( ${trunk_dims[$branch_dim_count]} )
-    
-    local sub_dna_path=$cell/.dna 
-
-    mkdir $sub_dna_path || fail
-    local -r super_dims=( ${leaf_dims[*]} ) || fail
-    local -r super_dim_count=${#super_dims[*]}
-    if [[ "$super_dims" ]]; then
-      local is_branch=f
-      if (( super_dim_count > 1 )); then
-        is_branch=t
-        create_sub_branch || fail
-        local target_folder=$sub_dim/_all/var
-        if [[ ! -d $target_folder ]]; then
-          mkdir $target_folder || fail
-        fi
-      else
-        create_sub_leaf || fail
-      fi
-      migrate_deps || fail
-    fi
-  end_function
-  handle_return
-}
-
 create_sub_cell() {
-  local sub_cell=$1
+  local sub_cell=$sub_cell \
+    parent_cell=$parent_cell \
+    parent_seed=$parent_seed
 
   local log_show_vars='^sub_cell'
   begin_function
@@ -813,8 +516,6 @@ create_sub_cell() {
       fail1
     fi
 
-    local parent_cell=${sub_cell%/*}
-    local parent_seed=/seed${parent_cell#/work}
     if [[ "$parent_cell" == "$sub_cell" ]]; then
       log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
       stack_trace
@@ -839,11 +540,18 @@ update_member() {
 
     get_sane_value "$member" || fail
     member_path=$cell_path/$dim:$sane_value
-    if [[ ! -d $member_path ]]; then
-      create_sub_cell $member_path || fail
-    fi
+
     local needs_update=
-    get_needs_update $member_path || return 1
+    if [[ ! -d $member_path ]]; then
+      parent_cell=$cell_path \
+      parent_seed=$seed_path \
+      sub_cell=$member_path \
+      create_sub_cell || fail
+      needs_update=t
+    else
+      get_needs_update $member_path || fail
+    fi
+
     if [[ $needs_update == t ]]; then
 
       if (( member_count > 1 )); then
