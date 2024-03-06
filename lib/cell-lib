@@ -115,7 +115,6 @@ load_var() {
     ;;
     *)
       quotes=single shell_quote_var to_var
-      #to_var="'${to_var//\'/\'\\\'\'}'"
     ;;
   esac
 }
@@ -123,11 +122,16 @@ load_var() {
 load_arr() {
   local from=$1 to_var=$2 line
   while IFS= read -r line || [[ "$line" ]]; do
-    if [[ "$line" == \"* ]]; then
-      eval "$to_var+=( $line )"
-    else
-      eval "$to_var+=( \"$line\" )"
-    fi
+    trim_ws line
+    case "$line" in
+      \"*|\'*|\(*)
+        :
+      ;;
+      *)
+        quotes=single shell_quote_var line
+      ;;
+    esac
+    eval "$to_var+=( $line )"
   done < <(cat "$from")
 }
 
@@ -396,7 +400,7 @@ make_context_expand_find_members() {
     local member_paths=$(find1 $seed_path -name "$dim:*" -type d | sort -g) || fail
 
     begin_for branch in $member_paths; doo
-      m=${branch#*:}
+      m=${branch##*/*:}
       if [[ $m == _all ]]; then
         log_fatal "Should not have an _all as a dim member: $branch"
         fail1
@@ -593,8 +597,9 @@ make_context() {
     source $context_path || fail
 
     make_or_load_context_dims || fail
+    prop_count=${#props[*]}
 
-    if (( leaf_dim_count > 0 )); then
+    if (( leaf_dim_count > 0 || prop_count > 0 )); then
       make_or_load_context_expand || fail
     fi
 
