@@ -373,6 +373,18 @@ leaf_dims=( ${leaf_dims[*]} )
 leaf_dim_count=$leaf_dim_count
 cell_is_leaf=$cell_is_leaf" >>$context_path || fail
     fi
+
+    local dim assignment member i
+    begin_for ((i = 0; i < branch_dim_count; i++)); doo
+      dim=${branch_dims[$i]}
+      member=${branch_members[$i]}
+      shell_quote_var member
+      assignment="d_$dim=$member"
+      if [[ $make_or_load == make ]]; then
+        echo "$assignment" >>$context_path || fail
+      fi
+      eval "$assignment"
+    end_for
   end_function
   handle_return
 }
@@ -505,7 +517,7 @@ make_or_load_context_expand() {
     fi
 
     local dim
-    begin_for dim in ${leaf_dims[*]:-}; doo
+    begin_for dim in ${leaf_dims[*]:-} ${props[*]:-}; doo
 
       if ! function_exists ${dim}_expand; then
         local members=() aliases=() has_explicit_member_list=f fun
@@ -1152,6 +1164,9 @@ expand_values_single() {
           "Use plural dim $dims if you intend to have multiple values."
         fail1
       fi
+    else
+      log_fatal "Internal error: Missing ${dim}_expand function, which should have been created by make_context method"
+      fail1
     fi
 
   end_function
@@ -1174,7 +1189,7 @@ expand_values_plural() {
         fi
         new_values=( "${values[@]}" )
       else
-        log_fatal "Missing value for dimension: $RESET$dim"
+        log_fatal "Internal error: Missing ${dim}_expand function, which should have been created by make_context method"
         fail1
       fi
 
@@ -1196,7 +1211,8 @@ expand_values_plural() {
           new_values+=( "${values[@]}" )
         end_for
       else
-        new_values=( "${values[@]}" )
+        log_fatal "Internal error: Missing ${dim}_expand function, which should have been created by make_context method"
+        fail1
       fi
 
     fi
@@ -1230,8 +1246,6 @@ expand_values() {
       eval "values=\${d_$dims:-\${$dims:-}}"
       expand_values_plural || fail
     fi
-
-    branch_members=( "${values[@]}" )
 
   end_function
   handle_return
@@ -1804,14 +1818,26 @@ execute_command_internal() {
         :
       ;;
       *)
+
         switch_context || {
           log_fatal "Context failed to load for $cell_path"
           fail1
         }
+
         if [[ "${leaf_dims:-}" ]]; then
           dim=$leaf_dims \
           expand_values || fail
         fi
+
+        local prop plural
+        begin_for prop in ${props[*]}; doo
+          dim=$prop \
+          expand_values || fail
+          get_plural $prop || fail
+          eval "$dim=\${values[*]}" || fail
+          eval "$plural=\${values[*]}" || fail
+        end_for
+
       ;;
     esac
 
