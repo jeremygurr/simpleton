@@ -114,7 +114,8 @@ load_var() {
       :
     ;;
     *)
-      to_var="'${to_var//\'/\'\\\'\'}'"
+      quotes=single shell_quote_var to_var
+      #to_var="'${to_var//\'/\'\\\'\'}'"
     ;;
   esac
 }
@@ -135,7 +136,10 @@ make_or_load_cyto_var() {
     local var_full_path=$1 var=$prefix$2 content 
     load_var $var_full_path content
     if [[ $make_or_load == make ]]; then
-      echo "${NL}$var=$content" >>$context_path || fail
+      if [[ $last_type == fun ]]; then
+        echo >>$context_path || fail
+      fi
+      echo "$var=$content" >>$context_path || fail
     else
       eval "$var=$content" || fail
     fi
@@ -156,7 +160,10 @@ make_or_load_cyto_arr() {
     result=${result% }
 
     if [[ $make_or_load == make ]]; then
-      echo "${NL}$var=( $result )" >>$context_path || fail
+      if [[ $last_type == fun ]]; then
+        echo >>$context_path || fail
+      fi
+      echo "$var=( $result )" >>$context_path || fail
     else
       eval "$var=( $result )" || fail
     fi
@@ -179,14 +186,34 @@ make_or_load_cyto_raw() {
   handle_return
 }
 
-# must set prefix= before calling this
-make_or_load_dna_contents() {
-  local dna_path=$1 prefix=${prefix:-}
+make_or_load_cyto_types() {
+  local types="$*"
   begin_function
-    local dna_contents=$(find1 $dna_path -not -name ".*" | sort -g) || fail
+
+    local name_matcher= type
+    begin_for type in $types; doo
+      if [[ "$name_matcher" ]]; then
+        name_matcher+=" -or"
+      fi
+      name_matcher+=" -name '*.$type'"
+    end_for
+
+    local dna_contents=$(eval "find -L $dna_path -type f -not -name '.*' -not -path '*/.dna/*/.dna/*'$name_matcher" | sort -g) || fail
+    local last_part item_name dna_full_item sub_path sub_part suffix prefix
     begin_for dna_full_item in $dna_contents; doo
       last_part=${dna_full_item##*/}
       item_name=${last_part#*([0-9])-}
+
+      prefix=
+      sub_path=${dna_full_item#$dna_path/}
+      if [[ $sub_path == */* ]]; then
+        sub_path=${sub_path%/*}
+        begin_for sub_part in ${sub_path//\// }; doo
+          if [[ $sub_part == *_ ]]; then
+            prefix+=$sub_part
+          fi
+        end_for
+      fi
 
       suffix=
       if [[ $item_name == *.* ]]; then
@@ -194,32 +221,39 @@ make_or_load_dna_contents() {
         item_name=${item_name%.*}
       fi
 
-      if [[ -f $dna_full_item ]]; then
-        case $suffix in
-          var)
-            make_or_load_cyto_var $dna_full_item $item_name || fail
-          ;;
-          arr)
-            make_or_load_cyto_arr $dna_full_item $item_name || fail
-          ;;
-          fun)
-            make_or_load_cyto_fun $dna_full_item $item_name || fail
-          ;;
-          '')
-            make_or_load_cyto_raw $dna_full_item $item_name || fail
-          ;;
-          *)
-            log_debug "Unknown dna object: $dna_full_item. Ignoring."
-          ;;
-        esac
-      elif [[ -d $dna_full_item ]]; then
-        local more_prefix=
-        if [[ $item_name == *_ ]]; then
-          more_prefix=$item_name
-        fi
-        prefix=$prefix$more_prefix make_or_load_dna_contents $dna_full_item || fail
-      fi
+      case $suffix in
+        var)
+          make_or_load_cyto_var $dna_full_item $item_name || fail
+        ;;
+        arr)
+          make_or_load_cyto_arr $dna_full_item $item_name || fail
+        ;;
+        fun)
+          make_or_load_cyto_fun $dna_full_item $item_name || fail
+        ;;
+        raw)
+          make_or_load_cyto_raw $dna_full_item $item_name || fail
+        ;;
+        *)
+          log_debug "Unknown dna object: $dna_full_item. Ignoring."
+        ;;
+      esac
+
+      last_type=$suffix
+
     end_for
+
+  end_function
+  handle_return
+}
+
+# must set prefix= before calling this
+make_or_load_dna_contents() {
+  local dna_path=$1 prefix=${prefix:-}
+  begin_function
+    make_or_load_cyto_types var arr || fail
+    make_or_load_cyto_types raw || fail
+    make_or_load_cyto_types fun || fail
   end_function
   handle_return
 }
@@ -327,16 +361,17 @@ make_or_load_context_dims() {
     log_debug "cell_is_leaf=$cell_is_leaf"
 
     if [[ $make_or_load == make ]]; then
-      echo "
-trunk_dims=( ${trunk_dims[*]} )
+      if [[ $last_type == fun ]]; then
+        echo >>$context_path || fail
+      fi
+      echo "trunk_dims=( ${trunk_dims[*]} )
 trunk_dim_count=$trunk_dim_count
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( "${branch_members[@]}" )
 leaf_dims=( ${leaf_dims[*]} )
 leaf_dim_count=$leaf_dim_count
-cell_is_leaf=$cell_is_leaf
-" >>$context_path || fail
+cell_is_leaf=$cell_is_leaf" >>$context_path || fail
     fi
   end_function
   handle_return
@@ -489,10 +524,11 @@ make_or_load_context_expand() {
         fi
 
         if [[ -v ${dim}_aliases ]]; then
-          eval "aliases=( \"\${${dim}_aliases[@]}\" )" || fail
+          eval "${NL}aliases=( \"\${${dim}_aliases[@]}\" )" || fail
         fi
 
-        fun="${dim}_expand() {
+        fun="
+${dim}_expand() {
   problem=
   case \"\$value\" in"
 
@@ -528,13 +564,12 @@ make_context() {
 
     echo "#!/usr/env bash
 # WARNING: This file is auto-generated from $dna_path" >$context_path || fail
-    local lock_fd
+    local lock_fd last_type=fun
     timeout=$lock_timeout \
       lock_path=$context_path \
       fd_write_lock || fail
 
     if [[ -d $dna_path ]]; then
-      local prefix=
       make_or_load_dna_contents $dna_path || fail
     elif [[ -f $dna_path ]]; then
       cat $dna_path >>$context_path || fail
