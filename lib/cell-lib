@@ -75,6 +75,20 @@ export debug_ignore+="
 debug_ignore=( $debug_ignore )
 debug_ignore=" ${debug_ignore[*]} "
 
+write_to_context() {
+  local new_type=$1 content=$2
+  begin_function
+    if [[ $make_or_load == make ]]; then
+      if [[ $last_type == fun ]]; then
+        echo >>$context_path || fail
+      fi
+      echo "$content" >>$context_path || fail
+      last_type=$new_type
+    fi
+  end_function
+  handle_return
+}
+
 make_or_load_dna_fun() {
   begin_function
     local full_path=$1 name=$prefix$2 content fun
@@ -95,11 +109,9 @@ $content
 "
     fi
 
-    if [[ $make_or_load == make ]]; then
-      echo -n "$fun" >>$context_path || fail
-    else
-      eval "$fun" || fail
-    fi
+    eval "$fun" || fail
+    write_to_context fun "$fun" || fail
+
   end_function
   handle_return
 }
@@ -140,14 +152,8 @@ make_or_load_dna_var() {
   begin_function
     local var_full_path=$1 var=$prefix$2 content 
     load_var $var_full_path content
-    if [[ $make_or_load == make ]]; then
-      if [[ $last_type == fun ]]; then
-        echo >>$context_path || fail
-      fi
-      echo "$var=$content" >>$context_path || fail
-    else
-      eval "$var=$content" || fail
-    fi
+    eval "$var=$content" || fail
+    write_to_context var "$content" || fail
   end_function
   handle_return
 }
@@ -158,14 +164,9 @@ make_or_load_dna_arr() {
     local var_full_path=$1 var=$prefix$2 content
     load_arr $var_full_path content || fail
 
-    if [[ $make_or_load == make ]]; then
-      if [[ $last_type == fun ]]; then
-        echo >>$context_path || fail
-      fi
-      echo "$var=( $content )" >>$context_path || fail
-    else
-      eval "$var=( $content )" || fail
-    fi
+    local result="$var=( $content )"
+    eval "$result" || fail
+    write_to_context var "$result" || fail
 
   end_function
   handle_return
@@ -176,11 +177,8 @@ make_or_load_dna_raw() {
     local full_path=$1 name=$2 content 
     content=$(<$full_path)
     trim_ws content
-    if [[ $make_or_load == make ]]; then
-      echo "${NL}$content" >>$context_path || fail
-    else
-      eval "$content" || fail
-    fi
+    eval "$content" || fail
+    write_to_context fun "$content" || fail
   end_function
   handle_return
 }
@@ -261,7 +259,9 @@ make_or_load_dna_folders() {
         eval "$current_var+=( $f )"
         if [[ -L $folder ]]; then
           local linktarget=$(realpath $folder)
-          eval "${current_var}_${f//-/_}_linktarget=$linktarget"
+          local result="${current_var}_${f//-/_}_linktarget=$linktarget"
+          eval "result" || fail
+          write_to_context var "$result" || fail
         fi
       fi
 
@@ -397,19 +397,14 @@ make_or_load_context_dims() {
     fi
     log_debug "cell_is_leaf=$cell_is_leaf"
 
-    if [[ $make_or_load == make ]]; then
-      if [[ $last_type == fun ]]; then
-        echo >>$context_path || fail
-      fi
-      echo "trunk_dims=( ${trunk_dims[*]} )
+    write_to_context fun "trunk_dims=( ${trunk_dims[*]} )
 trunk_dim_count=$trunk_dim_count
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( "${branch_members[@]}" )
 leaf_dims=( ${leaf_dims[*]} )
 leaf_dim_count=$leaf_dim_count
-cell_is_leaf=$cell_is_leaf" >>$context_path || fail
-    fi
+cell_is_leaf=$cell_is_leaf" || fail
 
     local dim assignment member i
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
@@ -417,10 +412,8 @@ cell_is_leaf=$cell_is_leaf" >>$context_path || fail
       member=${branch_members[$i]}
       shell_quote_var member
       assignment="d_$dim=$member"
-      if [[ $make_or_load == make ]]; then
-        echo "$assignment" >>$context_path || fail
-      fi
       eval "$assignment"
+      write_to_context var "$assignment" || fail
     end_for
   end_function
   handle_return
@@ -593,11 +586,8 @@ ${dim}_expand() {
           make_context_expand_members_known || fail
         fi
 
-        if [[ $make_or_load == make ]]; then
-          echo "$fun" >>$context_path || fail
-        else
-          eval "$fun" || fail
-        fi
+        eval "$fun" || fail
+        write_to_context fun "$fun"
       fi
     done
 
@@ -848,17 +838,16 @@ make_cyto_up() {
     begin_for up_name in ${up[*]}; doo
       local dep_path=$up_path/$up_name
       mkdir $dep_path || fail
-      if [[ -v up_${up_name}_cell ]]; then
-        local -n from_var=up_${up_name}_cell
-        local from=${!from_var}
-        safe_link $from $dep_path/cell || fail
-      elif [[ -v up_${up_name}_choices ]]; then
+      if [[ -v up_${up_name}_choices ]]; then
         local from
         local -n choices=up_${up_name}_choices
         mkdir $dep_path/choices || fail
         begin_for from in ${choices[*]}; doo
           safe_link $from $dep_path/choices/ || fail
         end_for
+      else
+        log_fatal "Invalid upstream config for $up_path: Missing choices folder."
+        fail1
       fi
     end_for
   end_function
@@ -899,7 +888,7 @@ cell_context_load() {
 
         source $context_path || fail
 
-        if [[ "$up" && ! -d $up_path ]]; then
+        if [[ "$up" && ! -d $up_path && $cell_is_leaf == t ]]; then
           make_cyto_up || fail
         fi
 
