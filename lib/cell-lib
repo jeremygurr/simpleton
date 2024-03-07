@@ -75,7 +75,7 @@ export debug_ignore+="
 debug_ignore=( $debug_ignore )
 debug_ignore=" ${debug_ignore[*]} "
 
-make_or_load_cyto_fun() {
+make_or_load_dna_fun() {
   begin_function
     local full_path=$1 name=$prefix$2 content fun
     content=$(<$full_path)
@@ -136,7 +136,7 @@ load_arr() {
   to_var=${to_var# }
 }
 
-make_or_load_cyto_var() {
+make_or_load_dna_var() {
   begin_function
     local var_full_path=$1 var=$prefix$2 content 
     load_var $var_full_path content
@@ -152,7 +152,7 @@ make_or_load_cyto_var() {
   handle_return
 }
 
-make_or_load_cyto_arr() {
+make_or_load_dna_arr() {
   begin_function
 
     local var_full_path=$1 var=$prefix$2 content
@@ -171,7 +171,7 @@ make_or_load_cyto_arr() {
   handle_return
 }
 
-make_or_load_cyto_raw() {
+make_or_load_dna_raw() {
   begin_function
     local full_path=$1 name=$2 content 
     content=$(<$full_path)
@@ -185,7 +185,7 @@ make_or_load_cyto_raw() {
   handle_return
 }
 
-make_or_load_cyto_types() {
+make_or_load_dna_types() {
   local types="$*"
   begin_function
 
@@ -222,16 +222,16 @@ make_or_load_cyto_types() {
 
       case $suffix in
         var)
-          make_or_load_cyto_var $dna_full_item $item_name || fail
+          make_or_load_dna_var $dna_full_item $item_name || fail
         ;;
         arr)
-          make_or_load_cyto_arr $dna_full_item $item_name || fail
+          make_or_load_dna_arr $dna_full_item $item_name || fail
         ;;
         fun)
-          make_or_load_cyto_fun $dna_full_item $item_name || fail
+          make_or_load_dna_fun $dna_full_item $item_name || fail
         ;;
         raw)
-          make_or_load_cyto_raw $dna_full_item $item_name || fail
+          make_or_load_dna_raw $dna_full_item $item_name || fail
         ;;
         *)
           log_debug "Unknown dna object: $dna_full_item. Ignoring."
@@ -246,13 +246,45 @@ make_or_load_cyto_types() {
   handle_return
 }
 
+make_or_load_dna_folders() {
+  local folder=$1 prefix=${prefix:-}
+  begin_function
+
+    local folders=$(eval "find1 $folder -type d -not -name '.*'" | sort -g) || fail
+    local current_var=$prefix${folder##*/} f
+
+    begin_for folder in $folders; doo
+
+      f=${folder##*/}
+      eval "$current_var+=( $f )"
+
+      if [[ -L $folder ]]; then
+        local linktarget=$(realpath $folder)
+        eval "${current_var}_linktarget=$linktarget"
+      fi
+
+      if [[ ! -d $folder/.dna ]]; then
+        local new_prefix=$prefix
+        if [[ $folder == *_ ]]; then
+          new_prefix+=$folder
+        fi
+        prefix=$new_prefix make_or_load_dna_folders $folder || fail
+      fi
+
+    end_for
+
+  end_function
+  handle_return
+}
+
 # must set prefix= before calling this
 make_or_load_dna_contents() {
-  local dna_path=$1 prefix=${prefix:-}
+  local dna_path=$1 prefix=
   begin_function
-    make_or_load_cyto_types var arr || fail
-    make_or_load_cyto_types raw || fail
-    make_or_load_cyto_types fun || fail
+    make_or_load_dna_types var arr || fail
+    make_or_load_dna_types raw || fail
+    make_or_load_dna_types fun || fail
+    make_or_load_dna_folders $dna_path || fail
   end_function
   handle_return
 }
