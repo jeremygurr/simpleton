@@ -271,6 +271,7 @@ make_or_load_dna_folders() {
     begin_for folder in $folders; doo
 
       f=${folder##*/}
+      strip_order f
       if [[ "$current_var" ]]; then
         eval "$current_var+=( $f )"
         if [[ -L $folder ]]; then
@@ -697,7 +698,7 @@ get_trunk_cell() {
 
 get_short_cell() {
   local x y cell_path=$1 dim_string= branch_dims=
-  if [[ "$cell_path" =~ : ]]; then
+  if [[ "$cell_path" == *:* ]]; then
     load_dims_from_path $cell_path || return 1
     dim_string="${branch_members[*]}"
     dim_string=:${dim_string// /\/}
@@ -1675,6 +1676,13 @@ already_in_dep_stack() {
   return 1
 }
 
+strip_order() {
+  local -n v=$1
+  if [[ $v =~ ^[0-9]+-([^/]*)$ ]]; then
+    v=${BASH_REMATCH[1]}
+  fi
+}
+
 # executes a step of the folder language
 # folder language
 #   {cell}                update the given cell with the current coordinates
@@ -1698,11 +1706,8 @@ execute_command_step() {
   begin_function
     local step_name=${step##*/} prefix= base
 
-    if [[ $step_name =~ [0-9]+-([^/]*)$ ]]; then
-      base=${BASH_REMATCH[1]}
-    else
-      base=$step_name
-    fi
+    base=$step_name
+    strip_order base
     
     if [[ -d $step/.dna ]]; then
 
@@ -1713,13 +1718,13 @@ execute_command_step() {
 
       safe_link $step $source_path/$base || fail
     elif [[ -d $step ]]; then
-      if [[ $base =~ ^choose-.* ]]; then
+      if [[ $base == choose-* ]]; then
         # TODO ...
         incomplete
         safe_link $choice $source_path/$last_part || fail
-      elif [[ $base =~ ^loop-.* ]]; then
+      elif [[ $base == loop-* ]]; then
         serial=t execute_command_step_loop || fail
-      elif [[ $base =~ ^each-.* ]]; then
+      elif [[ $base == each-* ]]; then
         serial=f execute_command_step_loop || fail
       else
         execute_command_step_folder || fail
@@ -2741,7 +2746,7 @@ setup_tmp_path() {
 get_workspace() {
   local subject=$1
   workspace=
-  while [[ ${#subject} -gt 1 && $subject =~ / ]]; do
+  while [[ ${#subject} -gt 1 && $subject == */* ]]; do
     if [[ "$subject" == "$top_cell"/* ]]; then
       workspace=$subject
       break
@@ -3514,7 +3519,7 @@ from_background_process() {
         interacted=f
         if [[ $pretending == t ]]; then
           if [[ "$pretend_out" ]]; then
-            if [[ "$pretend_out" =~ "$NL" ]]; then
+            if [[ "$pretend_out" == *"$NL"* ]]; then
               line=${pretend_out%%$NL*}
               pretend_out=${pretend_out#*$NL}
             else
