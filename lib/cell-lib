@@ -245,12 +245,27 @@ make_or_load_dna_types() {
   handle_return
 }
 
+make_array_assignment() {
+  local arr_name=$1
+  local -n arr=$1
+  begin_function
+    result="$arr_name=("
+    local v
+    begin_for v in "${arr[@]}"; doo
+      shell_quote_var v
+      result+=" $v"
+    end_for
+    result+=" )"
+  end_function
+  handle_return
+}
+
 make_or_load_dna_folders() {
   local folder=$1 prefix=${prefix:-}
   begin_function
 
     local folders=$(eval "find1 $folder -type d -not -name '.*'" | sort -g) || fail
-    local current_var=${prefix%_} f
+    local current_var=${prefix%_} f result
     current_var=${current_var//-/_}
 
     begin_for folder in $folders; doo
@@ -260,7 +275,7 @@ make_or_load_dna_folders() {
         eval "$current_var+=( $f )"
         if [[ -L $folder ]]; then
           local linktarget=$(realpath $folder)
-          local result="${current_var}_${f//-/_}_linktarget=$linktarget"
+          result="${current_var}_${f//-/_}_linktarget=$linktarget"
           eval "$result" || fail
           write_to_context var "$result" || fail
         fi
@@ -279,6 +294,11 @@ make_or_load_dna_folders() {
       fi
 
     end_for
+
+    if [[ "$current_var" ]]; then
+      make_array_assignment $current_var || fail
+      write_to_context var "$result" || fail
+    fi
 
   end_function
   handle_return
@@ -398,25 +418,26 @@ make_or_load_context_dims() {
     fi
     log_debug "cell_is_leaf=$cell_is_leaf"
 
-    debug_start
-    write_to_context var "trunk_dims=( ${trunk_dims[*]} )
-trunk_dim_count=$trunk_dim_count
-branch_dims=( ${branch_dims[*]} )
-branch_dim_count=$branch_dim_count
-branch_members=( \"${branch_members[@]}\" )
-leaf_dims=( ${leaf_dims[*]} )
-leaf_dim_count=$leaf_dim_count
-cell_is_leaf=$cell_is_leaf" || fail
-
-    local dim assignment member i
+    local dim assignment member i members_string=
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
       dim=${branch_dims[$i]}
       member=${branch_members[$i]}
       shell_quote_var member
+      members_string+="$member "
       assignment="d_$dim=$member"
       eval "$assignment"
       write_to_context var "$assignment" || fail
     end_for
+
+    write_to_context var "trunk_dims=( ${trunk_dims[*]} )
+trunk_dim_count=$trunk_dim_count
+branch_dims=( ${branch_dims[*]} )
+branch_dim_count=$branch_dim_count
+branch_members=( ${members_string% } )
+leaf_dims=( ${leaf_dims[*]} )
+leaf_dim_count=$leaf_dim_count
+cell_is_leaf=$cell_is_leaf" || fail
+
   end_function
   handle_return
 }
