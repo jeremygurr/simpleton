@@ -1,23 +1,59 @@
 #!/usr/bin/env bash
 
-dim_rm_delete_branches() {
+dim_rm_delete_branch() {
   begin_function
 
-    local seed=$1 branch sub_found=f
-    local branches=$(find1 $seed -name "*:*" | sort) || fail
+    local seed=$1 branch branch_dim
+    local branches=$(find1 $seed -name "*:*" | sort -g) || fail
 
     begin_for branch in $branches; doo
-      dim=${branch##*/}
-      dim=${dim%%:*}
-      dim_rm_delete_branches $branch || fail
-      sub_found=t
+      branch_dim=${branch##*/}
+      branch_dim=${branch_dim%%:*}
+      if [[ $dim == $branch_dim ]]; then
+        mv $branch/* $branch/.[A-Za-z0-9_]* $seed/ || fail
+        rm -r $branch || fail
+      else
+        dim_rm_delete_branches $branch || fail
+      fi
     end_for
 
-    if [[ $sub_found == f && $seed == *:* ]]; then
-      log_info "Removing dim $dim"
-      rm -rf $seed || fail
-    fi
+  end_function
+  handle_return
+}
 
+dim_rm_delete_vars() {
+  begin_function
+    local dim_folder=$(find1 $seed_path/.dna/trunk_dim -regex ".*/\([0-9]+-\)?$dim") || fail
+    if [[ -e $dim_folder ]]; then
+      rm -rf $dim_folder || fail
+    fi
+  end_function
+  handle_return
+}
+
+dim_rm_choose_dim() {
+  begin_function
+    local paths=$(find1 $seed_path/.dna/trunk_dim -type d | sort -g) || fail
+    if [[ "${paths:-}" ]]; then
+      local choices= choice path
+
+      begin_for path in $paths; doo
+        choice=${path##*/}
+        strip_order choice
+        choices+=" $choice"
+      end_for
+
+      echo "Choose a dim to remove from this cell:" >&2
+      local PS3="dim: " 
+      select dims in $choices; do break; done
+      if [[ ! "$dims" ]]; then
+        log_fatal "Invalid dim selected"
+        fail1
+      fi
+    else
+      log_fatal "Must specify a dim parameter containing the dim to remove."
+      fail1
+    fi
   end_function
   handle_return
 }
@@ -30,13 +66,15 @@ dim_rm_command() {
     find_seed_path $cell_path || fail
     trunk_seed_path=$seed_path
 
-    local dim=
-    dim_rm_delete_branches $seed_path || fail
-
-    local dim_folder=$seed_path/.dna/${dim}
-    if [[ -d $dim_folder ]]; then
-      rm -rf $dim_folder || fail
+    local dims=${dims:-${dim:-}} dim dim_path
+    if [[ ! "${dims:-}" ]]; then
+      dim_rm_choose_dim || fail
     fi
+
+    begin_for dim in $dims; doo
+      dim_rm_delete_branch $seed_path || fail
+      dim_rm_delete_vars || fail
+    end_for
 
     command_successful=t
 

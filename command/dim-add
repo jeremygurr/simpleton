@@ -69,8 +69,8 @@ dim_add_create_branches_at_seed() {
 dim_add_create_branches() {
   begin_function
     local create_other=t create_each=f members=( )
-    if [[ -f $dim_path/members.arr ]]; then
-      load_arr $dim_path/members.arr members || fail
+    if [[ -f $from_dim_path/members.arr ]]; then
+      load_arr $from_dim_path/members.arr members || fail
       local answer
 
       prompt_ynq "Do you want a $base_dim:_other folder created?" answer
@@ -121,10 +121,13 @@ dim_add_create_branches() {
 
 dim_add_command() {
   begin_function
-    local shared_dim_folder= seed_path type=${type:-dim}
+    local shared_dim_folder= seed_path type=${type:-trunk_dim}
 
     case $type in
-      dim|prop|sub_dim)
+      dim)
+        type=trunk_dim
+      ;;
+      trunk_dim|prop|sub_dim)
         :
       ;;
       *)
@@ -135,7 +138,6 @@ dim_add_command() {
 
     setup_cell_path_vars $cell_path || fail
     find_seed_path $cell_path || fail
-
     dim_add_find_shared_dim || fail
 
     local dims=${dims:-${dim:-}} dim
@@ -149,23 +151,17 @@ dim_add_command() {
       log_info "Adding $type $base_dim"
 
       local added_something=f \
-        dim_path=$shared_dim_folder/$dim
+        from_dim_path=$shared_dim_folder/$dim \
+        type_path=$seed_path/.dna/$type
+      local to_dim_path=$type_path/$base_dim
 
-      if [[ $type != dim ]]; then
-        local var_path=$cell_path/.dna/${type}s.var
-        local vals=
-        if [[ -f $var_path ]]; then
-          vals=$(<$var_path) || fail
-        fi
-        if [[ " $vals " != *" $base_dim "* ]]; then
-          echo "$base_dim" >>$var_path || fail
-          added_something=t
-        fi
+      if [[ ! -d $type_path ]]; then
+        mkdir $type_path || fail
       fi
 
-      if [[ ! -e $seed_path/.dna/${base_dim} ]]; then
-        if [[ -d $dim_path ]]; then
-          safe_link $dim_path $seed_path/.dna/${base_dim} || fail
+      if [[ ! -e $to_dim_path ]]; then
+        if [[ -d $from_dim_path ]]; then
+          safe_link $from_dim_path $to_dim_path || fail
           added_something=t
         else
           log_fatal "Dim not found: $dim in $shared_dim_folder"
@@ -174,15 +170,7 @@ dim_add_command() {
         fi
       fi
 
-      if [[ ! -d $dim_path ]]; then
-        dim_path=$seed_path/.dna/${base_dim}
-        if [[ ! -d $dim_path ]]; then
-          log_fatal "Internal error: shouldn't be possible"
-          fail1
-        fi
-      fi
-
-      if [[ $type == dim ]]; then
+      if [[ $type == trunk_dim ]]; then
         dim_add_create_branches || fail
       fi
 
@@ -197,8 +185,8 @@ dim_add_command() {
   end_function
 
   if failed; then
-    if [[ "${base_dim:-}" && -L $seed_path/.dna/${base_dim} ]]; then
-      rm $seed_path/.dna/${base_dim}
+    if [[ "${base_dim:-}" && -L $to_dim_path ]]; then
+      rm $to_dim_path
     fi
   fi
 
