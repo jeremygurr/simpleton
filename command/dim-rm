@@ -10,10 +10,14 @@ dim_rm_delete_branch() {
       branch_dim=${branch##*/}
       branch_dim=${branch_dim%%:*}
       if [[ $dim == $branch_dim ]]; then
-        mv $branch/* $branch/.[A-Za-z0-9_]* $seed/ || fail
+        local to_move=$branch/*
+        if [[ "$to_move" != *\** ]]; then
+          mv $branch/* $seed/ || fail
+        fi
         rm -r $branch || fail
+        did_something=t
       else
-        dim_rm_delete_branches $branch || fail
+        dim_rm_delete_branch $branch || fail
       fi
     end_for
 
@@ -23,37 +27,47 @@ dim_rm_delete_branch() {
 
 dim_rm_delete_vars() {
   begin_function
-    local dim_folder=$(find1 $seed_path/.dna/trunk_dim -regex ".*/\([0-9]+-\)?$dim") || fail
-    if [[ -e $dim_folder ]]; then
+    begin_for p in $trunk_dims_path $props_path $sub_dims_path; doo
+      local dim_folder=$(find1 $p -regex ".*/\([0-9]+-\)?$dim") || fail
       rm -rf $dim_folder || fail
-    fi
+      did_something=t
+    end_for
   end_function
   handle_return
 }
 
 dim_rm_choose_dim() {
   begin_function
-    local paths=$(find1 $seed_path/.dna/trunk_dim -type d | sort -g) || fail
-    if [[ "${paths:-}" ]]; then
-      local choices= choice path
-
-      begin_for path in $paths; doo
-        choice=${path##*/}
-        strip_order choice
-        choices+=" $choice"
-      end_for
-
-      echo "Choose a dim to remove from this cell:" >&2
-      local PS3="dim: " 
-      select dims in $choices; do break; done
-      if [[ ! "$dims" ]]; then
-        log_fatal "Invalid dim selected"
-        fail1
+    local choices= found
+    begin_for p in $trunk_dims_path $props_path $sub_dims_path; doo
+      if [[ -d $p ]]; then
+        found=$(find1 $p -type d | sort -g)
+        local f
+        begin_for f in $found; doo
+          f=${f##*/}
+          f=${f#+([0-9])-}
+          choices+="$f$NL" || fail
+        end_for
       fi
-    else
-      log_fatal "Must specify a dim parameter containing the dim to remove."
+    end_for
+
+    if [[ ! "$choices" ]]; then
+      log_fatal "No dims defined for this cell"
       fail1
     fi
+
+    choices=$(echo "$choices" | sort)
+    
+    local choice path
+
+    echo "Choose a dim to remove from this cell:" >&2
+    local PS3="dim: " 
+    select dims in $choices; do break; done
+    if [[ ! "$dims" ]]; then
+      log_fatal "Invalid dim selected"
+      fail1
+    fi
+
   end_function
   handle_return
 }
@@ -66,15 +80,24 @@ dim_rm_command() {
     find_seed_path $cell_path || fail
     trunk_seed_path=$seed_path
 
+    local trunk_dims_path=$seed_path/.dna/trunk_dims \
+      props_path=$seed_path/.dna/props \
+      sub_dims_path=$seed_path/.dna/sub_dims
+
     local dims=${dims:-${dim:-}} dim dim_path
     if [[ ! "${dims:-}" ]]; then
       dim_rm_choose_dim || fail
     fi
 
+    local did_something=f
     begin_for dim in $dims; doo
       dim_rm_delete_branch $seed_path || fail
       dim_rm_delete_vars || fail
     end_for
+
+    if [[ $did_something == f ]]; then
+      log_info "Nothing to be done."
+    fi
 
     command_successful=t
 
