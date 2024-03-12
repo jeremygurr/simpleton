@@ -662,8 +662,7 @@ get_trunk_cell() {
 
 get_short_cell() {
   local x y cell_path=$1 dim_string= branch_dims=
-  if [[ "$cell_path" == *:* ]]; then
-    load_dims_from_path $cell_path || return 1
+  if [[ "${branch_members:-}" ]]; then
     dim_string="${branch_members[*]}"
     dim_string=:${dim_string// /\/}
   fi
@@ -845,7 +844,6 @@ make_cyto_up() {
 
 cell_context_load() {
 
-  get_short_cell $cell_path
   local log_vars='cell_path last_context_loaded' log_show_vars=short_cell
   begin_function_hi
 
@@ -898,6 +896,8 @@ cell_context_load() {
       if [[ "$localize_dims" == local ]]; then
         localize_dims=
       fi
+
+      get_short_cell $cell_path
 
     else
       log_debug "Context already loaded"
@@ -1757,13 +1757,6 @@ execute_command_internal() {
       log_var_entries_stack \
       log_var_show_vars_stack \
 
-    if [[ " ${command_history:-}" == *" $current_command $short_cell "* ]]; then
-      log_fatal "Circular dependency found: arrived at $current_command $short_cell a second time."
-      fail1
-    fi
-
-    command_history+="$current_command $short_cell "
-
     can_create_cyto=t
 
     case $current_command in
@@ -1808,6 +1801,13 @@ execute_command_internal() {
       ;;
     esac
 
+    if [[ " ${command_history:-}" == *" $current_command $short_cell "* ]]; then
+      log_fatal "Circular dependency found: arrived at $current_command $short_cell a second time."
+      fail1
+    fi
+
+    command_history+="$current_command $short_cell "
+
     if [[ $disable_log == f ]]; then
 
       local running_job_path=$job_path/running
@@ -1827,17 +1827,6 @@ execute_command_internal() {
     if [[ ! -e $command_path ]]; then
       log_fatal "Command $current_command doesn't exist in $command_path or as a function"
       fail1
-    fi
-
-    if type -t command_${current_command}_prep &>/dev/null; then
-      command_${current_command}_prep || fail
-    elif [[ -f $command_path.prep ]]; then
-      source $command_path.prep || fail
-      if ! type -t ${current_command}_prep &>/dev/null; then
-        log_fatal "$command_path.prep must contain a function named ${current_command}_prep"
-        fail1
-      fi
-      ${current_command}_prep || fail
     fi
 
     if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
@@ -2025,19 +2014,12 @@ execute_command() {
       cell_path=$starting_point
     fi
 
-    local seed_path= branch_dims branch_members branch_hashes
-    load_dims_from_path $cell_path || fail
-
     if [[ ! -e "$cell_path" ]]; then
       plant_seed $cell_path || {
         log_fatal "Not a cell: $cell_path"
         fail1
       }
-    else
-      find_seed_path $cell_path || fail
     fi
-
-    load_dims_from_seed $seed_path || fail
 
     get_short_cell $cell_path
 
