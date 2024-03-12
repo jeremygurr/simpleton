@@ -121,6 +121,25 @@ dim_add_create_branches() {
   handle_return
 }
 
+dim_add_get_next_ord() {
+  begin_function
+    local d ord base largest_ordinal=0
+    local existing=$(find1 $type_path -not -name ".*" | sort -g) || fail
+    bases=
+    begin_for d in $existing; doo
+      d=${d##*/}
+      split_ordinal d ord base
+      bases+=" $base"
+      if (( ord > largest_ordinal )); then
+        largest_ordinal=$ord
+      fi
+    end_for
+    next_ord=$((largest_ordinal+1))
+  end_function
+  local log_return_vars=next_ord
+  handle_return
+}
+
 dim_add_command() {
   begin_function
     local shared_dim_folder= seed_path type=${type:-trunk_dim}
@@ -147,6 +166,10 @@ dim_add_command() {
       dim_add_choose_dim || fail
     fi
 
+    local next_ord= bases= \
+      type_path=$seed_path/.dna/${type}s
+    dim_add_get_next_ord || fail
+
     begin_for dim in $dims; doo
 
       local base_dim=${dim%%-*}
@@ -154,14 +177,13 @@ dim_add_command() {
 
       local added_something=f \
         from_dim_path=$shared_dim_folder/$dim \
-        type_path=$seed_path/.dna/${type}s
-      local to_dim_path=$type_path/$base_dim
+      local to_dim_path=$type_path/$next_ord-$base_dim
 
       if [[ ! -d $type_path ]]; then
         mkdir $type_path || fail
       fi
 
-      if [[ ! -e $to_dim_path ]]; then
+      if [[ "$bases " != *" $dim "* ]]; then
         if [[ -d $from_dim_path ]]; then
           safe_link $from_dim_path $to_dim_path || fail
           added_something=t

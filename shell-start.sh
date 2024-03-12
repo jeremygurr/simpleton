@@ -11,6 +11,8 @@ if [[ "${ADD_PATH:-}" ]]; then
   export PATH=$ADD_PATH:$PATH
 fi
 
+shopt -s extglob dotglob nullglob globstar huponexit
+
 complete -r # remove built-in shell completion since it currently has problems
 
 if [[ -e /tmp/prompt_name ]]; then
