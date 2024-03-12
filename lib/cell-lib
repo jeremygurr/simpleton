@@ -184,65 +184,59 @@ make_or_load_dna_raw() {
   handle_return
 }
 
-make_or_load_dna_types() {
-  local types="$*"
+make_or_load_dna_types2() {
   begin_function
 
-    local name_matcher= type
-    begin_for type in $types; doo
-      if [[ "$name_matcher" ]]; then
-        name_matcher+=" -or"
-      fi
-      name_matcher+=" -name '*.$type'"
-    end_for
-
-    local dna_contents=$(eval "find -L $dna_path -type f -not -name '.*' -not -path '*/.dna/*/.dna/*'$name_matcher" | sort -g) || fail
-    local last_part item_name dna_full_item sub_path sub_part suffix prefix
+    local dna_contents=$(eval "find1 $dna_path -not -name '.*'" | sort -g) || fail
+    local last_part item_name dna_full_item suffix 
     begin_for dna_full_item in $dna_contents; doo
       last_part=${dna_full_item##*/}
       item_name=${last_part#*([0-9])-}
 
-      prefix=
-      sub_path=${dna_full_item#$dna_path/}
-      if [[ $sub_path == */* ]]; then
-        sub_path=${sub_path%/*}
-        begin_for sub_part in ${sub_path//\// }; doo
-          if [[ $sub_part != _* ]]; then
-            prefix+=${sub_part}_
-          fi
-        end_for
+      if [[ -d $dna_full_item ]]; then
+        local p=$prefix
+        if [[ $item_name != _* ]]; then
+          p+=_$item_name
+        fi
+        prefix=$p make_or_load_dna_types2 || fail
+      else
+        suffix=
+        if [[ $item_name == *.* ]]; then
+          suffix=${item_name##*.}
+          item_name=${item_name%.*}
+        fi
+
+        case $suffix in
+          var)
+            make_or_load_dna_var $dna_full_item $item_name || fail
+          ;;
+          arr)
+            make_or_load_dna_arr $dna_full_item $item_name || fail
+          ;;
+          fun)
+            make_or_load_dna_fun $dna_full_item $item_name || fail
+          ;;
+          raw)
+            make_or_load_dna_raw $dna_full_item $item_name || fail
+          ;;
+          *)
+            log_debug "Unknown dna object: $dna_full_item. Ignoring."
+          ;;
+        esac
+
+        last_type=$suffix
+
       fi
-
-      suffix=
-      if [[ $item_name == *.* ]]; then
-        suffix=${item_name##*.}
-        item_name=${item_name%.*}
-      fi
-
-      case $suffix in
-        var)
-          make_or_load_dna_var $dna_full_item $item_name || fail
-        ;;
-        arr)
-          make_or_load_dna_arr $dna_full_item $item_name || fail
-        ;;
-        fun)
-          make_or_load_dna_fun $dna_full_item $item_name || fail
-        ;;
-        raw)
-          make_or_load_dna_raw $dna_full_item $item_name || fail
-        ;;
-        *)
-          log_debug "Unknown dna object: $dna_full_item. Ignoring."
-        ;;
-      esac
-
-      last_type=$suffix
 
     end_for
 
   end_function
   handle_return
+}
+
+make_or_load_dna_types() {
+  local types="$*" prefix=
+  make_or_load_dna_types2 || fail
 }
 
 make_array_assignment() {
@@ -717,6 +711,7 @@ get_short_cell() {
     trunk_cell=$x
   fi
   short_cell="$trunk_cell$dim_string"
+  debug_return_vars=short_cell
 }
 
 find_seed_path() {
