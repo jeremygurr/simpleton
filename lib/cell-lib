@@ -184,61 +184,6 @@ make_or_load_dna_raw() {
   handle_return
 }
 
-make_or_load_dna_types2() {
-  begin_function
-
-    local dna_contents=$(eval "find1 $dna_path -not -name '.*'" | sort -g) || fail
-    local last_part item_name dna_full_item suffix 
-    begin_for dna_full_item in $dna_contents; doo
-      last_part=${dna_full_item##*/}
-      item_name=${last_part#*([0-9])-}
-
-      if [[ -d $dna_full_item ]]; then
-        local p=$prefix
-        if [[ $item_name != _* ]]; then
-          p+=_$item_name
-        fi
-        prefix=$p make_or_load_dna_types2 || fail
-      else
-        suffix=
-        if [[ $item_name == *.* ]]; then
-          suffix=${item_name##*.}
-          item_name=${item_name%.*}
-        fi
-
-        case $suffix in
-          var)
-            make_or_load_dna_var $dna_full_item $item_name || fail
-          ;;
-          arr)
-            make_or_load_dna_arr $dna_full_item $item_name || fail
-          ;;
-          fun)
-            make_or_load_dna_fun $dna_full_item $item_name || fail
-          ;;
-          raw)
-            make_or_load_dna_raw $dna_full_item $item_name || fail
-          ;;
-          *)
-            log_debug "Unknown dna object: $dna_full_item. Ignoring."
-          ;;
-        esac
-
-        last_type=$suffix
-
-      fi
-
-    end_for
-
-  end_function
-  handle_return
-}
-
-make_or_load_dna_types() {
-  local types="$*" prefix=
-  make_or_load_dna_types2 || fail
-}
-
 make_array_assignment() {
   local arr_name=$1
   local -n arr=$1
@@ -254,38 +199,67 @@ make_array_assignment() {
   handle_return
 }
 
-make_or_load_dna_folders() {
+make_or_load_dna_contents2() {
   local folder=$1 prefix=${prefix:-}
   begin_function
 
-    local folders=$(eval "find1 $folder -type d -not -name '.*'" | sort -g) || fail
-    local current_var=${prefix%_} o f result
+    local items=$(find1 $folder -not -name '.*' | sort -g) || fail
+    local current_var=${prefix%_} o item_name result
     current_var=${current_var//-/_}
 
-    begin_for folder in $folders; doo
+    begin_for item in $items; doo
 
-      f=${folder##*/}
-      split_ordinal f o f
+      item_name=${item##*/}
+      split_ordinal item_name o item_name
       if [[ "$current_var" ]]; then
-        eval "$current_var+=( $f )"
-        if [[ -L $folder ]]; then
-          local linktarget=$(realpath $folder)
-          result="${current_var}_${f//-/_}_linktarget=$linktarget"
+        eval "$current_var+=( $item_name )"
+        if [[ -L $item ]]; then
+          local linktarget=$(realpath $item)
+          result="${current_var}_${item_name//-/_}_linktarget=$linktarget"
           eval "$result" || fail
           write_to_context var "$result" || fail
         fi
       fi
 
-      if [[ ! -d $folder/.dna ]]; then
-        local new_prefix=$prefix
-        if [[ $f != _* ]]; then
-          if [[ "$new_prefix" ]]; then
-            new_prefix+=_$f
-          else
-            new_prefix=$f
+      if [[ -d $item ]]; then
+
+        if [[ ! -d $item/.dna ]]; then
+          local new_prefix=$prefix
+          if [[ $item_name != _* ]]; then
+            new_prefix+=${item_name}_
           fi
+          prefix=$new_prefix make_or_load_dna_contents2 $item || fail
         fi
-        prefix=$new_prefix make_or_load_dna_folders $folder || fail
+
+      else # is a file
+
+        local suffix=
+        if [[ $item_name == *.* ]]; then
+          suffix=${item_name##*.}
+          item_name=${item_name%.*}
+        fi
+
+        case $suffix in
+          var)
+            make_or_load_dna_var $item $item_name || fail
+          ;;
+          arr)
+            make_or_load_dna_arr $item $item_name || fail
+          ;;
+          fun)
+            make_or_load_dna_fun $item $item_name || fail
+          ;;
+          raw)
+            make_or_load_dna_raw $item $item_name || fail
+          ;;
+          *)
+            log_debug "Unknown dna object: $item. Ignoring."
+            continue
+          ;;
+        esac
+
+        last_type=$suffix
+
       fi
 
     end_for
@@ -303,10 +277,7 @@ make_or_load_dna_folders() {
 make_or_load_dna_contents() {
   local dna_path=$1 prefix=
   begin_function
-    make_or_load_dna_types var arr || fail
-    make_or_load_dna_types raw || fail
-    make_or_load_dna_types fun || fail
-    make_or_load_dna_folders $dna_path || fail
+    make_or_load_dna_contents2 $dna_path || fail
   end_function
   handle_return
 }
@@ -342,7 +313,6 @@ load_dims_from_path() {
       c=${c%/*}
     end_while
 
-    trunk_dims+=( ${leaf_dims[*]:-} )
     trunk_dim_count=${#trunk_dims[*]}
     branch_dim_count=${#branch_dims[*]}
 
@@ -404,7 +374,7 @@ load_dims() {
 
 make_or_load_context_dims() {
   begin_function
-    load_dims || fail
+    # load_dims || fail
 
     if (( leaf_dim_count > 0 )); then
       cell_is_leaf=f
@@ -424,8 +394,8 @@ make_or_load_context_dims() {
       write_to_context var "$assignment" || fail
     end_for
 
-    write_to_context var "trunk_dims=( ${trunk_dims[*]} )
-trunk_dim_count=$trunk_dim_count
+    #write_to_context var "trunk_dims=( ${trunk_dims[*]} )
+    write_to_context var "trunk_dim_count=$trunk_dim_count
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
@@ -768,8 +738,7 @@ setup_cell_path_vars() {
       cell_path=/work${cell_path#/seed}
     fi
 
-    # This gets set after dims are loaded
-    seed_path=
+    find_seed_path $cell_path || fail
 
     if [[ ! "${top_cell:-}" ]]; then
       get_top_cell $cell_path || fail
@@ -840,6 +809,7 @@ init_context() {
   retry_scale=2 \
   reuse_existing_out=t \
   shuffle_chance=100 \
+  trunk_dims=() \
   up=() \
   update_cost=1 \
 
@@ -915,7 +885,6 @@ cell_context_load() {
         load_context || fail
       fi
 
-      find_seed_path $cell_path || fail
       setup_dep_defaults || fail
 
       localize_dims=local
