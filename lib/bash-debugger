@@ -56,7 +56,6 @@ side_log() {
 
 debug_expansion_clean() {
   local line shortest= plusses code plus_length from=$1 show
-  zombie_lap "Start of debug_expansion_clean"
   while read -r line || true; do
     if [[ "$line" =~ ^(\++)\ (.*) ]]; then
       plusses=${BASH_REMATCH[1]}
@@ -91,7 +90,6 @@ debug_expansion_clean() {
       break
     fi
   done < <(cat "$from")
-  zombie_lap "End of debug_expansion_clean"
   return 0
 }
 
@@ -106,7 +104,6 @@ debug_output_reversed_line() {
 }
 
 debug_source_update() {
-  zombie_lap "Start of debug_source_update"
   debug_path_to_source_file=$raw_debug_path_to_source_file
   if [[ $debug_path_to_source_file == /dev/fd/* ]]; then
     debug_path_to_source_file=none
@@ -117,13 +114,9 @@ debug_source_update() {
   else
     debug_source_file=${debug_path_to_source_file##*/}
   fi
-
-  zombie_lap "End of debug_source_update"
 }
 
 debug_source_update_hl() {
-  zombie_lap "Start of debug_source_update_hl"
-
   if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
 
     debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
@@ -136,8 +129,6 @@ debug_source_update_hl() {
     debug_path_to_source_file=$highlighted_source
 
   fi
-
-  zombie_lap "End of debug_source_update_hl"
 }
 
 debug_display_source() {
@@ -176,13 +167,11 @@ debug_display_source() {
 }
 
 debug_load_state() {
-  zombie_lap "Start of debug_load_state"
   if [[ -f "$debug_state_file" && "${debug_needs_to_load_state:-t}" == t ]]; then
     [[ ${debug_debug:-f} == t ]] && echo "${CYAN}Loading state from $debug_state_file${RESET}" >&$fd_original_err
     debug_needs_to_load_state=f
     source "$debug_state_file" || return 1
   fi
-  zombie_lap "End of debug_load_state"
   return 0
 }
 
@@ -258,18 +247,15 @@ debug_display_command_expansion_status() {
 }
 
 debug_output_stop() {
-  #zombie_lap "Start of debug_output_stop"
   if [[ $debug_recording_trace == t && -e $debug_out_path ]]; then
     BASH_XTRACEFD=$debug_original_tracefd
     eval "exec $fd_bash_trace>&-"
     rm $debug_out_path
     [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Stopping debug output expansion${RESET}" >&$fd_original_err
   fi
-  #zombie_lap "End of debug_output_stop"
 }
 
 debug_output_expansion() {
-  zombie_lap "Start of debug_output_expansion"
   if (( debug_expansion > 0 )); then
     if [[ -f "$debug_out_path" && ! "$debug_buffered_commands" ]]; then
 
@@ -283,7 +269,6 @@ debug_output_expansion() {
 
     fi
   fi
-  zombie_lap "End of debug_output_expansion"
 }
 
 debug_get_new_command() {
@@ -914,11 +899,11 @@ debug_command_loop() {
       \#)
         if [[ $debug_show_time == f ]]; then
           debug_show_time=t
-          PS4='$EPOCHREALTIME + '
+          #PS4='$EPOCHREALTIME + '
           echo "# Enabled time tracing" >&$fd_original_err
         else
           debug_show_time=f
-          PS4='+ '
+          #PS4='+ '
           echo "# Disabled time tracing" >&$fd_original_err
         fi
         debug_save_state
@@ -1026,7 +1011,6 @@ debug_command_loop() {
 }
 
 debug_update_expansion() {
-  zombie_lap "Start of debug_update_expansion"
   if (( debug_expansion > 0 )) && [[ ! -e $debug_out_path ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Starting debug output expansion${RESET}" >&$fd_original_err
     if [[ ! "${fd_bash_trace:-}" ]]; then
@@ -1038,11 +1022,9 @@ debug_update_expansion() {
     debug_original_tracefd=${BASH_XTRACEFD:-}
     BASH_XTRACEFD=$fd_bash_trace
   fi
-  zombie_lap "End of debug_update_expansion"
 }
 
 debug_get_ok_to_debug() {
-  zombie_lap "Beginning of debug_get_ok_to_debug"
   if [[ $debug_immediate == t ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_immediate${RESET}" >&$fd_original_err
     ok_to_debug=t
@@ -1158,7 +1140,6 @@ debug_get_ok_to_debug() {
     ok_to_debug=t
 
   fi
-  zombie_lap "End of debug_get_ok_to_debug"
 }
 
 maybe_enable_debug_tracing() {
@@ -1276,11 +1257,9 @@ debug_trap() {
   debug_saved_shell_options_short=$-
   set +evTu +o pipefail
 
-  zombie_lap "Start of debug_trap"
   debug_rematch=( "${BASH_REMATCH[@]}" )
   local saved_lineno
 
-  zombie_lap "Mid 1 of debug_trap"
   (( saved_lineno = debug_trap_first_line - 1 )) 
 
   if [[ "${debug_var:-}" ]]; then
@@ -1300,7 +1279,6 @@ debug_trap() {
     (( trace_debugger-- ))
   fi
 
-  zombie_lap "Mid 2 of debug_trap"
   if [[ $debug_debug == t ]]; then
     log_debug_debug "debug_id=$debug_id_current ${BASH_SOURCE[1]:-no_source}:$saved_lineno/${BASH_LINENO[1]:-no_line} ${FUNCNAME[1]:-no_func} ${BASH_COMMAND}" 
   fi
@@ -1315,7 +1293,6 @@ debug_trap() {
     debug_full_path=${debug_full_path:-f} \
     debug_source_file \
 
-  zombie_lap "Mid 3 of debug_trap"
   debug_tracing=f
   [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
   local prev_debug_out_path=$debug_out_path
@@ -1328,7 +1305,6 @@ debug_trap() {
   if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
     debug_output_stop
-    zombie_lap "Returning from debug_trap"
     return 0
   fi
 
@@ -1368,7 +1344,6 @@ debug_trap() {
   local ok_to_debug=f
   debug_get_ok_to_debug
 
-  zombie_lap "Last part of debug_trap"
   debug_output_expansion
 
   if [[ $ok_to_debug == t ]]; then
@@ -1395,7 +1370,6 @@ debug_trap() {
   fi
 
   BASH_REMATCH=( "${debug_rematch[@]}" )
-  zombie_lap "End of debug_trap"
   return $debug_r
 }
 
