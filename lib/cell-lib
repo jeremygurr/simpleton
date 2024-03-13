@@ -282,11 +282,10 @@ make_or_load_dna_contents() {
   handle_return
 }
 
-load_dims_from_path() {
+load_branch_dims() {
   local cell_path=${1:-$cell_path}
   begin_function
 
-    trunk_dims=() \
     branch_dims=() \
     branch_members=() \
     branch_hashes=() \
@@ -297,7 +296,6 @@ load_dims_from_path() {
       if [[ $p == *:* ]]; then
 
         d=${p%%:*}
-        trunk_dims=( $d ${trunk_dims[*]} )
         branch_dims=( $d ${branch_dims[*]} )
 
         m=${p#*:}
@@ -313,7 +311,6 @@ load_dims_from_path() {
       c=${c%/*}
     end_while
 
-    trunk_dim_count=${#trunk_dims[*]}
     branch_dim_count=${#branch_dims[*]}
 
     if [[ "${branch_dims:-}" ]]; then
@@ -324,7 +321,31 @@ load_dims_from_path() {
   handle_return
 }
 
+load_leaf_dims() {
+  begin_function
+    local i
+
+    leaf_dims=()
+    begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
+      leaf_dims+=( ${trunk_dims[$i]} )
+    end_for
+
+    leaf_dim_count=${#leaf_dims[*]}
+
+    if (( leaf_dim_count > 0 )); then
+      cell_is_leaf=f
+    else
+      cell_is_leaf=t
+    fi
+
+  end_function
+  handle_return
+}
+
 load_dims_from_seed() {
+  log_fatal "This should not be used."
+  return 1
+
   local seed_path=${1:-$seed_path}
   begin_function
 
@@ -361,6 +382,9 @@ load_dims_from_seed() {
 }
 
 load_dims() {
+  log_fatal "This should not be used."
+  return 1
+
   local cell_path=${1:-$cell_path}
   begin_function_hi
     load_dims_from_path $cell_path || fail
@@ -374,13 +398,9 @@ load_dims() {
 
 make_or_load_context_dims() {
   begin_function
-    # load_dims || fail
 
-    if (( leaf_dim_count > 0 )); then
-      cell_is_leaf=f
-    else
-      cell_is_leaf=t
-    fi
+    load_leaf_dims || fail
+
     log_debug "cell_is_leaf=$cell_is_leaf"
 
     local dim assignment member i members_string=
@@ -394,7 +414,6 @@ make_or_load_context_dims() {
       write_to_context var "$assignment" || fail
     end_for
 
-    #write_to_context var "trunk_dims=( ${trunk_dims[*]} )
     write_to_context var "trunk_dim_count=$trunk_dim_count
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
@@ -597,6 +616,7 @@ make_context() {
       fd_write_lock || fail
 
     if [[ -d $dna_path ]]; then
+      debug_start
       make_or_load_dna_contents $dna_path || fail
     elif [[ -f $dna_path ]]; then
       cat $dna_path >>$context_path || fail
@@ -737,6 +757,7 @@ setup_cell_path_vars() {
       cell_path=/work${cell_path#/seed}
     fi
 
+    load_branch_dims || fail
     find_seed_path $cell_path || fail
 
     if [[ ! "${top_cell:-}" ]]; then

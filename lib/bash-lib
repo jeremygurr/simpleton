@@ -82,6 +82,42 @@ zombie() {
   echo "$CYAN$EPOCHREALTIME $s:${BASH_LINENO[0]} $*$RESET" >&2
 }
 
+zombie_lap_reset() {
+  zombie_lap_total=0
+  unset zombie_lap_table
+  declare -Ag zombie_lap_table
+}
+
+# used for temporary debugging of performance issues
+# will aggregate time spent between each lap and show percentages and totals
+# calls to this should be removed before committing code
+zombie_lap() {
+  local m=$* ts=${EPOCHREALTIME/./} diff=0 p p1 p2 
+  if [[ "${zombie_lap_last_ts:-}" ]]; then
+    (( diff = ts - zombie_lap_last_ts ))
+  else
+    zombie_lap_reset
+  fi
+  zombie_lap_last_ts=$ts
+  : ${zombie_lap_table["$m"]:=0}
+  local extra=
+  if (( diff > 0 )); then
+    if (( diff < ${zombie_lap_max_diff:-100000} )); then
+      (( zombie_lap_table["$m"] += diff ))
+      (( zombie_lap_total += diff ))
+      (( percent = zombie_lap_table["$m"] * 10000 / zombie_lap_total ))
+      p1=${percent%??}
+      p2=${percent#$p1}
+      percent="${p1:-0}.$p2"
+      extra=" [diff=$diff sum=${zombie_lap_table["$m"]} $percent%]"
+    else
+      extra=" [exceeded zombie_lap_max_diff]"
+    fi
+  fi
+  echo "$CYAN$EPOCHREALTIME zombie_lap: $m$extra$RESET" >&2
+}
+
+# calls to this should be converted to normal evals before committing code
 zombie_eval() {
   local s=${BASH_SOURCE[1]:-(no func)}
   s=${s##*/}
