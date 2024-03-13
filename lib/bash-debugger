@@ -258,14 +258,14 @@ debug_display_command_expansion_status() {
 }
 
 debug_output_stop() {
+  zombie_lap "Start of debug_output_stop"
   if [[ $debug_recording_trace == t && -e $debug_out_path ]]; then
-    zombie_lap "Start of debug_output_stop"
     BASH_XTRACEFD=$debug_original_tracefd
     eval "exec $fd_bash_trace>&-"
     rm $debug_out_path
     [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Stopping debug output expansion${RESET}" >&$fd_original_err
-    zombie_lap "End of debug_output_stop"
   fi
+  zombie_lap "End of debug_output_stop"
 }
 
 debug_output_expansion() {
@@ -304,8 +304,6 @@ debug_command_loop() {
   debug_r=-1
   while [[ $debug_r == -1 ]]; do
 
-    # echo >&$fd_original_err
-
     local current_source_line_without_comment=none
     if [[ $debug_path_to_source_file != none ]]; then
       current_source_line_without_comment=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file" \
@@ -323,11 +321,6 @@ debug_command_loop() {
         debug_list_dir=forwards
         (( debug_list_offset += debug_list_window - 1 ))
       fi
-#    else
-#      if [[ "$backlog" ]]; then
-#        echo "$backlog"
-#        backlog=
-#      fi
     fi
 
     if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
@@ -344,8 +337,11 @@ debug_command_loop() {
       #   local log_id=${omni_log_fork_id:-0}:$omni_log_pos
       #   debug_prefix+="${CYAN}log_id=$log_id "
       # fi
-      if [[ $debug_show_time == t ]]; then
-        debug_prefix+="${LIGHT_WHITE}$EPOCHREALTIME "
+      if [[ $debug_show_time == t && "$debug_start_ts" ]]; then
+        local ts=${EPOCHREALTIME/./}
+        local time_diff=$((ts-debug_start_ts))
+        debug_prefix+="${LIGHT_WHITE}+$time_diff "
+        debug_start_ts=
       fi
       if [[ "$debug_id_current" ]]; then
         debug_prefix+="${CYAN}debug_id=$debug_id_current "
@@ -1023,6 +1019,10 @@ debug_command_loop() {
     esac
   done
 
+  if [[ $debug_show_time == t ]]; then
+    debug_start_ts=${EPOCHREALTIME/./}
+  fi
+
 }
 
 debug_update_expansion() {
@@ -1314,8 +1314,11 @@ debug_trap() {
 
   debug_tracing=f
   [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
+  local prev_debug_out_path=$debug_out_path
   debug_out_path=$tmp_folder/debug-out.$BASHPID
-  defer "rm $debug_out_path"
+  if [[ "$prev_debug_out_path" != $debug_out_path ]]; then
+    defer "rm $debug_out_path"
+  fi
   debug_recording_trace=f
 
   if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
