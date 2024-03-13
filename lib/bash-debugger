@@ -105,6 +105,41 @@ debug_output_reversed_line() {
   echo "$RESET" >&$fd_original_err
 }
 
+debug_source_update() {
+  zombie_lap "Start of debug_source_update"
+  debug_path_to_source_file=$raw_debug_path_to_source_file
+  if [[ $debug_path_to_source_file == /dev/fd/* ]]; then
+    debug_path_to_source_file=none
+  fi
+
+  if [[ $debug_full_path == t ]]; then
+    debug_source_file=$debug_path_to_source_file
+  else
+    debug_source_file=${debug_path_to_source_file##*/}
+  fi
+
+  zombie_lap "End of debug_source_update"
+}
+
+debug_source_update_hl() {
+  zombie_lap "Start of debug_source_update_hl"
+
+  if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
+
+    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
+    local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
+    if [ ! -f "$highlighted_source" ]; then
+      mkdir -p "${highlighted_source%/*}"
+      #cat "$debug_path_to_source_file" | highlight -S shellscript -O ansi >"$highlighted_source"
+      cat "$debug_path_to_source_file" | source-highlight -s bash -f esc >"$highlighted_source"
+    fi
+    debug_path_to_source_file=$highlighted_source
+
+  fi
+
+  zombie_lap "End of debug_source_update_hl"
+}
+
 debug_display_source() {
   raw_debug_path_to_source_file=${saved_bash_source[$debug_list_stack_pos]}
   if (( debug_list_stack_pos > 0 )); then
@@ -115,6 +150,8 @@ debug_display_source() {
   debug_current_function=${saved_funcname[$debug_list_stack_pos]:-}
 
   debug_source_update
+  debug_source_update_hl
+
   if [[ "$debug_path_to_source_file" == none ]]; then
     return 0
   fi
@@ -203,34 +240,6 @@ debug_ignore_remove() {
   done
 }
 
-debug_source_update() {
-  zombie_lap "Start of debug_source_update"
-  debug_path_to_source_file=$raw_debug_path_to_source_file
-  if [[ $debug_path_to_source_file == /dev/fd/* ]]; then
-    debug_path_to_source_file=none
-  fi
-
-  if [[ $debug_full_path == t ]]; then
-    debug_source_file=$debug_path_to_source_file
-  else
-    debug_source_file=${debug_path_to_source_file##*/}
-  fi
-
-  if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
-
-    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
-    local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
-    if [ ! -f "$highlighted_source" ]; then
-      mkdir -p "${highlighted_source%/*}"
-      #cat "$debug_path_to_source_file" | highlight -S shellscript -O ansi >"$highlighted_source"
-      cat "$debug_path_to_source_file" | source-highlight -s bash -f esc >"$highlighted_source"
-    fi
-    debug_path_to_source_file=$highlighted_source
-
-  fi
-  zombie_lap "End of debug_source_update"
-}
-
 debug_display_command_expansion_status() {
   case $debug_expansion in
     0)
@@ -249,7 +258,7 @@ debug_display_command_expansion_status() {
 }
 
 debug_output_stop() {
-  if [[ -e $debug_out_path ]]; then
+  if [[ $debug_recording_trace == t && -e $debug_out_path ]]; then
     zombie_lap "Start of debug_output_stop"
     BASH_XTRACEFD=$debug_original_tracefd
     eval "exec $fd_bash_trace>&-"
@@ -1175,6 +1184,7 @@ debug_inner() {
   fi
 
   debug_last_location="$raw_debug_path_to_source_file $debug_line_num"
+  debug_source_update_hl
 
   local backlog=
   if [[ $debug_path_to_source_file != none && "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
@@ -1297,12 +1307,16 @@ debug_trap() {
     debug_line_num=$saved_lineno \
     debug_current_function=${saved_funcname[0]:-none} \
     debug_command=${BASH_COMMAND} \
-    debug_current_depth=${#saved_funcname[*]}
+    debug_current_depth=${#saved_funcname[*]} \
+    IFS=$'\n'$'\t'" " \
+    debug_full_path=${debug_full_path:-f} \
+    debug_source_file \
 
   debug_tracing=f
   [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
-  local debug_out_path=$tmp_folder/debug-out.$BASHPID
+  debug_out_path=$tmp_folder/debug-out.$BASHPID
   defer "rm $debug_out_path"
+  debug_recording_trace=f
 
   if [[ "$debug_ignore" == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
@@ -1314,11 +1328,6 @@ debug_trap() {
   debug_load_state || return 1
 
   [[ $debug_exit == t ]] && exit 1
-
-  local IFS=$'\n'$'\t'" " \
-    debug_full_path=${debug_full_path:-f} \
-    debug_source_file \
-    raw_debug_path_to_source_file
 
   debug_rewind=f
 
