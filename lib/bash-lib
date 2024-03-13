@@ -100,22 +100,39 @@ zombie_lap() {
     zombie_lap_reset
   fi
   zombie_lap_last_ts=$ts
-  : ${zombie_lap_table["$m"]:=0}
+  : ${zombie_lap_table[$m]:=0}
   local extra=
   if (( diff > 0 )); then
     if (( diff < ${zombie_lap_max_diff:-100000} )); then
-      (( zombie_lap_table["$m"] += diff ))
+      (( zombie_lap_table[$m] += diff ))
       (( zombie_lap_total += diff ))
-      (( percent = zombie_lap_table["$m"] * 10000 / zombie_lap_total ))
+      (( percent = zombie_lap_table[$m] * 10000 / zombie_lap_total ))
       p1=${percent%??}
       p2=${percent#$p1}
       percent="${p1:-0}.$p2"
-      extra="[diff=$diff sum=${zombie_lap_table["$m"]} $percent%] "
+      extra="[diff=$diff sum=${zombie_lap_table[$m]} $percent%] "
     else
       extra="[exceeded zombie_lap_max_diff] "
     fi
   fi
-  echo "$CYAN$EPOCHREALTIME zombie_lap: $extra$m$RESET" >&2
+  if [[ "${zombie_lap_detail:-t}" == t ]]; then
+    echo "$CYAN$EPOCHREALTIME zombie_lap: $extra$m$RESET" >&2
+  fi
+}
+
+zombie_lap_summary() {
+  local key val percent p1 p2
+  for key in "${!zombie_lap_table[@]}"; do
+    val=${zombie_lap_table[$key]}
+    if [[ "$val" && "$val" -gt 0 ]]; then
+      (( percent = val * 10000 / zombie_lap_total ))
+      p1=${percent%??}
+      p2=${percent#$p1}
+      percent="${p1:-0}.${p2:-00}"
+      echo "$val$TAB$percent%$TAB$key"
+    fi
+  done | sort -gr >&2
+  echo "Total: $zombie_lap_total" >&2
 }
 
 # calls to this should be converted to normal evals before committing code
