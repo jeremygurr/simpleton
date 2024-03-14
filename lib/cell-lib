@@ -457,9 +457,9 @@ make_context_expand_find_members() {
 
 make_context_expand_handle_default() {
   begin_function
-    if [[ -v ${type}_${dim}_default ]]; then
+    if [[ -v ${dim_type}_${dim}_default ]]; then
 
-      eval "local default=\"\$${type}_${dim}_default\""
+      eval "local default=\"\$${dim_type}_${dim}_default\""
       fun+="
     '')
       values=( \"$default\" )
@@ -549,8 +549,8 @@ make_or_load_context_expand2() {
 
     local members=() aliases=() has_explicit_member_list=f fun
 
-    if [[ -v ${type}_${dim}_members ]]; then
-      eval "members=( \"\${${type}_${dim}_members[@]}\" )" || fail
+    if [[ -v ${dim_type}_${dim}_members ]]; then
+      eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
 
       if [[ ${#members[*]} -eq 0 ]]; then
         log_fatal "There are no members defined for $dim."
@@ -562,12 +562,12 @@ make_or_load_context_expand2() {
       make_context_expand_find_members
     fi
 
-    if [[ -v ${type}_${dim}_aliases ]]; then
-      eval "aliases=( \"\${${type}_${dim}_aliases[@]}\" )" || fail
+    if [[ -v ${dim_type}_${dim}_aliases ]]; then
+      eval "aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )" || fail
     fi
 
     fun="
-${type}_${dim}_expand() {
+${dim_type}_${dim}_expand() {
   problem=
   case \"\$value\" in"
 
@@ -598,11 +598,11 @@ make_or_load_context_expand() {
       fail1
     fi
 
-    local dim type
-    begin_for type in trunk_dims sub_dims props; doo
-      local -n dims=$type
+    local dim dim_type
+    begin_for dim_type in trunk_dims sub_dims props; doo
+      local -n dims=$dim_type
       begin_for dim in ${dims[*]:-}; doo
-        if ! function_exists ${type}_${dim}_expand; then
+        if ! function_exists ${dim_type}_${dim}_expand; then
           make_or_load_context_expand2 || fail
         fi
       end_for
@@ -1087,6 +1087,7 @@ fork_bg() {
 # use for simple cases
 for_each_leaf_flat() {
   local dim_array=( $* ) multi_cell \
+    dim_type=${dim_type:-trunk_dims} \
     leaf_function=$function
 
   begin_function
@@ -1190,12 +1191,12 @@ expand_values_single() {
       fail1
     fi
 
-    if function_exists ${dim}_expand; then
+    if function_exists ${dim_type}_${dim}_expand; then
       if [[ "$values" == $empty_member ]]; then
         values=
       fi
       local problem=
-      value=$values ${dim}_expand || fail
+      value=$values ${dim_type}_${dim}_expand || fail
       if [[ "$problem" ]]; then
         log_fatal "$problem"
         fail1
@@ -1210,7 +1211,7 @@ expand_values_single() {
         fail1
       fi
     else
-      log_fatal "Internal error: Missing ${dim}_expand function, which should have been created by make_context method"
+      log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
       fail1
     fi
 
@@ -1226,26 +1227,26 @@ expand_values_plural() {
 
     if [[ ! "${values:-}" ]]; then
 
-      if function_exists ${dim}_expand; then
-        value= ${dim}_expand || fail
+      if function_exists ${dim_type}_${dim}_expand; then
+        value= ${dim_type}_${dim}_expand || fail
         if [[ "$problem" ]]; then
           log_fatal "$problem"
           fail1
         fi
         new_values=( "${values[@]}" )
       else
-        log_fatal "Internal error: Missing ${dim}_expand function, which should have been created by make_context method"
+        log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
         fail1
       fi
 
     else
 
-      if function_exists ${dim}_expand; then
+      if function_exists ${dim_type}_${dim}_expand; then
         begin_for value in "${values[@]}"; doo
           if [[ "$value" == $empty_member ]]; then
             value=
           fi
-          value=$value ${dim}_expand || fail
+          value=$value ${dim_type}_${dim}_expand || fail
           if [[ "$problem" ]]; then
             log_fatal "$problem"
             fail1
@@ -1256,7 +1257,7 @@ expand_values_plural() {
           new_values+=( "${values[@]}" )
         end_for
       else
-        log_fatal "Internal error: Missing ${dim}_expand function, which should have been created by make_context method"
+        log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
         fail1
       fi
 
@@ -1273,6 +1274,7 @@ expand_values_plural() {
 # input: dim
 # output: values 
 expand_values() {
+  local dim_type=${dim_type:-trunk_dims}
   begin_function
 
     local problem= \
@@ -1820,6 +1822,7 @@ execute_command_internal() {
         local prop plural
         begin_for prop in ${props[*]}; doo
           dim=$prop \
+          dim_type=props \
           expand_values || fail
           get_plural $prop || fail
           eval "d_$dim=\${values[*]}" || fail
