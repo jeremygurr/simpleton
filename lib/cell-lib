@@ -399,9 +399,8 @@ load_dims() {
 make_or_load_context_dims() {
   begin_function
 
+    trunk_dim_count=${#trunk_dims[*]}
     load_leaf_dims || fail
-
-    log_debug "cell_is_leaf=$cell_is_leaf"
 
     local dim assignment member i members_string=
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
@@ -458,9 +457,9 @@ make_context_expand_find_members() {
 
 make_context_expand_handle_default() {
   begin_function
-    if [[ -v ${dim}_default ]]; then
+    if [[ -v ${type}_${dim}_default ]]; then
 
-      eval "local default=\"\$${dim}_default\""
+      eval "local default=\"\$${type}_${dim}_default\""
       fun+="
     '')
       values=( \"$default\" )
@@ -545,6 +544,52 @@ make_context_expand_handle_aliases() {
   handle_return
 }
 
+make_or_load_context_expand2() {
+  begin_function
+
+    local members=() aliases=() has_explicit_member_list=f fun
+
+    if [[ -v ${type}_${dim}_members ]]; then
+      eval "members=( \"\${${type}_${dim}_members[@]}\" )" || fail
+
+      if [[ ${#members[*]} -eq 0 ]]; then
+        log_fatal "There are no members defined for $dim."
+        fail1
+      fi
+
+      has_explicit_member_list=t
+    else
+      make_context_expand_find_members
+    fi
+
+    if [[ -v ${type}_${dim}_aliases ]]; then
+      eval "aliases=( \"\${${type}_${dim}_aliases[@]}\" )" || fail
+    fi
+
+    fun="
+${type}_${dim}_expand() {
+  problem=
+  case \"\$value\" in"
+
+    make_context_expand_handle_default || fail
+
+    if (( ${#aliases[*]} > 0 )); then
+      make_context_expand_handle_aliases || fail
+    fi
+
+    if [[ $has_explicit_member_list == f ]]; then
+      make_context_expand_members_unknown || fail
+    else
+      make_context_expand_members_known || fail
+    fi
+
+    eval "$fun" || fail
+    write_to_context fun "$fun" || fail
+
+  end_function
+  handle_return
+}
+
 make_or_load_context_expand() {
   begin_function
 
@@ -553,50 +598,15 @@ make_or_load_context_expand() {
       fail1
     fi
 
-    local dim
-    begin_for dim in ${leaf_dims[*]:-} ${props[*]:-}; doo
-
-      if ! function_exists ${dim}_expand; then
-        local members=() aliases=() has_explicit_member_list=f fun
-
-        if [[ -v ${dim}_members ]]; then
-          eval "members=( \"\${${dim}_members[@]}\" )" || fail
-
-          if [[ ${#members[*]} -eq 0 ]]; then
-            log_fatal "There are no members defined for $dim."
-            fail1
-          fi
-
-          has_explicit_member_list=t
-        else
-          make_context_expand_find_members
+    local dim type
+    begin_for type in trunk_dims sub_dims props; doo
+      local -n dims=$type
+      begin_for dim in ${dims[*]:-}; doo
+        if ! function_exists ${type}_${dim}_expand; then
+          make_or_load_context_expand2 || fail
         fi
-
-        if [[ -v ${dim}_aliases ]]; then
-          eval "${NL}aliases=( \"\${${dim}_aliases[@]}\" )" || fail
-        fi
-
-        fun="
-${dim}_expand() {
-  problem=
-  case \"\$value\" in"
-
-        make_context_expand_handle_default || fail
-
-        if (( ${#aliases[*]} > 0 )); then
-          make_context_expand_handle_aliases || fail
-        fi
-
-        if [[ $has_explicit_member_list == f ]]; then
-          make_context_expand_members_unknown || fail
-        else
-          make_context_expand_members_known || fail
-        fi
-
-        eval "$fun" || fail
-        write_to_context fun "$fun"
-      fi
-    done
+      end_for
+    end_for
 
   end_function
   handle_return
