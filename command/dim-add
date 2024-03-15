@@ -73,36 +73,15 @@ dim_add_create_branches() {
     local create_other=t create_each=f members=( )
     if [[ -f $from_dim_path/members.arr ]]; then
       load_arr $from_dim_path/members.arr members || fail
-      local answer
-
-      prompt_ynq "Do you want a $base_dim:_other folder created?" answer
-      case $answer in
-        n)
-          create_other=f
-        ;;
-        q)
-          out "Aborting."
-          fail1
-        ;;
-      esac
-
-      prompt_ynq "Do you want a $base_dim:{member} folder created for each member?" answer
-      case $answer in
-        y)
-          create_each=t
-        ;;
-        q)
-          out "Aborting."
-          fail1
-        ;;
-      esac
     fi
 
     local folders=() real_members=() member
+
     if [[ $create_other == t ]]; then
       folders+=( _other )
       real_members+=( _other )
     fi
+
     if [[ $create_each == t ]]; then
       begin_for member in "${members[@]}"; doo
         local value
@@ -110,9 +89,6 @@ dim_add_create_branches() {
         folders+=( $value )
         real_members+=( "$member" )
       end_for
-    fi
-    if [[ $create_each == f && $create_other == f ]]; then
-      warn "You have chosen not to have dim folders created automatically, which means you must create them manually in $seed_path folder."
     fi
 
     dim_add_create_branches_at_seed || fail
@@ -142,7 +118,11 @@ dim_add_get_next_ord() {
 
 dim_add_command() {
   begin_function
-    local shared_dim_folder= seed_path type=${type:-trunk_dim}
+
+    local shared_dim_folder= seed_path \
+      type=${type:-trunk_dim} \
+      create_other=${create_other:-f} \
+      create_each=${create_each:-f} \
 
     case $type in
       dim)
@@ -166,8 +146,12 @@ dim_add_command() {
       dim_add_choose_dim || fail
     fi
 
-    local next_ord= bases= \
+    local next_ord= bases \
       type_path=$seed_path/.dna/${type}s
+    if [[ ! -d $type_path ]]; then
+      mkdir $type_path || fail
+    fi
+
     dim_add_get_next_ord || fail
 
     begin_for dim in $dims; doo
@@ -178,10 +162,6 @@ dim_add_command() {
       local added_something=f \
         from_dim_path=$shared_dim_folder/$dim \
       local to_dim_path=$type_path/$next_ord-$base_dim
-
-      if [[ ! -d $type_path ]]; then
-        mkdir $type_path || fail
-      fi
 
       if [[ "$bases " != *" $dim "* ]]; then
         if [[ -d $from_dim_path ]]; then
@@ -194,7 +174,8 @@ dim_add_command() {
         fi
       fi
 
-      if [[ $type == trunk_dim ]]; then
+      if [[ $type == trunk_dim ]] && \
+         [[ $create_each == t || $create_other == t ]]; then
         dim_add_create_branches || fail
       fi
 
