@@ -48,16 +48,29 @@ scan_commands() {
         ;;
       esac
     end_for
-    if (( ${#leftovers[*]} > 0 )); then
-      local x=$leftovers
-      if [[ -d "$x" ]]; then
-        log_fatal "Not a valid cell: $x"
+    local leftover
+    begin_for leftover in "${leftovers[@]}"; doo
+      if [[ $help_mode == t ]]; then
+        local subs=( $path_to_commands/$leftovers-*.info )
+        if [[ "$subs" != *\** ]]; then
+          out "Choose a subcommand of $leftover:$NL"
+          local sub
+          begin_for sub in ${subs[*]}; doo
+            local command=${sub##*/}
+            command=${command%.info}
+            commands+=( $command )
+          end_for
+          continue
+        fi
+      fi
+      if [[ -d "$leftover" ]]; then
+        log_fatal "Not a valid cell: $leftover"
       else
-        log_fatal "Unidentified command: $x"
+        log_fatal "Unidentified command: $leftover"
       fi
       show_usage 
       fail1
-    fi
+    end_for
   end_function
   handle_return
 }
@@ -65,28 +78,22 @@ scan_commands() {
 show_help_for_command() {
   local command=$1
   begin_function
-    get_bottom_cell $cell_path || fail
-    if [[ "$bottom_cell" ]]; then
-      local cell_path=$bottom_cell \
-        can_create_cyto=f
-      switch_context || fail
-      [[ $first_command == f ]] && out ''
-      out "Command: $command"
-      if [[ -f $path_to_commands/$command.info ]]; then
-        source $path_to_commands/$command.info || fail
-        indent=2 out_wrap "$command_description"
-        local name description default default_string i
-        if [[ "${parameter_names:-}" ]]; then
-          out "Parameters:"
-          begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
-            parameter="${parameter_names[$i]}"
-            description="${parameter_descriptions[$i]}"
-            default="${parameter_defaults[$i]}"
-            default_string=
-            [[ "$default" ]] && default_string=" default: $default"
-            indent=2 out_wrap "$parameter: $description$default_string"
-          end_for
-        fi
+    [[ $first_command == f ]] && out ''
+    out "Command: ${command//-/ }"
+    if [[ -f $path_to_commands/$command.info ]]; then
+      source $path_to_commands/$command.info || fail
+      indent=2 out_wrap "$command_description"
+      local name description default default_string i
+      if [[ "${parameter_names:-}" ]]; then
+        out "Parameters:"
+        begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
+          parameter="${parameter_names[$i]}"
+          description="${parameter_descriptions[$i]}"
+          default="${parameter_defaults[$i]}"
+          default_string=
+          [[ "$default" ]] && default_string=" default: $default"
+          indent=2 out_wrap "$parameter: $description$default_string"
+        end_for
       fi
     fi
   end_function
