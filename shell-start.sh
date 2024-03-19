@@ -11,7 +11,7 @@ if [[ "${ADD_PATH:-}" ]]; then
   export PATH=$ADD_PATH:$PATH
 fi
 
-shopt -s extglob dotglob nullglob globstar huponexit
+shopt -s extglob dotglob globstar huponexit
 
 complete -r # remove built-in shell completion since it currently has problems
 
