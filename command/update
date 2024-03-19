@@ -10,20 +10,19 @@ get_upstream_needs_update() {
       local -r upstream_cells=( 
         $(find1 $up_path -not -name '.*' | sort -g) 
         ) || fail
-      local up up_part
-      begin_for up in ${upstream_cells[*]}; doo
+      local upstream up_part
+      begin_for upstream in ${upstream_cells[*]}; doo
 
-        up_part=${up##*/}
+        up_part=${upstream##*/}
         log_debug "Checking $up_part"
-        up_cyto=$up_path/$up_part
-        if [[ ! -e $up_cyto/chosen ]]; then
+        if [[ ! -e $upstream/chosen ]]; then
           log_debug "Cyto up is missing, needs update"
           needs_update=t
           break
         fi
 
         # recursive
-        check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $up_cyto/chosen || fail
+        check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $upstream/chosen || fail
 
         if [[ $needs_update == t ]]; then
           break
@@ -71,10 +70,13 @@ get_needs_update() {
 
   local cell_path=$(realpath $1)
 
-  local log_vars=^cell_path
+  local log_show_vars=^cell_path
   begin_function_hi
 
     local localize_dims=${localize_dims:-}
+    if [[ "${localize_dims:-local}" != local ]]; then
+      eval "$localize_dims" || fail
+    fi
 
     switch_context || fail
 
@@ -109,32 +111,41 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because something changed"
-    elif get_prop_changed $cell_path || fail
-         [[ $prop_changed == t ]]
-    then
-      needs_update=t
-      log_message="Needs update because properties have changed"
+ #    elif get_prop_changed $cell_path || fail
+ #         [[ $prop_changed == t ]]
+ #    then
+ #      needs_update=t
+ #      log_message="Needs update because properties have changed"
     elif get_is_stale $status_path || fail
          [[ $is_stale == t ]]
     then
       needs_update=t
       log_message="Needs update because cell is stale"
-    elif [[ -v leaf_dims ]] \
-         && { 
-           function=get_leaf_needs_update \
-             for_each_leaf_flat ${leaf_dims[*]} || fail 
-         } \
-         && { 
-           switch_context || fail
-         } \
-         && [[ $needs_update == t ]]
+#    elif [[ -v leaf_dims ]] \
+#         && { 
+#           function=get_leaf_needs_update \
+#             for_each_leaf_flat ${leaf_dims[*]} || fail 
+#         } \
+#         && { 
+#           switch_context || fail
+#         } \
+#         && [[ $needs_update == t ]]
+#    then
+#      log_message="Needs update because at least one leaf cell is out of date"
+#    elif [[ -v up_path ]] \
+#         && { get_upstream_needs_update || fail; } \
+#         && [[ $needs_update == t ]]
+#    then
+#      log_message="Needs update because at least one upstream cell is out of date"
+    elif [[ -v leaf_dims ]]
     then
-      log_message="Needs update because at least one leaf cell is out of date"
-    elif [[ -v up_path ]] \
-         && { get_upstream_needs_update || fail; } \
-         && [[ $needs_update == t ]]
+      needs_update=t
+      log_message="Needs update because cell has leaves"
+    elif [[ "${downstream_ref_path:-}" ]] && \
+      [[ "$(readlink ${downstream_ref_path}/chosen)" != $cell_path ]]
     then
-      log_message="Needs update because at least one upstream cell is out of date"
+      needs_update=t
+      log_message="Needs update because downstream_ref_path is outdated"
     elif local data_valid=t
       ignore_missing=t execute_op check || fail
       [[ $data_valid == f ]]
@@ -173,6 +184,8 @@ pre_update() {
     write_lock=t \
       timeout=$lock_timeout \
       cell_lock $cell_path || fail
+
+    defer "cell_unlock $cell_path"
 
     if [[ -v current_job_path ]]; then
       safe_link $current_job_path $running_job_path || fail
@@ -225,117 +238,81 @@ create_downstream_links() {
 }
 
 # inputs: 
-#   up_cyto
+#   upstream
 prep_upstream() {
-  # down_fresh may be used by prep script to propagate freshness requirements to upstream
-  down_fresh=$required_freshness
-
-  # Don't inherit parent's freshness requirements, 
-  #   only what upstream prep explicitly states
-  # extra_dims includes dimensions that need to be promoted in upstream that don't
-  #   exist in branch_dims
-  fresh=$down_fresh required_freshness= default_freshness= extra_dims=
-
-  local log_show_vars=^up_cyto
-  begin_function_hi
-    unset prep
-    if [[ -f $up_cyto/prep.bash ]]; then
-      log_debug "Executing upstream prep: $up_cyto/prep.bash"
-      source $up_cyto/prep.bash || fail
-      setup_dep_defaults || fail
-    fi
-  end_function
-  handle_return
-}
-
-update_upstream_prep() {
-
-  local log_show_vars="^up_cyto"
+  local log_show_vars=^upstream
   begin_function_hi
 
-    if [[ ! -d $up_path ]]; then
-      mkdir $up_path || fail
-    fi
+    # down_fresh may be used by prep script to propagate freshness requirements to upstream
+    down_fresh=$required_freshness
 
     # This may be overridden by upstream prep file to customize how failure of this upstream is handled
     handle_upstream_result() {
       if [[ $update_successful == f ]]; then
-        log_error "Failed to update upstream cell $up_cyto"
+        log_error "Failed to update upstream cell $upstream"
       fi
     }
 
-    if [[ -d $up_cyto ]]; then
+    # Don't inherit parent's freshness requirements, 
+    #   only what upstream prep explicitly states
+    # extra_dims includes dimensions that need to be promoted in upstream that don't
+    #   exist in branch_dims
+    fresh=$down_fresh required_freshness= default_freshness= extra_dims=
 
-      if [[ $previous_upstream_changed == t ]]; then
-        log_debug "Previous upstream changed, removing cyto upstream"
-        rm -r "$up_cyto" || fail
-      fi
-
+    if [[ -f $upstream/prep ]]; then
+      log_debug "Executing upstream prep: $upstream/prep"
+      source $upstream/prep || fail
+      setup_dep_defaults || fail
     fi
-
-    if [[ ! -d $up_cyto ]]; then
-
-      log_debug "Cyto upstream is missing, will need to update"
-      mkdir $up_cyto || fail
-      needs_update=t
-
-    fi
-
-    prep_upstream || fail
 
   end_function
   handle_return
-
 }
 
 # needs_update is guaranteed to be set after this completes successfully
 update_upstream_choose() {
+
+  local log_show_vars=^upstream
   begin_function_hi
 
-    if [[ -d $up_cyto/cell ]]; then
-      chosen=$up_cyto/cell
-    elif [[ -d $up_cyto/choices ]]; then
-      local choices=$(find1 $up_cyto/choices -not -name ".*" | sort -g) || fail
+    local choices=$(find1 $upstream/choices -not -name ".*" | sort -g) || fail
 
-      if [[ ! "$choices" ]]; then
-        log_fatal "No choices defined for upstream $up_cyto"
-        fail1
-      fi
-
-      # are any already updated?
-      local choice
-      if [[ ! "$needs_update" ]]; then
-        begin_for choice in $choices; doo
-
-          get_needs_update $choice || fail
-          if [[ "$needs_update" == f ]]; then
-            chosen=$choice
-            break
-          fi
-
-        end_for
-      fi
-
-      if [[ ! "$chosen" ]]; then
-        chosen=${choices%% *}
-        needs_update=t
-      fi
-    else
-      log_fatal "Missing either cell or choices folder for dependency: $up_cyto"
+    if [[ ! "$choices" ]]; then
+      log_fatal "No choices defined for upstream $upstream"
       fail1
     fi
 
-    local log_show_vars=chosen
+    # are any already updated?
+    local choice
+    if [[ ! "$needs_update" ]]; then
+      begin_for choice in $choices; doo
+
+        get_needs_update $choice || fail
+        if [[ "$needs_update" == f ]]; then
+          chosen=$choice
+          break
+        fi
+
+      end_for
+    fi
+
+    if [[ ! "$chosen" ]]; then
+      chosen=${choices%% *}
+      needs_update=t
+    fi
+
   end_function
+  local log_return_vars=chosen
   handle_return
+
 }
 
 update_upstream_get_locks() {
-  local log_show_vars=^up_cyto
+  local log_show_vars=^upstream
   begin_function_hi
 
     local lock 
-    local -r shared_lock_path=$up_cyto/chosen/.cyto/shared-locks
+    local -r shared_lock_path=$upstream/chosen/.cyto/shared-locks
     if [[ -d $shared_lock_path ]]; then
       local shared_locks=$(find1 $shared_lock_path -not -name ".*" | sort -g) || fail
       begin_for lock in $shared_locks; doo
@@ -345,7 +322,7 @@ update_upstream_get_locks() {
       end_for
     fi
 
-    local -r exclusive_lock_path=$up_cyto/chosen/.cyto/exclusive-locks
+    local -r exclusive_lock_path=$upstream/chosen/.cyto/exclusive-locks
     if [[ -d $exclusive_lock_path ]]; then
       local exclusive_locks=$(find1 $exclusive_lock_path -not -name ".*" | sort -g) || fail
       begin_for lock in $exclusive_locks; doo
@@ -358,7 +335,7 @@ update_upstream_get_locks() {
     # obtain lock from upstream cell
     write_lock=f \
       timeout=$lock_timeout \
-      cell_lock $up_cyto/chosen || fail
+      cell_lock $upstream/chosen || fail
 
   end_function
   handle_return
@@ -379,10 +356,9 @@ update_upstream() {
   local log_show_vars=^upstream 
   begin_function_hi
 
-    local up_part=${upstream##*/}
-    local up_cyto=$up_path/$up_part needs_update=
+    local needs_update=
 
-    update_upstream_prep || fail
+    prep_upstream || fail
 
     local chosen=
     update_upstream_choose || fail
@@ -392,18 +368,15 @@ update_upstream() {
       fail1
     fi
 
-    if [[ ! -e $up_cyto/chosen ]]; then
+    if [[ ! -e $upstream/chosen ]]; then
       needs_update=t
-    fi
-
-    if [[ "${localize_dims:-local}" != local ]]; then
-      eval "$localize_dims"
     fi
 
     if [[ $needs_update == t ]]; then
 
+      needs_update= \
       top_level_command=f \
-      downstream_ref_path=$up_cyto \
+      downstream_ref_path=$upstream \
       execute_command "$(realpath $chosen)" update || fail
 
       if [[ $something_changed == t ]]; then
@@ -426,10 +399,6 @@ update_upstream() {
 
 update_upstreams() {
   begin_function
-
-    if [[ "$update_successful" == f ]]; then
-      succeed
-    fi
 
     update_successful=t
     touch $status_path/deps-up-to-date || fail
@@ -906,7 +875,10 @@ update_command() {
 
     pre_update || fail
     plant_seed_internal "$seed_path" "$cell_path" || fail
-    update_upstreams || fail
+
+    if [[ "$update_successful" != f ]]; then
+      update_upstreams || fail
+    fi
 
     if [[ $update_successful == t ]]; then
       if [[ $cell_is_leaf == t ]]; then

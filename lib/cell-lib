@@ -644,9 +644,7 @@ make_context() {
     make_or_load_context_dims || fail
     prop_count=${#props[*]}
 
-    if (( leaf_dim_count > 0 || prop_count > 0 )); then
-      make_or_load_context_expand || fail
-    fi
+    make_or_load_context_expand || fail
 
     fd_unlock
 
@@ -735,7 +733,7 @@ find_seed_path() {
       fail1
     fi
 
-    begin_for (( i=d; i < dim_count; i++ )); doo
+    begin_for (( i = d; i < dim_count; i++ )); doo
 
       h=${branch_hashes[$i]}
       dim=${branch_dims[$i]}
@@ -743,12 +741,7 @@ find_seed_path() {
         s+=/$dim:$h
       elif [[ -d $s/$dim:_other ]]; then
         s+=/$dim:_other
-      else
-        log_fatal "Missing seed for $work_path dim $dim"
-        fail1
       fi
-
-      (( d++ ))
 
     end_for
 
@@ -782,7 +775,9 @@ setup_cell_path_vars() {
     cyto_path=$cell_path/.cyto \
 
     context_path=$cyto_path/context \
+    dna_key_path=$dna_path/key \
     down_path=$cyto_path/down \
+    key_path=$cyto_path/key \
     lock_path=$cyto_path/context \
     out_path=$cell_path \
     req_path=$cyto_path/req \
@@ -837,12 +832,14 @@ init_context() {
   out_file= \
   post_validate=f \
   pre_validate=f \
+  props=() \
   refresh_less_than=${refresh_less_than:-1} \
   retry_delay=1 \
   retry_max=1 \
   retry_scale=2 \
   reuse_existing_out=t \
   shuffle_chance=100 \
+  sub_dims=() \
   trunk_dims=() \
   up=() \
   update_cost=1 \
@@ -1825,6 +1822,10 @@ execute_command_internal() {
       ;;
       *)
 
+        if [[ "${localize_dims:-local}" != local ]]; then
+          eval "$localize_dims" || fail
+        fi
+
         switch_context || {
           log_fatal "Context failed to load for $cell_path"
           fail1
@@ -1845,7 +1846,11 @@ execute_command_internal() {
           eval "d_$plural=\${values[*]}" || fail
         end_for
 
-        eval "$localize_dims" || fail
+        # This is in this function twice, because it changes after switch_context
+        if [[ "${localize_dims:-local}" != local ]]; then
+          eval "$localize_dims" || fail
+        fi
+
 
       ;;
     esac
@@ -2013,6 +2018,8 @@ plant_member() {
         from=$seed_path/$dim:$sane_value
       elif [[ -d $seed_path/$dim:_other ]]; then
         from=$seed_path/$dim:_other
+      else
+        from=$seed_path
       fi
 
       if [[ "$from" ]]; then
@@ -2613,6 +2620,7 @@ get_sane_value() {
     hash=$(echo "$value" | sha1sum | awk '{ print $1 }')
     sane_value=${hash:0:8}
   fi
+  debug_return_vars=sane_value
   return 0
 }
 
