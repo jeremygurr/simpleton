@@ -49,6 +49,11 @@ CLEAR_SCREEN=$'\033[2J\r\033[H'
      REVERSE=$'\033[7m'
 
 original_cmd=${original_cmd:-"$0 $*"}
+alias debug_once='[[ ! "${debug_once_triggered:-}" ]] && { debug_once_triggered=t; debug_start; }'
+
+is_array() {
+  eval "[[ \${$1@a} == a ]]"
+}
 
 side_log() {
   echo "$*" >>$side_log_file
@@ -1229,9 +1234,37 @@ debug_inner() {
   if [[ "${debug_return_vars:-}" ]]; then
     local var val
     for var in $debug_return_vars; do
-      val=${!var}
-      shell_quote_var val
-      echo "+ $var=$val" >&$fd_original_err
+      if [[ -v $var ]]; then
+        if is_array $var; then
+          local -n array=$var
+          local i count=${#array[*]} max=10 short_mode=t result=
+          if (( count < 10 )); then
+            max=$count
+          fi
+          if (( ${#array[0]} > 20 )); then
+            short_mode=f
+          fi
+          for ((i = 0; i < max; i++)); do
+            val=${array[$i]}
+            shell_quote_var val
+            if (( ${#val} < 20 )); then
+              result+=" $val"
+            else
+              short_mode=f
+              echo "+ $var[$i]=$val" >&$fd_original_err
+            fi
+          done
+          if [[ $short_mode == f ]]; then
+            echo "+ $var count=$count" >&$fd_original_err
+          else
+            echo "+ $var[*]=( ${result# } )" >&$fd_original_err
+          fi
+        else
+          val=${!var}
+          shell_quote_var val
+          echo "+ $var=$val" >&$fd_original_err
+        fi
+      fi
     done
     debug_return_vars=
   fi
@@ -1449,8 +1482,6 @@ cooked_stack_trace() {
   fi
   return 0
 }
-
-alias debug_once='[[ ! "${debug_once_triggered:-}" ]] && { debug_once_triggered=t; debug_start; }'
 
 debugger_init() {
   local first_run=${first_run:-t}
