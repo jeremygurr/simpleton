@@ -92,6 +92,7 @@ write_to_context() {
 make_or_load_dna_fun() {
   begin_function
     local full_path=$1 name=$prefix$2 content fun
+    name=${name//-/_}
     content=$(<$full_path)
     trim_ws content
 
@@ -105,8 +106,7 @@ $name() {
 $content
   end_function
   handle_return
-}
-"
+}"
     fi
 
     eval "$fun" || fail
@@ -189,13 +189,13 @@ make_array_assignment() {
   local arr_name=$1
   local -n arr=$1
   begin_function
-    result="$arr_name=("
+    array_assignment="$arr_name=("
     local v
     begin_for v in "${arr[@]}"; doo
       shell_quote_var v
-      result+=" $v"
+      array_assignment+=" $v"
     end_for
-    result+=" )"
+    array_assignment+=" )"
   end_function
   handle_return
 }
@@ -216,18 +216,19 @@ make_or_load_dna_contents2() {
 
       item_name=${item##*/}
       split_ordinal item_name o item_name
-      if [[ "$current_var" ]]; then
-        eval "$current_var+=( $item_name )"
-        local path
-        if [[ -L $item || -d $item ]]; then
-          path=$(realpath $item)
-          result="${current_var}_${item_name//-/_}_path=$path"
-          eval "$result" || fail
-          write_to_context var "$result" || fail
-        fi
-      fi
 
       if [[ -d $item ]]; then
+
+        if [[ "$current_var" ]]; then
+          eval "$current_var+=( $item_name )"
+          local path
+          if [[ -L $item || -d $item ]]; then
+            path=$(realpath $item)
+            result="${current_var}_${item_name//-/_}_path=$path"
+            eval "$result" || fail
+            write_to_context var "$result" || fail
+          fi
+        fi
 
         if [[ ! -d $item/.dna ]]; then
           local new_prefix=$prefix
@@ -272,7 +273,7 @@ make_or_load_dna_contents2() {
 
     if [[ "$current_var" ]]; then
       make_array_assignment $current_var || fail
-      write_to_context var "$result" || fail
+      write_to_context var "$array_assignment" || fail
     fi
 
   end_function
@@ -1851,7 +1852,6 @@ execute_command_internal() {
         if [[ "${localize_dims:-local}" != local ]]; then
           eval "$localize_dims" || fail
         fi
-
 
       ;;
     esac

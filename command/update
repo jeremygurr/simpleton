@@ -170,6 +170,7 @@ get_needs_update() {
     needs_update=f
   fi
 
+  local log_return_vars=needs_update
   handle_return
 }
 
@@ -259,9 +260,11 @@ prep_upstream() {
     #   exist in branch_dims
     fresh=$down_fresh required_freshness= default_freshness= extra_dims=
 
-    if [[ -f $upstream/prep ]]; then
-      log_debug "Executing upstream prep: $upstream/prep"
-      source $upstream/prep || fail
+    local upstream_name=${upstream##*/}
+    local prep_function=up_${upstream_name//-/_}_prep
+    if function_exists $prep_function; then
+      log_debug "Executing upstream prep: $prep_function"
+      $prep_function || fail
       setup_dep_defaults || fail
     fi
 
@@ -278,9 +281,11 @@ update_upstream_choose() {
     if [[ -f "$upstream/chosen" ]]; then
       chosen=$(readlink $upstream/chosen)
       get_needs_update $chosen || fail
+    else
+      needs_update=t
     fi
 
-    if [[ $needs_update == t ]]; then
+    if [[ "$needs_update" == t ]]; then
       local choices=$(find1 $upstream/choices -not -name ".*" | sort -g) || fail
 
       if [[ ! "$choices" ]]; then
@@ -371,10 +376,6 @@ update_upstream() {
     if [[ ! "$chosen" ]]; then
       log_fatal "chosen was not set."
       fail1
-    fi
-
-    if [[ ! -e $upstream/chosen ]]; then
-      needs_update=t
     fi
 
     if [[ $needs_update == t ]]; then
