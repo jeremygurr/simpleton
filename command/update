@@ -158,7 +158,7 @@ get_needs_update() {
 
   if succeeded; then
     local level=log_verbose
-    if [[ ${cell_is_leaf:-t} == t || $show_branches == t || $top_level_command == t ]]; then
+    if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
       level=log_info
     fi
     action=update_check $level "$log_message ($short_cell)"
@@ -400,6 +400,34 @@ update_upstream() {
     update_upstream_get_locks || fail
 
   end_function
+  handle_return
+}
+
+load_upstream_vars() {
+  begin_function
+
+    if [[ -d "${up_path:-}" ]]; then
+
+      upstreams=$(find1 $up_path -not -name '.*' | sort -g) || fail
+      begin_for upstream in $upstreams; doo
+        update_successful=t
+        local auto_path=$upstream/chosen/auto
+        if [[ -d $auto_path ]]; then
+          load_vars $auto_path || fail
+        fi
+        if [[ $update_successful == f ]]; then
+          break
+        fi
+      end_for
+
+    fi
+
+  end_function
+
+  if failed || [[ $update_successful == f ]]; then
+    update_successful=f
+  fi
+
   handle_return
 }
 
@@ -890,6 +918,7 @@ update_command() {
     if [[ $update_successful == t ]]; then
       if [[ $cell_is_leaf == t ]]; then
         if function_exists update_op; then
+          load_upstream_vars || fail
           update_successful=
           update_self_retry_loop || fail
           check_results || fail

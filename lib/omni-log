@@ -13,112 +13,139 @@ type -t omni_log_init >/dev/null && return 0
 # }
 
 omni_log_init() {
-  local command="$*"  
-  omni_log_job_id=0 omni_log_fork_id=0
+  begin_function
+    local command="$*"  
+    omni_log_job_id=0 omni_log_fork_id=0
 
-  if [[ "${debugger_available:-f}" == t ]]; then
-    debug_at_log_id=
-    if [[ "${log_id:-}" ]]; then
-      echo "${CYAN}Will debug starting at log_id $log_id or later${RESET}" >&2
-      debug_at_log_id=$log_id
+    if [[ "${debugger_available:-f}" == t ]]; then
+      debug_at_log_id=
+      if [[ "${log_id:-}" ]]; then
+        echo "${CYAN}Will debug starting at log_id $log_id or later${RESET}" >&2
+        debug_at_log_id=$log_id
+      fi
     fi
-  fi
 
-  first_log_file= \
-  first_log=t \
-  log_depth_current=0 \
-  omni_log_pos=0 \
-  trace_var=${trace_var:-} \
-  log=${log:-file} \
-  log_to_file=t \
-  log_to_out=f \
-  log_action_filter=${log_action:-} \
-  log_depth_filter=${log_depth:-} \
-  log_function_filter=${log_function:-} \
-  log_level_filter=${log_level:-verbose} \
-  log_format=${log_format:-default} \
-  show_debug_id=${show_debug_id:-${show_id:-f}} \
-  cooked_stack=( ${cooked_stack[*]:-} ) \
-  log_ansi=${log_ansi:-${ansi:-t}} \
+    first_log_file= \
+    first_log=t \
+    log_depth_current=0 \
+    omni_log_pos=0 \
+    trace_var=${trace_var:-} \
+    log=${log:-} \
+    log_to_file=t \
+    log_to_out=f \
+    log_action_filter=${log_action:-} \
+    log_depth_filter=${log_depth:-} \
+    log_function_filter=${log_function:-} \
+    log_level_filter=${log_level:-info} \
+    log_format=${log_format:-default} \
+    show_debug_id=${show_debug_id:-${show_id:-f}} \
+    cooked_stack=( ${cooked_stack[*]:-} ) \
+    log_ansi=${log_ansi:-${ansi:-t}} \
 
-  declare -gA trace_var_value
+    declare -gA trace_var_value
 
-  case $log in
-    off|fatal|error|warn|info|verbose|debug|trace|all)
-      log_level_filter=$log
-      log=file
+    case $log in
+      o|f|e|w|i|v|d|t|a)
+        log_level_filter=$log
+        ;;
+      off|fatal|error|warn|info|verbose|debug|trace|all)
+        log_level_filter=$log
+        ;;
+      file)
+        # default behavior
+        ;;
+      out)
+        log_to_out=t
+        log_level_filter=warn
+        if [[ "$log_format" == default ]]; then
+          log_format='$level_color$message$RESET'
+        fi
+        ;;
+      both)
+        log_to_file=t
+        log_to_out=t
+        ;;
+      id)
+        show_debug_id=t
+        ;;
+    esac
+
+    case $log_level_filter in
+      n)
+        log_level_filter=none
       ;;
-    file)
-      # default behavior
+      f)
+        log_level_filter=fatal
       ;;
-    out)
-      log_to_out=t
-      log_level_filter=warn
-      if [[ "$log_format" == default ]]; then
+      e)
+        log_level_filter=error
+      ;;
+      i)
+        log_level_filter=info
+      ;;
+      v)
+        log_level_filter=verbose
+      ;;
+      d)
+        log_level_filter=debug
+      ;;
+      t)
+        log_level_filter=trace
+      ;;
+      a)
+        log_level_filter=all
+      ;;
+    esac
+
+    case $log_level_filter in
+      none)
+        log_format=
+      ;;
+      fatal|error|warn|info|verbose)
+        if [[ "$log_format" == default ]]; then
+          log_format='$level_color$message$RESET'
+        fi
+      ;;
+      debug)
+        if [[ "$log_format" == default ]]; then
+          log_format='$debug_id$level_color$message$RESET'
+        fi
+      ;;
+      trace|all)
+        if [[ "$log_format" == default ]]; then
+          #log_format='$time$pid$debug_id$log_id$COL45$level_color$action$COL60$function$COL90$log_vars$message$RESET'
+          log_format='$debug_id$level_color$action$COL25$function$COL50$log_vars$message$RESET'
+        fi
+      ;;
+      *)
+        log_fatal "Invalid log_level value. Must be one of: none, error, warn, info, verbose, debug, trace"
+        exit 1
+      ;;
+    esac
+
+    case $log_format in
+      tiny)
         log_format='$level_color$message$RESET'
-      fi
       ;;
-    both)
-      log_to_file=t
-      log_to_out=t
+      short)
+        log_format='$level_color$action$COL15$function$COL45$log_vars$message$RESET'
       ;;
-    id)
-      show_debug_id=t
+      compact)
+        log_format='$level_color$action$function$log_vars$message$RESET'
       ;;
-    *)
-      log_to_file=t
-      log_to_out=t
-      log_action_filter=$log
-      ;;
-  esac
+    esac
 
-  case $log_level_filter in
-    none)
-      log_format=
-    ;;
-    fatal|error|warn|info|verbose)
-      if [[ "$log_format" == default ]]; then
-        log_format='$level_color$message$RESET'
-      fi
-    ;;
-    debug)
-      if [[ "$log_format" == default ]]; then
-        log_format='$debug_id$level_color$message$RESET'
-      fi
-    ;;
-    trace|all)
-      if [[ "$log_format" == default ]]; then
-        #log_format='$time$pid$debug_id$log_id$COL45$level_color$action$COL60$function$COL90$log_vars$message$RESET'
-        log_format='$debug_id$level_color$action$COL25$function$COL50$log_vars$message$RESET'
-      fi
-    ;;
-    *)
-      log_fatal "Invalid log_level value. Must be one of: none, error, warn, info, verbose, debug, trace"
-      exit 1
-    ;;
-  esac
+    if [[ $show_debug_id == t || $show_debug_id == a ]]; then
+      log_format='$debug_id$level_color$message$RESET'
+    fi
 
-  case $log_format in
-    tiny)
-      log_format='$level_color$message$RESET'
-    ;;
-    short)
-      log_format='$level_color$action$COL15$function$COL45$log_vars$message$RESET'
-    ;;
-    compact)
-      log_format='$level_color$action$function$log_vars$message$RESET'
-    ;;
-  esac
-
-  if [[ $show_debug_id == t || $show_debug_id == a ]]; then
-    log_format='$debug_id$level_color$message$RESET'
-  fi
-
-  var_stack=( ) \
-    var_stack2=( ) \
-    logging_to_file= \
-    log_vars= \
-    log_show_vars= 
+    var_stack=( ) \
+      var_stack2=( ) \
+      logging_to_file= \
+      log_vars= \
+      log_show_vars= 
+  end_function
+  handle_return
 }
 
 save_log_vars() {
@@ -333,7 +360,7 @@ write_to_log_console_out() {
     fi
 
     local level_num=${log_level_num_map[$level]} \
-      log_level_num=${log_level_num_map[${log_level_filter:=info}]}
+      log_level_num=${log_level_num_map[$log_level_filter]}
     if (( level_num < log_level_num )); then
       hide=t
     fi
