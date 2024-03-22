@@ -12,29 +12,32 @@ get_command() {
 
     switch_context || fail
     if [[ $cell_is_leaf == t ]]; then
+
+      if [[ -d $out_path/auto ]]; then
+        load_vars $out_path/auto || fail
+      fi
+
       if function_exists get_op; then
         execute_op get || fail
       else
 
         local get_show_file=${get_show_file:-}
 
-        if [[ ! "$get_show_file" ]]; then
-          local f
-          begin_for f in $out_path/auto/data.* $out_path/data.*; doo
-            if [[ -f $f ]]; then
-              get_show_file=$f
-              break
-            fi
-          end_for
-        fi
-
-        if [[ "$get_show_file" ]]; then
-          if [[ $multi_cell == t ]]; then
-            out -n "$short_cell: "
-          fi
-          cat $get_show_file || fail
+        if [[ "$get_show_file" && -f "$out_path/$get_show_file" ]]; then
+          cat $out_path/$get_show_file || fail
         else
-          log_warn "Either this cell hasn't been updated, or it doesn't have get_show_file defined. Nothing to show."
+          if is_array data; then
+            if [[ -v data_fields ]]; then
+              out "${data_fields[*]}"
+            fi
+            begin_for row in "${data[@]}"; doo
+              out "$row"
+            end_for
+          elif [[ -v data ]]; then
+            out "$data"
+          else
+            out "No data"
+          fi
         fi
 
       fi
@@ -50,3 +53,4 @@ get_command() {
   end_function
   handle_return
 }
+
