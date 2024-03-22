@@ -1,9 +1,128 @@
 #!/usr/bin/env bash
 
+display_data_raw() {
+  begin_function
+    if [[ -v data_fields ]]; then
+      out "${data_fields[*]}"
+    fi
+    begin_for row in "${data[@]}"; doo
+      out "$row"
+    end_for
+  end_function
+  handle_return
+}
+
+display_data_simple2() {
+  begin_function
+
+    o=
+    local i
+    begin_for (( c = 0; c < selected_count; c++ )); doo
+      i=${selected_field_indices[$c]}
+      apad o "${data_fields[$i]}" "${data_fields[$i]} "
+    end_for
+    result+="$o$NL"
+
+    begin_for (( r = 0; r < row_count; r++ )); doo
+      o=
+      row=( ${data[$r]} )
+      begin_for (( c = 0; c < selected_count; c++ )); doo
+        i=${selected_field_indices[$c]}
+        apad o "${data_fields[$i]}" "${row[$i]} "
+      end_for
+      result+="$o$NL"
+    end_for
+
+  end_function
+  handle_return
+}
+
+display_data_simple() {
+  begin_function
+
+    local result= o c r v row
+
+    display_data_simple2 || fail
+    result=
+    # done twice, first time it calculates the boundaries
+    display_data_simple2 || fail
+    out -n "$result"
+
+  end_function
+  handle_return
+}
+
+get_selected_field_indices() {
+  begin_function
+    local field i found
+
+    out_fields=" $out_fields "
+    out_fields=${out_fields// all / ${data_fields[*]} }
+    out_fields=${out_fields# }
+    out_fields=${out_fields% }
+
+    begin_for field in ${out_fields}; doo
+      found=f
+      begin_for (( i = 0; i < field_count; i++ )); doo
+        if [[ "${data_fields[$i]}" == "$field" ]]; then
+          found=t
+          selected_field_indices+=( $i )
+          break
+        fi
+      end_for
+      if [[ $found == f ]]; then
+        log_fatal "Field not found: $field. Must be one of: ${data_fields[*]}"
+        fail1
+      fi
+    end_for
+    selected_count=${#selected_field_indices[*]}
+  end_function
+  handle_return
+}
+
+get_command_output() {
+  begin_function
+    if [[ "$get_show_file" && -f "$out_path/$get_show_file" ]]; then
+      cat $out_path/$get_show_file || fail
+    else
+      if is_array data; then
+
+        local selected_field_indices=() \
+          field_count=${#data_fields[*]} \
+          selected_count \
+          row_count=${#data[*]} \
+
+        get_selected_field_indices || fail
+
+        case $out_form in 
+          r|raw)
+            display_data_raw || fail
+          ;;
+          s|simple)
+            display_data_simple || fail
+          ;;
+          *)
+            log_fatal "Unknown form: $out_form. Choose from one of: raw simple"
+            fail1
+          ;;
+        esac
+      elif [[ -v data ]]; then
+        out "$data"
+      else
+        out "No data"
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 get_command() {
   begin_function
 
-    local cell_path=${cell_path:-}
+    local out_form=${out_form:-${form:-simple}} \
+      out_fields=${out_fields:-${fields:-${field:-all}}} \
+      cell_path=${cell_path:-} \
+
     if [[ "${member:-}" ]]; then
       local sane_value
       get_sane_value "$member" || fail
@@ -20,27 +139,10 @@ get_command() {
       if function_exists get_op; then
         execute_op get || fail
       else
-
         local get_show_file=${get_show_file:-}
-
-        if [[ "$get_show_file" && -f "$out_path/$get_show_file" ]]; then
-          cat $out_path/$get_show_file || fail
-        else
-          if is_array data; then
-            if [[ -v data_fields ]]; then
-              out "${data_fields[*]}"
-            fi
-            begin_for row in "${data[@]}"; doo
-              out "$row"
-            end_for
-          elif [[ -v data ]]; then
-            out "$data"
-          else
-            out "No data"
-          fi
-        fi
-
+        get_command_output
       fi
+
     else
       par=f fork=f \
       function=get_command \
