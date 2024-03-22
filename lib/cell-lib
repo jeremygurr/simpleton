@@ -149,6 +149,23 @@ load_arr() {
   return 0
 }
 
+load_tab() {
+  local from=$1 to_var=$2 to_var_fields="${2}_fields" line first=t
+  eval "$to_var="
+  while IFS= read -r line || [[ "$line" ]]; do
+    trim_ws line
+    if [[ $first == t ]]; then
+      first=f
+      eval "$to_var_fields=\"$line\""
+    else
+      quotes=single shell_quote_var line
+      eval "$to_var+=\" $line\"" || return 1
+    fi
+  done < <(cat "$from")
+  to_var=${to_var##*( )}
+  return 0
+}
+
 make_or_load_dna_var() {
   begin_function
     local var_full_path=$1 var=$prefix$2 content 
@@ -167,6 +184,20 @@ make_or_load_dna_arr() {
     load_arr $var_full_path content || fail
 
     local result="$var=( $content )"
+    eval "$result" || fail
+    write_to_context var "$result" || fail
+
+  end_function
+  handle_return
+}
+
+make_or_load_dna_tab() {
+  begin_function
+
+    local var_full_path=$1 var=$prefix$2 content=() content_fields=()
+    load_tab $var_full_path content || fail
+
+    local result="${var}_fields=( $content_fields ) $var=( $content )"
     eval "$result" || fail
     write_to_context var "$result" || fail
 
@@ -253,6 +284,9 @@ make_or_load_dna_contents2() {
           arr)
             make_or_load_dna_arr $item $item_name || fail
           ;;
+          tab)
+            make_or_load_dna_tab $item $item_name || fail
+          ;;
           fun)
             make_or_load_dna_fun $item $item_name || fail
           ;;
@@ -290,9 +324,12 @@ make_or_load_dna_contents() {
 }
 
 load_vars() {
-  prefix= \
-  make_or_load=load \
-  make_or_load_dna_contents2 $1
+  begin_function
+    prefix= \
+    make_or_load=load \
+    make_or_load_dna_contents2 $1
+  end_function
+  handle_return
 }
 
 load_branch_dims() {
@@ -1890,11 +1927,11 @@ execute_command_internal() {
       fail1
     fi
 
-    if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
-      log_info "Executing cell command: $short_cell $current_command"
-    else
+    # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
+    #   log_info "Executing cell command: $short_cell $current_command"
+    # else
       log_verbose "Executing cell command: $short_cell $current_command"
-    fi
+    # fi
 
     source $command_path || fail
     local command_function=${current_command//-/_}_command

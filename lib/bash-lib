@@ -197,10 +197,19 @@ indent() {
 }
 
 function_exists() {
-  local -r name=$1 
-  local t
-  read t < <(type -t $name)
-  [[ "$t" == function ]]
+  #local -r name=$1 
+  #local t
+  #read t < <(type -t $name)
+  #[[ "$t" == function ]]
+  declare -pf $1 &>/dev/null
+}
+
+execute_if_exists() {
+  local function_name=$1 full_command=$*
+  if declare -pf $function_name &>/dev/null; then
+    $full_command || return 1
+  fi
+  return 0
 }
 
 ansi_filter_stream() {
@@ -353,6 +362,9 @@ random_sleep() {
 }
 
 is_array() {
+  if [[ ! -v $1 ]]; then
+    return 1
+  fi
   eval "[[ \${$1@a} == a ]]"
 }
 
@@ -519,6 +531,40 @@ apad() {
     if (( pad_size > 0 )); then
       printf -v pad %${pad_size}s
       base+=$pad
+    fi
+
+  done
+}
+
+# Usage: apad_calc [{class of append string} {append string}]...
+# similar to apad, except that it doesn't write to a var, it only calculates boundaries
+apad_calc() {
+  local class append append_size class_size class_min class_max pad pad_size
+  while (( $# > 1 )); do
+
+    class=$1 append=$2; shift 2
+    append_size=${#append}
+
+    if [[ ! -v apad_min[$class] ]]; then
+      apad_min[$class]=0
+    fi
+    class_min=${apad_min[$class]}
+
+    if [[ ! -v apad_size[$class] ]]; then
+      apad_size[$class]=$class_min
+    fi
+    class_size=${apad_size[$class]}
+
+    if [[ ! -v apad_max[$class] ]]; then
+      apad_max[$class]=1000
+    fi
+    class_max=${apad_max[$class]} 
+
+    if (( append_size > class_size && class_size < class_max )); then
+      apad_size[$class]=$append_size
+      if (( class_size > class_max )); then
+        apad_size[$class]=$class_max
+      fi
     fi
 
   done
