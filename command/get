@@ -3,27 +3,34 @@
 get_formatted_data() {
   begin_function
 
-    local i o c r v row
+    local i field value o c r row row_type
 
     o=
-    begin_for (( c = 0; c < selected_count; c++ )); doo
-      i=${selected_field_indices[$c]}
-      each_header_field || fail
-    end_for
+    row_type=header
+    if function_exists each_field; then
+      begin_for (( c = 0; c < selected_count; c++ )); doo
+        i=${selected_field_indices[$c]}
+        field=${data_fields[$i]}
+        value=${data_fields[$i]}
+        each_field || fail
+      end_for
+    fi
 
-    execute_if_exists end_of_header || fail
-    formatted_data+="$o$NL"
-    execute_if_exists after_header || fail
+    execute_if_exists after_row || fail
 
+    row_type=data
     begin_for (( r = 0; r < row_count; r++ )); doo
       o=
       row=( ${data[$r]} )
-      begin_for (( c = 0; c < selected_count; c++ )); doo
-        i=${selected_field_indices[$c]}
-        each_row_field || fail
-      end_for
-      execute_if_exists end_of_row || fail
-      formatted_data+="$o$NL"
+      if function_exists each_field; then
+        begin_for (( c = 0; c < selected_count; c++ )); doo
+          i=${selected_field_indices[$c]}
+          field=${data_fields[$i]}
+          value=${row[$i]}
+          each_field || fail
+        end_for
+      fi
+      execute_if_exists after_row || fail
     end_for
 
   end_function
@@ -33,12 +40,8 @@ get_formatted_data() {
 display_data_raw() {
   begin_function
 
-    each_header_field() {
-      o+="${data_fields[$i]} "
-    }
-
-    each_row_field() {
-      o+="${row[$i]} "
+    each_field() {
+      o+="$value "
     }
 
     local formatted_data=
@@ -54,12 +57,8 @@ display_data_simple() {
 
     local formatted_data= o c r v row
 
-    each_header_field() {
-      apad o "${data_fields[$i]}" "${data_fields[$i]} "
-    }
-
-    each_row_field() {
-      apad o "${data_fields[$i]}" "${row[$i]} "
+    each_field() {
+      apad o "$field" "$value "
     }
 
     get_formatted_data || fail
@@ -77,34 +76,66 @@ display_data_table() {
 
     local formatted_data o c r v row
 
-    each_header_field() {
-      apad o "${data_fields[$i]}" "| ${data_fields[$i]} "
-    }
-
-    each_row_field() {
-      apad o "${data_fields[$i]}" "| ${row[$i]} "
+    each_field() {
+      apad o "$field" "| $value "
     }
 
     formatted_data=
     get_formatted_data || fail
 
-    end_of_header() {
+    after_row() {
       o+="|"
+      formatted_data+="$o$NL"
+      if [[ $row_type == header ]]; then
+        formatted_data+="$bar$NL"
+      fi
     }
 
-    end_of_row() {
-      o+="|"
-    }
+    local c i f bar="+" length pad
+    begin_for (( c = 0; c < selected_count; c++ )); doo
+      i=${selected_field_indices[$c]}
+      f="${data_fields[$i]}"
+      length=${apad_size[$f]}
+      printf -v pad %$((length-1))s
+      pad=${pad// /-}
+      bar+="$pad+"
+    end_for
 
-    after_header() {
-      formatted_data+="$bar$NL"
-    }
-
-    bar="-------------------"
     formatted_data="$bar$NL"
     # done twice, first time it calculates the boundaries
     get_formatted_data || fail
     formatted_data+="$bar$NL"
+
+    out -n "$formatted_data"
+
+  end_function
+  handle_return
+}
+
+display_data_json() {
+  begin_function
+
+    local formatted_data o c r v row
+
+    each_field() {
+      if [[ $row_type == data ]]; then
+        o+="\"$field\":\"$value\","
+      fi
+    }
+
+    after_row() {
+      if [[ $row_type == data ]]; then
+        o=${o%,}
+        o+="},{"
+        formatted_data+="$o"
+      fi
+    }
+
+    formatted_data="[{"
+    # done twice, first time it calculates the boundaries
+    get_formatted_data || fail
+    formatted_data=${formatted_data%'},{'}
+    formatted_data+="}]$NL"
 
     out -n "$formatted_data"
 
@@ -154,7 +185,12 @@ get_command_output() {
 
         get_selected_field_indices || fail
 
-        unset after_header end_of_row end_of_header
+        unset \
+          each_field \
+
+        after_row() {
+          formatted_data+="$o$NL"
+        }
 
         case $out_form in 
           r|raw)
@@ -165,6 +201,12 @@ get_command_output() {
           ;;
           t|table)
             display_data_table || fail
+          ;;
+          j|json)
+            display_data_json || fail
+          ;;
+          k|kv)
+            display_data_kv || fail
           ;;
           *)
             log_fatal "Unknown form: $out_form. Choose from one of: raw simple"
