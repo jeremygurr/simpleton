@@ -1,37 +1,49 @@
 #!/usr/bin/env bash
 
-display_data_raw() {
+get_formatted_data() {
   begin_function
-    if [[ -v data_fields ]]; then
-      out "${data_fields[*]}"
-    fi
-    begin_for row in "${data[@]}"; doo
-      out "$row"
-    end_for
-  end_function
-  handle_return
-}
 
-display_data_simple2() {
-  begin_function
+    local i o c r v row
 
     o=
-    local i
     begin_for (( c = 0; c < selected_count; c++ )); doo
       i=${selected_field_indices[$c]}
-      apad o "${data_fields[$i]}" "${data_fields[$i]} "
+      each_header_field || fail
     end_for
-    result+="$o$NL"
+
+    execute_if_exists end_of_header || fail
+    formatted_data+="$o$NL"
+    execute_if_exists after_header || fail
 
     begin_for (( r = 0; r < row_count; r++ )); doo
       o=
       row=( ${data[$r]} )
       begin_for (( c = 0; c < selected_count; c++ )); doo
         i=${selected_field_indices[$c]}
-        apad o "${data_fields[$i]}" "${row[$i]} "
+        each_row_field || fail
       end_for
-      result+="$o$NL"
+      execute_if_exists end_of_row || fail
+      formatted_data+="$o$NL"
     end_for
+
+  end_function
+  handle_return
+}
+
+display_data_raw() {
+  begin_function
+
+    each_header_field() {
+      o+="${data_fields[$i]} "
+    }
+
+    each_row_field() {
+      o+="${row[$i]} "
+    }
+
+    local formatted_data=
+    get_formatted_data || fail
+    out -n "$formatted_data"
 
   end_function
   handle_return
@@ -40,13 +52,61 @@ display_data_simple2() {
 display_data_simple() {
   begin_function
 
-    local result= o c r v row
+    local formatted_data= o c r v row
 
-    display_data_simple2 || fail
-    result=
+    each_header_field() {
+      apad o "${data_fields[$i]}" "${data_fields[$i]} "
+    }
+
+    each_row_field() {
+      apad o "${data_fields[$i]}" "${row[$i]} "
+    }
+
+    get_formatted_data || fail
+    formatted_data=
     # done twice, first time it calculates the boundaries
-    display_data_simple2 || fail
-    out -n "$result"
+    get_formatted_data || fail
+    out -n "$formatted_data"
+
+  end_function
+  handle_return
+}
+
+display_data_table() {
+  begin_function
+
+    local formatted_data o c r v row
+
+    each_header_field() {
+      apad o "${data_fields[$i]}" "| ${data_fields[$i]} "
+    }
+
+    each_row_field() {
+      apad o "${data_fields[$i]}" "| ${row[$i]} "
+    }
+
+    formatted_data=
+    get_formatted_data || fail
+
+    end_of_header() {
+      o+="|"
+    }
+
+    end_of_row() {
+      o+="|"
+    }
+
+    after_header() {
+      formatted_data+="$bar$NL"
+    }
+
+    bar="-------------------"
+    formatted_data="$bar$NL"
+    # done twice, first time it calculates the boundaries
+    get_formatted_data || fail
+    formatted_data+="$bar$NL"
+
+    out -n "$formatted_data"
 
   end_function
   handle_return
@@ -94,12 +154,17 @@ get_command_output() {
 
         get_selected_field_indices || fail
 
+        unset after_header end_of_row end_of_header
+
         case $out_form in 
           r|raw)
             display_data_raw || fail
           ;;
           s|simple)
             display_data_simple || fail
+          ;;
+          t|table)
+            display_data_table || fail
           ;;
           *)
             log_fatal "Unknown form: $out_form. Choose from one of: raw simple"
