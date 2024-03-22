@@ -196,6 +196,71 @@ get_selected_field_indices() {
   handle_return
 }
 
+get_single_column() {
+  local index=$1
+  begin_function
+
+    local i field value o c r row row_type
+
+    single_column=
+    begin_for (( r = 0; r < row_count; r++ )); doo
+      row=( ${data[$r]} )
+      value=${row[$index]}
+      single_column+="$value$NL"
+    end_for
+
+  end_function
+  handle_return
+}
+
+handle_sorting() {
+  begin_function
+    local sort_flags=
+    if [[ $out_sort == -* ]]; then
+      out_sort=${out_sort#-}
+      sort_flags='-r'
+    fi
+
+    local i sort_field_index=
+    begin_for (( i = 0; i < field_count; i++ )); doo
+      if [[ "${data_fields[$i]}" == "$out_sort" ]]; then
+        sort_field_index=$i
+        break
+      fi
+    end_for
+
+    if [[ ! "$sort_field_index" ]]; then
+      log_fatal "Invalid sort field: $out_sort"
+      fail1
+    fi
+
+    local single_column
+    get_single_column $sort_field_index || fail
+    local result=$(echo -n "$single_column" | sort $sort_flags) || fail
+    local from_data=( "${data[@]}" ) 
+
+    data=( )
+    OIFS=$IFS
+    IFS="$NL"
+    local r v sort_field_value row
+    begin_for v in ${result}; doo
+      IFS=$OIFS
+      local from_data_size=${#from_data[@]}
+      begin_for (( r = 0; r < from_data_size; r++ )); doo
+        row=( ${from_data[$r]} )
+        sort_field_value=${row[$sort_field_index]}
+        if [[ "$sort_field_value" == "$v" ]]; then
+          data+=( "${from_data[$r]}" )
+          unset from_data[$r]
+          break
+        fi
+      end_for
+    end_for
+    IFS=$OIFS
+  end_function
+  handle_return
+}
+
 get_command_output() {
   begin_function
     if [[ "$get_show_file" && -f "$out_path/$get_show_file" ]]; then
@@ -209,9 +274,11 @@ get_command_output() {
           row_count=${#data[*]} \
 
         get_selected_field_indices || fail
+        if [[ "$out_sort" ]]; then
+          handle_sorting || fail
+        fi
 
-        unset \
-          each_field \
+        unset each_field
 
         after_row() {
           formatted_data+="$o$NL"
@@ -254,6 +321,7 @@ get_command() {
     local out_form=${out_form:-${form:-simple}} \
       out_fields=${out_fields:-${fields:-${field:-all}}} \
       cell_path=${cell_path:-} \
+      out_sort=${out_sort:-${sort:-}} \
 
     if [[ "${member:-}" ]]; then
       local sane_value
