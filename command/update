@@ -210,27 +210,25 @@ pre_update() {
 create_downstream_links() {
   begin_function_hi
 
-    if [[ "${downstream_ref_path:-}" ]]; then
-      local cell_path down_cell_path down_cell_name
+    local cell_path down_cell_path down_cell_name
 
-      get_bottom_cell ${downstream_ref_path%/*} || fail
-      down_cell_path=$bottom_cell
+    get_bottom_cell ${downstream_ref_path%/*} || fail
+    down_cell_path=$bottom_cell
 
-      get_cell_name $down_cell_path || fail
-      down_cell_name=${cell_name%% *}
+    get_cell_name $down_cell_path || fail
+    down_cell_name=${cell_name%% *}
 
-      local down_link=$down_path/$down_cell_name
-      if [[ ! -e $down_link ]]; then
-        if [[ ! -d $down_path ]]; then
-          mkdir $down_path || fail
-        fi
-        safe_link $down_cell_path $down_link || fail
-      else
-        local link_target=$(readlink $down_link) || fail
-        if [[ $link_target != $down_cell_path ]]; then
-          log_fatal "Link conflict: A link already exists but doesn't point to the same place."
-          log_fatal "  $link_target is expected to point to $down_cell_path"
-        fi
+    local down_link=$down_path/$down_cell_name
+    if [[ ! -e $down_link ]]; then
+      if [[ ! -d $down_path ]]; then
+        mkdir $down_path || fail
+      fi
+      safe_link $down_cell_path $down_link || fail
+    else
+      local link_target=$(readlink $down_link) || fail
+      if [[ $link_target != $down_cell_path ]]; then
+        log_fatal "Link conflict: A link already exists but doesn't point to the same place."
+        log_fatal "  $link_target is expected to point to $down_cell_path"
       fi
     fi
 
@@ -356,7 +354,8 @@ update_upstream_get_locks() {
 update_upstream() {
 
   local required_freshness=$required_freshness fresh=$fresh \
-    default_freshness=$default_freshness 
+    default_freshness=$default_freshness \
+    command_history=${command_history:-}
 
   if [[ -e $upstream/.dna ]]; then
     log_fatal "update_upstream upstream field should be a path to a upstream spec, not a cell"
@@ -891,8 +890,10 @@ update_command() {
       something_changed=f \
       needs_update=${needs_update:-}
 
-    create_downstream_links || fail
     if [[ "${downstream_ref_path:-}" ]]; then
+      if [[ $cell_is_leaf == t ]]; then
+        create_downstream_links || fail
+      fi
       log_debug "Linking upstream cell to it's downstream cell cyto up folder"
       force=t safe_link $cell_path $downstream_ref_path/chosen || fail
     fi
