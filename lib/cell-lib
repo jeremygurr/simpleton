@@ -1844,19 +1844,8 @@ get_job_id() {
   handle_return
 }
 
-execute_command_internal() {
-
-  local log_vars='cell_path' \
-    log_show_vars='short_cell current_command' 
+execute_command_internal_prep() {
   begin_function
-
-    local logging_to_file=${logging_to_file:-} \
-      omni_log_job_id=${omni_log_job_id:-} \
-      omni_log_fork_id=${omni_log_fork_id:-} \
-      previous_fork_id=${previous_fork_id:-} \
-      log_var_entries_stack \
-      log_var_show_vars_stack \
-
     can_create_cyto=t
 
     case $current_command in
@@ -1908,6 +1897,60 @@ execute_command_internal() {
 
       ;;
     esac
+  end_function
+  handle_return
+}
+
+execute_command_internal_setup_params() {
+  begin_function
+    source $command_path.info || fail
+    if [[ "${parameter_questions:-}" ]]; then
+      local p i pi 
+      begin_for pi in ${!parameter_questions[*]}; doo
+        p=${parameter_questions[$pi]}
+        begin_for i in ${!parameter_names[*]}; doo
+          if [[ "${parameter_names[$i]}" == $p ]]; then
+            out "Parameter: $p"
+
+            if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
+              indent=2 out_wrap "${parameter_descriptions[$i]}"
+            fi
+
+            if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
+              indent=2 out_wrap "default: ${parameter_defaults[$i]}"
+            fi
+
+            if [[ -v parameter_choices[$i] && "${parameter_choices[$i]}" ]]; then
+              eval "local choices=( ${parameter_choices[$i]} )"
+            elif [[ -v ${p}_choices ]]; then
+              eval "local -n choices=${p}_choices"
+            else
+              local choices=()
+            fi
+
+            choose "Which $p? " $p "${choices[@]}" || fail
+          fi
+        end_for
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
+execute_command_internal() {
+
+  local log_vars='cell_path' \
+    log_show_vars='short_cell current_command' 
+  begin_function
+
+    local logging_to_file=${logging_to_file:-} \
+      omni_log_job_id=${omni_log_job_id:-} \
+      omni_log_fork_id=${omni_log_fork_id:-} \
+      previous_fork_id=${previous_fork_id:-} \
+      log_var_entries_stack \
+      log_var_show_vars_stack \
+
+    execute_command_internal_prep || fail
 
     if [[ " ${command_history:-}" == *" $current_command $short_cell "* ]]; then
       log_fatal "Circular dependency found: arrived at $current_command $short_cell a second time."
@@ -1930,18 +1973,17 @@ execute_command_internal() {
 
     fi
 
-    local command_path=$path_to_commands/$current_command
-
-    if [[ ! -e $command_path ]]; then
-      log_fatal "Command $current_command doesn't exist in $command_path or as a function"
-      fail1
-    fi
-
     # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
     #   log_info "Executing cell command: $short_cell $current_command"
     # else
       log_verbose "Executing cell command: $short_cell $current_command"
     # fi
+
+    local command_path=$path_to_commands/$current_command
+
+    if [[ -f $command_path.info ]]; then
+      execute_command_internal_setup_params || fail
+    fi
 
     source $command_path || fail
     local command_function=${current_command//-/_}_command

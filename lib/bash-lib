@@ -18,6 +18,11 @@ fi
 # use this to make vars local which are computed by another function call
 alias local_vars='[[ "${to_local_vars:-}" ]] && eval "local $to_local_vars"'
 
+# some parts of bash require a statement, but in some cases there's nothing to be
+# done, so this serves as a clear indication that nothing needs to be done, and yet
+# satisfies the requirement that a statement be there. 
+alias nothing=':;'
+
 # some required defaults
 export tmp_folder="${tmp_folder:-/tmp}"
 export EDITOR=${EDITOR:-vim}
@@ -166,8 +171,33 @@ zombie_eval() {
   eval "$*"
 }
 
+# get input from the user to select from a given set of possibilities and assign
+# the result to the given variable.
+# usage: choose {prompt string} {var} {choices...}
+# prompt string: prompt to show user
+# var: variable to assign choice to
+# choices: space separated list of options
+choose() {
+  local prompt=$1; shift
+  local var_name=$1; shift
+  local -n var=$var_name
+  
+  if (( $# > 0 )); then
+    local PS3=$prompt
+    select var; do break; done
+    if [[ "$var" ]]; then
+      return 0
+    else
+      return 1
+    fi
+  else
+    read -p "$prompt" $var_name || return 1
+  fi
+  return 0
+}
+
 out_wrap() {
-  local message="$@" index=${index:-0} pad
+  local message="$@" indent=${indent:-0} pad
   trim_ws message
   message=${message//$NL/}
   printf -v pad %${indent}s
@@ -1161,7 +1191,7 @@ ts_diff() {
 
 debug_timer_start() {
   debug_counter_count=${debug_counter_count:-0}
-  if (( debug_counter_count++ )); then :; fi
+  if (( debug_counter_count++ )); then nothing fi
   reply_to_caller "debug_counter_count=$debug_counter_count"
   debug_timer_start=$EPOCHREALTIME
   #echo "DEBUG TIMER $debug_counter_count started" >&$fd_original_err
@@ -1175,7 +1205,7 @@ debug_timer_end() {
 
 debug_counter() {
   debug_counter_count=${debug_counter_count:-0}
-  if (( debug_counter_count++ )); then :; fi
+  if (( debug_counter_count++ )); then nothing fi
   reply_to_caller "debug_counter_count=$debug_counter_count"
   echo "DEBUG COUNTER: $debug_counter_count" >&$fd_original_err
 }
@@ -1184,7 +1214,6 @@ debug_counter() {
 # this needs to be run again whenever forking to a subprocess
 setup_exit_trap() {
   trap '
-    #zombie "EXIT $BASH_COMMAND cleanup=${cleanup_on_exit:-}"
     rc=$?
     if (( rc > 0 )); then
       extra=
