@@ -220,6 +220,7 @@ debug_step_to_next_function='$debug_step_to_next_function'
 debug_stepping='$debug_stepping'
 debug_stop_at='$debug_stop_at'
 debug_subshell='$debug_subshell'
+debug_warm_stack_pos='$debug_warm_stack_pos'
 debug_watch='$debug_watch'
 PS4='$PS4'" >"$debug_state_file" || return 1
   fi
@@ -292,6 +293,66 @@ debug_get_new_command() {
   echo "Starting over command: $new_command" >&$fd_original_err
 }
 
+debug_move_up_stack() {
+  local warm_stack_size=${#warm_stack[*]}
+
+  local new_pos=$((warm_stack_size + debug_warm_stack_pos - 1))
+  if (( new_pos < 0 )); then
+    echo "# Already at top of stack trace" >&$fd_original_err
+  else
+
+    (( debug_warm_stack_pos-- ))
+    local debug_id raw_stack_id function
+    eval "${warm_stack[$new_pos]}"
+    echo "# Up stack to function $function" >&$fd_original_err
+    
+    local raw_stack_size=${#saved_bash_source[*]}
+    (( debug_list_stack_pos = raw_stack_size - raw_stack_id )) 
+    (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
+    debug_display_source
+    debug_list_dir=forwards
+    (( debug_list_offset += debug_list_window ))
+
+  fi
+}
+
+debug_move_down_stack() {
+  local warm_stack_size=${#warm_stack[*]}
+
+  local new_pos=$((warm_stack_size + debug_warm_stack_pos + 1))
+  if (( new_pos >= warm_stack_size )); then
+    echo "# Already at top of stack trace" >&$fd_original_err
+  else
+
+    (( debug_warm_stack_pos++ ))
+    local debug_id raw_stack_id function
+    eval "${warm_stack[$new_pos]}"
+    echo "# Down stack to function $function" >&$fd_original_err
+    
+    local raw_stack_size=${#saved_bash_source[*]}
+    (( debug_list_stack_pos = raw_stack_size - raw_stack_id )) 
+    (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
+    debug_display_source
+    debug_list_dir=forwards
+    (( debug_list_offset += debug_list_window ))
+
+  fi
+}
+
+get_effective_debug_id() {
+
+  if (( debug_warm_stack_pos == -1 )); then
+    effective_debug_id=$debug_id_current
+  else
+    local warm_stack_size=${#warm_stack[*]}
+    local i=$((warm_stack_size + debug_warm_stack_pos)) \
+      debug_id raw_stack_id function
+    eval "${warm_stack[$i]}"
+    effective_debug_id=$debug_id
+  fi
+
+}
+
 debug_command_loop() {
   local debug_c no_follow_once=f
 
@@ -338,7 +399,8 @@ debug_command_loop() {
         debug_start_ts=
       fi
       if [[ "$debug_id_current" ]]; then
-        debug_prefix+="${CYAN}debug_id=$debug_id_current "
+        get_effective_debug_id
+        debug_prefix+="${CYAN}debug_id=$effective_debug_id "
       fi
       if [[ $debug_source_file != none ]]; then
         echo -n "$debug_prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
@@ -394,7 +456,13 @@ debug_command_loop() {
         fi
         ;;
       b)
-        local rewind_debug_id=$((debug_id_current-1))
+        get_effective_debug_id
+        local rewind_debug_id
+        if (( effective_debug_id != debug_id_current )); then
+          rewind_debug_id=$effective_debug_id
+        else
+          rewind_debug_id=$((effective_debug_id-1))
+        fi
         echo "# Going back to debug_id=$rewind_debug_id..." >&$fd_original_err
         local new_command
         debug_get_new_command
@@ -404,28 +472,9 @@ debug_command_loop() {
         exit 0
         ;;
       B)
-        if [[ "${warm_stack[-1]:-}" ]]; then
-          local rewind_debug_id=${warm_stack[-1]}
-          rewind_debug_id=${rewind_debug_id#debug_id=}
-          rewind_debug_id=${rewind_debug_id%% *}
-          if (( rewind_debug_id == debug_id_current )) && [[ "${warm_stack[-2]:-}" ]]; then
-            rewind_debug_id=${warm_stack[-2]}
-            rewind_debug_id=${rewind_debug_id#debug_id=}
-            rewind_debug_id=${rewind_debug_id%% *}
-          fi
-          echo "# Rewinding stack to debug_id=$rewind_debug_id..." >&$fd_original_err
-          local new_command
-          debug_get_new_command
-          debug_restart_command=$new_command
-          debugging=
-          exit 0
-        else
-          echo "# No warm stack available"
-        fi
-        #   OLD WAY
-        # debug_rewind=t
-        # debug_stepping=t
-        # debug_r=0
+        debug_rewind=t
+        debug_stepping=t
+        debug_r=0
         ;;
       C)
         echo "# Continuing..." >&$fd_original_err
@@ -827,30 +876,12 @@ debug_command_loop() {
         no_follow_once=t
         ;;
       -)
-        if (( debug_list_stack_pos >= ${#saved_bash_lineno[*]} )); then
-          echo "# Already at top of stack trace" >&$fd_original_err
-        else
-          echo >&$fd_original_err
-          (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
-          (( debug_list_stack_pos++ )) 
-          debug_display_source
-          debug_list_dir=forwards
-          (( debug_list_offset += debug_list_window ))
-          no_follow_once=t
-        fi
+        debug_move_up_stack
+        no_follow_once=t
         ;;
       _)
-        if (( debug_list_stack_pos == 0 )); then
-          echo "# Already at bottom of stack trace" >&$fd_original_err
-        else
-          echo >&$fd_original_err
-          (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
-          (( debug_list_stack_pos-- )) 
-          debug_display_source
-          debug_list_dir=forwards
-          (( debug_list_offset += debug_list_window ))
-          no_follow_once=t
-        fi
+        debug_move_down_stack
+        no_follow_once=t
         ;;
       =)
         echo "# Running until this line is reached again" >&$fd_original_err
@@ -960,8 +991,8 @@ debug_command_loop() {
         echo >&$fd_original_err
         echo "a  display array" >&$fd_original_err
         echo "A  display previously shown array" >&$fd_original_err
-        echo "b  restart command, going back to previous debug_id (only works if the script running this is deterministic)" >&$fd_original_err
-        echo "B  restart command, going back to previous stack frame debug_id (only works if the script running this is deterministic)" >&$fd_original_err
+        echo "b  restart command, going back to previous debug_id or going to debug_id of current stack if - command was used to go up the stack. (only works if the script running this is deterministic)" >&$fd_original_err
+        echo "B  go to next iteration of while loop, which effectively rewinds time if inside of a begin_function block" >&$fd_original_err
         echo "c  list debug_list_window/2 lines of source code before and after current line" >&$fd_original_err
         echo "C  continue execution without stopping" >&$fd_original_err
         echo "d  display an expression with variables substituted" >&$fd_original_err
@@ -1472,9 +1503,11 @@ stack_trace() {
 warm_stack_trace() {
   if [[ -v warm_stack ]]; then
     echo "Warm call stack:" >&$fd_original_err
-    local count=${#warm_stack[*]} n
+    local count=${#warm_stack[*]} n \
+      debug_id raw_stack_id function
     for ((n = 0; n < count; n++)); do
-      echo " ${warm_stack[$n]}" >&$fd_original_err
+      eval "${warm_stack[$n]}"
+      echo " debug_id=$debug_id $function" >&$fd_original_err
     done
   else
     echo "No warm stack." >&$fd_original_err
@@ -1605,6 +1638,7 @@ debug_start() {
     debug_stop_at=${debug_stop_at:-} \
     debug_subshell=${debug_subshell:-f} \
     debug_var=${debug_var:-} \
+    debug_warm_stack_pos=-1 \
     debug_watch=${debug_watch:-${debug_var:-${trace_var:-}}} \
 
     if [[ "$debug_watch" =~ ^[a-zA-Z_0-9]+$ ]]; then
