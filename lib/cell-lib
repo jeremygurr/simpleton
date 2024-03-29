@@ -1248,98 +1248,46 @@ for_each_leaf_flat() {
   handle_return
 }
 
-expand_values_single() {
+expand_values_check_default() {
   begin_function
 
-    local can_ask=${can_ask:-t}
-    values=( $values )
+    local problem
+    value= ${dim_type}_${dim}_expand || fail
 
-    if [[ "${#values[*]}" -gt 1 ]]; then
-      log_fatal "Too many values for a singular dim $dim." \
-        "Use plural dim $dims if you intend to have multiple values."
-      fail1
-    fi
-
-    if function_exists ${dim_type}_${dim}_expand; then
-      if [[ "$values" == $empty_member ]]; then
-        values=
-      fi
-      local problem=
-      value=$values ${dim_type}_${dim}_expand || fail
-      if [[ "$problem" ]]; then
-        log_fatal "$problem"
-        fail1
+    if [[ ! "${values:-}" ]]; then
+      if [[ $can_ask == t ]]; then
+        choose "Enter required value: $dim=" d_$dim || fail
+        can_ask=f expand_values || fail
       fi
       if [[ ! "${values:-}" ]]; then
-        log_fatal "Dim $dim has invalid value '$value'"
+        log_fatal "Missing required $dim_type: $dim"
         fail1
       fi
-      if [[ "${#values[*]}" -gt 1 ]]; then
-        log_fatal "Too many values for a singular dim $dim." \
-          "Use plural dim $dims if you intend to have multiple values."
-        fail1
-      fi
-    else
-      log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
-      fail1
     fi
 
   end_function
   handle_return
 }
 
-expand_values_plural() {
+expand_values_check_if_too_many() {
+  if [[ $check_single == t && ${#values[*]} -gt 1 ]]; then
+    log_fatal "Too many values for a singular dim $dim." \
+      "Use plural dim $dims if you intend to have multiple values."
+    fail1
+  fi
+}
+
+# input: check_single value
+# output: values
+expand_values_check_one() {
   begin_function
 
-    local new_values=() can_ask=${can_ask:-t}
-    values=( $values )
-
-    if [[ ! "${values:-}" ]]; then
-
-      if function_exists ${dim_type}_${dim}_expand; then
-        value= ${dim_type}_${dim}_expand || fail
-        if [[ "$problem" ]]; then
-          if [[ $can_ask == t ]]; then
-            ask_for_missing_dim dim || fail
-            can_ask=f expand_values_plural || fail
-          else
-            log_fatal "$problem"
-            fail1
-          fi
-        fi
-        new_values=( "${values[@]}" )
-      else
-        log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
-        fail1
-      fi
-
-    else
-
-      if function_exists ${dim_type}_${dim}_expand; then
-        begin_for value in "${values[@]}"; doo
-          if [[ "$value" == $empty_member ]]; then
-            value=
-          fi
-          value=$value ${dim_type}_${dim}_expand || fail
-          if [[ "$problem" ]]; then
-            log_fatal "$problem"
-            fail1
-          fi
-          if [[ ! "${values:-}" ]]; then
-            values=( $empty_member )
-          fi
-          new_values+=( "${values[@]}" )
-        end_for
-      else
-        log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
-        fail1
-      fi
-
+    ${dim_type}_${dim}_expand || fail
+    if [[ "$problem" ]]; then
+      log_fatal "$problem"
+      fail1
     fi
-
-    # not removing duplicates here because of potential performance issues
-    # better to just let needs_update analysis take care of avoiding extra work
-    values=( "${new_values[@]}" )
+    expand_values_check_if_too_many || fail
 
   end_function
   handle_return
@@ -1348,33 +1296,31 @@ expand_values_plural() {
 # input: dim
 # output: values 
 expand_values() {
-  local dim_type=${dim_type:-trunk_dims}
+  local dim_type=${dim_type:-trunk_dims} can_ask=${can_ask:-t}
   begin_function
 
-    local problem= \
-          failed=f \
-          plural \
-          dims 
+    if ! function_exists ${dim_type}_${dim}_expand; then
+      log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
+      fail1
+    fi
 
-    local check_single=t
     eval "values=\${d_$dim:-\${$dim:-}}"
+    local check_single=t
 
     if [[ ! "$values" ]]; then
-      local dims=$plural 
+      local plural
       get_plural $dim
+      local dims=$plural 
       eval "values=\${d_$dims:-\${$dims:-}}"
+      check_single=f
     fi
 
     local new_values=()
     eval "values=( $values )"
-    begin_for value in "${values[@]}"; doo
-      if [[ "$value" != $empty_member ]]; then
-        new_values+=( "$value" )
-      fi
-    end_for
-    values=( "${new_values[@]}" )
 
-    if [[ ! "$values" ]]; then
+    expand_values_check_if_too_many || fail
+
+    if [[ ! "${values:-}" ]]; then
       expand_values_check_default || fail
     else
       local value
@@ -1383,7 +1329,9 @@ expand_values() {
         check_single=$check_single expand_values_check_one || fail
         new_values+=( "${values[@]}" )
       end_for
+      values=( "${new_values[@]}" )
     fi
+
   end_function
   handle_return
 }
