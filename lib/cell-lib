@@ -1251,6 +1251,7 @@ for_each_leaf_flat() {
 expand_values_single() {
   begin_function
 
+    local can_ask=${can_ask:-t}
     values=( $values )
 
     if [[ "${#values[*]}" -gt 1 ]]; then
@@ -1290,7 +1291,7 @@ expand_values_single() {
 expand_values_plural() {
   begin_function
 
-    local new_values=() 
+    local new_values=() can_ask=${can_ask:-t}
     values=( $values )
 
     if [[ ! "${values:-}" ]]; then
@@ -1298,8 +1299,13 @@ expand_values_plural() {
       if function_exists ${dim_type}_${dim}_expand; then
         value= ${dim_type}_${dim}_expand || fail
         if [[ "$problem" ]]; then
-          log_fatal "$problem"
-          fail1
+          if [[ $can_ask == t ]]; then
+            ask_for_missing_dim dim || fail
+            can_ask=f expand_values_plural || fail
+          else
+            log_fatal "$problem"
+            fail1
+          fi
         fi
         new_values=( "${values[@]}" )
       else
@@ -1348,20 +1354,36 @@ expand_values() {
     local problem= \
           failed=f \
           plural \
-          dims \
-          value
+          dims 
 
-    get_plural $dim
-    local dims=$plural
+    local check_single=t
     eval "values=\${d_$dim:-\${$dim:-}}"
 
-    if [[ "$values" ]]; then
-      expand_values_single || fail
-    else
+    if [[ ! "$values" ]]; then
+      local dims=$plural 
+      get_plural $dim
       eval "values=\${d_$dims:-\${$dims:-}}"
-      expand_values_plural || fail
     fi
 
+    local new_values=()
+    eval "values=( $values )"
+    begin_for value in "${values[@]}"; doo
+      if [[ "$value" != $empty_member ]]; then
+        new_values+=( "$value" )
+      fi
+    end_for
+    values=( "${new_values[@]}" )
+
+    if [[ ! "$values" ]]; then
+      expand_values_check_default || fail
+    else
+      local value
+      new_values=()
+      begin_for value in "${values[@]}"; doo
+        check_single=$check_single expand_values_check_one || fail
+        new_values+=( "${values[@]}" )
+      end_for
+    fi
   end_function
   handle_return
 }
