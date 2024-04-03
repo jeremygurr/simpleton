@@ -416,6 +416,10 @@ plant() {
   cd_to_plant
 }
 
+work() {
+  cd_to_plant
+}
+
 unset parse_git_branch
 parse_git_branch() {
   local p=$PWD

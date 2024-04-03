@@ -240,14 +240,14 @@ make_array_assignment() {
 }
 
 make_or_load_dna_contents2() {
-  local folder=$1 prefix=${prefix:-}
+  local folder=$1 prefix=${prefix:-} pass_thru=${pass_thru:-f}
   begin_function
 
     local items=$(find1 $folder -not -name '.*' | sort -g) || fail
     local current_var=${prefix%_} o item_name result
     current_var=${current_var//-/_}
 
-    if [[ "$current_var" ]]; then
+    if [[ "$current_var" && $pass_thru == f ]]; then
       eval "$current_var=()"
     fi
 
@@ -258,7 +258,7 @@ make_or_load_dna_contents2() {
 
       if [[ -d $item ]]; then
 
-        if [[ "$current_var" ]]; then
+        if [[ "$current_var" && $item_name != _* ]]; then
           eval "$current_var+=( $item_name )"
           local path
           if [[ -L $item || -d $item ]]; then
@@ -270,11 +270,13 @@ make_or_load_dna_contents2() {
         fi
 
         if [[ ! -d $item/.dna ]]; then
-          local new_prefix=$prefix
+          local new_prefix=$prefix new_pass_thru=f
           if [[ $item_name != _* ]]; then
             new_prefix+=${item_name}_
+          else
+            new_pass_thru=t
           fi
-          prefix=$new_prefix make_or_load_dna_contents2 $item || fail
+          prefix=$new_prefix pass_thru=$new_pass_thru make_or_load_dna_contents2 $item || fail
         fi
 
       else # is a file
@@ -313,7 +315,7 @@ make_or_load_dna_contents2() {
 
     end_for
 
-    if [[ "$current_var" ]]; then
+    if [[ "$current_var" && -v $current_var && ${!current_var} && $pass_thru == f ]]; then
       make_array_assignment $current_var || fail
       write_to_context var "$array_assignment" || fail
     fi
@@ -396,60 +398,6 @@ load_leaf_dims() {
       cell_is_leaf=t
     fi
 
-  end_function
-  handle_return
-}
-
-load_dims_from_seed() {
-  log_fatal "This should not be used."
-  return 1
-
-  local seed_path=${1:-$seed_path}
-  begin_function
-
-    if [[ ! "$seed_path" || ! -d $seed_path ]]; then
-      log_fatal "Invalid seed path: $seed_path"
-      fail1
-    fi
-
-    leaf_dims=()
-
-    local branch c=$seed_path d
-    begin_loop; doo
-      branch=$(find1 $c -name "*:*" -type d | head -n 1) || fail
-      if [[ "$branch" ]]; then
-        d=${branch##*/}
-        d=${d%%:*}
-        trunk_dims+=( $d )
-        leaf_dims+=( $d )
-        c=$branch
-      else
-        break
-      fi
-    end_loop
-
-    trunk_dim_count=${#trunk_dims[*]}
-    leaf_dim_count=${#leaf_dims[*]}
-
-    if [[ "${leaf_dims:-}" ]]; then
-      log_debug "Leaf dims found: ${leaf_dims[*]}"
-    fi
-
-  end_function
-  handle_return
-}
-
-load_dims() {
-  log_fatal "This should not be used."
-  return 1
-
-  local cell_path=${1:-$cell_path}
-  begin_function_hi
-    load_dims_from_path $cell_path || fail
-    if [[ ! "${seed_path:-}" ]]; then
-      find_seed_path $cell_path || fail
-    fi
-    load_dims_from_seed $seed_path || fail
   end_function
   handle_return
 }
