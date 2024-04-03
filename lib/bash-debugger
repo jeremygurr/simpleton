@@ -61,7 +61,7 @@ side_log() {
 
 debug_expansion_clean() {
   local line shortest= plusses code plus_length from=$1 show
-  while read -r line || true; do
+  while read -rs line >&$fd_original_err || true; do
     if [[ "$line" =~ ^(\++)\ (.*) ]]; then
       plusses=${BASH_REMATCH[1]}
       code=${BASH_REMATCH[2]}
@@ -426,7 +426,7 @@ debug_command_loop() {
       debug_buffered_commands=${debug_buffered_commands#$debug_c}
       silent_command=t
     else
-      read -rs -N1 -u $fd_original_in debug_c 
+      read -rs -n1 -u $fd_original_in debug_c >&$fd_original_err 2>&1
       user_interacted=t
     fi
 
@@ -440,7 +440,7 @@ debug_command_loop() {
     case "$debug_c" in
       a)
         echo >&$fd_original_err
-        read -e -p "Name of array variable: " debug_array <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Name of array variable: " debug_array >&$fd_original_err
         if [[ "$debug_array" ]]; then
           show_array $debug_array
         fi
@@ -476,14 +476,6 @@ debug_command_loop() {
         debug_stepping=t
         debug_r=0
         ;;
-      C)
-        echo "# Continuing..." >&$fd_original_err
-        [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
-        debug_r=0
-        debug_long_command=t
-        debug_save_state
-        debug_untrap=t
-        ;;
       c)
         if [[ $debug_path_to_source_file == none ]]; then
           echo "# Source not available" >&$fd_original_err
@@ -497,9 +489,17 @@ debug_command_loop() {
           no_follow_once=t
         fi
         ;;
+      C)
+        echo "# Continuing..." >&$fd_original_err
+        [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
+        debug_r=0
+        debug_long_command=t
+        debug_save_state
+        debug_untrap=t
+        ;;
       d)
         echo >&$fd_original_err
-        read -e -p "Display: " debug_display <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Display: " debug_display >&$fd_original_err
         if [[ "$debug_display" =~ ^[a-zA-Z_0-9]+$ ]]; then
           eval 'echo "$'$debug_display'"' >&$fd_original_err 
         else
@@ -518,7 +518,7 @@ debug_command_loop() {
         ;;
       e)
         echo >&$fd_original_err
-        read -er -p "Eval: " debug_expression <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -er -p "Eval: " debug_expression >&$fd_original_err
         #eval "$debug_saved_shell_options"
         eval "$debug_expression" >&$fd_original_err
         set +evT +o pipefail
@@ -535,7 +535,7 @@ debug_command_loop() {
         ;;
       /)
         echo >&$fd_original_err
-        read -e -p "Deep Find: " debug_search <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Deep Find: " debug_search >&$fd_original_err
         if [[ "${debug_search:-}" ]]; then
           if [[ "$debug_search" == ~* ]]; then
             # use unescaped to support regex if expression starts with ~
@@ -568,7 +568,7 @@ debug_command_loop() {
         ;;
       g)
         echo >&$fd_original_err
-        read -e -p "Go until function: " debug_quick_function <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Go until function: " debug_quick_function >&$fd_original_err
         if [[ "${debug_quick_function:-}" ]]; then
           debug_r=0
           debug_long_command=t
@@ -624,7 +624,7 @@ debug_command_loop() {
         ;;
       j)
         echo >&$fd_original_err
-        read -e -p "Shallow Find: " debug_search <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Shallow Find: " debug_search >&$fd_original_err
         if [[ "${debug_search:-}" ]]; then
           if [[ "$debug_search" == ~* ]]; then
             # use unescaped to support regex if expression starts with ~
@@ -792,7 +792,7 @@ debug_command_loop() {
       u)
         echo >&$fd_original_err
         local f
-        read -e -p "Unignore function: " f <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Unignore function: " f >&$fd_original_err
         if [[ "${f:-}" ]]; then
           debug_ignore_remove $f
         fi
@@ -805,7 +805,7 @@ debug_command_loop() {
       w)
         echo >&$fd_original_err
         local new_watch w add=f
-        read -e -p "Watch: " new_watch <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Watch: " new_watch >&$fd_original_err
 
         if [[ "$new_watch" == +* ]]; then
           new_watch=${new_watch#+}
@@ -828,7 +828,7 @@ debug_command_loop() {
       x)
         echo >&$fd_original_err
         local v
-        read -e -p "Hex Display: " v <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Hex Display: " v >&$fd_original_err
         if [[ "$v" ]]; then
           eval 'echo -n "$'${v#\$}'" | xxd' >&$fd_original_err || true
         fi
@@ -847,6 +847,10 @@ debug_command_loop() {
           echo "# zombie_lap_detail=t" >&$fd_original_err
           zombie_lap_detail=t
         fi
+        ;;
+      \!)
+        echo "# resetting bind vars" >&$fd_original_err
+        bind "$debug_bind_vars"
         ;;
       \()
         (( debug_expansion-- ))
@@ -890,7 +894,7 @@ debug_command_loop() {
         ;;
       \[)
         echo >&$fd_original_err
-        read -e -p "Condition (brackets optional): " debug_condition <&$fd_original_in >&$fd_original_err
+        read -u $fd_original_in -e -p "Condition (brackets optional): " debug_condition >&$fd_original_err
         if [[ "${debug_condition:-}" ]]; then
           debug_condition_old=$debug_condition
           debug_search_deep=t
@@ -1026,8 +1030,9 @@ debug_command_loop() {
         echo "x  hex display of a variable" >&$fd_original_err
         echo "z  display zombie_lap_summary" >&$fd_original_err
         echo "Z  toggle zombie_lap_detail" >&$fd_original_err
-        echo "#  add timestamps to each debug trace line" >&$fd_original_err
+        echo "!  reset tty / bind variables" >&$fd_original_err
         echo "@  show full path of file containing source being executed" >&$fd_original_err
+        echo "#  add timestamps to each debug trace line" >&$fd_original_err
         echo "$  enter debug shell" >&$fd_original_err
         echo "^  toggle source following (displays source context after every command)" >&$fd_original_err
         echo "(  reduce command expansion level. Command expansion shows what the shell previously executed" >&$fd_original_err
@@ -1690,7 +1695,7 @@ debug_shell() {
   echo "Use 'exit' to abort all further code execution. " >&$fd_original_err
   echo "You have access to the full execution environment (variables and functions). " >&$fd_original_err
   while true; do
-    read -e -p "debug ${CYAN}\$${RESET} " c <&$fd_original_in >&$fd_original_err
+    read -u $fd_original_in -e -p "debug ${CYAN}\$${RESET} " c >&$fd_original_err
     case $c in
       q|quit)
         echo "Leaving debug shell." >&$fd_original_err
