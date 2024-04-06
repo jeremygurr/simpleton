@@ -384,7 +384,6 @@ debug_command_loop() {
     fi
 
     if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
-      set +u
       eval "echo \"+ $debug_watch\"" >&$fd_original_err
     fi
 
@@ -526,7 +525,7 @@ debug_command_loop() {
         read -u $fd_original_in -er -p "Eval: " debug_expression >&$fd_original_err
         #eval "$debug_saved_shell_options"
         eval "$debug_expression" >&$fd_original_err
-        set +evT +o pipefail
+        set +evTu +o pipefail
         no_follow_once=t
         ;;
       E)
@@ -1216,34 +1215,7 @@ maybe_enable_debug_tracing() {
   fi
 }
 
-debug_inner() {
-  local saved_bash_source=( "${BASH_SOURCE[@]:2}" ) \
-    saved_bash_lineno=( "${BASH_LINENO[@]:2}" ) \
-    saved_funcname=( "${FUNCNAME[@]:2}" ) \
-
-  if [[ $debug_skip_ignore == t ]]; then
-    debug_skip_ignore=f
-    if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
-      debug_ignore_remove "$debug_current_function" 
-    fi
-  fi
-
-  debug_last_location="$raw_debug_path_to_source_file $debug_line_num"
-  debug_source_update_hl
-
-  local backlog=
-  if [[ $debug_path_to_source_file != none && "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
-    local start_line=$((debug_prev_line+1))
-    local end_line=$((debug_line_num-1))
-    backlog=$(sed -n "$start_line,${end_line}p;${end_line}q" "$debug_path_to_source_file")
-  fi
-
-  debug_prev_line="$debug_line_num"
-  debug_prev_function=$debug_current_function
-  debug_prev_source_file=$debug_source_file
-  debug_step_to_next_function=f
-  debug_step_to_next_file=f
-
+debug_show_extra_backlog() {
   if [[ "$debug_prev_command" =~ for\ (.*)\ in\  || "$debug_prev_command" =~ case\ \$(.*)\ in\  ]]; then
     local w=${BASH_REMATCH[1]}
     local w=${w#\$}
@@ -1317,6 +1289,38 @@ debug_inner() {
     done
     debug_return_vars=
   fi
+
+}
+
+debug_inner() {
+  local saved_bash_source=( "${BASH_SOURCE[@]:2}" ) \
+    saved_bash_lineno=( "${BASH_LINENO[@]:2}" ) \
+    saved_funcname=( "${FUNCNAME[@]:2}" ) \
+
+  if [[ $debug_skip_ignore == t ]]; then
+    debug_skip_ignore=f
+    if [[ "$debug_ignore" == *" $debug_current_function "* ]]; then
+      debug_ignore_remove "$debug_current_function" 
+    fi
+  fi
+
+  debug_last_location="$raw_debug_path_to_source_file $debug_line_num"
+  debug_source_update_hl
+
+  local backlog=
+  if [[ $debug_path_to_source_file != none && "$debug_prev_function" == "$debug_current_function" && "$((debug_prev_line+1))" -lt "$debug_line_num" ]]; then
+    local start_line=$((debug_prev_line+1))
+    local end_line=$((debug_line_num-1))
+    backlog=$(sed -n "$start_line,${end_line}p;${end_line}q" "$debug_path_to_source_file")
+  fi
+
+  debug_prev_line="$debug_line_num"
+  debug_prev_function=$debug_current_function
+  debug_prev_source_file=$debug_source_file
+  debug_step_to_next_function=f
+  debug_step_to_next_file=f
+
+  debug_show_extra_backlog
 
   local display_command=$debug_command
   local raw_display_command=$display_command
@@ -1451,17 +1455,9 @@ debug_trap() {
   maybe_enable_debug_tracing
   debug_list_stack_pos=0
 
-  if [[ $debug_subshell == t ]]; then
-    set -T
-  fi
-
-  if [[ $debug_saved_shell_options_short == *e* ]]; then
-    set -e
-  fi
-
-  if [[ $debug_saved_shell_options_short == *u* ]]; then
-    set -u
-  fi
+  [[ $debug_subshell == t ]] && set -T
+  [[ $debug_saved_shell_options_short == *e* ]] && set -e
+  [[ $debug_saved_shell_options_short == *u* ]] && set -u
 
   BASH_REMATCH=( "${debug_rematch[@]}" )
   return $debug_r
