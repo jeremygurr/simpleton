@@ -9,7 +9,7 @@ ARG HTTPS_PROXY=""
 ARG HTTP_PROXY=""
 ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine/
 
-COPY repositories /etc/apk/
+COPY target/repositories /etc/apk/
 RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@$ALPINE_REPO@g" /etc/apk/repositories 
 
 RUN ln -s /var/cache/apk /etc/apk/cache 
@@ -115,8 +115,8 @@ ENV REPO_CACHE /home/.m2/repository
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
 # RUN chmod a+rwx /etc
 RUN ln -sf $SIMPLETON_REPO/target/shell-start.sh /etc/profile.d/
-RUN ln -sf $SIMPLETON_REPO/inputrc /etc/
-COPY sudoers /etc/
+RUN ln -sf $SIMPLETON_REPO/target/inputrc /etc/
+COPY target/sudoers /etc/
 RUN chown root /etc/sudoers
 RUN mkdir -p $REPO_CACHE
 
@@ -131,5 +131,5 @@ RUN chown -R autouser $HOME
 RUN rm /etc/motd
 
 WORKDIR /work
-CMD /bin/bash $SIMPLETON_REPO/init
+CMD /bin/bash $SIMPLETON_REPO/target/init
 
