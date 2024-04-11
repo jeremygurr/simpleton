@@ -1847,6 +1847,38 @@ execute_command_internal_prep() {
   handle_return
 }
 
+show_parameter_help() {
+  local name=$1
+  begin_function
+    out "Parameter: $name"
+    begin_for i in ${!parameter_names[*]}; doo
+      if [[ "${parameter_names[$i]}" == $name ]]; then
+        if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
+          indent=2 out_wrap "${parameter_descriptions[$i]}"
+        fi
+
+        if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
+          indent=2 out_wrap "default: ${parameter_defaults[$i]}"
+        fi
+
+        if [[ -v parameter_choices[$i] && "${parameter_choices[$i]}" ]]; then
+          eval "local choices=( ${parameter_choices[$i]} )"
+        elif [[ -v ${name}_choices ]]; then
+          eval "local -n choices=${name}_choices"
+        elif function_exists ${name}_get_choices; then
+          local choices
+          ${name}_get_choices || fail
+        else
+          local choices=()
+        fi
+
+        choose "Which $name? " $name "${choices[@]}" || fail
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
 execute_command_internal_setup_params() {
   begin_function
     source $command_path.info || fail
@@ -1854,29 +1886,10 @@ execute_command_internal_setup_params() {
       local p i pi 
       begin_for pi in ${!parameter_questions[*]}; doo
         p=${parameter_questions[$pi]}
-        begin_for i in ${!parameter_names[*]}; doo
-          if [[ "${parameter_names[$i]}" == $p ]]; then
-            out "Parameter: $p"
-
-            if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
-              indent=2 out_wrap "${parameter_descriptions[$i]}"
-            fi
-
-            if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
-              indent=2 out_wrap "default: ${parameter_defaults[$i]}"
-            fi
-
-            if [[ -v parameter_choices[$i] && "${parameter_choices[$i]}" ]]; then
-              eval "local choices=( ${parameter_choices[$i]} )"
-            elif [[ -v ${p}_choices ]]; then
-              eval "local -n choices=${p}_choices"
-            else
-              local choices=()
-            fi
-
-            choose "Which $p? " $p "${choices[@]}" || fail
-          fi
-        end_for
+        if [[ " $parameter_delayed_questions " == *\ $p\ * ]]; then
+          continue
+        fi
+        show_parameter_help $p || fail
       end_for
     fi
   end_function
