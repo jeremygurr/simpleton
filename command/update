@@ -141,11 +141,11 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because cell has leaves"
-    elif [[ "${downstream_ref_path:-}" ]] && \
-      [[ "$(readlink ${downstream_ref_path}/chosen)" != $cell_path ]]
-    then
-      needs_update=t
-      log_message="Needs update because downstream_ref_path is outdated"
+#    elif [[ "${downstream_ref_path:-}" ]] && \
+#      [[ "$(readlink ${downstream_ref_path}/chosen)" != $cell_path ]]
+#    then
+#      needs_update=t
+#      log_message="Needs update because downstream_ref_path is outdated"
     elif local data_valid=t
       ignore_missing=t execute_op check || fail
       [[ $data_valid == f ]]
@@ -903,11 +903,30 @@ update_command() {
       needs_update=${needs_update:-}
 
     if [[ "${downstream_ref_path:-}" ]]; then
+
       if [[ $cell_is_leaf == t ]]; then
         create_downstream_links || fail
       fi
-      log_debug "Linking upstream cell to it's downstream cell cyto up folder"
-      force=t safe_link $cell_path $downstream_ref_path/chosen || fail
+
+      local update_downstream_link=f
+      if [[ ! -e $downstream_ref_path/chosen ]]; then
+        log_debug "Will update downstream link because chosen file is missing"
+        update_downstream_link=t
+      else
+        local new_target_length=${#cell_path} 
+        local old_target_length=$(readlink $downstream_ref_path/chosen)
+        old_target_length=${#old_target_length}
+        if (( new_target_length > old_target_length )); then
+          log_debug "Will update downstream link because new target is more specific"
+          update_downstream_link=t
+        fi
+      fi
+
+      if [[ $update_downstream_link == t ]]; then
+        log_debug "Linking upstream cell to it's downstream cell cyto up folder"
+        force=t safe_link $cell_path $downstream_ref_path/chosen || fail
+      fi
+
     fi
 
     get_needs_update $cell_path || fail
