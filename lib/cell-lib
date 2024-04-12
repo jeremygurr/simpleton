@@ -1828,18 +1828,18 @@ execute_command_internal_prep() {
           eval "unset $dim" || fail
           eval "unset d_$dim" || fail
           eval "d_$plural=\${values[*]}" || fail
+        else
+          local prop plural
+          begin_for prop in ${props[*]}; doo
+            local dim=$prop
+            dim_type=props \
+            expand_values || fail
+            get_plural $dim || fail
+            eval "unset $dim" || fail
+            eval "unset d_$dim" || fail
+            eval "d_$plural=\${values[*]}" || fail
+          end_for
         fi
-
-        local prop plural
-        begin_for prop in ${props[*]}; doo
-          local dim=$prop
-          dim_type=props \
-          expand_values || fail
-          get_plural $dim || fail
-          eval "unset $dim" || fail
-          eval "unset d_$dim" || fail
-          eval "d_$plural=\${values[*]}" || fail
-        end_for
 
       ;;
     esac
@@ -2118,6 +2118,42 @@ plant_seed() {
   handle_return
 }
 
+execute_command_log_prep() {
+  begin_function
+    cyto_path=$cell_path/.cyto
+    if [[ ! -d $cyto_path ]]; then
+      mkdir $cyto_path || fail
+    fi
+
+    if [[ ! -d $job_path ]]; then
+      mkdir $job_path || fail
+    fi
+
+    if [[ ! "${omni_log_job_id:-}" ]]; then
+      job_start_time=${EPOCHREALTIME//./}
+      command_to_log="${original_cmd#* }" \
+        get_job_id || fail
+    fi
+
+    current_job_path=$job_path/$omni_log_job_id
+    if [[ ! -d $current_job_path ]]; then
+      mkdir $current_job_path || fail
+    fi
+
+    # only set this for the first cell in the job, all other cells should 
+    #   use the same fork_id log so that they all have unique ids across the job
+    if [[ ! "${fork_id_log:-}" ]]; then
+      fork_id_log=$current_job_path/fork-id-log
+    fi
+
+    log_path=$current_job_path/log
+    if [[ ! -d $log_path ]]; then
+      mkdir $log_path || fail
+    fi
+  end_function
+  handle_return
+}
+
 execute_command() {
 
   local cell_path=$(realpath $1) current_command=$2 \
@@ -2153,38 +2189,7 @@ execute_command() {
     if [[ $disable_log == t ]]; then
       log_debug "Logging disabled."
     else
-
-      cyto_path=$cell_path/.cyto
-      if [[ ! -d $cyto_path ]]; then
-        mkdir $cyto_path || fail
-      fi
-
-      if [[ ! -d $job_path ]]; then
-        mkdir $job_path || fail
-      fi
-
-      if [[ ! "${omni_log_job_id:-}" ]]; then
-        job_start_time=${EPOCHREALTIME//./}
-        command_to_log="${original_cmd#* }" \
-          get_job_id || fail
-      fi
-
-      current_job_path=$job_path/$omni_log_job_id
-      if [[ ! -d $current_job_path ]]; then
-        mkdir $current_job_path || fail
-      fi
-
-      # only set this for the first cell in the job, all other cells should 
-      #   use the same fork_id log so that they all have unique ids across the job
-      if [[ ! "${fork_id_log:-}" ]]; then
-        fork_id_log=$current_job_path/fork-id-log
-      fi
-
-      log_path=$current_job_path/log
-      if [[ ! -d $log_path ]]; then
-        mkdir $log_path || fail
-      fi
-
+      execute_command_log_prep || fail
     fi
 
     previous_log_pos=$omni_log_pos
