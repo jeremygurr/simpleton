@@ -900,31 +900,38 @@ update_command() {
 
     local leave_loop=0 \
       something_changed=f \
-      needs_update=${needs_update:-}
+      needs_update=${needs_update:-} \
 
     if [[ "${downstream_ref_path:-}" ]]; then
+
+      local old_link=$downstream_ref_path/chosen \
+        old_target=$(readlink $downstream_ref_path/chosen) \
+        new_target=$cell_path
 
       if [[ $cell_is_leaf == t ]]; then
         create_downstream_links || fail
       fi
 
       local update_downstream_link=f
-      if [[ ! -e $downstream_ref_path/chosen ]]; then
+      if [[ ! -e $old_link ]]; then
         log_debug "Will update downstream link because chosen file is missing"
         update_downstream_link=t
       else
-        local new_target_length=${#cell_path} 
-        local old_target_length=$(readlink $downstream_ref_path/chosen)
-        old_target_length=${#old_target_length}
+        local new_target_length=${#new_target} \
+          old_target_length=${#old_target}
+
         if (( new_target_length > old_target_length )); then
           log_debug "Will update downstream link because new target is more specific"
+          update_downstream_link=t
+        elif [[ ${old_target#$new_target} == ${old_target} ]]; then
+          log_debug "Will update downstream link because new target is different"
           update_downstream_link=t
         fi
       fi
 
       if [[ $update_downstream_link == t ]]; then
         log_debug "Linking upstream cell to it's downstream cell cyto up folder"
-        force=t safe_link $cell_path $downstream_ref_path/chosen || fail
+        force=t safe_link $cell_path $old_link || fail
       fi
 
     fi
