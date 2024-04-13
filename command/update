@@ -99,6 +99,10 @@ get_needs_update() {
     if [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
       needs_update=t
       log_message="Needs update because output file doesn't exist"
+    elif [[ -v leaf_dims ]]
+    then
+      needs_update=t
+      log_message="Needs update because cell has leaves"
     elif (( refresh_less_than > update_cost ))
     then
       needs_update=t
@@ -137,10 +141,6 @@ get_needs_update() {
 #         && [[ $needs_update == t ]]
 #    then
 #      log_message="Needs update because at least one upstream cell is out of date"
-    elif [[ -v leaf_dims ]]
-    then
-      needs_update=t
-      log_message="Needs update because cell has leaves"
 #    elif [[ "${downstream_ref_path:-}" ]] && \
 #      [[ "$(readlink ${downstream_ref_path}/chosen)" != $cell_path ]]
 #    then
@@ -541,6 +541,43 @@ create_sub_cell() {
   handle_return
 }
 
+update_downstream() {
+  begin_function
+
+    local old_link=$downstream_ref_path/chosen \
+      old_target=$(readlink $downstream_ref_path/chosen) \
+      new_target=$cell_path
+
+    if [[ $cell_is_leaf == t ]]; then
+      create_downstream_links || fail
+    fi
+
+    local update_downstream_link=f
+    if [[ ! -e $old_link ]]; then
+      log_debug "Will update downstream link because chosen file is missing"
+      update_downstream_link=t
+    else
+      local new_target_length=${#new_target} \
+        old_target_length=${#old_target}
+
+      if (( new_target_length > old_target_length )); then
+        log_debug "Will update downstream link because new target is more specific"
+        update_downstream_link=t
+      elif [[ ${old_target#$new_target} == ${old_target} ]]; then
+        log_debug "Will update downstream link because new target is different"
+        update_downstream_link=t
+      fi
+    fi
+
+    if [[ $update_downstream_link == t ]]; then
+      log_debug "Linking upstream cell to it's downstream cell cyto up folder"
+      force=t safe_link $cell_path $old_link || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 update_member() {
   local sane_value member_path \
     log_vars=member log_show_vars=member \
@@ -560,6 +597,10 @@ update_member() {
       needs_update=t
     else
       get_needs_update $member_path || fail
+    fi
+
+    if [[ "${downstream_ref_path:-}" ]]; then
+      cell_path=$member_path update_downstream || fail
     fi
 
     if [[ $needs_update == t ]]; then
@@ -831,9 +872,9 @@ post_update() {
         if [[ -v current_job_path ]]; then
           force=t safe_link $current_job_path $job_path/last-success || fail
         fi
-        if [[ "${props:-}" ]]; then
-          update_prop_hash || fail
-        fi
+#        if [[ "${props:-}" ]]; then
+#          update_prop_hash || fail
+#        fi
         if [[ $something_changed == t ]]; then
           from_cell=$cell_path \
             propagate_change_to_downstream || fail
@@ -903,37 +944,7 @@ update_command() {
       needs_update=${needs_update:-} \
 
     if [[ "${downstream_ref_path:-}" ]]; then
-
-      local old_link=$downstream_ref_path/chosen \
-        old_target=$(readlink $downstream_ref_path/chosen) \
-        new_target=$cell_path
-
-      if [[ $cell_is_leaf == t ]]; then
-        create_downstream_links || fail
-      fi
-
-      local update_downstream_link=f
-      if [[ ! -e $old_link ]]; then
-        log_debug "Will update downstream link because chosen file is missing"
-        update_downstream_link=t
-      else
-        local new_target_length=${#new_target} \
-          old_target_length=${#old_target}
-
-        if (( new_target_length > old_target_length )); then
-          log_debug "Will update downstream link because new target is more specific"
-          update_downstream_link=t
-        elif [[ ${old_target#$new_target} == ${old_target} ]]; then
-          log_debug "Will update downstream link because new target is different"
-          update_downstream_link=t
-        fi
-      fi
-
-      if [[ $update_downstream_link == t ]]; then
-        log_debug "Linking upstream cell to it's downstream cell cyto up folder"
-        force=t safe_link $cell_path $old_link || fail
-      fi
-
+      update_downstream || fail
     fi
 
     get_needs_update $cell_path || fail
