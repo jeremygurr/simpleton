@@ -96,7 +96,10 @@ get_needs_update() {
       fail1
     fi
 
-    if [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
+    if (( deep_update > 0 )); then
+      needs_update=t
+      log_message="Needs update because deep_update=$deep_update"
+    elif [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
       needs_update=t
       log_message="Needs update because output file doesn't exist"
     elif [[ -v leaf_dims ]]
@@ -229,6 +232,7 @@ create_downstream_links() {
       if [[ $link_target != $down_cell_path ]]; then
         log_fatal "Link conflict: A link already exists but doesn't point to the same place."
         log_fatal "  $link_target is expected to point to $down_cell_path"
+        fail1
       fi
     fi
 
@@ -376,6 +380,11 @@ update_upstream() {
     if [[ ! "$chosen" ]]; then
       log_fatal "chosen was not set."
       fail1
+    fi
+
+    if (( deep_update > 0 )); then
+      (( deep_update-- ))
+      needs_update=t
     fi
 
     if [[ $needs_update == t ]]; then
@@ -942,6 +951,7 @@ update_command() {
     local leave_loop=0 \
       something_changed=f \
       needs_update=${needs_update:-} \
+      deep_update=${deep_update:-0} \
 
     if [[ "${downstream_ref_path:-}" ]]; then
       update_downstream || fail
@@ -952,6 +962,10 @@ update_command() {
     if [[ $needs_update == f ]]; then
       update_successful=t
       succeed
+    fi
+
+    if (( deep_update > 0 )); then
+      log_debug "deep_update == $deep_update"
     fi
 
     pre_update || fail
