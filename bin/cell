@@ -115,6 +115,44 @@ show_help_for_command() {
   handle_return
 }
 
+clean_cell() {
+  local cell_path=$1
+  begin_function
+
+    (( clean_depth-- ))
+    if (( clean_depth > 0 )) && [[ -d $cell_path/.cyto/up ]]; then
+      local upstreams=$(find1 $cell_path/.cyto/up -type d | sort -g)
+      local up
+      begin_for up in $upstreams; doo
+        local up_cell=$up/chosen
+        if [[ -d $up_cell ]]; then
+          up_cell=$(readlink $up_cell)
+          clean_cell $up_cell || fail
+        fi
+      end_for
+    fi
+
+    local short_cell
+    get_short_cell $cell_path
+    log_info "Cleaning $short_cell..." 
+
+    local clean_file=$cell_path/.dna/clean_op.fun
+    if [[ -f $clean_file ]]; then
+      local make_or_load=load
+      make_or_load_dna_fun $clean_file || fail
+      clean_op || fail
+    fi
+
+    local x
+    begin_for x in $cell_path/!(*.dna); doo
+      log_verbose "Removing ${x#$cell_path/}"
+      rm -rf $x &>/dev/null
+    end_for
+
+  end_function
+  handle_return
+}
+
 handle_command() {
   local command=$1
 
@@ -140,22 +178,8 @@ handle_command() {
             log_fatal "Not a valid cell: $cell_path"
             fail1
           fi
-          local cell_path=$bottom_cell
-          log_info "Cleaning $cell_path..." 
-          local clean_file=$cell_path/.dna/op/clean.bash
-          if [[ -f $clean_file ]]; then
-            source $clean_file || fail
-            clean || fail
-          else
-            local x
-
-            begin_for x in $cell_path/!(*.dna); doo
-              log_info "Removing ${x#$cell_path/}"
-              rm -rf $x &>/dev/null
-            end_for
-
-            log_info "Cleaned."
-          fi
+          clean_depth=${clean_depth:-1}
+          clean_cell $bottom_cell || fail
         ;;
         *)
           get_bottom_cell $cell_path || fail
@@ -387,7 +411,7 @@ show_usage() {
 
     out "${NL}Possible Commands:"
     local command_info command_name
-    begin_for command_info in $(find1 $path_to_commands -name '*.info' | sort); doo
+    begin_for command_info in $(find1 $path_to_commands -name '*.info' | sort -g); doo
       command_name=${command_info%.info}
       command_name=${command_name##*/}
       source $command_info || fail
