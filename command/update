@@ -277,11 +277,16 @@ update_upstream_choose() {
   local log_show_vars=^upstream
   begin_function_hi
 
-
-    if [[ -f "$upstream/chosen" ]]; then
-      chosen=$(readlink $upstream/chosen)
-      needs_update= \
-      get_needs_update $chosen || fail
+    local choice
+    if [[ -e "$upstream/chosen" ]]; then
+      chosen=$(readlink $upstream/chosen) || fail
+      if [[ -e "$chosen/.dna" ]]; then
+        downstream_ref_path=$chosen
+        needs_update= \
+        get_needs_update $chosen || fail
+      else
+        needs_update=t
+      fi
     else
       needs_update=t
     fi
@@ -295,7 +300,6 @@ update_upstream_choose() {
       fi
 
       # are any already updated?
-      local choice
       begin_for choice in $choices; doo
 
         needs_update= \
@@ -310,6 +314,10 @@ update_upstream_choose() {
       if [[ ! "$chosen" ]]; then
         chosen=${choices%% *}
       fi
+
+      force=t safe_link $chosen $upstream/chosen || fail
+      downstream_ref_path=$chosen
+
     fi
 
   end_function
@@ -368,11 +376,9 @@ update_upstream() {
   local log_show_vars=^upstream 
   begin_function_hi
 
-    local needs_update=
+    local needs_update= downstream_ref_path= chosen=
 
     prep_upstream || fail
-
-    local chosen=
     update_upstream_choose || fail
 
     if [[ ! "$chosen" ]]; then
@@ -386,7 +392,6 @@ update_upstream() {
 
       needs_update= \
       top_level_command=f \
-      downstream_ref_path=$upstream \
       execute_command "$up_cell" update || fail
 
       if [[ $something_changed == t ]]; then
@@ -548,9 +553,9 @@ create_sub_cell() {
 update_downstream() {
   begin_function
 
-    local old_link=$downstream_ref_path/chosen \
-      old_target=$(readlink $downstream_ref_path/chosen) \
-      new_target=$cell_path
+    local old_link=$downstream_ref_path \
+      old_target=$(readlink $downstream_ref_path) \
+      new_target=$cell_path || fail
 
     if [[ $cell_is_leaf == t ]]; then
       create_downstream_links || fail
