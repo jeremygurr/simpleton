@@ -738,7 +738,10 @@ find_seed_path() {
     seed_path=
 
     s=/seed${work_path#/work}
-    dim_count=${#branch_dims[*]}
+
+    local branch_dims branch_members branch_hashes branch_dim_count
+    load_branch_dims $work_path || fail
+
     begin_while [[ ! -d $s && $s == *:* ]]; doo
       s=${s%/*}
     end_while
@@ -758,7 +761,7 @@ find_seed_path() {
         local seed_dim=${dim_folder##*/}
         seed_dim=${seed_dim%%:*}
 
-        begin_for (( i = 0; i < dim_count; i++ )); doo
+        begin_for (( i = 0; i < branch_dim_count; i++ )); doo
 
           dim=${branch_dims[$i]}
           if [[ $dim == $seed_dim ]]; then
@@ -2086,20 +2089,16 @@ plant_member() {
         echo "$member" >$new_path/.member || fail
       fi
 
-      local from=
+      local seed_path=
 
-      if [[ -d $seed_path/$dim:$sane_value ]]; then
-        from=$seed_path/$dim:$sane_value
-      elif [[ -d $seed_path/$dim:_other ]]; then
-        from=$seed_path/$dim:_other
-      else
-        from=$seed_path
+      find_seed_path $member_path || fail
+      if [[ ! "$seed_path" ]]; then
+        log_fatal "No seed is associated with this path: $member_path"
+        fail1
       fi
 
-      if [[ "$from" ]]; then
-        # recursive
-        plant_seed_internal $from $new_path || fail
-      fi
+      plant_branches=t \
+      plant_seed_internal $seed_path $new_path || fail
 
       if [[ -e $member_path ]]; then
         rm -rf $member_path || fail
