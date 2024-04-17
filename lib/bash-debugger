@@ -225,6 +225,7 @@ debug_step_to_next_function='$debug_step_to_next_function'
 debug_stepping='$debug_stepping'
 debug_stop_at='$debug_stop_at'
 debug_subshell='$debug_subshell'
+debug_var_regex='$debug_var_regex'
 debug_warm_stack_pos='$debug_warm_stack_pos'
 debug_watch='$debug_watch'
 PS4='$PS4'" >"$debug_state_file" || return 1
@@ -806,6 +807,26 @@ debug_command_loop() {
         debug_ignore=
         no_follow_once=t
         ;;
+      v)
+        echo >&$fd_original_err
+        read -u $fd_original_in -e -p "Var regex: " debug_var_regex >&$fd_original_err
+        if [[ "$debug_var_regex" ]]; then
+          eval "declare -p | grep ' $debug_var_regex.*='" >&$fd_original_err 
+        else
+          eval "declare -p" >&$fd_original_err 
+        fi
+        no_follow_once=t
+        ;;
+      V)
+        if [[ "$debug_var_regex" ]]; then
+          echo "# Showing vars matching $debug_var_regex" >&$fd_original_err
+          eval "declare -p | grep ' $debug_var_regex.*='" >&$fd_original_err 
+        else
+          echo "# Showing all vars" >&$fd_original_err
+          eval "declare -p" >&$fd_original_err 
+        fi
+        no_follow_once=t
+        ;;
       w)
         echo >&$fd_original_err
         local new_watch w add=f
@@ -1030,6 +1051,8 @@ debug_command_loop() {
         echo "T  show cooked call stack" >&$fd_original_err
         echo "u  unignore: remove given function from ignore list" >&$fd_original_err
         echo "U  unignore all functions" >&$fd_original_err
+        echo "v  dump vars matching a regex" >&$fd_original_err
+        echo "V  repeat last v command" >&$fd_original_err
         echo "w  set or clear current watched expression. Expression can contain any string expression which can be given to echo as an argument." >&$fd_original_err
         echo "x  hex display of a variable" >&$fd_original_err
         echo "z  display zombie_lap_summary" >&$fd_original_err
@@ -1649,6 +1672,7 @@ debug_start() {
     debug_subshell=${debug_subshell:-f} \
     debug_untrap=f \
     debug_var=${debug_var:-} \
+    debug_var_regex=${debug_var_regex:-} \
     debug_warm_stack_pos=-1 \
     debug_watch=${debug_watch:-${debug_var:-${trace_var:-}}} \
 
