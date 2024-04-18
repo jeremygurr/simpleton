@@ -774,15 +774,6 @@ update_self() {
       update_successful=${update_successful:-f}
     fi
 
-    if [[ -d $out_path/export && ! -f $out_path/export/data.tab ]]; then
-      local exported_files=( $(find1 $out_path/export -type f -not -name '.*') ) || fail
-      if (( ${#exported_files[*]} == 1 )); then
-        local var_name=${exported_files##*/}
-        var_name=${var_name%.*}
-        echo "$var_name" | cat - $exported_files >$out_path/export/data.tab || fail
-      fi
-    fi
-
     if [[ $reuse_existing_out == f && -d $out_path ]]; then
       out_path=$original_out_path
       if [[ $update_successful == t ]]; then
@@ -972,7 +963,7 @@ update_command() {
     fi
 
     pre_update || fail
-    plant_seed_internal "$seed_path" "$cell_path" || fail
+    deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
 
     if [[ "$update_successful" != f ]]; then
       update_upstreams || fail
@@ -980,12 +971,23 @@ update_command() {
 
     if [[ $update_successful == t ]]; then
       if [[ $cell_is_leaf == t ]]; then
+
         if function_exists update_op; then
           load_upstream_vars || fail
           update_successful=
           update_self_retry_loop || fail
           check_results || fail
         fi
+
+        if [[ -d $out_path/export && ! -f $out_path/export/data.tab ]]; then
+          local exported_files=( $(find1 $out_path/export -type f -not -name '.*') ) || fail
+          if (( ${#exported_files[*]} == 1 )); then
+            local var_name=${exported_files##*/}
+            var_name=${var_name%.*}
+            echo "$var_name" | cat - $exported_files >$out_path/export/data.tab || fail
+          fi
+        fi
+
       else
         if [[ "${leaf_dims:-}" ]]; then
           update_members || fail
