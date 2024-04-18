@@ -176,7 +176,7 @@ load_tab() {
 
 make_or_load_dna_var() {
   begin_function
-    local var_full_path=$1 var=$prefix$2 content 
+    local var_full_path=$1 var=${prefix:-}$2 content 
     load_var $var_full_path content || fail
     local result="$var=$content" 
     eval "$result" || fail
@@ -188,7 +188,7 @@ make_or_load_dna_var() {
 make_or_load_dna_arr() {
   begin_function
 
-    local var_full_path=$1 var=$prefix$2 content
+    local var_full_path=$1 var=${prefix:-}$2 content
     load_arr $var_full_path content || fail
 
     local result="$var=( $content )"
@@ -255,6 +255,12 @@ make_or_load_dna_contents2() {
 
       item_name=${item##*/}
       split_ordinal item_name o item_name
+      item_name=${item_name//-/_}
+
+      local new_prefix= 
+      if [[ "$current_var" ]]; then
+        new_prefix=${current_var}_
+      fi
 
       if [[ -d $item ]]; then
 
@@ -270,12 +276,15 @@ make_or_load_dna_contents2() {
         fi
 
         if [[ ! -d $item/.dna ]]; then
-          local new_prefix=$prefix new_pass_thru=f
+
+          local new_pass_thru=f
+
           if [[ $item_name != _* ]]; then
             new_prefix+=${item_name}_
           else
             new_pass_thru=t
           fi
+
           prefix=$new_prefix pass_thru=$new_pass_thru make_or_load_dna_contents2 $item || fail
         fi
 
@@ -294,19 +303,19 @@ make_or_load_dna_contents2() {
 
         case $suffix in
           var)
-            make_or_load_dna_var $item $item_name || fail
+            prefix=$new_prefix make_or_load_dna_var $item $item_name || fail
           ;;
           arr)
-            make_or_load_dna_arr $item $item_name || fail
+            prefix=$new_prefix make_or_load_dna_arr $item $item_name || fail
           ;;
           tab)
-            make_or_load_dna_tab $item $item_name || fail
+            prefix=$new_prefix make_or_load_dna_tab $item $item_name || fail
           ;;
           fun)
-            make_or_load_dna_fun $item $item_name || fail
+            prefix=$new_prefix make_or_load_dna_fun $item $item_name || fail
           ;;
           raw)
-            make_or_load_dna_raw $item $item_name || fail
+            prefix=$new_prefix make_or_load_dna_raw $item $item_name || fail
           ;;
           *)
             log_debug "Unknown dna object: $item. Ignoring."
@@ -1709,7 +1718,7 @@ split_ordinal() {
     _o=${BASH_REMATCH[1]}
     _b=${BASH_REMATCH[2]}
   fi
-  debug_return_vars="$1 $2 $3"
+  debug_return_vars="$2 $3"
 }
 
 trace_step_execution=${trace_step_execution:-f}
