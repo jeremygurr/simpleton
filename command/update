@@ -141,11 +141,11 @@ get_needs_update() {
 #         && [[ $needs_update == t ]]
 #    then
 #      log_message="Needs update because at least one upstream cell is out of date"
-#    elif [[ "${downstream_ref_path:-}" ]] && \
-#      [[ "$(readlink ${downstream_ref_path}/chosen)" != $cell_path ]]
+#    elif [[ "${upstream_cell_link:-}" ]] && \
+#      [[ "$(readlink ${upstream_cell_link}/chosen)" != $cell_path ]]
 #    then
 #      needs_update=t
-#      log_message="Needs update because downstream_ref_path is outdated"
+#      log_message="Needs update because upstream_cell_link is outdated"
     elif local data_valid=t
       ignore_missing=t execute_op check || fail
       [[ $data_valid == f ]]
@@ -208,17 +208,14 @@ pre_update() {
 }
 
 create_downstream_links() {
-  begin_function_hi
+  begin_function
 
-    local cell_path down_cell_path down_cell_name
+    local down_cell_path down_cell_name
 
-    get_bottom_cell ${downstream_ref_path%/*} || fail
+    get_bottom_cell ${upstream_cell_link%/*} || fail
     down_cell_path=$bottom_cell
 
-    get_cell_name $down_cell_path || fail
-    down_cell_name=$cell_name
-
-    local down_link=$down_path/$down_cell_name
+    local down_link=$down_path/$downstream_cell_name
     if [[ ! -e $down_link ]]; then
       if [[ ! -d $down_path ]]; then
         mkdir $down_path || fail
@@ -228,7 +225,9 @@ create_downstream_links() {
       local link_target=$(readlink $down_link) || fail
       if [[ $link_target != $down_cell_path ]]; then
         log_fatal "Link conflict: A link already exists but doesn't point to the same place."
-        log_fatal "  $down_link is expected to point to $down_cell_path, but it points to $link_target"
+        log_fatal "  source:   $down_link"
+        log_fatal "  target 1: $down_cell_path"
+        log_fatal "  target 2: $link_target"
         fail1
       fi
     fi
@@ -281,7 +280,7 @@ update_upstream_choose() {
     if [[ -e "$upstream/chosen" ]]; then
       chosen=$(readlink $upstream/chosen) || fail
       if [[ -e "$chosen/.dna" ]]; then
-        downstream_ref_path=$chosen
+        upstream_cell_link=$chosen
         needs_update= \
         get_needs_update $chosen || fail
       else
@@ -311,12 +310,14 @@ update_upstream_choose() {
 
       end_for
 
+      switch_context || fail
+
       if [[ ! "$chosen" ]]; then
         chosen=${choices%% *}
       fi
 
       force=t safe_link $chosen $upstream/chosen || fail
-      downstream_ref_path=$chosen
+      upstream_cell_link=$chosen
 
     fi
 
@@ -376,7 +377,7 @@ update_upstream() {
   local log_show_vars=^upstream 
   begin_function_hi
 
-    local needs_update= downstream_ref_path= chosen=
+    local needs_update= upstream_cell_link= chosen=
 
     prep_upstream || fail
     update_upstream_choose || fail
@@ -392,6 +393,7 @@ update_upstream() {
 
       needs_update= \
       top_level_command=f \
+      downstream_cell_name=${short_cell//\//_} \
       execute_command "$up_cell" update || fail
 
       if [[ $something_changed == t ]]; then
@@ -422,15 +424,12 @@ load_upstream_vars() {
         update_successful=t
         local export_path=$upstream/chosen/export
         if [[ -d $export_path ]]; then
-
-          local prefix= up_name=${upstream##*/}
-          if [[ $up_name != _* ]]; then
-            prefix=$up_name
-          fi
-
-          make_or_load=load \
-          make_or_load_dna_contents2 $export_path || fail
-
+          local prefix
+          begin_for prefix in '' ${upstream##*/}_ ; doo
+            make_or_load=load \
+            pass_thru=t \
+            make_or_load_dna_contents2 $export_path || fail
+          end_for
         fi
         if [[ $update_successful == f ]]; then
           break
@@ -553,8 +552,8 @@ create_sub_cell() {
 update_downstream() {
   begin_function
 
-    local old_link=$downstream_ref_path \
-      old_target=$(readlink $downstream_ref_path) \
+    local old_link=$upstream_cell_link \
+      old_target=$(readlink $upstream_cell_link) \
       new_target=$cell_path || fail
 
     if [[ $cell_is_leaf == t ]]; then
@@ -590,7 +589,7 @@ update_downstream() {
 update_member() {
   local sane_value member_path \
     log_vars=member log_show_vars=member \
-    downstream_ref_path=${downstream_ref_path:-}
+    upstream_cell_link=${upstream_cell_link:-}
 
   begin_function
 
@@ -608,17 +607,17 @@ update_member() {
       get_needs_update $member_path || fail
     fi
 
-    if [[ "${downstream_ref_path:-}" ]]; then
+    if [[ "${upstream_cell_link:-}" ]]; then
       cell_path=$member_path update_downstream || fail
     fi
 
     if [[ $needs_update == t ]]; then
 
       if (( member_count > 1 )); then
-        log_debug "More than one member found ($member_count), not passing downstream_ref_path."
-        downstream_ref_path=
-      elif [[ "$downstream_ref_path" ]]; then
-        log_debug "Only one member found, passing downstream_ref_path: $downstream_ref_path"
+        log_debug "More than one member found ($member_count), not passing upstream_cell_link."
+        upstream_cell_link=
+      elif [[ "$upstream_cell_link" ]]; then
+        log_debug "Only one member found, passing upstream_cell_link: $upstream_cell_link"
       fi
 
       top_level_command=f \
@@ -633,7 +632,7 @@ update_member() {
     fi
 
     if (( member_count == 1 )); then
-      downstream_ref_path=
+      upstream_cell_link=
     fi
 
   end_function
@@ -951,7 +950,7 @@ update_command() {
       something_changed=f \
       needs_update=${needs_update:-} \
 
-    if [[ "${downstream_ref_path:-}" ]]; then
+    if [[ "${upstream_cell_link:-}" ]]; then
       update_downstream || fail
     fi
 
