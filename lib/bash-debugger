@@ -326,8 +326,10 @@ debug_move_down_stack() {
   local warm_stack_size=${#warm_stack[*]}
 
   local new_pos=$((warm_stack_size + debug_warm_stack_pos + 1))
-  if (( new_pos >= warm_stack_size )); then
+  if (( new_pos > warm_stack_size )); then
     echo "# Already at top of stack trace" >&$fd_original_err
+  elif (( new_pos == warm_stack_size )); then
+    debug_reset_stack_pos
   else
 
     (( debug_warm_stack_pos++ ))
@@ -347,7 +349,7 @@ debug_move_down_stack() {
 
 get_effective_debug_id() {
 
-  if (( debug_warm_stack_pos == -1 )); then
+  if (( debug_warm_stack_pos == 0 )); then
     effective_debug_id=$debug_id_current
   else
     local warm_stack_size=${#warm_stack[*]}
@@ -357,6 +359,15 @@ get_effective_debug_id() {
     effective_debug_id=$debug_id
   fi
 
+}
+
+debug_reset_stack_pos() {
+  (( debug_list_offset = -debug_list_window / 2 + 1 ))
+  debug_list_stack_pos=0
+  debug_warm_stack_pos=0
+  debug_display_source
+  debug_list_dir=forwards
+  (( debug_list_offset += debug_list_window ))
 }
 
 debug_command_loop() {
@@ -489,11 +500,7 @@ debug_command_loop() {
           echo "# Source not available" >&$fd_original_err
         else
           echo "$NL" >&$fd_original_err
-          (( debug_list_offset = -debug_list_window / 2 + 1 ))
-          debug_list_stack_pos=0
-          debug_display_source
-          debug_list_dir=forwards
-          (( debug_list_offset += debug_list_window ))
+          debug_reset_stack_pos
           no_follow_once=t
         fi
         ;;
@@ -1678,7 +1685,7 @@ debug_start() {
     debug_untrap=f \
     debug_var=${debug_var:-} \
     debug_var_regex=${debug_var_regex:-} \
-    debug_warm_stack_pos=-1 \
+    debug_warm_stack_pos=0 \
     debug_watch=${debug_watch:-${debug_var:-${trace_var:-}}} \
 
     if [[ "$debug_watch" =~ ^[a-zA-Z_0-9]+$ ]]; then
