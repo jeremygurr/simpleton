@@ -97,50 +97,63 @@ write_to_context() {
   handle_return
 }
 
-make_or_load_dna_fun() {
-  begin_function
-    local full_path=$1 name=${prefix:-}$2 content fun
-    name=${name//-/_}
-    content=$(<$full_path)
-    trim_ws content
+load_fun() {
+  local full_path=$1 name=${prefix:-}$2 content fun
+  name=${name//-/_}
+  content=$(<$full_path)
+  trim_ws content
 
-    if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
-      fun="$content"
-    else
-      content=$(echo -n "$content" | sed 's/^/    /')
-      fun="
+  if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
+    fun="$content"
+  else
+    content=$(echo -n "$content" | sed 's/^/    /')
+    fun="
 $name() {
   begin_function
 $content
   end_function
   handle_return
 }"
-    fi
-
-    eval "$fun" || fail
-    write_to_context fun "$fun" || fail
-
-  end_function
-  handle_return
+  fi
 }
 
 load_var() {
-  local from=$1
+
+  local from=$1 
   local -n to_var=$2
-  to_var=$(<$from)
-  trim_ws to_var
-  case "$to_var" in
-    \"*|\'*|\(*)
+  local content=$(<$from)
+
+  trim_ws content
+  local append=f
+  case "$content" in
+    \"*|\'*)
       :
     ;;
+    +=*)
+      append=t
+    ;;
     *)
-      quotes=single shell_quote_var to_var
+      quotes=single shell_quote_var content
     ;;
   esac
+
+  if [[ $append == t ]]; then
+    to_var+=$content
+  else
+    to_var=$content
+  fi
+
 }
 
 load_arr() {
   local from=$1 to_var=$2 line
+  local content=$(<$from)
+  trim_ws content
+  if [[ "$content" == '+='* ]]; then
+    content=${content#'+='}
+  else
+    eval "$to_var=()"
+  fi
   while IFS= read -r line || [[ "$line" ]]; do
     trim_ws line
     case "$line" in
@@ -151,75 +164,114 @@ load_arr() {
         quotes=single shell_quote_var line
       ;;
     esac
-    eval "$to_var+=\" $line\"" || return 1
-  done < <(cat "$from")
-  eval "$to_var=\${$to_var##*( )}"
+    eval "$to_var+=( $line )" || return 1
+  done < <(echo -n "$content")
   return 0
 }
 
 load_tab() {
-  local from=$1 to_var=$2 to_var_fields="${2}_fields" line first=t
-  eval "$to_var="
-  while IFS= read -r line || [[ "$line" ]]; do
-    trim_ws line
-    if [[ $first == t ]]; then
-      first=f
-      eval "$to_var_fields=\"$line\""
+
+  local from=$1 \
+    line first=t \
+    load_columns=${load_columns:-f}
+
+  local -n to_var=$2 to_var_fields=${2}_fields 
+
+  begin_function
+
+    local content=$(<$from) appending=f
+
+    trim_ws content
+    if [[ "$content" == '+='* ]]; then
+      content=${content#'+='}
+      appending=t
     else
-      quotes=single shell_quote_var line
-      eval "$to_var+=\" $line\"" || return 1
+      to_var=()
     fi
-  done < <(cat "$from")
-  to_var=${to_var##*( )}
-  return 0
+
+    while IFS= read -r line || [[ "$line" ]]; do
+      trim_ws line
+      if [[ $first == t ]]; then
+        first=f
+        to_var_fields=$line
+      else
+        quotes=single shell_quote_var line
+        to_var+=( "$line" ) || return 1
+      fi
+    done < <(cat "$from")
+
+    if [[ $load_columns == t ]]; then
+      local fields=( $to_var_fields ) field
+      begin_for field in "${fields[@]}"; doo
+        if [[ ! "$field" =~ ^[a-zA-Z0-9_]$ ]]; then
+          log_fatal "Invalid field name ($field). They must be valid bash variable names."
+          fail1
+        fi
+        local target_var_name=${prefix:-}$field row
+        local -n target_var=$target_var_name
+        if [[ $appending == f ]]; then
+          target_var=()
+        fi
+        begin_for (( row = 0; row < ${#to_var[*]}; row++ )); doo
+          # TODO extract correct column
+          target_var+=( ${to_var[$row]} )
+        end_for
+      end_for
+
+    fi
+
+  end_function
+  handle_return
 }
 
 make_or_load_dna_var() {
   begin_function
-    local var_full_path=$1 var=${prefix:-}$2 content 
-    load_var $var_full_path content || fail
-    local result="$var=$content" 
-    eval "$result" || fail
-    write_to_context var "$result" || fail
-  end_function
-  handle_return
-}
+    local var_full_path=$1 prefix=${prefix:-} suffix= code item_name
 
-make_or_load_dna_arr() {
-  begin_function
+    item_name=${var_full_path##*/}
+    if [[ $item_name == *.* ]]; then
+      suffix=${item_name##*.}
+      item_name=${item_name%.*}
+    fi
+    last_type=$suffix
 
-    local var_full_path=$1 var=${prefix:-}$2 content
-    load_arr $var_full_path content || fail
-
-    local result="$var=( $content )"
-    eval "$result" || fail
-    write_to_context var "$result" || fail
-
-  end_function
-  handle_return
-}
-
-make_or_load_dna_tab() {
-  begin_function
-
-    local var_full_path=$1 var=${prefix:-}$2 content=() content_fields=()
-    load_tab $var_full_path content || fail
-
-    local result="${var}_fields=( $content_fields ) $var=( $content )"
-    eval "$result" || fail
-    write_to_context var "$result" || fail
-
-  end_function
-  handle_return
-}
-
-make_or_load_dna_raw() {
-  begin_function
-    local full_path=$1 name=$2 content 
-    content=$(<$full_path)
-    trim_ws content
-    eval "$content" || fail
-    write_to_context fun "$content" || fail
+    case "$suffix" in
+      var)
+        load_var $var_full_path || {
+          log_fatal "Failed to load simple variable from $var_full_path"
+          fail1
+        }
+      ;;
+      arr)
+        load_arr $var_full_path || {
+          log_fatal "Failed to load array variable from $var_full_path"
+          fail1
+        }
+      ;;
+      fun)
+        load_fun $var_full_path || {
+          log_fatal "Failed to load function from $var_full_path"
+          fail1
+        }
+      ;;
+      tab)
+        load_tab $var_full_path || {
+          log_fatal "Failed to load table variable from $var_full_path"
+          fail1
+        }
+      ;;
+      raw)
+        load_raw $var_full_path || {
+          log_fatal "Failed to load raw variable from $var_full_path"
+          fail1
+        }
+      ;;
+      *)
+        log_debug "Unknown dna object: $item. Ignoring."
+      ;;
+    esac
+    eval "$code" || fail
+    write_to_context var "$code" || fail
   end_function
   handle_return
 }
@@ -295,35 +347,7 @@ make_or_load_dna_contents2() {
           fail1
         fi
 
-        local suffix=
-        if [[ $item_name == *.* ]]; then
-          suffix=${item_name##*.}
-          item_name=${item_name%.*}
-        fi
-
-        case $suffix in
-          var)
-            prefix=$new_prefix make_or_load_dna_var $item $item_name || fail
-          ;;
-          arr)
-            prefix=$new_prefix make_or_load_dna_arr $item $item_name || fail
-          ;;
-          tab)
-            prefix=$new_prefix make_or_load_dna_tab $item $item_name || fail
-          ;;
-          fun)
-            prefix=$new_prefix make_or_load_dna_fun $item $item_name || fail
-          ;;
-          raw)
-            prefix=$new_prefix make_or_load_dna_raw $item $item_name || fail
-          ;;
-          *)
-            log_debug "Unknown dna object: $item. Ignoring."
-            continue
-          ;;
-        esac
-
-        last_type=$suffix
+        prefix=$new_prefix make_or_load_dna_var $item || fail
 
       fi
 
