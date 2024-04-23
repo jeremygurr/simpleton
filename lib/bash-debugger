@@ -1393,8 +1393,12 @@ debug_trap() {
   set +evTu +o pipefail
 
   debug_rematch=( "${BASH_REMATCH[@]}" )
-  local saved_lineno
 
+  local saved_in saved_out saved_err
+  : {saved_in}<&0 {saved_out}>&1 {saved_err}>&2
+  : <&$fd_original_in >&$fd_original_out 2>&$fd_original_err
+
+  local saved_lineno
   (( saved_lineno = debug_trap_first_line - 1 )) 
 
   if [[ "${debug_var:-}" ]]; then
@@ -1497,6 +1501,7 @@ debug_trap() {
   [[ $debug_saved_shell_options_short == *u* ]] && set -u
 
   BASH_REMATCH=( "${debug_rematch[@]}" )
+  : <&$saved_in >&$saved_out 2>&$saved_err
   return $debug_r
 }
 
@@ -1577,10 +1582,10 @@ debugger_init() {
   local first_run=${first_run:-t}
   # used by debugger, in case input or output is redirected from somewhere else during debugging
   if [[ ! -v fd_original_in ]]; then
-    exec {fd_original_in}<&0
-    exec {fd_original_out}>&1
-    exec {fd_original_err}>&2
-    exec {fd_original_trace}>&${fd_trace:-2}
+    : {fd_original_in}<&0
+    : {fd_original_out}>&1
+    : {fd_original_err}>&2
+    : {fd_original_trace}>&${fd_trace:-2}
   fi
 
   debug_output=${debug_output:-f}
