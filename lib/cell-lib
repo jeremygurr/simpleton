@@ -97,143 +97,171 @@ write_to_context() {
   handle_return
 }
 
+# inputs:
+#   item_name 
+#   prefix
+# outputs:
+#   code
 load_fun() {
-  local full_path=$1 name=${prefix:-}$2 content fun
-  name=${name//-/_}
-  content=$(<$full_path)
-  trim_ws content
+  local full_path=$1 content name
+  begin_function
+    name=$prefix$item_name
+    content=$(<$full_path)
+    trim_ws content
 
-  if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
-    fun="$content"
-  else
-    content=$(echo -n "$content" | sed 's/^/    /')
-    fun="
+    if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
+      code="$content"
+    else
+      content=$(echo -n "$content" | sed 's/^/    /')
+      code="
 $name() {
   begin_function
 $content
   end_function
   handle_return
 }"
-  fi
-}
-
-load_var() {
-
-  local from=$1 
-  local -n to_var=$2
-  local content=$(<$from)
-
-  trim_ws content
-  local append=f
-  case "$content" in
-    \"*|\'*)
-      :
-    ;;
-    +=*)
-      append=t
-    ;;
-    *)
-      quotes=single shell_quote_var content
-    ;;
-  esac
-
-  if [[ $append == t ]]; then
-    to_var+=$content
-  else
-    to_var=$content
-  fi
-
-}
-
-load_arr() {
-  local from=$1 to_var=$2 line
-  local content=$(<$from)
-  trim_ws content
-  if [[ "$content" == '+='* ]]; then
-    content=${content#'+='}
-  else
-    eval "$to_var=()"
-  fi
-  while IFS= read -r line || [[ "$line" ]]; do
-    trim_ws line
-    case "$line" in
-      \"*|\'*)
-        :
-      ;;
-      *)
-        quotes=single shell_quote_var line
-      ;;
-    esac
-    eval "$to_var+=( $line )" || return 1
-  done < <(echo -n "$content")
-  return 0
-}
-
-load_tab() {
-
-  local from=$1 \
-    line first=t \
-    load_columns=${load_columns:-f}
-
-  local -n to_var=$2 to_var_fields=${2}_fields 
-
-  begin_function
-
-    local content=$(<$from) appending=f
-
-    trim_ws content
-    if [[ "$content" == '+='* ]]; then
-      content=${content#'+='}
-      appending=t
-    else
-      to_var=()
-    fi
-
-    while IFS= read -r line || [[ "$line" ]]; do
-      trim_ws line
-      if [[ $first == t ]]; then
-        first=f
-        to_var_fields=$line
-      else
-        quotes=single shell_quote_var line
-        to_var+=( "$line" ) || return 1
-      fi
-    done < <(cat "$from")
-
-    if [[ $load_columns == t ]]; then
-      local fields=( $to_var_fields ) field
-      begin_for field in "${fields[@]}"; doo
-        if [[ ! "$field" =~ ^[a-zA-Z0-9_]$ ]]; then
-          log_fatal "Invalid field name ($field). They must be valid bash variable names."
-          fail1
-        fi
-        local target_var_name=${prefix:-}$field row
-        local -n target_var=$target_var_name
-        if [[ $appending == f ]]; then
-          target_var=()
-        fi
-        begin_for (( row = 0; row < ${#to_var[*]}; row++ )); doo
-          # TODO extract correct column
-          target_var+=( ${to_var[$row]} )
-        end_for
-      end_for
-
     fi
 
   end_function
   handle_return
 }
 
-make_or_load_dna_var() {
+# inputs:
+#   item_name 
+#   prefix
+# outputs:
+#   code
+load_var() {
+  local full_path=$1 content name append=f
   begin_function
-    local var_full_path=$1 prefix=${prefix:-} suffix= code item_name
 
-    item_name=${var_full_path##*/}
-    if [[ $item_name == *.* ]]; then
-      suffix=${item_name##*.}
-      item_name=${item_name%.*}
+    name=$prefix$item_name
+    content=$(<$full_path)
+    trim_ws content
+
+    if [[ "$content" == '+='* ]]; then
+      content=${content#'+='}
+      append=t
+    fi
+
+    if [[ "$content" != [\"\']* ]]; then
+      quotes=single shell_quote_var content
+    fi
+
+    if [[ $append == t ]]; then
+      code="$name+=$content"
+    else
+      code="$name=$content"
+    fi
+
+  end_function
+  handle_return
+}
+
+load_arr() {
+  begin_function
+
+    local full_path=$1 content name append=f
+    name=$prefix$item_name
+    content=$(<$full_path)
+    trim_ws content
+
+    if [[ "$content" == '+='* ]]; then
+      content=${content#'+='}
+      append=t
+    fi
+
+    code="$name"
+    if [[ $append == t ]]; then
+      code+="+=("
+    else
+      code+="=("
+    fi
+
+    while IFS= read -r line || [[ "$line" ]]; do
+      trim_ws line
+      if [[ "$line" != [\"\']* ]]; then
+        quotes=single shell_quote_var line
+      fi
+      code+=" $line" || fail
+    done < <(echo -n "$content")
+
+    code+=" )"
+
+  end_function
+  handle_return
+}
+
+load_tab() {
+
+  begin_function
+    local full_path=$1 content name append=f
+    name=${prefix:-}$item_name
+    local target_var=$name target_var_fields=${name}_fields fields i
+    content=$(<$full_path)
+    trim_ws content
+
+    if [[ "$content" == '+='* ]]; then
+      content=${content#'+='}
+      append=t
+    fi
+
+    while IFS= read -r line || [[ "$line" ]]; do
+      trim_ws line
+      if [[ $first == t ]]; then
+        first=f
+        fields=( $line )
+        local column_code=()
+        begin_for (( i = 0; i < ${#fields[*]}; i++ )); doo
+          field=${fields[$i]}
+
+          if [[ ! "$field" =~ ^[a-zA-Z0-9_]$ ]]; then
+            log_fatal "Invalid field name ($field). They must be valid bash variable names."
+            fail1
+          fi
+
+          if [[ $append == t ]]; then
+            column_code[$i]="${name}_$field+=("
+          else
+            column_code[$i]="${name}_$field=("
+          fi
+
+        end_for
+        code="${name}_fields=( ${fields[*]} )$NL"
+      else
+        local line_array=( $line ) value
+        begin_for (( i = 0; i < ${#fields[*]}; i++ )); doo
+          field=${fields[$i]}
+          value=${line_array[$i]}
+          quotes=single shell_quote_var value || fail
+          local target_var_name=${name}_$field row
+          column_code[$i]+=" $value"
+        end_for
+      fi
+    done < <(echo -n "$content")
+
+    local cc
+    begin_for cc in "${column_code[@]}"; doo
+      code+="$cc )$NL"
+    end_for
+
+  end_function
+  handle_return
+}
+
+make_or_load_dna_item() {
+  begin_function
+    local var_full_path=$1 prefix=${prefix:-} \
+      suffix= code item_name=${2:-} \
+      file_name
+
+    file_name=${var_full_path##*/}
+    if [[ $file_name == *.* ]]; then
+      suffix=${file_name##*.}
+      file_name=${file_name%.*}
     fi
     last_type=$suffix
+    item_name=$prefix$file_name
 
     case "$suffix" in
       var)
@@ -347,7 +375,7 @@ make_or_load_dna_contents2() {
           fail1
         fi
 
-        prefix=$new_prefix make_or_load_dna_var $item || fail
+        prefix=$new_prefix make_or_load_dna_item $item || fail
 
       fi
 
