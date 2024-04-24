@@ -924,6 +924,7 @@ init_context() {
   cell_expiration= \
   cell_is_external=f \
   cell_is_persistent=f \
+  command_path=$path_to_commands/$current_command \
   current_pause=250 \
   default_freshness= \
   default_strategies=crl \
@@ -952,6 +953,8 @@ init_context() {
   unset \
     check_op \
     update_op \
+
+  source $command_path.info || return 1
 
   return 0
 }
@@ -993,72 +996,75 @@ make_cyto_up() {
 
 cell_context_load() {
 
-  local log_vars=last_context_loaded log_show_vars=^cell_path
-  begin_function_hi
+  zombie "loading context for $cell_path"
+  if [[ "${last_context_loaded:-}" != $cell_path ]]; then
 
-    if [[ ! -e $cell_path/.dna ]]; then
-      log_fatal "$cell_path is not a cell"
-      fail1
-    fi
+    local log_vars=last_context_loaded log_show_vars=^cell_path
+    begin_function_hi
 
-    if [[ "${last_context_loaded:-}" != $cell_path ]]; then
-
-      last_context_loaded=$cell_path
-
-      setup_cell_path_vars $cell_path || fail
-
-      init_context || fail
-      if [[ $can_create_cyto == t ]]; then
-        if [[ ! -e $cyto_path ]]; then
-          mkdir $cyto_path || fail
-        fi
-
-        if [[ ! -d $status_path ]]; then
-          mkdir $status_path || fail
-        fi
-
-        if [[ ! -e $context_path ]]; then
-          make_context || fail
-        fi
-
-        source $context_path || fail
-
-        if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-          make_cyto_up || fail
-        fi
-
-      else # $can_create_cyto == f
-        load_context || fail
+      if [[ ! -e $cell_path/.dna ]]; then
+        log_fatal "$cell_path is not a cell"
+        fail1
       fi
 
-      setup_dep_defaults || fail
+        last_context_loaded=$cell_path
 
-      if [[ ! "${out_path:-}" ]]; then
-        out_path=$cell_path
-      elif [[ "$out_path" != /* ]]; then
-        out_path=$cell_path/$out_path
-      fi
+        setup_cell_path_vars $cell_path || fail
 
-      localize_dims='local -x'
-      for dim in ${trunk_dims[*]} ${sub_dims[*]} ${props[*]}; do
-        get_plural $dim
-        dim_plural=$plural
-        local ddim=d_$dim ddims=d_$dim_plural
-        localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
-      done
+        init_context || fail
+        if [[ $can_create_cyto == t ]]; then
+          if [[ ! -e $cyto_path ]]; then
+            mkdir $cyto_path || fail
+          fi
 
-      if [[ "$localize_dims" == 'local -x' ]]; then
-        localize_dims=
-      fi
+          if [[ ! -d $status_path ]]; then
+            mkdir $status_path || fail
+          fi
 
-      get_short_cell $cell_path
+          if [[ ! -e $context_path ]]; then
+            make_context || fail
+          fi
 
-    else
-      log_debug "Context already loaded"
-    fi
+          source $context_path || fail
 
-  end_function
-  handle_return
+          if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
+            make_cyto_up || fail
+          fi
+
+        else # $can_create_cyto == f
+          load_context || fail
+        fi
+
+        setup_dep_defaults || fail
+
+        if [[ ! "${out_path:-}" ]]; then
+          out_path=$cell_path
+        elif [[ "$out_path" != /* ]]; then
+          out_path=$cell_path/$out_path
+        fi
+
+        localize_dims='local -x'
+        for dim in ${trunk_dims[*]} ${sub_dims[*]} ${props[*]}; do
+          get_plural $dim
+          dim_plural=$plural
+          local ddim=d_$dim ddims=d_$dim_plural
+          localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
+        done
+
+        if [[ "$localize_dims" == 'local -x' ]]; then
+          localize_dims=
+        fi
+
+        get_short_cell $cell_path
+
+    end_function
+    handle_return
+
+  else
+    log_debug "Context already loaded"
+  fi
+
+  return 0
 }
 
 setup_dep_defaults() {
@@ -1971,7 +1977,6 @@ show_parameter_help() {
 
 execute_command_internal_setup_params() {
   begin_function
-    source $command_path.info || fail
     if [[ "${parameter_questions:-}" ]]; then
       local p i pi 
       begin_for pi in ${!parameter_questions[*]}; doo
@@ -2034,8 +2039,6 @@ execute_command_internal() {
     # else
       log_verbose "Executing cell command: $short_cell $current_command"
     # fi
-
-    local command_path=$path_to_commands/$current_command
 
     if [[ -f $command_path.info ]]; then
       execute_command_internal_setup_params || fail

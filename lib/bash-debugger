@@ -370,6 +370,29 @@ debug_reset_stack_pos() {
   (( debug_list_offset += debug_list_window ))
 }
 
+debug_set_watch() {
+  local new_watch=$1 add=f
+
+  if [[ "$new_watch" == +* ]]; then
+    new_watch=${new_watch#+}
+    add=t
+  fi
+
+  if [[ "$new_watch" =~ ^[a-zA-Z0-9_]+$ ]]; then
+    if is_array $new_watch; then
+      new_watch="$new_watch=( \${$new_watch[*]:0:10} )"
+    else
+      new_watch="$new_watch=\$$new_watch"
+    fi
+  fi
+
+  if [[ $add == t ]]; then
+    debug_watch+=" $new_watch"
+  else
+    debug_watch=$new_watch
+  fi
+}
+
 debug_command_loop() {
   local debug_c no_follow_once=f
 
@@ -841,24 +864,9 @@ debug_command_loop() {
         ;;
       w)
         echo >&$fd_original_err
-        local new_watch w add=f
+        local new_watch w
         read -u $fd_original_in -e -p "Watch: " new_watch >&$fd_original_err
-
-        if [[ "$new_watch" == +* ]]; then
-          new_watch=${new_watch#+}
-          add=t
-        fi
-
-        if [[ "$new_watch" =~ ^[a-zA-Z0-9_]+$ ]]; then
-          new_watch="$new_watch=\$$new_watch"
-        fi
-
-        if [[ $add == t ]]; then
-          debug_watch+=" $new_watch"
-        else
-          debug_watch=$new_watch
-        fi
-
+        debug_set_watch "$new_watch"
         debug_save_state
         no_follow_once=t
         ;;
@@ -1429,7 +1437,7 @@ debug_trap() {
     debug_current_function=${FUNCNAME[1]:-none} \
     debug_command=${BASH_COMMAND} \
     debug_current_depth=${#FUNCNAME[*]} \
-    IFS=$'\n'$'\t'" " \
+    IFS=' '$'\n'$'\t' \
     debug_full_path=${debug_full_path:-f} \
     debug_source_file \
 
@@ -1693,11 +1701,9 @@ debug_start() {
     debug_var=${debug_var:-} \
     debug_var_regex=${debug_var_regex:-} \
     debug_warm_stack_pos=0 \
-    debug_watch=${debug_watch:-${debug_var:-${trace_var:-}}} \
+    new_debug_watch=${debug_watch:-${debug_var:-${trace_var:-}}} \
 
-    if [[ "$debug_watch" =~ ^[a-zA-Z_0-9]+$ ]]; then
-      debug_watch="$debug_watch=\$$debug_watch"
-    fi
+    debug_set_watch "$new_debug_watch"
 
     trap '
       set +x
