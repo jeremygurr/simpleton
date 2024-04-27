@@ -83,7 +83,7 @@ form_alias=out_form
 field_alias=out_fields
 fields_alias=out_fields
 
-write_to_context() {
+write_or_load() {
   local new_type=$1 content=$2
   begin_function
     if [[ $context_make == t ]]; then
@@ -92,6 +92,9 @@ write_to_context() {
       fi
       echo "$content" >>$context_path || fail
       last_type=$new_type
+    fi
+    if [[ $context_load == t ]]; then
+      eval "$content" || fail
     fi
   end_function
   handle_return
@@ -301,15 +304,14 @@ make_or_load_dna_item() {
         log_debug "Unknown dna object: $item. Ignoring."
       ;;
     esac
-    eval "$code" || fail
-    write_to_context var "$code" || fail
+    write_or_load var "$code" || fail
   end_function
   handle_return
 }
 
 make_array_assignment() {
   local arr_name=$1
-  local -n arr=$1
+  local -n arr=$2
   begin_function
     array_assignment="$arr_name=("
     local v
@@ -327,12 +329,8 @@ make_or_load_dna_contents2() {
   begin_function
 
     local items=$(find1 $folder -not -name '.*' | sort -g) || fail
-    local current_var=${prefix%_} o item_name result
+    local current_var=${prefix%_} o item_name result array_content=( )
     current_var=${current_var//-/_}
-
-    if [[ "$current_var" && $pass_thru == f ]]; then
-      eval "$current_var=()"
-    fi
 
     begin_for item in $items; doo
 
@@ -348,13 +346,12 @@ make_or_load_dna_contents2() {
       if [[ -d $item ]]; then
 
         if [[ "$current_var" && $item_name != _* ]]; then
-          eval "$current_var+=( $item_name )"
+          array_content+=( "$item_name" )
           local path
           if [[ -L $item || -d $item ]]; then
             path=$(realpath $item)
             result="${current_var}_${item_name//-/_}_path=$path"
-            eval "$result" || fail
-            write_to_context var "$result" || fail
+            write_or_load var "$result" || fail
           fi
         fi
 
@@ -369,6 +366,7 @@ make_or_load_dna_contents2() {
           fi
 
           prefix=$new_prefix pass_thru=$new_pass_thru make_or_load_dna_contents2 $item || fail
+
         fi
 
       else # is a file
@@ -384,9 +382,9 @@ make_or_load_dna_contents2() {
 
     end_for
 
-    if [[ "$current_var" && -v $current_var && ${!current_var} && $pass_thru == f ]]; then
-      make_array_assignment $current_var || fail
-      write_to_context var "$array_assignment" || fail
+    if [[ "$current_var" && -v $current_var && "$array_content" && $pass_thru == f ]]; then
+      make_array_assignment $current_var $array_content || fail
+      write_or_load var "$array_assignment" || fail
     fi
 
   end_function
@@ -486,11 +484,10 @@ make_or_load_context_dims() {
       #shell_quote_var member
       members_string+="$member "
       assignment="d_$dim=$member"
-      eval "$assignment"
-      write_to_context var "$assignment" || fail
+      write_or_load var "$assignment" || fail
     end_for
 
-    write_to_context var "trunk_dim_count=$trunk_dim_count
+    write_or_load var "trunk_dim_count=$trunk_dim_count
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
@@ -653,7 +650,7 @@ make_or_load_context_expand2() {
       eval "aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )" || fail
     fi
 
-    fun="
+    code="
 ${dim_type}_${dim}_expand() {
   problem=
   case \"\$value\" in"
@@ -670,8 +667,7 @@ ${dim_type}_${dim}_expand() {
       make_context_expand_members_known || fail
     fi
 
-    eval "$fun" || fail
-    write_to_context fun "$fun" || fail
+    write_or_load fun "$code" || fail
 
   end_function
   handle_return
@@ -689,9 +685,7 @@ make_or_load_context_expand() {
     begin_for dim_type in trunk_dims sub_dims props; doo
       local -n dims=$dim_type
       begin_for dim in ${dims[*]:-}; doo
-        # if ! function_exists ${dim_type}_${dim}_expand; then
-          make_or_load_context_expand2 || fail
-        # fi
+        make_or_load_context_expand2 || fail
       end_for
     end_for
 
@@ -699,72 +693,55 @@ make_or_load_context_expand() {
   handle_return
 }
 
+load_context() {
+  context_make=f context_load=t make_or_load_context 
+}
+
 make_context() {
+  context_make=t context_load=f make_or_load_context 
+}
+
+make_or_load_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function_hi
     local item_name last_part dna_full_item suffix \
-      context_make=t context_load=t \
+      context_make=$context_make \
+      context_load=$context_load \
 
-    echo "#!/usr/env bash
+    if [[ $context_make == t ]]; then
+      echo "#!/usr/env bash
 # WARNING: This file is auto-generated from $dna_path" >$context_path || fail
-    local lock_fd last_type=fun
-    timeout=$lock_timeout \
-      lock_path=$context_path \
-      fd_write_lock || fail
+      local lock_fd last_type=fun
+      timeout=$lock_timeout \
+        lock_path=$context_path \
+        fd_write_lock || fail
+    fi
 
     if [[ -d $dna_path ]]; then
       make_or_load_dna_contents $dna_path || fail
     elif [[ -f $dna_path ]]; then
-      cat $dna_path >>$context_path || fail
+      if [[ $context_make == t ]]; then
+        cp $dna_path $context_path || fail
+      fi
+      if [[ $context_load == t ]]; then
+        source $dna_path || fail
+      fi
     else
       log_vars=dna_path log_fatal "dna not found"
       fail1
     fi
 
-    source $context_path || fail
-
     make_or_load_context_dims || fail
-    prop_count=${#props[*]}
-
     make_or_load_context_expand || fail
 
-    fd_unlock
+    if [[ $context_make == t ]]; then
+      fd_unlock
+    fi
 
   end_function
   if failed; then
     rm $context_path
   fi
-  handle_return
-}
-
-load_context() {
-  local log_vars=cell_path log_show_vars=short_cell
-  begin_function_hi
-    local dna_path=$cell_path/.dna \
-      cyto_path=$cell_path/.cyto \
-      dna_folder dna_full_folder \
-      context_load=t \
-      context_make=f 
-
-    if [[ -f "$cyto_path/context" ]]; then
-      source $cyto_path/context || fail
-    elif [[ -d $dna_path ]]; then
-      local prefix=
-      make_or_load_dna_contents $dna_path || fail
-    elif [[ -f $dna_path ]]; then
-      source $dna_path || fail
-    else
-      log_vars=dna_path log_fatal "dna not found"
-      fail1
-    fi
-
-    make_or_load_context_dims || fail
-
-    if (( leaf_dim_count > 0 )); then
-      make_or_load_context_expand || fail
-    fi
-
-  end_function
   handle_return
 }
 
@@ -926,7 +903,7 @@ init_context() {
   cell_expiration= \
   cell_is_external=f \
   cell_is_persistent=f \
-  command_path=$path_to_commands/$current_command \
+  command_path= \
   current_pause=250 \
   default_freshness= \
   default_strategies=crl \
@@ -952,11 +929,18 @@ init_context() {
   up=() \
   update_cost=1 \
 
+  if [[ "${current_command:-}" ]]; then
+    command_path=$path_to_commands/$current_command
+    if [[ -e $command_path.info ]]; then
+      source $command_path.info || return 1
+    else
+      log_warn "Missing file $command_path.info"
+    fi
+  fi
+
   unset \
     check_op \
     update_op \
-
-  source $command_path.info || return 1
 
   return 0
 }
@@ -1008,55 +992,55 @@ cell_context_load() {
         fail1
       fi
 
-        last_context_loaded=$cell_path
+      last_context_loaded=$cell_path
 
-        setup_cell_path_vars $cell_path || fail
+      setup_cell_path_vars $cell_path || fail
+      init_context || fail
 
-        init_context || fail
-        if [[ $can_create_cyto == t ]]; then
-          if [[ ! -e $cyto_path ]]; then
-            mkdir $cyto_path || fail
-          fi
-
-          if [[ ! -d $status_path ]]; then
-            mkdir $status_path || fail
-          fi
-
-          if [[ ! -e $context_path ]]; then
-            make_context || fail
-          fi
-
-          source $context_path || fail
-
-          if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-            make_cyto_up || fail
-          fi
-
-        else # $can_create_cyto == f
-          load_context || fail
+      if [[ $can_create_cyto == t ]]; then
+        if [[ ! -e $cyto_path ]]; then
+          mkdir $cyto_path || fail
         fi
 
-        setup_dep_defaults || fail
-
-        if [[ ! "${out_path:-}" ]]; then
-          out_path=$cell_path
-        elif [[ "$out_path" != /* ]]; then
-          out_path=$cell_path/$out_path
+        if [[ ! -d $status_path ]]; then
+          mkdir $status_path || fail
         fi
 
-        localize_dims='local -x'
-        for dim in ${trunk_dims[*]} ${sub_dims[*]} ${props[*]}; do
-          get_plural $dim
-          dim_plural=$plural
-          local ddim=d_$dim ddims=d_$dim_plural
-          localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
-        done
-
-        if [[ "$localize_dims" == 'local -x' ]]; then
-          localize_dims=
+        if [[ ! -e $context_path ]]; then
+          make_context || fail
         fi
 
-        get_short_cell $cell_path
+        source $context_path || fail
+
+        if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
+          make_cyto_up || fail
+        fi
+
+      else # $can_create_cyto == f
+        load_context || fail
+      fi
+
+      setup_dep_defaults || fail
+
+      if [[ ! "${out_path:-}" ]]; then
+        out_path=$cell_path
+      elif [[ "$out_path" != /* ]]; then
+        out_path=$cell_path/$out_path
+      fi
+
+      localize_dims='local -x'
+      for dim in ${trunk_dims[*]} ${sub_dims[*]} ${props[*]}; do
+        get_plural $dim
+        dim_plural=$plural
+        local ddim=d_$dim ddims=d_$dim_plural
+        localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
+      done
+
+      if [[ "$localize_dims" == 'local -x' ]]; then
+        localize_dims=
+      fi
+
+      get_short_cell $cell_path
 
     end_function
     handle_return
@@ -1942,6 +1926,7 @@ show_parameter_help() {
 
     local found=f choices=()
 
+    # TODO this should go away and get replaced with props
     begin_for i in ${!parameter_names[*]}; doo
       if [[ "${parameter_names[$i]}" == $name ]]; then
         out "Parameter: $name"
@@ -1962,8 +1947,22 @@ show_parameter_help() {
           ${name}_get_choices || fail
         fi
         found=t
+        break
       fi
     end_for
+
+    if [[ $found == f ]]; then
+      local dim_type
+      begin_for dim_type in trunk_dims leaf_dims props; doo
+        if [[ -v ${dim_type}_${dim}_description ]]; then
+          eval "local description=\$${dim_type}_${dim}_description" || fail
+          indent=2 out_wrap "$description"
+          # TODO write other parameters
+          found=t
+          break
+        fi
+      end_for
+    fi
 
     if [[ $found == f ]]; then
       log_warn "No description found for parameter $name"
