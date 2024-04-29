@@ -87,7 +87,8 @@ write_or_load() {
   local new_type=$1 content=$2
   begin_function
     if [[ $context_make == t ]]; then
-      if [[ $last_type == fun ]]; then
+      if [[ $last_type == fun && $new_type == var 
+         || $last_type == var && $new_type == fun ]]; then
         echo >>$context_path || fail
       fi
       echo "$content" >>$context_path || fail
@@ -115,8 +116,7 @@ load_fun() {
       code="$content"
     else
       content=$(echo -n "$content" | sed 's/^/    /')
-      code="
-$name() {
+      code="$name() {
   begin_function
 $content
   end_function
@@ -262,9 +262,9 @@ make_or_load_dna_item() {
       suffix=${file_name##*.}
       file_name=${file_name%.*}
     fi
-    last_type=$suffix
     item_name=$prefix$file_name
 
+    local load_type=var
     case "$suffix" in
       var)
         load_var $var_full_path $item_name || {
@@ -283,6 +283,7 @@ make_or_load_dna_item() {
           log_fatal "Failed to load function from $var_full_path"
           fail1
         }
+        load_type=fun
       ;;
       tab)
         load_tab $var_full_path $item_name || {
@@ -295,12 +296,13 @@ make_or_load_dna_item() {
           log_fatal "Failed to load raw variable from $var_full_path"
           fail1
         }
+        load_type=fun
       ;;
       *)
         log_debug "Unknown dna object: $item. Ignoring."
       ;;
     esac
-    write_or_load var "$code" || fail
+    write_or_load $load_type "$code" || fail
   end_function
   handle_return
 }
@@ -317,6 +319,7 @@ make_array_assignment() {
     end_for
     array_assignment+=" )"
   end_function
+  debug_return_vars=array_assignment
   handle_return
 }
 
@@ -378,8 +381,8 @@ make_or_load_dna_contents2() {
 
     end_for
 
-    if [[ "$current_var" && -v $current_var && "$array_content" && $pass_thru == f ]]; then
-      make_array_assignment $current_var $array_content || fail
+    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
+      make_array_assignment $current_var array_content || fail
       write_or_load var "$array_assignment" || fail
     fi
 
