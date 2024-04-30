@@ -276,44 +276,51 @@ update_upstream_choose() {
   local log_show_vars=^upstream
   begin_function_hi
 
-    local choice
+    local choice needs_to_choose=f
     if [[ -e "$upstream/chosen" ]]; then
       chosen=$(readlink $upstream/chosen) || fail
       if [[ -e "$chosen/.dna" ]]; then
         upstream_cell_link=$chosen
         needs_update= \
         get_needs_update $chosen || fail
+        if [[ $needs_update == t ]]; then
+          needs_to_choose=t
+          needs_update=
+        fi
       else
-        needs_update=t
+        needs_to_choose=t
       fi
     else
-      needs_update=t
+      needs_to_choose=t
     fi
 
-    if [[ $needs_update == t ]]; then
-      local choices=$(find1 $upstream/choices -not -name ".*" | sort -g) || fail
+    if [[ $needs_to_choose == t ]]; then
+      local choices=( $(find1 $upstream/choices -not -name ".*" | sort -g) ) || fail
 
       if [[ ! "$choices" ]]; then
         log_fatal "No choices defined for upstream $upstream"
         fail1
       fi
 
-      # are any already updated?
-      begin_for choice in $choices; doo
+      if (( ${#choices[*]} == 1 )); then
+        chosen=$choices
+      else
 
-        needs_update= \
-        get_needs_update $choice || fail
-        if [[ $needs_update == f ]]; then
-          chosen=$choice
-          break
+        begin_for choice in $choices; doo
+          needs_update= \
+          get_needs_update $choice || fail
+          if [[ $needs_update == f ]]; then
+            chosen=$choice
+            break
+          fi
+        end_for
+
+        switch_context || fail
+
+        if [[ ! "$chosen" ]]; then
+          chosen=${choices%% *}
         fi
 
-      end_for
-
-      switch_context || fail
-
-      if [[ ! "$chosen" ]]; then
-        chosen=${choices%% *}
       fi
 
       force=t safe_link $chosen $upstream/chosen || fail
@@ -382,9 +389,8 @@ update_upstream() {
     prep_upstream || fail
     update_upstream_choose || fail
 
-    if [[ ! "$chosen" ]]; then
-      log_fatal "chosen was not set."
-      fail1
+    if [[ ! "$needs_update" ]]; then
+      get_needs_update $chosen || fail
     fi
 
     if [[ $needs_update == t ]]; then
