@@ -1,4 +1,4 @@
-ARG ALPINE_IMAGE=alpine:v3.18
+ARG ALPINE_IMAGE=alpine:v3.20
 
 FROM $ALPINE_IMAGE
 
@@ -105,7 +105,7 @@ RUN --mount=type=cache,target=/var/cache/apk \
     yq \
     zlib-doc \
     $end_of_packages
-  
+
 ENV HOME /home
 ENV PAGER less
 ENV SIMPLETON_BASE /repo
