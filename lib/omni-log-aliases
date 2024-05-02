@@ -46,15 +46,48 @@ debug_id_inc() {
   (( no_trace_depth-- ))
 }
 
+trace_time_summarize() {
+  eval "exec $trace_time_fd>&-"
+  trace_time_fd=
+  echo "$hbar_equals"
+  echo "trace_time summary by function instance sorted by name:$NL"
+  sort -k2 $trace_time_log
+
+  echo "$hbar_equals"
+  echo "trace_time summary by function instance sorted by time:$NL"
+  sort -n $trace_time_log
+}
+
 setup_log_block_aliases() {
+
+  : ${trace_time:=f}
+
+  alias trace_time_open='
+    if [[ $trace_time == t ]]; then
+      if [[ ! ${trace_time_fd:-} ]]; then
+        : ${trace_time_log:=/tmp/trace_time.log}
+        exec {trace_time_fd}<>$trace_time_log
+      fi
+      trace_time_start=${EPOCHREALTIME/./}
+    fi
+  '
+
+  alias trace_time_close='
+    if [[ $trace_time == t && "${trace_time_fd:-}" ]]; then
+      local trace_time_stop=${EPOCHREALTIME/./} d
+      (( d = trace_time_stop - trace_time_start ))
+      echo "$d$TAB$FUNCNAME${TAB}${TAB}debug_id=$debug_id_current" >&$trace_time_fd
+    fi
+  '
 
   alias begin_function_hi='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=2
+    local return_value=0 break_out=f function_level=2 trace_time_start
     write_to_log_and_save 
     (( log_depth_current++ ))
     log_vars= log_show_vars=
     warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=${FUNCNAME[0]}" )
+    trace_time_open
     debug_id_inc
     while true; do
     (( no_trace_depth-- ))
@@ -62,8 +95,9 @@ setup_log_block_aliases() {
 
   alias begin_function='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=1
+    local return_value=0 break_out=f function_level=1 trace_time_start
     warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=${FUNCNAME[0]}" )
+    trace_time_open
     debug_id_inc
     while true; do
     (( no_trace_depth-- ))
@@ -89,9 +123,12 @@ setup_log_block_aliases() {
   alias handle_return='
     (( no_trace_depth++ ))
     case $function_level in
-      2)
-        load_log_vars_and_write_to_log
-        (( log_depth_current-- ))
+      1|2)
+        trace_time_close
+        if [[ $function_level == 2 ]]; then
+          load_log_vars_and_write_to_log
+          (( log_depth_current-- ))
+        fi
       ;;
       0)
         if (( no_trace_depth-- <= 0 )); then 
