@@ -95,6 +95,24 @@ rln() {
   ln -s $to $from || return 1
 }
 
+# prefix move
+# usage: pmv {from} {to_prefix}
+# example:
+#   pmv 1-some-file 2
+# would be equivalent to:
+#   mv 1-some-file 2-some-file
+pmv() {
+  local from=$1 to=$2 postfix to_size
+  if [[ ! -e $from ]]; then
+    echo "Source doesn't exist: $from" >&2
+    return 1
+  fi
+  to_size=${#to}
+  postfix=${from:$to_size}
+  to=$to$postfix
+  mv "$from" "$to"
+}
+
 alias b=back
 alias bb='back; back;'
 alias bbb='back; back; back;'
