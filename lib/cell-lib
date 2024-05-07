@@ -423,7 +423,7 @@ load_branch_dims() {
         if [[ -f $member_var_path ]]; then
           m=$(<$member_var_path) || fail
         fi
-        branch_members=( $m ${branch_members[*]} )
+        branch_members=( "$m" "${branch_members[@]}" )
 
       fi
       c=${c%/*}
@@ -470,8 +470,7 @@ make_or_load_context_dims() {
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
       dim=${branch_dims[$i]}
       member=${branch_members[$i]}
-      # should not need this because members should already be quoted as needed
-      #shell_quote_var member
+      quotes=single shell_quote_var member
       members_string+="$member "
       assignment="d_$dim=$member"
       write_or_load var "$assignment" || fail
@@ -558,7 +557,7 @@ make_context_expand_members_unknown() {
       problem=\"'all' member not available for this dim: $dim\"
     ;;
     *)
-      values=( \$value )
+      values=( \"\$value\" )
     ;;
   esac
 }"
@@ -1023,8 +1022,8 @@ switch_context() {
       for dim in ${trunk_dims[*]} ${sub_dims[*]} ${props[*]}; do
         get_plural $dim
         dim_plural=$plural
-        local ddim=d_$dim ddims=d_$dim_plural
-        localize_dims+=" $ddim=\${$ddim:-\${$dim:-}} $ddims=\${$ddims:-\${$dim_plural:-\${$ddim:-\${$dim:-}}}}"
+        local ddim=d_$dim ddims=d_$dim_plural pdim=p_$dim pdims=p_$dim_plural
+        localize_dims+=" $ddim=\${$ddim:-\${$pdim:-\${$dim:-}}} $ddims=\${$ddims:-\${$pdims:-\${$dim_plural:-\${$ddim:-\${$pdim:-\${$dim:-}}}}}}"
       done
 
       if [[ "$localize_dims" == 'local -x' ]]; then
@@ -1342,21 +1341,21 @@ expand_values() {
       fail1
     fi
 
-    eval "values=\${d_$dim:-\${$dim:-}}"
+    eval "values=\${d_$dim:-\${p_$dim:-\${$dim:-}}}"
     local check_single=t
 
     if [[ ! "$values" ]]; then
       local plural
       get_plural $dim
       local dims=$plural 
-      eval "values=\${d_$dims:-\${$dims:-}}"
+      eval "values=\${d_$dims:-\${p_$dims:-\${$dims:-}}}"
       check_single=f
     elif [[ ! "$values" =~ ^[a-zA-Z0-9_]+$ ]]; then
       quotes=single shell_quote_var values
     fi
 
     local new_values=()
-    eval 'values=( $values )' || fail
+    eval "values=( $values )" || fail
 
     expand_values_check_if_too_many || fail
 
@@ -2955,36 +2954,48 @@ update_replay_hash() {
   pipe_replay_hash=$(echo -n "$command" | sha1sum | awk '{print $1}')
 }
 
-start_background_process() {
-  local command="$*" secret=${secret:-}
+# This can be used directly if a background process is already running
+prep_background_communication() {
+  local command=$command
   begin_function
-
-    local masked_command=$command
-    if [[ "$secret" ]]; then
-      masked_command="${masked_command//$secret/****}"
-    fi
-
     pipe_replay=${pipe_replay:-${replay:-f}}
     # pipe_replay may be: replaying recording disabled
+
     if [[ $pipe_replay == t ]]; then
       pipe_replay_state=replaying
     else
       pipe_replay_state=${pipe_replay_state:-recording}
     fi
     pipe_replay_hash=none
+
     case $pipe_replay_state in
-      recording|replaying)
+      recording)
         update_replay_hash "$command" || fail
-      ;;&
+      ;;
       replaying)
+        update_replay_hash "$command" || fail
         log_verbose "Replaying pre-recorded $masked_command responses"
-      ;;&
-      recording|disabled)
-        log_and_run "$command" || fail
+      ;;
+      disabled)
+        :
       ;;
       *)
         log_fatal "Unknown pipe_replay_state: $pipe_replay_state"
         fail1
+      ;;
+    esac
+
+  end_function
+  handle_return
+}
+
+start_background_process() {
+  local command="$*" secret=${secret:-}
+  begin_function
+    prep_background_communication || fail
+    case $pipe_replay_state in
+      recording|disabled)
+        log_and_run "$command" || fail
       ;;
     esac
   end_function
