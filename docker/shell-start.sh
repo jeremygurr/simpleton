@@ -401,17 +401,17 @@ cd_to_seed() {
   return 0
 }
 
-cd_to_plant() {
-  local plant=/work${PWD#/seed}
+cd_to_work() {
+  local work=/work${PWD#/seed}
 
-  while [[ ! -d $plant && ${#plant} -gt 5 ]]; do
-    plant=${plant%/*}
+  while [[ ! -d $work && ${#work} -gt 5 ]]; do
+    work=${work%/*}
   done
 
-  if [[ -d $plant ]]; then
-    cd $plant || return 1
+  if [[ -d $work ]]; then
+    cd $work || return 1
   else
-    echo "Failed to find plant." >&2
+    echo "Failed to find work." >&2
     return 1
   fi
    
@@ -430,12 +430,12 @@ seed() {
   cd_to_seed
 }
 
-plant() {
-  cd_to_plant
+work() {
+  cd_to_work
 }
 
-work() {
-  cd_to_plant
+plant() {
+  cd_to_work
 }
 
 unset parse_git_branch
@@ -472,7 +472,7 @@ get_cell_location_string() {
   local p= close=f
 
   if [[ $PWD == /work/* ]]; then
-    p+="[plant"
+    p+="[work"
     close=t
   elif [[ $PWD == /seed/* ]]; then
     p+="[seed"
