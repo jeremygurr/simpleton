@@ -2896,34 +2896,32 @@ cell_lock() {
     write_lock=${write_lock:-t} \
     timeout=$timeout \
     lock_fd \
-    lock_type=read
-  local lock_path
+    lock_type=read \
+    lock_path
 
-  if [[ -e $cell_path/.cyto ]]; then
-    lock_path=$cell_path/.cyto/context
-  else
-    log_fatal "Invalid lock path: $cell_path"
-    return 1
-  fi
-
-  if [[ $write_lock == f && -f $cell_path/.cyto/require-write-lock ]]; then
-    write_lock=t
-  fi
-
-  if [[ $write_lock == t ]]; then
-    lock_type=write
-  fi
-
-  local log_show_vars="lock_type timeout ^lock_path"
+  local log_show_vars="timeout ^cell_path"
   begin_function_hi
+
+    if [[ -e $cell_path/.cyto ]]; then
+      lock_path=$cell_path/.cyto/context
+    else
+      log_fatal "Invalid lock path: $cell_path"
+      fail1
+    fi
+
+    if [[ $write_lock == t ]]; then
+      lock_type=write
+    fi
+
     if [[ -f $lock_path ]]; then
       if [[ $write_lock == t ]]; then
-        fd_write_lock || return 1
+        fd_write_lock || fail
       else
-        fd_read_lock || return 1
+        fd_read_lock || fail
       fi
       cell_locks+=( $lock_fd )
     fi
+
   end_function
   handle_return
 
@@ -2958,16 +2956,18 @@ update_replay_hash() {
 prep_background_communication() {
   local command=$command
   begin_function
-    pipe_replay=${pipe_replay:-${replay:-f}}
-    # pipe_replay may be: replaying recording disabled
+    if [[ ! "${pipe_replay_state:-}" ]]; then
+      pipe_replay=${pipe_replay:-${replay:-f}}
+      # pipe_replay may be: replaying recording disabled
 
-    if [[ $pipe_replay == t ]]; then
-      pipe_replay_state=replaying
-    else
-      pipe_replay_state=${pipe_replay_state:-recording}
+      if [[ $pipe_replay == t ]]; then
+        pipe_replay_state=replaying
+      else
+        pipe_replay_state=${pipe_replay_state:-recording}
+      fi
     fi
-    pipe_replay_hash=none
 
+    pipe_replay_hash=none
     case $pipe_replay_state in
       recording)
         update_replay_hash "$command" || fail
