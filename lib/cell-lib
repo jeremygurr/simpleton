@@ -205,7 +205,8 @@ load_tab() {
 
   begin_function
     local full_path=$1 content name=$2 append=f
-    local target_var=$name target_var_fields=${name}_fields fields i
+    local target_var_table=${name}_table target_var_fields=${name}_fields \
+      fields i
     content=$(<$full_path)
     trim_ws content
 
@@ -214,47 +215,60 @@ load_tab() {
       append=t
     fi
 
-    local first=t
+    local row_index=0
     begin_while IFS= read -r line || [[ "$line" ]]; do
       trim_ws line
-      if [[ $first == t ]]; then
-        first=f
-        fields=( $line )
-        local column_code=()
-        begin_for (( i = 0; i < ${#fields[*]}; i++ )); doo
+      if (( row_index == 0 )); then
 
+        if [[ $append == t ]]; then
+          code="$target_var_fields+=( "
+        else
+          code="$target_var_fields=( "
+        fi
+
+        eval "fields=( $line )"
+        local column_code=() field_count=${#fields[*]}
+        begin_for (( i = 0; i < field_count; i++ )); doo
           field=${fields[$i]}
-
-          if [[ ! "$field" =~ ^[a-zA-Z0-9_]+$ ]]; then
-            log_fatal "Invalid field name ($field). They must be valid bash variable names."
-            fail1
-          fi
-
-          if [[ $append == t ]]; then
-            column_code[$i]="${name}_$field+=("
-          else
-            column_code[$i]="${name}_$field=("
-          fi
-
+          quotes=single shell_quote_var field || fail
+          code+="$field "
         end_for
-        code="${name}_fields=( ${fields[*]} )$NL"
+
+        code+=")$NL"
+
+        if [[ $append == t ]]; then
+          code+="$target_var_table+=($NL"
+        else
+          code+="$target_var_table=($NL"
+        fi
+
       else
-        local value
+
         eval "local line_array=( $line )"
-        begin_for (( i = 0; i < ${#fields[*]}; i++ )); doo
-          field=${fields[$i]}
+        local value line_cell_count=${#line_array[*]}
+
+        if (( line_cell_count != field_count )); then
+          log_fatal "Invalid data in table $full_path row $row_index. Number of cells in row doesn't match number of fields."
+          fail1
+        fi
+
+        code+="  "
+        begin_for (( i = 0; i < ${#line_array[*]}; i++ )); doo
           value=${line_array[$i]}
           quotes=single shell_quote_var value || fail
-          column_code[$i]+=" $value"
+          code+="$value "
         end_for
+        code=${code% }
+        code+="$NL"
+
       fi
+       
+      (( row_index++ )) 
+
     done < <(echo -n "$content")
     maybe_break
 
-    local cc
-    begin_for cc in "${column_code[@]}"; doo
-      code+="$cc )$NL"
-    end_for
+    code+=")$NL"
 
   end_function
   handle_return
@@ -2126,6 +2140,8 @@ plant_seed_internal() {
               log_fatal "Seed has two different dims defined, which is not allowed: $dim_found and $new_dim in $from"
               fail1
             fi
+          elif [[ -L $x ]]; then
+            cp -a $x $to/ || fail
           elif [[ -d $x ]]; then
             mkdir $target || fail
             if [[ $deep == t ]]; then
