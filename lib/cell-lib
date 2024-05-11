@@ -624,6 +624,18 @@ make_context_expand_members_known() {
   handle_return
 }
 
+make_context_expand_members_table() {
+  begin_function
+    code+="
+    *)
+      get_members_from_table ....
+    ;;
+  esac
+}"
+  end_function
+  handle_return
+}
+
 make_context_expand_handle_aliases() {
   begin_function
     local a_line first remaining
@@ -642,7 +654,7 @@ make_context_expand_handle_aliases() {
 make_or_load_context_expand2() {
   begin_function
 
-    local members=() aliases=() has_explicit_member_list=f fun
+    local members=() aliases=() has_explicit_member_list=f fun has_table=f
 
     if [[ -v ${dim_type}_${dim}_members ]]; then
       eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
@@ -653,6 +665,8 @@ make_or_load_context_expand2() {
       fi
 
       has_explicit_member_list=t
+    elif [[ -v ${dim_type}_${dim}_members_table ]]; then
+      has_table=t
     else
       make_context_expand_find_members
     fi
@@ -674,6 +688,8 @@ ${dim_type}_${dim}_expand() {
 
     if [[ $has_explicit_member_list == f ]]; then
       make_context_expand_members_unknown || fail
+    elif [[ $has_table == t ]]; then
+      make_context_expand_members_table || fail
     else
       make_context_expand_members_known || fail
     fi
@@ -1053,6 +1069,7 @@ switch_context() {
       fi
 
       get_short_cell $cell_path
+      : ${anchor_dims:=${trunk_dims[*]}}
 
     end_function
     handle_return
@@ -1316,6 +1333,7 @@ expand_values_check_default() {
     if [[ ! "${values:-}" ]]; then
       if [[ $can_ask == t ]]; then
         choose "Enter required value: $dim=" d_$dim || fail
+        # recursive
         can_ask=f expand_values || fail
       fi
       if [[ ! "${values:-}" ]]; then
@@ -2275,6 +2293,11 @@ execute_command() {
         log_fatal "Not a cell: $cell_path"
         fail1
       }
+    fi
+
+    local anchor_dims=${anchor_dims:-}
+    if [[ $top_level_command == f ]]; then
+      anchor_dims=
     fi
 
     get_short_cell $cell_path
