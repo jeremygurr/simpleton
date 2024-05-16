@@ -624,11 +624,64 @@ make_context_expand_members_known() {
   handle_return
 }
 
+# input: 
+#   $1 = table var name
+#   $2 = target field name
+# output: values
+get_members_from_table() {
+  begin_function
+    local -n fields=${1}_fields table=${1}_table
+    local target_field=$2
+    if [[ ! -v fields || ! -v table ]]; then
+      log_fatal "Missing expected vars: ${1}_fields or ${1}_table"
+      fail1
+    fi
+    local i r f t row field value target_value \
+      field_count=${#fields[*]} table_count=${#table[*]}
+    local row_count=$((table_count/field_count)) r
+    values=()
+    begin_for (( r = 0; r < row_count; r++ )); doo
+      (( i = row * field_count ))
+      begin_for (( f = 0; f < field_count; f++ )); doo
+        field=${fields[$f]}
+        (( t = i + f ))
+        value=${table[$t]}
+        if [[ $field == $target_field ]]; then
+          target_value=$value
+        else
+          if [[ "$value" == all ]]; then
+            continue # try next field, since this one matches
+          fi
+          if [[ ! -v $dim ]]; then
+            log_fatal "Missing dim value for $dim, which is required to expand values from the given table"
+            fail1
+          fi
+          local -n expected_value=$dim
+          if [[ "$value" != "$expected_value" ]]; then
+            continue 2 # try next row, since row failed to match
+          fi
+        fi
+      end_for
+      values+=( $target_value )
+    end_for
+    if [[ ! "$values" ]]; then
+      log_fatal "No matching values found for dim $dim"
+      fail1
+    fi
+  end_function
+  handle_return
+}
+
 make_context_expand_members_table() {
   begin_function
     code+="
+    all)
+      if ! get_members_from_table ${dim_type}_${dim}_members $dim; then
+        problem=\"Invalid $dim: \$value\"
+      fi
+    ;;
     *)
-      get_members_from_table ....
+      problem=\"Invalid $dim: \$value\"
     ;;
   esac
 }"
