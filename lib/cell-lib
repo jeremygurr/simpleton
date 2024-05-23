@@ -773,6 +773,30 @@ make_or_load_context_expand() {
   handle_return
 }
 
+load_delegated_dims() {
+  begin_function
+    local up_name original_cell=$cell_path
+    if [[ "${up:-}" ]]; then
+      begin_for up_name in ${up[*]}; doo
+        local up_name2=${up_name//-/_}
+        if [[ -v up_${up_name2}_choices ]]; then
+          local choice choices_var=up_${up_name2}_choices
+          local -n choices=$choices_var
+          begin_for choice in ${choices[*]}; doo
+            local choice2=${choice//-/_}
+            local path_var=up_${up_name2}_choices_${choice2}_path
+            local -n path=$path_var
+            # recursive
+            switch_context $path || fail
+          end_for
+        fi
+      end_for
+      switch_context $original_cell || fail
+    fi
+  end_function
+  handle_return
+}
+
 make_or_load_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function_hi
@@ -805,6 +829,9 @@ make_or_load_context() {
       log_vars=dna_path log_fatal "dna not found"
       fail1
     fi
+
+    delegated_dims=()
+    load_delegated_dims $cell_path || fail
 
     make_or_load_context_dims || fail
     make_or_load_context_expand || fail
@@ -1061,6 +1088,33 @@ make_cyto_up() {
   handle_return
 }
 
+git_commit_check() {
+  begin_function
+
+    local status_file=$status_path/git-commit-when-built \
+      changed=f \
+      repo_path=$(realpath $dna_path)
+    local new_hash=$(git $repo_path rev-list HEAD --max-count=1)
+
+    if [[ ! -f $status_file ]]; then
+      changed=t
+    else
+      local old_hash=$(<$status_file)
+      if [[ "$old_hash" != "$new_hash" ]]; then
+        changed=t
+      fi
+    fi
+
+    if [[ $changed == t ]]; then
+      rm -rf $cyto_path || fail
+      mkdir -p $status_path || fail
+      echo "$new_hash" >$status_file || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
@@ -1079,6 +1133,8 @@ switch_context() {
       init_context || fail
 
       if [[ $can_create_cyto == t ]]; then
+        git_commit_check || fail
+
         if [[ ! -e $cyto_path ]]; then
           mkdir $cyto_path || fail
         fi
