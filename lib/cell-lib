@@ -1061,12 +1061,38 @@ make_cyto_up() {
   handle_return
 }
 
+load_repo_paths() {
+  declare -gA repo_paths
+  begin_function
+    local repos=$(find1 /repo -not -name '.*' -type d) || fail
+    local repo 
+    begin_for repo in $repos; doo
+      if [[ -d $repo/seed ]]; then
+        local modules=$(find1 $repo/seed -not -name '.*' -type d) || fail
+        local module
+        begin_for module in $modules; doo
+          repo_paths[$module]=$repo
+        end_for
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
 git_commit_check() {
   begin_function
 
     local status_file=$status_path/git-commit-when-built \
       changed=f \
-      repo_path=$(realpath $dna_path)
+      module_name=$(realpath $dna_path)
+    module_name=${module_name#/seed/}
+    module_name=${module_name%%/*}
+
+    if [[ ! -v repo_paths ]]; then
+      load_repo_paths || fail
+    fi
+
+    local repo_path=${repo_paths[$module_name]}
     local new_hash=$(git $repo_path rev-list HEAD --max-count=1)
 
     if [[ ! -f $status_file ]]; then
