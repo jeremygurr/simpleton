@@ -847,6 +847,7 @@ make_context() {
   context_make=t make_or_load_context 
 }
 
+# should make sure load_branch_info was run before calling this
 find_seed_path() {
   local work_path=$1 d s= i h dim dim_count
   begin_function
@@ -932,12 +933,6 @@ setup_cell_path_vars() {
     status_path=$cyto_path/status \
     tmp_path=$cyto_path/tmp \
     up_path=$cyto_path/up \
-
-    if [[ "${log_path:-}" ]]; then
-      background_log=$log_path/background
-    else
-      unset background_log
-    fi
 
     if [[ "${job_path:-}" ]]; then
       replay_path=$job_path/pipe_replay
@@ -1117,7 +1112,9 @@ switch_context() {
       init_context || fail
 
       if [[ $can_create_cyto == t ]]; then
-        git_commit_check || fail
+        if [[ $trunk_changed == t ]]; then
+          git_commit_check || fail
+        fi
 
         if [[ ! -e $cyto_path ]]; then
           mkdir $cyto_path || fail
@@ -2140,7 +2137,6 @@ execute_command_internal_setup_params() {
 
 execute_command_log_prep() {
   begin_function
-    cyto_path=$cell_path/.cyto
     if [[ ! -d $cyto_path ]]; then
       mkdir $cyto_path || fail
     fi
@@ -2170,6 +2166,8 @@ execute_command_log_prep() {
     if [[ ! -d $log_path ]]; then
       mkdir $log_path || fail
     fi
+
+    background_log=$log_path/background
 
     previous_log_pos=$omni_log_pos
     cell_open_log_file || fail
@@ -2410,6 +2408,20 @@ execute_command() {
       fail1
     fi
 
+    local anchor_dims=${anchor_dims:-} \
+      prev_trunk_cell=${trunk_cell:-} \
+      disable_log=${disable_log:-} \
+      trunk_changed \
+      $branch_local_vars \
+
+    load_branch_info || fail
+
+    if [[ "$prev_trunk_cell" != "$trunk_cell" ]]; then
+      trunk_changed=t
+    else
+      trunk_changed=f
+    fi
+
     if [[ ! -e "$cell_path" ]]; then
       plant_seed $cell_path || {
         log_fatal "Not a cell: $cell_path"
@@ -2417,18 +2429,16 @@ execute_command() {
       }
     fi
 
-    local anchor_dims=${anchor_dims:-} \
-      prev_trunk_cell=${trunk_cell:-} \
-      disable_log=${disable_log:-} \
-      $branch_local_vars \
-
-    load_branch_info || fail
-
-    case $current_command in log|edit|dim-*|up-*|plant|get)
-      disable_log=${disable_log:-t}
-    esac
-
-    : ${disable_log:=f}
+    if [[ ! "${disable_log:-}" ]]; then
+      case $current_command in 
+        log|edit|dim-*|up-*|plant|get)
+          disable_log=t
+        ;;
+        *)
+          disable_log=f
+        ;;
+      esac
+    fi
 
     local should_fork=t 
     if [[ $top_level_command == t ]]; then
