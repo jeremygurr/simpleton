@@ -427,18 +427,18 @@ plant_seed_internal() {
 # inputs: $1  work path to target folder, which may be a cell or a folder of a cell
 # outputs: seed_path work_path
 find_seed_path() {
-  local d s= i h dim dim_count
-  work_path=$1 
+  local d s i h dim dim_count
+  s=$1 
   begin_function
     seed_path=
 
-    s=/seed${work_path#/work}
+    s=/seed${s#/work}
 
     begin_while [[ ! -d $s && $s == *:* ]]; doo
       s=${s%/*}
     end_while
 
-    if [[ $ignore_nonexistent == t ]]; then
+    if [[ ${ignore_nonexistent:-f} == t ]]; then
       begin_while [[ ! -d $s && $s == */*/*/* ]]; doo
         s=${s%/*}
       end_while
@@ -448,6 +448,8 @@ find_seed_path() {
       log_fatal "Couldn't find seed for $work_path"
       fail1
     fi
+
+    work_path=/work${s#/seed}
 
     # go through each seed folder and find matching dim
     local found_branch=t
@@ -493,38 +495,46 @@ find_seed_path() {
 
 # inputs: $1  work path to the cell
 plant_seed() {
-  local seed_path cell_path work_path to=$1 \
+  local seed_path to=$1 \
     deep=${deep:-t} plant_branches=${plant_branches:-f} \
     ignore_nonexistent=${ignore_nonexistent:-f}
   begin_function
 
-    # TODO
-    #   to needs to be adjusted if its inside of a cell
-    #   alse need to return new cell path
     find_seed_path $to || fail
     if [[ ! "$seed_path" ]]; then
-      log_fatal "No seed is associated with this path: $cell_path"
+      log_fatal "No seed is associated with this path: $to"
       fail1
     fi
 
-    plant_seed_internal $seed_path $cell_path || fail
+    plant_seed_internal $seed_path $work_path || fail
 
   end_function
   handle_return
 }
 
 make_or_load_dna_contents_update_cell() {
-  local file=$1
+  local file=$1 original_cell_path=$cell_path cell_path work_path
   begin_function
+
     local bottom_cell cell_path parent=${file%/*}
-    if [[ ! "$bottom_cell" ]]; then
+    if [[ ! -d "$parent" ]]; then
       plant_seed $parent || fail
       cell_path=$work_path
     else
       get_bottom_cell $parent
+      if [[ ! "$bottom_cell" ]]; then
+        log_fatal "Could not find cell for $file"
+        fail1
+      fi
       cell_path=$bottom_cell
     fi
-    # TODO update cell if target file doesn't yet exist
+
+    execute_command "$cell_path" update || fail
+
+    if [[ ! -f "$file" ]]; then
+      log_fatal "Cell $cell_path did not produce file at $file as required by dna of $original_cell_path"
+    fi
+
   end_function
   handle_return
 }
