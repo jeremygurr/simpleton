@@ -525,54 +525,28 @@ out_exec() {
 
 # moves a file or folder and updates all links pointing to it
 relink() {
-  local from=$(realpath $1) to=$(realpath $2) start_at=${start_at:-$PWD}
-
-  if [[ ! -e "$from" ]]; then
-    echo "ERROR: $from doesn't exist" >&2
-    return 1
-  fi
-
-  if [[ -e "$to" ]]; then
-    echo "ERROR: $to already exists" >&2
-    return 1
-  fi
-
-  local planted_to=${to#/seed}
-  planted_to=/work${planted_to#/work}
-  local planted_from=${from#/seed}
-  planted_from=/seed${planted_to#/work}
+  local from=$1 to=$2 start_at=${start_at:-$PWD}
 
   local link target 
-  local links=( $(find "$start_at" -mindepth 1 -type l) ) || return 1
+  local links=( $(find "$start_at" -mindepth 1 -type l 2>/dev/null) ) || return 1
   for link in "${links[@]}"; do
-    if [[ ! -e $link ]]; then
-      echo "Broken link: $link -> $(readlink $link) : Ignoring" >&2
-      continue
-    fi
-    target=$(realpath $link)
+    target=$(readlink $link)
     if [[ "$target" == "$from" \
        || "$target" == "$from"/* \
-       || "$target" == "$planted_from" \
-       || "$target" == "$planted_from"/* \
        ]]; then
 
       local sub_path=
       if [[ "$target" == "$from"/* ]]; then
         sub_path=${target#$from}
-      elif [[ "$target" == "$planted_from"/* ]]; then
-        sub_path=${target#$planted_from}
       fi
 
       out_exec rm "$link" || return 1
-      out_exec ln -s "$planted_to$sub_path" "$link" || return 1
+      out_exec ln -s "$to$sub_path" "$link" || return 1
     fi
   done
 
-  out_exec mv "$from" "$to" || return 1
-  out_exec ln -s "$to" "$from" || return 1
-  if [[ -e "$planted_from" && "$from" != "$planted_from" ]]; then
-    out_exec mv "$planted_from" "$planted_to" || return 1
-    out_exec ln -s "$planted_to" "$planted_from" || return 1
+  if [[ -e "$from" && ! -e "$to" ]]; then
+    out_exec mv "$from" "$to" || return 1
   fi
 
   return 0

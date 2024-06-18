@@ -512,6 +512,67 @@ plant_seed() {
   handle_return
 }
 
+execute_command() {
+  local cell_path=$(realpath $1) current_command=$2 \
+    log_show_vars='^cell_path current_command' 
+  begin_function
+
+    if [[ $cell_path != /work* ]]; then
+      log_fatal "You must run this command from within the workspace (any subfolder of /work)"
+      fail1
+    fi
+
+    local anchor_dims=${anchor_dims:-} \
+      prev_trunk_cell=${trunk_cell:-} \
+      disable_log=${disable_log:-} \
+      trunk_changed \
+      $branch_local_vars \
+
+    load_branch_info || fail
+
+    if [[ "$prev_trunk_cell" != "$trunk_cell" ]]; then
+      trunk_changed=t
+    else
+      trunk_changed=f
+    fi
+
+    if [[ ! -e "$cell_path" ]]; then
+      plant_seed $cell_path || {
+        log_fatal "Not a cell: $cell_path"
+        fail1
+      }
+    fi
+
+    if [[ ! "${disable_log:-}" ]]; then
+      case $current_command in 
+        log|edit|dim-*|up-*|plant|get)
+          disable_log=t
+        ;;
+        *)
+          disable_log=f
+        ;;
+      esac
+    fi
+
+    local should_fork=t 
+    if [[ $top_level_command == t ]]; then
+      should_fork=f
+    elif [[ "$prev_trunk_cell" == "$trunk_cell" ]]; then
+      should_fork=f
+    fi
+
+    if [[ $should_fork == t ]]; then
+      fork execute_command_internal || fail_later
+    else
+      execute_command_internal || fail_later
+    fi
+
+    cell_close_log_file || fail
+
+  end_function
+  handle_return
+}
+
 make_or_load_dna_contents_update_cell() {
   local file=$1 original_cell_path=$cell_path cell_path work_path
   begin_function
@@ -590,7 +651,7 @@ make_or_load_dna_contents() {
       else # is a file
 
         if [[ -L $item && ! -e $item ]]; then
-          local unlinked_item=$((realpath -m $item)) || fail
+          local unlinked_item=$(realpath -m $item) || fail
           if [[ $unlinked_item == /work/* ]]; then
             make_or_load_dna_contents_update_cell $unlinked_item || fail
           else
@@ -2456,67 +2517,6 @@ plant_member() {
       mv $new_path $member_path || fail
 
     fi
-  end_function
-  handle_return
-}
-
-execute_command() {
-  local cell_path=$(realpath $1) current_command=$2 \
-    log_show_vars='^cell_path current_command' 
-  begin_function
-
-    if [[ $cell_path != /work* ]]; then
-      log_fatal "You must run this command from within the workspace (any subfolder of /work)"
-      fail1
-    fi
-
-    local anchor_dims=${anchor_dims:-} \
-      prev_trunk_cell=${trunk_cell:-} \
-      disable_log=${disable_log:-} \
-      trunk_changed \
-      $branch_local_vars \
-
-    load_branch_info || fail
-
-    if [[ "$prev_trunk_cell" != "$trunk_cell" ]]; then
-      trunk_changed=t
-    else
-      trunk_changed=f
-    fi
-
-    if [[ ! -e "$cell_path" ]]; then
-      plant_seed $cell_path || {
-        log_fatal "Not a cell: $cell_path"
-        fail1
-      }
-    fi
-
-    if [[ ! "${disable_log:-}" ]]; then
-      case $current_command in 
-        log|edit|dim-*|up-*|plant|get)
-          disable_log=t
-        ;;
-        *)
-          disable_log=f
-        ;;
-      esac
-    fi
-
-    local should_fork=t 
-    if [[ $top_level_command == t ]]; then
-      should_fork=f
-    elif [[ "$prev_trunk_cell" == "$trunk_cell" ]]; then
-      should_fork=f
-    fi
-
-    if [[ $should_fork == t ]]; then
-      fork execute_command_internal || fail_later
-    else
-      execute_command_internal || fail_later
-    fi
-
-    cell_close_log_file || fail
-
   end_function
   handle_return
 }
