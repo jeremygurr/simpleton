@@ -511,6 +511,210 @@ plant_seed() {
   handle_return
 }
 
+switch_context() {
+
+  if [[ "${last_context_loaded:-}" != $cell_path ]]; then
+
+    local log_vars=last_context_loaded log_show_vars=^cell_path
+    begin_function_hi
+
+      if [[ ! -e $cell_path/.dna ]]; then
+        log_fatal "$cell_path is not a cell"
+        fail1
+      fi
+
+      last_context_loaded=$cell_path
+
+      setup_cell_path_vars $cell_path || fail
+      init_context || fail
+
+      if [[ $can_create_cyto == t ]]; then
+        if [[ $trunk_changed == t && -e $cyto_path ]]; then
+          git_commit_check || fail
+        fi
+
+        if [[ ! -e $cyto_path ]]; then
+          mkdir $cyto_path || fail
+        fi
+
+        if [[ ! -d $status_path ]]; then
+          mkdir $status_path || fail
+        fi
+
+        if [[ ! -e $context_path ]]; then
+          make_context || fail
+        fi
+
+        source $context_path || fail
+
+        if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
+          make_cyto_up || fail
+        fi
+
+      else # $can_create_cyto == f
+        load_context || fail
+      fi
+
+      setup_dep_defaults || fail
+
+      if [[ ! "${out_path:-}" ]]; then
+        out_path=$cell_path
+      elif [[ "$out_path" != /* ]]; then
+        out_path=$cell_path/$out_path
+      fi
+
+      localize_dims='local -x'
+      for dim in ${trunk_dims[*]} ${sub_dims[*]} ${props[*]}; do
+        get_plural $dim
+        dim_plural=$plural
+        local ddim=d_$dim ddims=d_$dim_plural pdim=p_$dim pdims=p_$dim_plural
+        localize_dims+=" $ddim=\${$ddim:-\${$pdim:-\${$dim:-}}} $ddims=\${$ddims:-\${$pdims:-\${$dim_plural:-\${$ddim:-\${$pdim:-\${$dim:-}}}}}}"
+      done
+
+      if [[ "$localize_dims" == 'local -x' ]]; then
+        localize_dims=
+      fi
+
+      if [[ ! "${anchor_dims:-}" ]]; then
+        anchor_dims=( "${leaf_dims[@]}" )
+      else
+        local anchor
+        begin_for anchor in "${anchor_dims[@]}"; doo
+          if [[ ! " ${leaf_dims[*]} " == *" $anchor "* ]]; then
+            log_fatal "Internal error: dim from anchor_dims not found in leaf_dims: $anchor"
+            fail1
+          fi
+        end_for
+      fi
+
+    end_function
+    handle_return
+
+  else
+    log_debug "Context already loaded"
+  fi
+
+  return 0
+}
+
+execute_command_internal_prep() {
+  begin_function
+    can_create_cyto=t
+
+    case $current_command in
+      edit)
+        if [[ ! "$cell_path" ]]; then
+          log_fatal "You must execute this command from within a cell"
+          fail1
+        fi
+        dna_path=$cell_path/.dna
+        key_path=$dna_path/key
+        status_path=
+        if [[ ! -e $key_path ]]; then
+          mkdir $key_path || fail
+        fi
+      ;;
+      log|dim-*|plant|up-*)
+        branch_dims=()
+        command_path=$path_to_commands/$current_command
+      ;;
+      *)
+
+        switch_context || {
+          log_fatal "Context failed to load for $cell_path"
+          fail1
+        }
+
+        if [[ "${leaf_dims:-}" ]]; then
+          local dim=$leaf_dims
+          expand_values || fail
+          get_plural $dim || fail
+          eval "unset $dim" || fail
+          eval "unset d_$dim" || fail
+          eval "d_$plural=\${values[*]}" || fail
+        else
+          local prop plural
+          begin_for prop in ${props[*]}; doo
+            local dim=$prop
+            dim_type=props \
+            expand_values || fail
+            get_plural $dim || fail
+            eval "unset $dim" || fail
+            if (( ${#values[*]} == 1 )); then
+              eval "d_$dim=\${values[*]}" || fail
+            else
+              eval "unset d_$dim" || fail
+            fi
+            eval "d_$plural=\${values[*]}" || fail
+          end_for
+        fi
+
+      ;;
+    esac
+  end_function
+  handle_return
+}
+
+execute_command_internal() {
+
+  local log_vars='cell_path' \
+    log_show_vars='short_cell current_command' 
+  begin_function_hi
+
+    local logging_to_file=${logging_to_file:-} \
+      omni_log_job_id=${omni_log_job_id:-} \
+      omni_log_fork_id=${omni_log_fork_id:-} \
+      previous_fork_id=${previous_fork_id:-} \
+      job_path log_path current_job_path \
+
+    if [[ "${localize_dims:-}" ]]; then
+      eval "$localize_dims" || fail
+    fi
+
+    local coordinates=() 
+    execute_command_internal_prep || fail
+
+    # This is in this function twice, because it changes after switch_context
+    if [[ "${localize_dims:-}" ]]; then
+      eval "$localize_dims" || fail
+    fi
+
+    if [[ " ${command_history:-}" == *" $current_command $short_cell "* ]]; then
+      log_fatal "Circular dependency found: arrived at $current_command $short_cell a second time."
+      fail1
+    fi
+
+    command_history+="$current_command $short_cell "
+
+    if [[ $disable_log == t ]]; then
+      log_debug "Logging disabled."
+    else
+      execute_command_log_prep || fail
+    fi
+
+    # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
+    #   log_info "Executing cell command: $short_cell $current_command"
+    # else
+      log_verbose "Executing cell command: $short_cell $current_command"
+    # fi
+
+    if [[ -f $command_path.info ]]; then
+      execute_command_internal_setup_params || fail
+    fi
+
+    source $command_path || fail
+    local command_function=${current_command//-/_}_command
+    if function_exists $command_function; then
+      $command_function || fail
+    else
+      log_fatal "Missing command function $command_function which should be in $command_path"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
 execute_command() {
   local cell_path=$(realpath $1) current_command=$2 \
     log_show_vars='^cell_path current_command' 
@@ -1294,80 +1498,6 @@ git_commit_check() {
 
   end_function
   handle_return
-}
-
-switch_context() {
-
-  if [[ "${last_context_loaded:-}" != $cell_path ]]; then
-
-    local log_vars=last_context_loaded log_show_vars=^cell_path
-    begin_function_hi
-
-      if [[ ! -e $cell_path/.dna ]]; then
-        log_fatal "$cell_path is not a cell"
-        fail1
-      fi
-
-      last_context_loaded=$cell_path
-
-      setup_cell_path_vars $cell_path || fail
-      init_context || fail
-
-      if [[ $can_create_cyto == t ]]; then
-        if [[ $trunk_changed == t && -e $cyto_path ]]; then
-          git_commit_check || fail
-        fi
-
-        if [[ ! -e $cyto_path ]]; then
-          mkdir $cyto_path || fail
-        fi
-
-        if [[ ! -d $status_path ]]; then
-          mkdir $status_path || fail
-        fi
-
-        if [[ ! -e $context_path ]]; then
-          make_context || fail
-        fi
-
-        source $context_path || fail
-
-        if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-          make_cyto_up || fail
-        fi
-
-      else # $can_create_cyto == f
-        load_context || fail
-      fi
-
-      setup_dep_defaults || fail
-
-      if [[ ! "${out_path:-}" ]]; then
-        out_path=$cell_path
-      elif [[ "$out_path" != /* ]]; then
-        out_path=$cell_path/$out_path
-      fi
-
-      localize_dims='local -x'
-      for dim in ${trunk_dims[*]} ${sub_dims[*]} ${props[*]}; do
-        get_plural $dim
-        dim_plural=$plural
-        local ddim=d_$dim ddims=d_$dim_plural pdim=p_$dim pdims=p_$dim_plural
-        localize_dims+=" $ddim=\${$ddim:-\${$pdim:-\${$dim:-}}} $ddims=\${$ddims:-\${$pdims:-\${$dim_plural:-\${$ddim:-\${$pdim:-\${$dim:-}}}}}}"
-      done
-
-      if [[ "$localize_dims" == 'local -x' ]]; then
-        localize_dims=
-      fi
-
-    end_function
-    handle_return
-
-  else
-    log_debug "Context already loaded"
-  fi
-
-  return 0
 }
 
 setup_dep_defaults() {
@@ -2208,64 +2338,6 @@ get_job_id() {
   handle_return
 }
 
-execute_command_internal_prep() {
-  begin_function
-    can_create_cyto=t
-
-    case $current_command in
-      edit)
-        if [[ ! "$cell_path" ]]; then
-          log_fatal "You must execute this command from within a cell"
-          fail1
-        fi
-        dna_path=$cell_path/.dna
-        key_path=$dna_path/key
-        status_path=
-        if [[ ! -e $key_path ]]; then
-          mkdir $key_path || fail
-        fi
-      ;;
-      log|dim-*|plant|up-*)
-        branch_dims=()
-        command_path=$path_to_commands/$current_command
-      ;;
-      *)
-
-        switch_context || {
-          log_fatal "Context failed to load for $cell_path"
-          fail1
-        }
-
-        if [[ "${leaf_dims:-}" ]]; then
-          local dim=$leaf_dims
-          expand_values || fail
-          get_plural $dim || fail
-          eval "unset $dim" || fail
-          eval "unset d_$dim" || fail
-          eval "d_$plural=\${values[*]}" || fail
-        else
-          local prop plural
-          begin_for prop in ${props[*]}; doo
-            local dim=$prop
-            dim_type=props \
-            expand_values || fail
-            get_plural $dim || fail
-            eval "unset $dim" || fail
-            if (( ${#values[*]} == 1 )); then
-              eval "d_$dim=\${values[*]}" || fail
-            else
-              eval "unset d_$dim" || fail
-            fi
-            eval "d_$plural=\${values[*]}" || fail
-          end_for
-        fi
-
-      ;;
-    esac
-  end_function
-  handle_return
-}
-
 show_parameter_help() {
   local name=$1
   begin_function
@@ -2375,7 +2447,7 @@ execute_command_log_prep() {
     cell_open_log_file || fail
     (( previous_log_pos++ ))
 
-    local running_job_path=$job_path/running
+    running_job_path=$job_path/running
 
     local link_target
     begin_for link_target in $current_command-attempt attempt; doo
@@ -2384,66 +2456,6 @@ execute_command_log_prep() {
       fi
       safe_link $current_job_path $job_path/last-$link_target || fail
     end_for
-
-  end_function
-  handle_return
-}
-
-execute_command_internal() {
-
-  local log_vars='cell_path' \
-    log_show_vars='short_cell current_command' 
-  begin_function_hi
-
-    local logging_to_file=${logging_to_file:-} \
-      omni_log_job_id=${omni_log_job_id:-} \
-      omni_log_fork_id=${omni_log_fork_id:-} \
-      previous_fork_id=${previous_fork_id:-} \
-      job_path log_path current_job_path \
-
-    if [[ "${localize_dims:-}" ]]; then
-      eval "$localize_dims" || fail
-    fi
-
-    local coordinates=() 
-    execute_command_internal_prep || fail
-
-    # This is in this function twice, because it changes after switch_context
-    if [[ "${localize_dims:-}" ]]; then
-      eval "$localize_dims" || fail
-    fi
-
-    if [[ " ${command_history:-}" == *" $current_command $short_cell "* ]]; then
-      log_fatal "Circular dependency found: arrived at $current_command $short_cell a second time."
-      fail1
-    fi
-
-    command_history+="$current_command $short_cell "
-
-    if [[ $disable_log == t ]]; then
-      log_debug "Logging disabled."
-    else
-      execute_command_log_prep || fail
-    fi
-
-    # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
-    #   log_info "Executing cell command: $short_cell $current_command"
-    # else
-      log_verbose "Executing cell command: $short_cell $current_command"
-    # fi
-
-    if [[ -f $command_path.info ]]; then
-      execute_command_internal_setup_params || fail
-    fi
-
-    source $command_path || fail
-    local command_function=${current_command//-/_}_command
-    if function_exists $command_function; then
-      $command_function || fail
-    else
-      log_fatal "Missing command function $command_function which should be in $command_path"
-      fail1
-    fi
 
   end_function
   handle_return
