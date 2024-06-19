@@ -427,8 +427,7 @@ plant_seed_internal() {
 # inputs: $1  work path to target folder, which may be a cell or a folder of a cell
 # outputs: seed_path work_path
 find_seed_path() {
-  local d s i h dim dim_count
-  s=$1 
+  local d s=$1 i h dim dim_count
   begin_function
     seed_path=
 
@@ -445,7 +444,7 @@ find_seed_path() {
     fi
 
     if [[ ! -d $s ]]; then
-      log_fatal "Couldn't find seed for $work_path"
+      log_fatal "Couldn't find seed for $s"
       fail1
     fi
 
@@ -555,7 +554,7 @@ execute_command() {
     fi
 
     local should_fork=t 
-    if [[ $top_level_command == t ]]; then
+    if [[ ${top_level_command:=t} == t ]]; then
       should_fork=f
     elif [[ "$prev_trunk_cell" == "$trunk_cell" ]]; then
       should_fork=f
@@ -579,7 +578,7 @@ make_or_load_dna_contents_update_cell() {
 
     local bottom_cell cell_path parent=${file%/*}
     if [[ ! -d "$parent" ]]; then
-      plant_seed $parent || fail
+      ignore_nonexistent=t plant_seed $parent || fail
       cell_path=$work_path
     else
       get_bottom_cell $parent
@@ -590,10 +589,13 @@ make_or_load_dna_contents_update_cell() {
       cell_path=$bottom_cell
     fi
 
+    needs_update= \
+    top_level_command=f \
     execute_command "$cell_path" update || fail
 
     if [[ ! -f "$file" ]]; then
       log_fatal "Cell $cell_path did not produce file at $file as required by dna of $original_cell_path"
+      fail1
     fi
 
   end_function
@@ -1414,7 +1416,7 @@ get_new_fork_id() {
 }
 
 cell_open_log_file() {
-  if [[ "${omni_log_job_id:-}" && $disable_log == f ]]; then
+  if [[ "${omni_log_job_id:-0}" != 0 && $disable_log == f ]]; then
     cell_log_file_stack+=( $logging_to_file )
     previous_fork_id=$omni_log_fork_id
     get_new_fork_id || return 1
@@ -2345,7 +2347,7 @@ execute_command_log_prep() {
       mkdir $job_path || fail
     fi
 
-    if [[ ! "${omni_log_job_id:-}" ]]; then
+    if [[ "${omni_log_job_id:-0}" == 0 ]]; then
       job_start_time=${EPOCHREALTIME//./}
       command_to_log="${original_cmd#* }" \
         get_job_id || fail
