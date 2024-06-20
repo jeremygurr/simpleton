@@ -655,6 +655,58 @@ execute_command_internal_prep() {
   handle_return
 }
 
+execute_command_log_prep() {
+  begin_function
+    if [[ ! -d $cyto_path ]]; then
+      mkdir $cyto_path || fail
+    fi
+
+    if [[ ! -d $job_path ]]; then
+      mkdir $job_path || fail
+    fi
+
+    if [[ "${omni_log_job_id:-0}" == 0 ]]; then
+      job_start_time=${EPOCHREALTIME//./}
+      command_to_log="${original_cmd#* }" \
+        get_job_id || fail
+    fi
+
+    current_job_path=$job_path/$omni_log_job_id
+    if [[ ! -d $current_job_path ]]; then
+      mkdir $current_job_path || fail
+    fi
+
+    # only set this for the first cell in the job, all other cells should 
+    #   use the same fork_id log so that they all have unique ids across the job
+    if [[ ! "${fork_id_log:-}" ]]; then
+      fork_id_log=$current_job_path/fork-id-log
+    fi
+
+    log_path=$current_job_path/log
+    if [[ ! -d $log_path ]]; then
+      mkdir $log_path || fail
+    fi
+
+    background_log=$log_path/background
+
+    previous_log_pos=$omni_log_pos
+    cell_open_log_file || fail
+    (( previous_log_pos++ ))
+
+    running_job_path=$job_path/running
+
+    local link_target
+    begin_for link_target in $current_command-attempt attempt; doo
+      if [[ -e "$job_path/last-$link_target" ]]; then
+        mv $job_path/last-$link_target $job_path/prev-$link_target || fail
+      fi
+      safe_link $current_job_path $job_path/last-$link_target || fail
+    end_for
+
+  end_function
+  handle_return
+}
+
 execute_command_internal() {
 
   local log_vars='cell_path' \
@@ -1508,40 +1560,16 @@ setup_dep_defaults() {
   return 0
 }
 
-# inputs: log_id_part
+# inputs: omni_log_fork_id child_log_id
 # outputs: new_fork_id
 get_new_fork_id() {
-  # old way
-#  if [[ ! "${fork_id_log:-}" ]]; then
-#    log_fatal "Missing fork_id_log"
-#    stack_trace
-#    return 1
-#  fi
-#  timeout=5 lock_path=$fork_id_log fd_write_lock || {
-#    echo "Failed to get lock on $fork_id_log" >&2
-#    return 1
-#  }
-#  local last_id=$(tail -n1 $fork_id_log | awk '{print $1}')
-#  (( new_fork_id = last_id + 1 ))
-#  echo $new_fork_id >>$fork_id_log || return 1
-#  fd_unlock
-  : ${ancestor_fork_id:=}
-
-  if [[ "$ancestor_fork_id" ]]; then
-    new_fork_id=$ancestor_fork_id-
+  : ${child_log_id:=0}
+  (( child_log_id++ ))
+  if [[ "${omni_log_fork_id:-}" ]]; then
+    new_fork_id=$omni_log_fork_id-$child_log_id
   else
-    new_fork_id=
+    new_fork_id=$child_log_id
   fi
-
-  if [[ "$ancestor_fork_id" ]]; then
-    ancestor_fork_id+=-$log_id_part
-  else
-    ancestor_fork_id+=$log_id_part
-  fi
-
-  new_fork_id+=$log_id_part
-  log_id_part=0
-
   return 0
 }
 
@@ -2405,58 +2433,6 @@ execute_command_internal_setup_params() {
         show_parameter_help $p || fail
       end_for
     fi
-  end_function
-  handle_return
-}
-
-execute_command_log_prep() {
-  begin_function
-    if [[ ! -d $cyto_path ]]; then
-      mkdir $cyto_path || fail
-    fi
-
-    if [[ ! -d $job_path ]]; then
-      mkdir $job_path || fail
-    fi
-
-    if [[ "${omni_log_job_id:-0}" == 0 ]]; then
-      job_start_time=${EPOCHREALTIME//./}
-      command_to_log="${original_cmd#* }" \
-        get_job_id || fail
-    fi
-
-    current_job_path=$job_path/$omni_log_job_id
-    if [[ ! -d $current_job_path ]]; then
-      mkdir $current_job_path || fail
-    fi
-
-    # only set this for the first cell in the job, all other cells should 
-    #   use the same fork_id log so that they all have unique ids across the job
-    if [[ ! "${fork_id_log:-}" ]]; then
-      fork_id_log=$current_job_path/fork-id-log
-    fi
-
-    log_path=$current_job_path/log
-    if [[ ! -d $log_path ]]; then
-      mkdir $log_path || fail
-    fi
-
-    background_log=$log_path/background
-
-    previous_log_pos=$omni_log_pos
-    cell_open_log_file || fail
-    (( previous_log_pos++ ))
-
-    running_job_path=$job_path/running
-
-    local link_target
-    begin_for link_target in $current_command-attempt attempt; doo
-      if [[ -e "$job_path/last-$link_target" ]]; then
-        mv $job_path/last-$link_target $job_path/prev-$link_target || fail
-      fi
-      safe_link $current_job_path $job_path/last-$link_target || fail
-    end_for
-
   end_function
   handle_return
 }
