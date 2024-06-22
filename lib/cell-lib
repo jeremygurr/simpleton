@@ -863,11 +863,30 @@ make_or_load_dna_contents_update_cell() {
   handle_return
 }
 
+# requires dna_roots
 make_or_load_dna_contents() {
   local folder=$1 prefix=${prefix:-} pass_thru=${pass_thru:-f}
   begin_function
 
-    local items=$(find1 $folder -not -name '.*' | sort -g) || fail
+    local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
+
+    if [[ "$dna_roots" ]]; then
+      debug_start
+      local dna_folder=${dna_folder:-}
+      if [[ $folder == */.dna ]]; then
+        dna_folder=$folder
+      fi
+      local child_path=${folder#$dna_folder/} root_path
+      local dna_root
+      begin_for dna_root in $dna_roots; doo
+        root_path=${dna_root##*/dna-root/}
+        if [[ "$root_path" == "$child_path" ]]; then
+          local new_items=$(find1 $dna_root -not -name '.*' -not -name 'dna-root' | sort -g) || fail
+          items+="$NL$new_items"
+        fi
+      end_for
+    fi
+
     local current_var=${prefix%_} o item_name result 
     if [[ $pass_thru == f ]]; then
       local array_content=( )
@@ -934,15 +953,6 @@ make_or_load_dna_contents() {
       write_or_load var "$array_assignment" || fail
     fi
 
-  end_function
-  handle_return
-}
-
-load_vars() {
-  begin_function
-    prefix= \
-    context_make=f \
-    make_or_load_dna_contents $1
   end_function
   handle_return
 }
@@ -1335,6 +1345,7 @@ make_or_load_context() {
     fi
 
     if [[ -d $dna_path ]]; then
+      local dna_roots=$(find1 $dna_path -name 'dna-root' | sort -g) || fail
       prefix= make_or_load_dna_contents $dna_path || fail
     elif [[ -f $dna_path ]]; then
       if [[ $context_make == t ]]; then
@@ -1845,7 +1856,7 @@ expand_values_check_default() {
         begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
           field=${fields[$column_index]}
           if [[ $field != $dim ]]; then
-            result=$value
+            
           fi
         end_for
 
