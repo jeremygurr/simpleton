@@ -1832,15 +1832,62 @@ expand_values_check_default() {
     value= ${dim_type}_${dim}_expand || fail
 
     if [[ ! "${values:-}" ]]; then
-      if [[ $can_ask == t ]]; then
+
+      if [[ -v ${dim_type}_${dim}_members_table ]]; then
+        local -n \
+          table=${dim_type}_${dim}_members_table \
+          fields=${dim_type}_${dim}_members_fields
+        local field_count=${#fields[*]} \
+          table_count=${#table[*]} \
+          maybe table_index=0 column_index \
+          found=f value= result= field everything_matches
+
+        begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+          field=${fields[$column_index]}
+          if [[ $field != $dim ]]; then
+            result=$value
+          fi
+        end_for
+
+        begin_while (( table_index < table_count )); doo
+          (( table_index += field_count ))
+          everything_matches=t
+          begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+            field=${fields[$column_index]}
+            value=${table[$((table_index + column_index))]}
+            if [[ $field == $dim ]]; then
+              result=$value
+            else
+              local -n dim2=$field
+              if [[ ! -v dim2 || "$dim2" != "$value" ]]; then
+                everything_matches=f
+                break
+              fi
+            fi
+          end_for
+          if [[ $everything_matches == t ]]; then
+            found=t
+            break
+          fi
+        end_while
+        if [[ $found == t ]]; then
+          if [[ ! "$result" ]]; then
+            log_fatal "Table for dim $dim is missing the column named $dim"
+            fail1
+          fi
+          values=$result
+        fi
+      elif [[ $can_ask == t ]]; then
         choose "Enter required value: $dim=" d_$dim || fail
         # recursive
         can_ask=f expand_values || fail
       fi
+
       if [[ ! "${values:-}" ]]; then
         log_fatal "Missing required $dim_type: $dim"
         fail1
       fi
+
     fi
 
   end_function
