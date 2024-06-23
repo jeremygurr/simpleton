@@ -876,12 +876,13 @@ make_or_load_dna_contents() {
       if [[ $folder == */.dna ]]; then
         dna_folder=$folder
       fi
-      local child_path=${folder#$dna_folder/} root_path
+      local child_path=${folder#$dna_folder} root_path
       local dna_root
       begin_for dna_root in $dna_roots; doo
-        root_path=${dna_root##*/dna-root/}
+        # TODO: not quite righty yet
+        local new_items=$(find1 $dna_root$child_path -not -name '.*' -not -name 'dna-root' | sort -g) || fail
+        root_path=${dna_root##*/dna-root}
         if [[ "$root_path" == "$child_path" ]]; then
-          local new_items=$(find1 $dna_root -not -name '.*' -not -name 'dna-root' | sort -g) || fail
           items+="$NL$new_items"
         fi
       end_for
@@ -1345,7 +1346,7 @@ make_or_load_context() {
     fi
 
     if [[ -d $dna_path ]]; then
-      local dna_roots=$(find1 $dna_path -name 'dna-root' | sort -g) || fail
+      local dna_roots=$(find -L $dna_path -name dna-root 2>/dev/null | sort -g) || fail
       prefix= make_or_load_dna_contents $dna_path || fail
     elif [[ -f $dna_path ]]; then
       if [[ $context_make == t ]]; then
@@ -1836,6 +1837,67 @@ for_each_leaf_flat() {
   handle_return
 }
 
+expand_values_check_default_table() {
+  begin_function        
+      
+    debug_start
+    local field_count=${#fields[*]} \
+      table_count=${#table[*]} \
+      maybe table_index=0 column_index \
+      found=f value= result= field everything_matches plural
+
+    local invalid=f
+    begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+      field=${fields[$column_index]}
+      if [[ $field != $dim ]]; then
+        local -n f=$field
+#        if [[ ! -v f ]]; then
+#          get_plural $field
+#          local -n f=$plural
+          if [[ ! -v f ]]; then
+            invalid=t
+            break
+          fi
+#        fi
+      fi
+    end_for
+
+    if [[ $invalid == f ]]; then
+      begin_while (( table_index < table_count )); doo
+        (( table_index += field_count ))
+        everything_matches=t
+        begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+          field=${fields[$column_index]}
+          value=${table[$((table_index + column_index))]}
+          if [[ $field == $dim ]]; then
+            result=$value
+          else
+            local -n dim2=$field
+            if [[ ! -v dim2 || "$dim2" != "$value" ]]; then
+              everything_matches=f
+              break
+            fi
+          fi
+        end_for
+        if [[ $everything_matches == t ]]; then
+          found=t
+          break
+        fi
+      end_while
+
+      if [[ $found == t ]]; then
+        if [[ ! "$result" ]]; then
+          log_fatal "Table for dim $dim is missing the column named $dim"
+          fail1
+        fi
+        values=$result
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
 expand_values_check_default() {
   begin_function
 
@@ -1844,50 +1906,15 @@ expand_values_check_default() {
 
     if [[ ! "${values:-}" ]]; then
 
-      if [[ -v ${dim_type}_${dim}_members_table ]]; then
-        local -n \
-          table=${dim_type}_${dim}_members_table \
-          fields=${dim_type}_${dim}_members_fields
-        local field_count=${#fields[*]} \
-          table_count=${#table[*]} \
-          maybe table_index=0 column_index \
-          found=f value= result= field everything_matches
+      local -n table=dim_constraints_${dim}_table \
+        fields=dim_constraints_${dim}_fields
+      if [[ ! -v table ]]; then
+        local -n table=dim_constraints_all_table \
+          fields=dim_constraints_all_fields
+      fi
 
-        begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-          field=${fields[$column_index]}
-          if [[ $field != $dim ]]; then
-            
-          fi
-        end_for
-
-        begin_while (( table_index < table_count )); doo
-          (( table_index += field_count ))
-          everything_matches=t
-          begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-            field=${fields[$column_index]}
-            value=${table[$((table_index + column_index))]}
-            if [[ $field == $dim ]]; then
-              result=$value
-            else
-              local -n dim2=$field
-              if [[ ! -v dim2 || "$dim2" != "$value" ]]; then
-                everything_matches=f
-                break
-              fi
-            fi
-          end_for
-          if [[ $everything_matches == t ]]; then
-            found=t
-            break
-          fi
-        end_while
-        if [[ $found == t ]]; then
-          if [[ ! "$result" ]]; then
-            log_fatal "Table for dim $dim is missing the column named $dim"
-            fail1
-          fi
-          values=$result
-        fi
+      if [[ -v table ]]; then
+        expand_values_check_default_table || fail
       elif [[ $can_ask == t ]]; then
         choose "Enter required value: $dim=" d_$dim || fail
         # recursive
