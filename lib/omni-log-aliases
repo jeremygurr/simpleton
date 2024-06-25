@@ -92,6 +92,21 @@ setup_log_block_aliases() {
 
   : ${trace_time:=f}
 
+  alias timebox_open='
+    (( no_trace_depth++ ))
+    timebox_stack+=( $timebox )
+    trace_time_open
+    (( no_trace_depth-- ))
+  '
+
+  alias timebox_close='
+    (( no_trace_depth++ ))
+    trace_time_close
+    unset timebox_stack[-1]
+    timebox=${timebox_stack[-1]}
+    (( no_trace_depth-- ))
+  '
+
   alias trace_time_open='
     if [[ $trace_time == t ]]; then
       if [[ ! ${trace_time_fd:-} ]]; then
@@ -108,13 +123,13 @@ setup_log_block_aliases() {
     if [[ $trace_time == t && "${trace_time_fd:-}" ]]; then
       local trace_time_stop=${EPOCHREALTIME/./} d
       (( d = trace_time_stop - trace_time_start ))
-      echo "$d $current_function ${trace_time_start_debug_id} ${debug_id_current}" >&$trace_time_fd
+      echo "$d $timebox ${trace_time_start_debug_id} ${debug_id_current}" >&$trace_time_fd
     fi
   '
 
   alias begin_function_hi='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=2 trace_time_start current_function=${function_override:-${FUNCNAME[0]}} function_override=
+    local return_value=0 break_out=f function_level=2 trace_time_start current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME )
     write_to_log_and_save 
     (( log_depth_current++ ))
     log_vars= log_show_vars=
@@ -127,7 +142,7 @@ setup_log_block_aliases() {
 
   alias begin_function='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=1 trace_time_start current_function=${function_override:-${FUNCNAME[0]}} function_override=
+    local return_value=0 break_out=f function_level=1 trace_time_start current_function=${function_override:-${FUNCNAME[0]}} function_override= timebox_stack=( $FUNCNAME )
     warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=$current_function" )
     trace_time_open
     struct_type="open $current_function" debug_id_inc
@@ -137,7 +152,7 @@ setup_log_block_aliases() {
     
   alias begin_function_lo='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=0 function_override=
+    local return_value=0 break_out=f function_level=0 function_override= timebox_stack=( $FUNCNAME )
     while true; do
   '
 
@@ -156,11 +171,13 @@ setup_log_block_aliases() {
     (( no_trace_depth++ ))
     case $function_level in
       2)
+        timebox=$FUNCNAME
         trace_time_close
         load_log_vars_and_write_to_log
         (( log_depth_current-- ))
       ;;
       1)
+        timebox=$FUNCNAME
         trace_time_close
       ;;
       0)
