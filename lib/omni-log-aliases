@@ -54,20 +54,29 @@ trace_time_summarize() {
   trace_time_fd=
 
   echo "$hbar_equals"
-  echo "trace_time summary in chronological order:$NL"
-  ( echo "duration(µs) function id_start id_end"; sort -n -k3 $trace_time_log ) | field=0 format_number_stream | column -t 
+  echo "trace_time summary by function instance in chronological order:$NL"
+  ( echo "duration(µs) function id_start id_end heat"; sort -n -k3 $trace_time_log ) \
+    | field=0 format_number_stream | column -t 
+
+  echo "$hbar_equals"
+  echo "trace_time summary by function instance in heat order:$NL"
+  ( echo "duration(µs) function id_start id_end heat"; sort -n -k5 $trace_time_log ) \
+    | field=0 format_number_stream | column -t 
 
   echo "$hbar_equals"
   echo "trace_time summary by function instance sorted by name:$NL"
-  ( echo "duration(µs) function id_start id_end"; sort -k2 $trace_time_log ) | field=0 format_number_stream | column -t 
+  ( echo "duration(µs) function id_start id_end heat"; sort -k2 $trace_time_log ) \
+    | field=0 format_number_stream | column -t 
 
   echo "$hbar_equals"
   echo "trace_time summary by function instance sorted by time:$NL"
-  ( echo "duration(µs) function id_start id_end"; sort -n $trace_time_log ) | field=0 format_number_stream | column -t 
+  ( echo "duration(µs) function id_start id_end heat"; sort -n $trace_time_log ) \
+    | field=0 format_number_stream | column -t 
 
   echo "$hbar_equals"
   echo "trace_time summary by function sorted by time:$NL"
-  ( echo "duration(µs) function times_executed"; cat /tmp/trace_time.log | sort -k2 | awk '
+  ( echo "duration(µs) function times_executed heat"; cat /tmp/trace_time.log \
+    | sort -k2 | awk '
   BEGIN {
     prev=""
   }
@@ -76,13 +85,15 @@ trace_time_summarize() {
     prev=$2
     total=0
     count=0
+    heat=0
   }
   {
     total+=$1
     count+=1
+    heat+=$5
   }
   END {
-    if ( prev != "" && total > 0 ) print total " " prev " x" count
+    if ( prev != "" && total > 0 ) print total " " prev " x" count " " heat
   }
   ' | sort -n | field=0 format_number_stream ) | column -t
 
@@ -115,21 +126,22 @@ setup_log_block_aliases() {
         exec {trace_time_fd}<>$trace_time_log
       fi
       trace_time_start=${EPOCHREALTIME/./}
-      local trace_time_start_debug_id=$debug_id_current
+      trace_time_start_debug_id=$debug_id_current
     fi
   '
 
   alias trace_time_close='
     if [[ $trace_time == t && "${trace_time_fd:-}" ]]; then
-      local trace_time_stop=${EPOCHREALTIME/./} d
-      (( d = trace_time_stop - trace_time_start ))
-      echo "$d $timebox ${trace_time_start_debug_id} ${debug_id_current}" >&$trace_time_fd
+      trace_time_stop=${EPOCHREALTIME/./}
+      (( time_dur = trace_time_stop - trace_time_start ))
+      (( time_heat = time_dur / (trace_time_start_debug_id - debug_id_current + 1) ))
+      echo "$time_dur $timebox $trace_time_start_debug_id $debug_id_current $time_heat" >&$trace_time_fd
     fi
   '
 
   alias begin_function_hi='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=2 trace_time_start current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME )
+    local return_value=0 break_out=f function_level=2 trace_time_start current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_heat time_dur
     write_to_log_and_save 
     (( log_depth_current++ ))
     log_vars= log_show_vars=
@@ -142,7 +154,7 @@ setup_log_block_aliases() {
 
   alias begin_function='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=1 trace_time_start current_function=${function_override:-${FUNCNAME[0]}} function_override= timebox_stack=( $FUNCNAME )
+    local return_value=0 break_out=f function_level=2 trace_time_start current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_heat time_dur
     warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=$current_function" )
     trace_time_open
     struct_type="open $current_function" debug_id_inc
@@ -152,7 +164,7 @@ setup_log_block_aliases() {
     
   alias begin_function_lo='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=0 function_override= timebox_stack=( $FUNCNAME )
+    local return_value=0 break_out=f function_level=0 function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_heat time_dur
     while true; do
   '
 
