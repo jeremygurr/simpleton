@@ -7,6 +7,9 @@ debug_id_inc() {
   if [[ ${show_debug_id:-f} == a ]]; then
     out -n " $CYAN$debug_id_current$RESET"
   fi
+  if [[ ${trace_structure:-f} == t ]]; then
+    out " $CYAN$debug_id_current$RESET ${struct_type:-}"
+  fi
   if [[ "${trace_var:-}" ]]; then
     local v
     if [[ ! $trace_var =~ ^[a-zA-Z_0-9]+$ ]]; then
@@ -105,38 +108,36 @@ setup_log_block_aliases() {
     if [[ $trace_time == t && "${trace_time_fd:-}" ]]; then
       local trace_time_stop=${EPOCHREALTIME/./} d
       (( d = trace_time_stop - trace_time_start ))
-      echo "$d $FUNCNAME ${trace_time_start_debug_id} ${debug_id_current}" >&$trace_time_fd
+      echo "$d $current_function ${trace_time_start_debug_id} ${debug_id_current}" >&$trace_time_fd
     fi
   '
 
   alias begin_function_hi='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=2 trace_time_start
+    local return_value=0 break_out=f function_level=2 trace_time_start current_function=${function_override:-${FUNCNAME[0]}} function_override=
     write_to_log_and_save 
     (( log_depth_current++ ))
     log_vars= log_show_vars=
-    warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=${FUNCNAME[0]}" )
+    warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=$current_function" )
     trace_time_open
-    debug_id_inc
+    struct_type="open $current_function" debug_id_inc
     while true; do
     (( no_trace_depth-- ))
   '
 
   alias begin_function='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=1 trace_time_start
-    warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=${FUNCNAME[0]}" )
+    local return_value=0 break_out=f function_level=1 trace_time_start current_function=${function_override:-${FUNCNAME[0]}} function_override=
+    warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=$current_function" )
     trace_time_open
-    debug_id_inc
+    struct_type="open $current_function" debug_id_inc
     while true; do
     (( no_trace_depth-- ))
   '
     
   alias begin_function_lo='
     (( no_trace_depth++ ))
-    local return_value=0 break_out=f function_level=0
-    warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=${FUNCNAME[0]}" )
-    debug_id_inc
+    local return_value=0 break_out=f function_level=0 function_override=
     while true; do
   '
 
@@ -144,24 +145,26 @@ setup_log_block_aliases() {
     (( no_trace_depth++ ))
     break; done;
     local log_return_vars=
-    unset warm_stack[-1]
-    debug_id_inc
+    if (( function_level > 0 )); then
+      unset warm_stack[-1]
+      struct_type="close $current_function" debug_id_inc
+    fi
     (( no_trace_depth-- ))
   '
 
   alias handle_return='
     (( no_trace_depth++ ))
     case $function_level in
-      1|2)
+      2)
         trace_time_close
-        if [[ $function_level == 2 ]]; then
-          load_log_vars_and_write_to_log
-          (( log_depth_current-- ))
-        fi
+        load_log_vars_and_write_to_log
+        (( log_depth_current-- ))
       ;;
+      1)
+        trace_time_close
       0)
-        if (( no_trace_depth-- <= 0 )); then 
-          no_trace_depth=0
+        if (( no_trace_depth-- <= 1 )); then 
+          no_trace_depth=1
         fi
       ;;
     esac
@@ -173,9 +176,9 @@ setup_log_block_aliases() {
   alias begin_while='break_out=f; while'
   alias   begin_for='break_out=f; for'
   alias  begin_loop='break_out=f; while true'
-  alias   end_while='done; debug_id_inc; [[ $break_out == t ]] && break'
-  alias     end_for='done; debug_id_inc; [[ $break_out == t ]] && break'
-  alias    end_loop='done; debug_id_inc; [[ $break_out == t ]] && break'
+  alias   end_while='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
+  alias     end_for='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
+  alias    end_loop='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
 
   # end_while or end_for or end_loop should usually be used instead of this.
   # This is helpful though if the done part needs to be separated from the break part
@@ -184,7 +187,7 @@ setup_log_block_aliases() {
   alias handle_exit='exit $return_value'
 
   # to avoid bash syntax parsing problems, and provide a hook for loop beginning
-  alias         doo='do debug_id_inc;'
+  alias         doo='do struct_type="loop iteration" debug_id_inc;'
 
   # This performs the same debug_id advancement that begin_function and others do,
   #   except unlike begin_function this may be placed anywhere within a function,
