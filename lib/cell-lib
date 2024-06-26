@@ -658,6 +658,36 @@ execute_command_internal_prep() {
   handle_return
 }
 
+cell_open_log_file() {
+  if [[ "${omni_log_job_id:-0}" != 0 && $disable_log == f ]]; then
+    cell_log_file_stack+=( $logging_to_file )
+    previous_fork_id=$omni_log_fork_id
+    get_new_fork_id || return 1
+    local new_log_file=$log_path/$omni_log_job_id:$new_fork_id.olog
+    local first_log_path=${new_log_file%/*}/first.olog
+    if [[ ! -f $first_log_path ]]; then
+      from_must_exist=f \
+        safe_link $new_log_file $first_log_path || return 1
+    fi
+    omni_log_fork_id=$new_fork_id
+    log_function=${FUNCNAME[1]} \
+      change_log_file || return 1
+  fi
+}
+
+cell_close_log_file() {
+  if [[ "${cell_log_file_stack:-}" ]]; then
+    local previous_log=${cell_log_file_stack[-1]}
+    omni_log_fork_id=$previous_fork_id
+    unset cell_log_file_stack[-1]
+    log_function=${FUNCNAME[1]} \
+      new_log_file=$previous_log \
+      resume_existing_log=t \
+      logging_to_file= \
+      change_log_file || return 1
+  fi
+}
+
 execute_command_log_prep() {
   begin_function
     if [[ ! -d $cyto_path ]]; then
@@ -692,10 +722,6 @@ execute_command_log_prep() {
 
     background_log=$log_path/background
 
-    previous_log_pos=$omni_log_pos
-    cell_open_log_file || fail
-    (( previous_log_pos++ ))
-
     running_job_path=$job_path/running
 
     local link_target
@@ -716,20 +742,18 @@ execute_command_internal() {
     log_show_vars='short_cell current_command' 
   begin_function_hi
 
-    local logging_to_file=${logging_to_file:-} \
-      omni_log_job_id=${omni_log_job_id:-} \
-      omni_log_fork_id=${omni_log_fork_id:-} \
-      previous_fork_id=${previous_fork_id:-} \
-      job_path=${job_path:-} \
-      log_path=${log_path:-} \
-      current_job_path=${current_job_path:-} \
-
     if [[ "${localize_dims:-}" ]]; then
       eval "$localize_dims" || fail
     fi
 
     local coordinates=() 
     execute_command_internal_prep || fail
+
+    if [[ $disable_log == t ]]; then
+      log_debug "Logging disabled." || fail
+    else
+      execute_command_log_prep || fail
+    fi
 
     # This is in this function twice, because it changes after switch_context
     if [[ "${localize_dims:-}" ]]; then
@@ -742,12 +766,6 @@ execute_command_internal() {
     fi
 
     command_history+="$current_command $short_cell "
-
-    if [[ $disable_log == t ]]; then
-      log_debug "Logging disabled." || fail
-    else
-      execute_command_log_prep || fail
-    fi
 
     # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
     #   log_info "Executing cell command: $short_cell $current_command"
@@ -787,6 +805,13 @@ execute_command() {
       disable_log=${disable_log:-} \
       trunk_changed \
       $branch_local_vars \
+      logging_to_file=${logging_to_file:-} \
+      omni_log_job_id=${omni_log_job_id:-} \
+      omni_log_fork_id=${omni_log_fork_id:-} \
+      previous_fork_id=${previous_fork_id:-} \
+      job_path=${job_path:-} \
+      log_path=${log_path:-} \
+      current_job_path=${current_job_path:-} \
 
     load_branch_info || fail
 
@@ -824,10 +849,16 @@ execute_command() {
     if [[ $should_fork == t ]]; then
       fork execute_command_internal || fail_later
     else
+      if [[ $disable_log == f ]]; then
+        previous_log_pos=$omni_log_pos
+        cell_open_log_file || fail
+        (( previous_log_pos++ ))
+      fi
       execute_command_internal || fail_later
+      if [[ $disable_log == f ]]; then
+        cell_close_log_file || fail
+      fi
     fi
-
-    cell_close_log_file || fail
 
   end_function
   handle_return
@@ -1585,36 +1616,6 @@ get_new_fork_id() {
     new_fork_id=$child_log_id
   fi
   return 0
-}
-
-cell_open_log_file() {
-  if [[ "${omni_log_job_id:-0}" != 0 && $disable_log == f ]]; then
-    cell_log_file_stack+=( $logging_to_file )
-    previous_fork_id=$omni_log_fork_id
-    get_new_fork_id || return 1
-    local new_log_file=$log_path/$omni_log_job_id:$new_fork_id.olog
-    local first_log_path=${new_log_file%/*}/first.olog
-    if [[ ! -f $first_log_path ]]; then
-      from_must_exist=f \
-        safe_link $new_log_file $first_log_path || return 1
-    fi
-    omni_log_fork_id=$new_fork_id
-    log_function=${FUNCNAME[1]} \
-      change_log_file || return 1
-  fi
-}
-
-cell_close_log_file() {
-  if [[ "${cell_log_file_stack:-}" ]]; then
-    local previous_log=${cell_log_file_stack[-1]}
-    omni_log_fork_id=$previous_fork_id
-    unset cell_log_file_stack[-1]
-    log_function=${FUNCNAME[1]} \
-      new_log_file=$previous_log \
-      resume_existing_log=t \
-      logging_to_file= \
-      change_log_file || return 1
-  fi
 }
 
 # this should be run in a subshell
