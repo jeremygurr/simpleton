@@ -367,7 +367,7 @@ plant_seed_internal() {
   local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
   begin_function
 
-    log_debug "Planting seed from $from to $to"
+    log_debug "Planting seed from $from to $to" || fail
 
     if [[ ! -d $to ]]; then
 
@@ -594,7 +594,7 @@ switch_context() {
     handle_return
 
   else
-    log_debug "Context already loaded"
+    log_debug "Context already loaded" || fail
   fi
 
   return 0
@@ -744,7 +744,7 @@ execute_command_internal() {
     command_history+="$current_command $short_cell "
 
     if [[ $disable_log == t ]]; then
-      log_debug "Logging disabled."
+      log_debug "Logging disabled." || fail
     else
       execute_command_log_prep || fail
     fi
@@ -752,7 +752,7 @@ execute_command_internal() {
     # if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
     #   log_info "Executing cell command: $short_cell $current_command"
     # else
-      log_verbose "Executing cell command: $short_cell $current_command"
+      log_verbose "Executing cell command: $short_cell $current_command" || fail
     # fi
 
     if [[ -f $command_path.info ]]; then
@@ -990,7 +990,7 @@ load_branch_info() {
     branch_dim_count=${#branch_dims[*]}
 
     if [[ "${branch_dims:-}" ]]; then
-      log_debug "Branch dims found: ${branch_dims[*]}"
+      log_debug "Branch dims found: ${branch_dims[*]}" || fail
     fi
 
     local x y dim_string= 
@@ -1329,7 +1329,7 @@ make_or_load_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function_hi
 
-    log_debug "Loading context for $short_cell"
+    log_debug "Loading context for $short_cell" || fail
     local item_name last_part dna_full_item suffix \
       context_make=$context_make \
 
@@ -1466,7 +1466,7 @@ init_context() {
     if [[ -e $command_path.info ]]; then
       source $command_path.info || return 1
     else
-      log_warn "Missing file $command_path.info"
+      log_warn "Missing file $command_path.info" || return 1
     fi
   fi
 
@@ -1600,7 +1600,7 @@ cell_open_log_file() {
     fi
     omni_log_fork_id=$new_fork_id
     log_function=${FUNCNAME[1]} \
-      change_log_file
+      change_log_file || return 1
   fi
 }
 
@@ -1613,7 +1613,7 @@ cell_close_log_file() {
       new_log_file=$previous_log \
       resume_existing_log=t \
       logging_to_file= \
-      change_log_file
+      change_log_file || return 1
   fi
 }
 
@@ -1746,7 +1746,7 @@ for_each_leaf_flat() {
 
   begin_function
 
-    log_debug "Checking leaves of $short_cell"
+    log_debug "Checking leaves of $short_cell" || fail
     if [[ "$localize_dims" ]]; then
       eval "$localize_dims" || fail
     fi
@@ -1837,25 +1837,20 @@ for_each_leaf_flat() {
 expand_values_check_default_table() {
   begin_function        
       
-    debug_start
     local field_count=${#fields[*]} \
       table_count=${#table[*]} \
       maybe table_index=0 column_index \
-      found=f value= result= field everything_matches plural
+      found=f value= result= field everything_matches
 
     local invalid=f
     begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
       field=${fields[$column_index]}
       if [[ $field != $dim ]]; then
-        local -n f=$field
-#        if [[ ! -v f ]]; then
-#          get_plural $field
-#          local -n f=$plural
-          if [[ ! -v f ]]; then
-            invalid=t
-            break
-          fi
-#        fi
+        local -n f=d_$field
+        if [[ ! -v f ]]; then
+          invalid=t
+          break
+        fi
       fi
     end_for
 
@@ -1869,7 +1864,7 @@ expand_values_check_default_table() {
           if [[ $field == $dim ]]; then
             result=$value
           else
-            local -n dim2=$field
+            local -n dim2=d_$field
             if [[ ! -v dim2 || "$dim2" != "$value" ]]; then
               everything_matches=f
               break
@@ -2156,7 +2151,7 @@ wait_for_low_load() {
   local current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
   if [[ $current_load -gt $cell_max_load ]]; then
     log_warn "Load average is too high ($current_load > $cell_max_load)," \
-      "waiting until things cool down first."
+      "waiting until things cool down first." || fail
     local time_waited=0
     while [[ $current_load -gt $cell_max_load ]]; do
       current_load=$(uptime | sed -E 's/.*average: ([0-9]*).*/\1/')
@@ -2186,33 +2181,37 @@ reply_file=
 
 # input: parallel processes
 wait_for_sub_processes() {
-if [[ "$processes" ]]; then
-  log_debug "Waiting for sub processes to complete"
-  local process last_err_code= last_failed_process= rc
-  for process in $processes; do
-    log_debug "Waiting for process $process"
-    wait $process &>/dev/null; rc=$?
-    if [[ $rc -gt 0 && $rc -lt 127 ]]; then
-      if [[ ! "$last_err_code" ]]; then
-        last_err_code=$rc
-        last_failed_process=$process
-      else
-        log_warn "Subprocess $process failed to terminate successfully"
-        return 1
+  begin_function
+    if [[ "$processes" ]]; then
+      log_debug "Waiting for sub processes to complete" || fail
+      local process last_err_code= last_failed_process= rc
+      for process in $processes; do
+        log_debug "Waiting for process $process" || fail
+        wait $process &>/dev/null; rc=$?
+        if [[ $rc -gt 0 && $rc -lt 127 ]]; then
+          if [[ ! "$last_err_code" ]]; then
+            last_err_code=$rc
+            last_failed_process=$process
+          else
+            log_fatal "Subprocess $process failed to terminate successfully"
+            fail1
+          fi
+        fi
+      done
+      after_fork
+      if [[ "$last_err_code" ]]; then
+        if [[ "$last_err_code" == 1 ]]; then
+          log_fatal "Subprocess $last_failed_process failed to terminate successfully"
+          fail1
+        fi
+        return_value=$last_err_code
+        break_out=t
+        break
       fi
+      processes=
     fi
-  done
-  after_fork
-  if [[ "$last_err_code" ]]; then
-    if [[ "$last_err_code" == 1 ]]; then
-      log_warn "Subprocess $last_failed_process failed to terminate successfully"
-      return 1
-    fi
-    return $last_err_code
-  fi
-  processes=
-fi
-return 0
+  end_function
+  handle_return
 }
 
 # 'value' is the loop var
@@ -2231,7 +2230,7 @@ parallel_loop() {
     if [[ ! -v $loop_over_var2 ]]; then
       log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
       stack_trace
-      fail
+      fail1
     fi
 
     eval "array=( \"\${$loop_over_var2[@]}\" )"
@@ -2253,12 +2252,12 @@ parallel_loop() {
 
     local size=${#array[*]}
     if (( size > 1 )); then
-      log_debug "Looping over $size values$extra. body: $body2"
+      log_debug "Looping over $size values$extra. body: $body2" || fail
     fi
 
     begin_for value in "${array[@]}"; doo
 
-      log_debug "Current iteration value=$value"
+      log_debug "Current iteration value=$value" || fail
 
       if [[ "$head2" ]]; then
         eval "$head2" || fail
@@ -2408,7 +2407,7 @@ execute_op() {
 
       missing=t
       if [[ $ignore_missing == t ]]; then
-        log_debug "No ${op_name}_op function found, ignoring"
+        log_debug "No ${op_name}_op function found, ignoring" || fail
       else
         log_fatal "No ${op_name}_op function found"
         fail1
@@ -2498,7 +2497,7 @@ show_parameter_help() {
     fi
 
     if [[ $found == f ]]; then
-      log_warn "No description found for parameter $name"
+      log_warn "No description found for parameter $name" || fail
     fi
 
     #choose "What should $name be set to? " $name "${choices[@]}" || fail
@@ -2670,7 +2669,7 @@ encrypt_file_with_shared_key() {
     key_path=$key_path \
     user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
-  log_debug "Encrypting $from to $to"
+  log_debug "Encrypting $from to $to" || fail
 
   local log_vars='from to'
   begin_function_hi
@@ -2716,7 +2715,7 @@ encrypt_file_with_shared_key() {
 
       else
 
-        log_debug "There are no keys for this cell yet. Will create a new key."
+        log_debug "There are no keys for this cell yet. Will create a new key." || fail
 
         # create a new main key
         if ! out_to_file=$tmp_path/main log_and_run openssl rand -base64 40; then
@@ -2797,7 +2796,7 @@ handle_secure_edit() {
       if files_are_different $old_unsafe_file $new_unsafe_file >/dev/null; then
         changed=t
       else
-        log_debug "No change"
+        log_debug "No change" || fail
         rm $new_unsafe_file || fail
       fi
     else
@@ -2833,7 +2832,7 @@ handle_insecure_edit() {
       if files_are_different $old_file $new_file >/dev/null; then
         changed=t
       else
-        log_debug "No change"
+        log_debug "No change" || fail
         rm $new_file || fail
       fi
     else
@@ -2998,7 +2997,7 @@ decrypt_file_with_shared_key() {
   local key_path=$key_path
   local user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
-  log_debug "Decrypting $from to $to"
+  log_debug "Decrypting $from to $to" || return 1
 
   local log_vars='from to'
   begin_function_hi
@@ -3264,7 +3263,7 @@ prep_background_communication() {
       ;;
       replaying)
         update_replay_hash "$command" || fail
-        log_verbose "Replaying pre-recorded $masked_command responses"
+        log_verbose "Replaying pre-recorded $masked_command responses" || fail
       ;;
       disabled)
         :
@@ -3315,7 +3314,7 @@ to_background_process_single() {
     fi
 
     if (( timeout_ms == 0 )); then
-      log_debug "Sending output to process without timeout: $masked_command"
+      log_debug "Sending output to process without timeout: $masked_command" || fail
       if [[ $pretend == f ]]; then
         if [[ "${background_log:-}" ]]; then
           echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
@@ -3335,7 +3334,7 @@ to_background_process_single() {
         delay_ms=250
       local delay_s=$(dc -e "$delay_ms 1000 3 k / p")
 
-      log_debug "Sending output to process with ${timeout}s timeout: $masked_command"
+      log_debug "Sending output to process with ${timeout}s timeout: $masked_command" || fail
 
       timed_out=f wait_time=0
       if [[ $pretend == f ]]; then
@@ -3350,27 +3349,27 @@ to_background_process_single() {
 
           begin_while ps $pid &>/dev/null; doo
 
-            log_debug "Waiting $delay_s sec for background process to be running"
+            log_debug "Waiting $delay_s sec for background process to be running" || fail
             sleep $delay_s || fail
 
             (( time_left -= delay_ms 
              , wait_time += delay_ms ))
 
             if (( time_left <= 0 )); then
-              log_debug "Timed out trying to execute: $masked_command"
+              log_debug "Timed out trying to execute: $masked_command" || fail
               timed_out=t
               kill $pid || log_warn "Failed to kill $pid"
               break
             fi
 
             if (( wait_time > 4000 )) && [[ $wait_message == f ]]; then
-              log_warn "${NL}Waiting for pipe to be open (time_left=$time_left)"
+              log_warn "${NL}Waiting for pipe to be open (time_left=$time_left)" || fail
               wait_message=t
             fi
 
           end_while
           local wait_time_s=$(dc -e "$wait_time 1000 / p")
-          log_debug "Finished waiting. Took ${wait_time_s}s."
+          log_debug "Finished waiting. Took ${wait_time_s}s." || fail
 
         fi
 
@@ -3440,10 +3439,10 @@ from_background_process__record_line() {
   case $pipe_replay_state in
     recording)
       echo "$line" >>$replay_file || return 1
-      log_debug "Recording line to replay file: $line"
+      log_debug "Recording line to replay file: $line" || fail
     ;;
     replaying)
-      log_debug "Replaying line: $line"
+      log_debug "Replaying line: $line" || fail
     ;;
   esac
 
@@ -3461,7 +3460,7 @@ from_background_process__check_line() {
     if [[ "$fail_after" ]]; then
       begin_for ((i=0; i < succeed_after_count; i++)); doo
         if [[ "$line" =~ ${fail_after[$i]} ]]; then
-          log_debug "Failed after [${fail_after[$i]}]"
+          log_debug "Failed after [${fail_after[$i]}]" || fail
           failed=t
           succeed
         fi
@@ -3472,7 +3471,7 @@ from_background_process__check_line() {
       local pretend=$pretending
       begin_for ((i=0; i < interact_count; i++)); doo
         if [[ "$line" =~ ${interact_in[$i]} ]]; then
-          log_debug "Interact matched [${interact_in[$i]}]"
+          log_debug "Interact matched [${interact_in[$i]}]" || fail
           local output=${interact_out[$i]}
           pretend=$pretend secret="$secret" from_var=output to_background_process || fail
           interacted=t
@@ -3488,7 +3487,7 @@ from_background_process__check_line() {
     if [[ "$succeed_after" ]]; then
       begin_for ((i=0; i < succeed_after_count; i++)); doo
         if [[ "$line" =~ ${succeed_after[$i]} ]]; then
-          log_debug "Stopped after [${succeed_after[$i]}]"
+          log_debug "Stopped after [${succeed_after[$i]}]" || fail
           succeeded=t
           succeed
         fi
@@ -3497,7 +3496,7 @@ from_background_process__check_line() {
 
     if [[ "$required_output" ]]; then
       if [[ "$line" =~ ${required_output} ]]; then
-        log_debug "Found required text: [$required_output]"
+        log_debug "Found required text: [$required_output]" || fail
         requirement_met=t
       fi
     fi
@@ -3580,9 +3579,9 @@ flush_background_process() {
 
     local t=${timeout//./}
     if (( t > 0 )); then
-      log_debug "Flushing background output with timeout of ${timeout}s"
+      log_debug "Flushing background output with timeout of ${timeout}s" || fail
     else
-      log_debug "Flushing background output with no timeout"
+      log_debug "Flushing background output with no timeout" || fail
     fi
 
     get_replay_file || fail
@@ -3594,7 +3593,7 @@ flush_background_process() {
           if [[ "$char" ]]; then
             line+=$char
           else
-            log_debug "Flushing: $line"
+            log_debug "Flushing: $line" || fail
             from_background_process__record_line || fail
             line=
           fi
@@ -3602,7 +3601,7 @@ flush_background_process() {
         ;;
       line)
         while IFS= read -r -t $timeout -r line; do
-          log_debug "Flushing: $line"
+          log_debug "Flushing: $line" || fail
           from_background_process__record_line || fail
         done <$pipe_out
         ;;
@@ -3675,10 +3674,10 @@ from_background_process() {
 
     local back_fd
     if [[ $pretending == t ]]; then
-      log_debug "Pretending to read background job output"
+      log_debug "Pretending to read background job output" || fail
     elif [[ $pipe_replay_state == replaying ]]; then
       if [[ -f $replay_file ]]; then
-        log_debug "Replaying background interaction from $replay_file"
+        log_debug "Replaying background interaction from $replay_file" || fail
         exec {back_fd}<>$replay_file || fail
         defer "exec $back_fd>$-"
       else
@@ -3687,7 +3686,7 @@ from_background_process() {
       fi
     else
       log_vars=pipe_out \
-        log_debug "Waiting for background job output"
+        log_debug "Waiting for background job output" || fail
       exec {back_fd}<>$pipe_out || fail
       defer "exec $back_fd>$-"
     fi
@@ -3776,9 +3775,9 @@ from_background_process() {
       if [[ "$line" ]]; then
         local remaining_hex="$(echo -n "$line" | hexdump -e '60/1 "%_c " "\n"')"
         log_vars=remaining_hex \
-          log_debug "Timed out after $timeout seconds with remaining line:$NL$line" 
+          log_debug "Timed out after $timeout seconds with remaining line:$NL$line"  || fail
       else
-        log_debug "Timed out after $timeout seconds"
+        log_debug "Timed out after $timeout seconds" || fail
       fi
     fi
 
@@ -3835,15 +3834,16 @@ run_pipe_command() {
 
   if [[ $timed_out == t ]]; then
     log_vars=result \
-      log_error "Timed out waiting for prompt from remote ssh session"
+      log_error "Timed out waiting for prompt from remote ssh session" || fail
   elif [[ "$failed" == t ]]; then
     log_vars=result \
-      log_error "Command execution on remote ssh session returned a failure"
+      log_error "Command execution on remote ssh session returned a failure" || fail
   elif failed; then
     log_vars=result \
       log_fatal "Internal error while trying to execute remote command"
+    fail1
   else 
-    log_debug "Command was successful"
+    log_debug "Command was successful" || fail
     command_successful=t
   fi
 
