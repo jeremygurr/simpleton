@@ -575,6 +575,69 @@ init_context() {
   return 0
 }
 
+branch_local_vars='branch_dims branch_members branch_hashes branch_dim_count trunk_cell short_cell'
+load_branch_info() {
+  local cell_path=${1:-$cell_path}
+
+  begin_function
+
+    branch_dims=() \
+    branch_members=() \
+    branch_hashes=() \
+
+    local c=$cell_path p d m
+    begin_while [[ $c == *:* ]]; doo
+      p=${c##*/}
+      if [[ $p == *:* ]]; then
+
+        d=${p%%:*}
+        branch_dims=( $d ${branch_dims[*]} )
+
+        m=${p#*:}
+        branch_hashes=( $m ${branch_hashes[*]} )
+
+        local member_var_path=$c/.member
+        if [[ -f $member_var_path ]]; then
+          m=$(<$member_var_path) || fail
+        fi
+        branch_members=( "$m" "${branch_members[@]}" )
+
+      fi
+      c=${c%/*}
+    end_while
+
+    trunk_cell=$c
+    branch_dim_count=${#branch_dims[*]}
+
+    if [[ "${branch_dims:-}" ]]; then
+      log_debug "Branch dims found: ${branch_dims[*]}" || fail
+    fi
+
+    local x y dim_string= 
+    if [[ "${branch_hashes:-}" ]]; then
+      dim_string="${branch_hashes[*]}"
+      dim_string=:${dim_string// /\/}
+    fi
+    local short_trunk=${trunk_cell#/*/*/}
+    #if   y=${short_trunk%/*/*/*} 
+    #     x=${short_trunk#$y/}
+    #     [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
+    #  short_trunk=$x
+    #elif y=${short_trunk%/*/*} 
+    #     x=${short_trunk#$y/}
+    #     [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
+    #  short_trunk=$x
+    #elif x=${short_trunk##*/} 
+    #     [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
+    #  short_trunk=$x
+    #fi
+    short_cell="$short_trunk$dim_string"
+
+    log_return_vars=short_cell
+  end_function
+  handle_return
+}
+
 switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
@@ -852,69 +915,6 @@ execute_command_internal() {
       fail1
     fi
 
-  end_function
-  handle_return
-}
-
-branch_local_vars='branch_dims branch_members branch_hashes branch_dim_count trunk_cell short_cell'
-load_branch_info() {
-  local cell_path=${1:-$cell_path}
-
-  begin_function
-
-    branch_dims=() \
-    branch_members=() \
-    branch_hashes=() \
-
-    local c=$cell_path p d m
-    begin_while [[ $c == *:* ]]; doo
-      p=${c##*/}
-      if [[ $p == *:* ]]; then
-
-        d=${p%%:*}
-        branch_dims=( $d ${branch_dims[*]} )
-
-        m=${p#*:}
-        branch_hashes=( $m ${branch_hashes[*]} )
-
-        local member_var_path=$c/.member
-        if [[ -f $member_var_path ]]; then
-          m=$(<$member_var_path) || fail
-        fi
-        branch_members=( "$m" "${branch_members[@]}" )
-
-      fi
-      c=${c%/*}
-    end_while
-
-    trunk_cell=$c
-    branch_dim_count=${#branch_dims[*]}
-
-    if [[ "${branch_dims:-}" ]]; then
-      log_debug "Branch dims found: ${branch_dims[*]}" || fail
-    fi
-
-    local x y dim_string= 
-    if [[ "${branch_hashes:-}" ]]; then
-      dim_string="${branch_hashes[*]}"
-      dim_string=:${dim_string// /\/}
-    fi
-    local short_trunk=$trunk_cell
-    if   y=${short_trunk%/*/*/*} 
-         x=${short_trunk#$y/}
-         [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
-      short_trunk=$x
-    elif y=${short_trunk%/*/*} 
-         x=${short_trunk#$y/}
-         [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
-      short_trunk=$x
-    elif x=${short_trunk##*/} 
-         [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
-      short_trunk=$x
-    fi
-    short_cell="$short_trunk$dim_string"
-
-    log_return_vars=short_cell
   end_function
   handle_return
 }
