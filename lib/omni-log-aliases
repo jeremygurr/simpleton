@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+declare -A trace_var_old
 debug_id_current=0
 debug_id_inc() {
   (( no_trace_depth++ ))
@@ -11,22 +12,18 @@ debug_id_inc() {
     out " $CYAN$debug_id_current$RESET ${struct_type:-}"
   fi
   if [[ "${trace_var:-}" ]]; then
-    local v
-    if [[ ! $trace_var =~ ^[a-zA-Z_0-9]+$ ]]; then
-      set +u
-      eval "v=$trace_var"
-      set -u
-    elif is_array $trace_var; then
-      eval "v=\"( \${$trace_var[*]:0:10} )\""
-    elif [[ -v $trace_var ]]; then
-      v=${!trace_var}
-    else
-      v='(unbound)'
-    fi
-    if [[ "${trace_var_old:-}" != "$v" ]]; then
-      echo "${CYAN}debug_id=$debug_id_current $trace_var=$v$RESET" >&$fd_original_err
-    fi
-    trace_var_old=$v
+    local var value='(unbound)'
+    for var in $trace_var; do
+      if is_array $var; then
+        eval "value=\"( \${$var[*]:0:10} )\""
+      elif [[ -v $var ]]; then
+        value=${!var}
+      fi
+      if [[ "${trace_var_old[$var]:-}" != "$value" ]]; then
+        echo "${CYAN}debug_id=$debug_id_current $var=$value$RESET" >&$fd_original_err
+      fi
+      trace_var_old[$var]=$value
+    done
   fi
   if [[ "${debug_id:-}" && $debug_id != t && $debug_id_current -ge $debug_id ]]; then
     if [[ "${debug_debug:-}" == t ]]; then
