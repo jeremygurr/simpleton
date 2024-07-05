@@ -1,76 +1,8 @@
 #!/usr/bin/env bash
 
-get_upstream_needs_update() {
-
-  local log_show_vars=short_cell log_vars=cell_path
-  begin_function_hi
-    local anchor_dims=
-    if [[ "${up_path:-}" && -d "$up_path" ]] \
-       && (( check_upstream_depth > 0 )); then
-      #log_debug "Checking upstream of $short_cell"
-      local -r upstream_cells=( 
-        $(find1 $up_path -not -name '.*' | sort -g) 
-        ) || fail
-      local upstream up_part
-      begin_for upstream in ${upstream_cells[*]}; doo
-
-        up_part=${upstream##*/}
-        log_debug "Checking $up_part"
-        if [[ ! -e $upstream/chosen ]]; then
-          log_debug "Cyto up is missing, needs update"
-          needs_update=t
-          break
-        fi
-
-        # recursive
-        check_upstream_depth=$((check_upstream_depth-1)) get_needs_update $upstream/chosen || fail
-
-        if [[ $needs_update == t ]]; then
-          break
-        fi
-
-      end_for
-    fi
-
-    # restore context
-    switch_context || fail
-
-  end_function
-  handle_return
-
-}
-
-get_leaf_needs_update() {
-  needs_update=
-  if [[ ! "${leaf_path:-}" ]]; then
-    log_fatal "leaf_path is missing"
-    return 1
-  fi
-  local leaf_cell_path=$cell_path$leaf_path
-
-  if [[ -d $leaf_cell_path ]]; then
-    # recursive
-    get_needs_update $leaf_cell_path || return 1
-  else
-    needs_update=t
-  fi
-
-  if [[ $needs_update == t ]]; then
-    leave_loop=1
-  fi
-  return 0
-}
-
 # returns needs_update
+# context should already be loaded for target cell before this is called
 get_needs_update() {
-  if [[ ! -e $1 ]]; then
-    log_fatal "Cell doesn't exist: $1"
-    stack_trace
-    return 1
-  fi
-
-  local cell_path=$(realpath $1)
-
   local log_show_vars=^cell_path
   begin_function_hi
 
@@ -78,8 +10,6 @@ get_needs_update() {
     if [[ "${localize_dims:-local}" != local ]]; then
       eval "$localize_dims" || fail
     fi
-
-    switch_context || fail
 
     local level=log_verbose
     if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
@@ -122,37 +52,11 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because something changed"
- #    elif get_prop_changed $cell_path || fail
- #         [[ $prop_changed == t ]]
- #    then
- #      needs_update=t
- #      log_message="Needs update because properties have changed"
     elif get_is_stale $status_path || fail
          [[ $is_stale == t ]]
     then
       needs_update=t
       log_message="Needs update because cell is stale"
-#    elif [[ -v leaf_dims ]] \
-#         && { 
-#           function=get_leaf_needs_update \
-#             for_each_leaf_flat ${leaf_dims[*]} || fail 
-#         } \
-#         && { 
-#           switch_context || fail
-#         } \
-#         && [[ $needs_update == t ]]
-#    then
-#      log_message="Needs update because at least one leaf cell is out of date"
-#    elif [[ -v up_path ]] \
-#         && { get_upstream_needs_update || fail; } \
-#         && [[ $needs_update == t ]]
-#    then
-#      log_message="Needs update because at least one upstream cell is out of date"
-#    elif [[ "${upstream_cell_link:-}" ]] && \
-#      [[ "$(readlink ${upstream_cell_link}/chosen)" != $cell_path ]]
-#    then
-#      needs_update=t
-#      log_message="Needs update because upstream_cell_link is outdated"
     elif local data_valid=t
       ignore_missing=t execute_op check || fail
       [[ $data_valid == f ]]
@@ -274,67 +178,66 @@ prep_upstream() {
 }
 
 # needs_update is guaranteed to be set after this completes successfully
+# returns: chosen needs_update
 update_upstream_choose() {
 
   local log_show_vars=^upstream
   begin_function_hi
 
-    local choice needs_to_choose=f original_choice=
+    local choice original_choice= original_cell_path=$cell_path
+    local choices=( $(find1 $upstream/choices -not -name ".*" | sort -g) ) || fail
+
+    if [[ ! "${choices:-}" ]]; then
+      log_fatal "No choices defined for upstream $upstream"
+      fail1
+    fi
+
+    chosen=
     if [[ -e "$upstream/chosen" ]]; then
       chosen=$(readlink $upstream/chosen) || fail
       original_choice=$chosen
-      if [[ -e "$chosen/.dna" ]]; then
-        upstream_cell_link=$chosen
-        needs_update=
-        get_needs_update $chosen || fail
-        if [[ $needs_update == t ]]; then
-          needs_to_choose=t
-          needs_update=
-        fi
-      else
-        needs_to_choose=t
-      fi
-    else
-      needs_to_choose=t
     fi
 
-    if [[ $needs_to_choose == t ]]; then
-      local choices=( $(find1 $upstream/choices -not -name ".*" | sort -g) ) || fail
-
-      if [[ ! "$choices" ]]; then
-        log_fatal "No choices defined for upstream $upstream"
-        fail1
+    needs_update=
+    if (( ${#choices[*]} == 1 )); then
+      chosen=$choices
+      if [[ ! -e $upstream/chosen ]]; then
+        force=t safe_link $chosen $upstream/chosen || fail
       fi
-
-      if (( ${#choices[*]} == 1 )); then
-        chosen=$choices
-      else
-
-        local anchor_dims=
+    else # more than one choice available
+      local anchor_dims=
+      if [[ "$chosen" && -e "$chosen/.dna" ]]; then
+        upstream_cell_link=$chosen
+        cell_path=$chosen
+        switch_context
+        get_needs_update || fail
+        if [[ $needs_update == t ]]; then
+          chosen=
+        fi
+      fi
+      if [[ ! "$chosen" ]]; then
         begin_for choice in $choices; doo
-          needs_update= \
-          get_needs_update $choice || fail
+          needs_update=
+          cell_path=$choice
+          get_needs_update || fail
           if [[ $needs_update == f ]]; then
             chosen=$choice
             break
           fi
         end_for
-
         if [[ ! "$chosen" ]]; then
           chosen=${choices%% *}
         fi
-
+        force=t safe_link $chosen $upstream/chosen || fail
+        upstream_cell_link=$chosen
+        if [[ "$original_choice" == "$chosen" ]]; then
+          needs_update=t
+        fi
       fi
-
-      switch_context || fail
-
-      force=t safe_link $chosen $upstream/chosen || fail
-      upstream_cell_link=$chosen
-      if [[ "$original_choice" == "$chosen" ]]; then
-        needs_update=t
-      fi
-
     fi
+
+    cell_path=$original_cell_path
+    switch_context || fail
 
   end_function
   local log_return_vars=chosen
@@ -376,7 +279,8 @@ update_upstream() {
 
   local required_freshness=$required_freshness fresh=$fresh \
     default_freshness=$default_freshness \
-    command_history=${command_history:-}
+    command_history=${command_history:-} \
+    cell_path=${cell_path:-}
 
   if [[ -e $upstream/.dna ]]; then
     log_fatal "update_upstream upstream field should be a path to a upstream spec, not a cell"
@@ -391,14 +295,9 @@ update_upstream() {
     prep_upstream || fail
     update_upstream_choose || fail
 
-    if [[ ! "$needs_update" ]]; then
-      get_needs_update $chosen || fail
-      switch_context || fail
-    fi
-
     if [[ $needs_update == t ]]; then
 
-      local up_cell=$(realpath $chosen)
+      local up_cell=$(realpath $chosen) || fail
 
       top_level_command=f \
       downstream_cell_name=${short_cell//\//_} \
@@ -597,7 +496,8 @@ update_downstream() {
 update_member() {
   local sane_value member_path \
     log_vars=member log_show_vars=member \
-    upstream_cell_link=${upstream_cell_link:-}
+    upstream_cell_link=${upstream_cell_link:-} \
+    original_cell_path=$cell_path
 
   begin_function
 
@@ -612,6 +512,8 @@ update_member() {
       create_sub_cell || fail
       needs_update=t
     else
+      cell_path=$member_path
+      switch_context || fail
       get_needs_update $member_path || fail
     fi
 
@@ -647,6 +549,8 @@ update_member() {
       upstream_cell_link=
     fi
 
+    cell_path=$original_cell_path
+    switch_context || fail
   end_function
   handle_return
 }
@@ -970,7 +874,7 @@ update_command() {
       update_downstream || fail
     fi
 
-    get_needs_update $cell_path || fail
+    get_needs_update || fail
 
     if [[ $needs_update == f ]]; then
       update_successful=t
