@@ -99,9 +99,9 @@ write_or_load() {
     if [[ $context_make == t ]]; then
       if [[ $last_type == fun && $new_type == var 
          || $last_type == var && $new_type == fun ]]; then
-        echo >>$context_path || fail
+        echo >>$context_path.new || fail
       fi
-      echo "$content" >>$context_path || fail
+      echo "$content" >>$context_path.new || fail
       last_type=$new_type
     fi
     eval "$content" || fail
@@ -684,6 +684,125 @@ broken_link_check() {
   handle_return
 }
 
+load_leaf_dims() {
+  begin_function
+    local i
+
+    leaf_dims=()
+    begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
+      leaf_dims+=( ${trunk_dims[$i]} )
+    end_for
+
+    leaf_dim_count=${#leaf_dims[*]}
+
+    if (( leaf_dim_count > 0 )); then
+      cell_is_leaf=f
+    else
+      cell_is_leaf=t
+    fi
+
+  end_function
+  handle_return
+}
+
+make_or_load_context_dims() {
+  begin_function
+
+    trunk_dim_count=${#trunk_dims[*]}
+    load_leaf_dims || fail
+
+    local dim assignment member i members_string=
+    begin_for ((i = 0; i < branch_dim_count; i++)); doo
+      dim=${branch_dims[$i]}
+      member=${branch_members[$i]}
+      quotes=single shell_quote_var member
+      members_string+="$member "
+      assignment="d_$dim=$member"
+      write_or_load var "$assignment" || fail
+    end_for
+
+    write_or_load var "trunk_dim_count=$trunk_dim_count
+branch_dims=( ${branch_dims[*]} )
+branch_dim_count=$branch_dim_count
+branch_members=( ${members_string% } )
+leaf_dims=( ${leaf_dims[*]} )
+leaf_dim_count=$leaf_dim_count
+cell_is_leaf=$cell_is_leaf" || fail
+
+  end_function
+  handle_return
+}
+
+make_or_load_context_expand() {
+  begin_function
+
+    if [[ ! -d $seed_path ]]; then
+      log_fatal "No configuration in seed at $seed_path"
+      fail1
+    fi
+
+    local dim dim_type
+    begin_for dim_type in trunk_dims sub_dims props; doo
+      local -n dims=$dim_type
+      begin_for dim in ${dims[*]:-}; doo
+        make_or_load_context_expand2 || fail
+      end_for
+    end_for
+
+  end_function
+  handle_return
+}
+
+make_or_load_context() {
+  local log_vars=cell_path log_show_vars=short_cell
+  begin_function_hi
+
+    log_debug "Loading context for $short_cell" || fail
+    local item_name last_part dna_full_item suffix \
+      context_make=$context_make \
+
+    if [[ $context_make == t ]]; then
+      if [[ -e $context_path.new ]]; then
+        rm $context_path.new || fail
+      fi
+      echo "#!/usr/env bash
+# WARNING: This file is auto-generated from $dna_path" >$context_path.new || fail
+      local last_type=fun
+    fi
+
+    if [[ -d $dna_path ]]; then
+      local dna_roots=$(find -L $dna_path -name up -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
+      prefix= make_or_load_dna_contents $dna_path || fail
+    elif [[ -f $dna_path ]]; then
+      if [[ $context_make == t ]]; then
+        cp $dna_path $context_path || fail
+      fi
+      source $dna_path || fail
+    else
+      log_vars=dna_path log_fatal "dna not found"
+      fail1
+    fi
+
+    make_or_load_context_dims || fail
+    make_or_load_context_expand || fail
+    
+    mv $context_path.new $context_path || fail
+
+  end_function
+  if failed; then
+    rm $context_path.new
+  fi
+  handle_return
+}
+
+load_context() {
+  context_make=f make_or_load_context 
+}
+
+make_context() {
+  context_make=t make_or_load_context 
+}
+
 switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
@@ -1163,55 +1282,6 @@ make_or_load_dna_contents() {
   handle_return
 }
 
-load_leaf_dims() {
-  begin_function
-    local i
-
-    leaf_dims=()
-    begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
-      leaf_dims+=( ${trunk_dims[$i]} )
-    end_for
-
-    leaf_dim_count=${#leaf_dims[*]}
-
-    if (( leaf_dim_count > 0 )); then
-      cell_is_leaf=f
-    else
-      cell_is_leaf=t
-    fi
-
-  end_function
-  handle_return
-}
-
-make_or_load_context_dims() {
-  begin_function
-
-    trunk_dim_count=${#trunk_dims[*]}
-    load_leaf_dims || fail
-
-    local dim assignment member i members_string=
-    begin_for ((i = 0; i < branch_dim_count; i++)); doo
-      dim=${branch_dims[$i]}
-      member=${branch_members[$i]}
-      quotes=single shell_quote_var member
-      members_string+="$member "
-      assignment="d_$dim=$member"
-      write_or_load var "$assignment" || fail
-    end_for
-
-    write_or_load var "trunk_dim_count=$trunk_dim_count
-branch_dims=( ${branch_dims[*]} )
-branch_dim_count=$branch_dim_count
-branch_members=( ${members_string% } )
-leaf_dims=( ${leaf_dims[*]} )
-leaf_dim_count=$leaf_dim_count
-cell_is_leaf=$cell_is_leaf" || fail
-
-  end_function
-  handle_return
-}
-
 make_context_expand_find_members() {
   begin_function
 
@@ -1450,78 +1520,6 @@ ${dim_type}_${dim}_expand() {
   handle_return
 }
 
-make_or_load_context_expand() {
-  begin_function
-
-    if [[ ! -d $seed_path ]]; then
-      log_fatal "No configuration in seed at $seed_path"
-      fail1
-    fi
-
-    local dim dim_type
-    begin_for dim_type in trunk_dims sub_dims props; doo
-      local -n dims=$dim_type
-      begin_for dim in ${dims[*]:-}; doo
-        make_or_load_context_expand2 || fail
-      end_for
-    end_for
-
-  end_function
-  handle_return
-}
-
-make_or_load_context() {
-  local log_vars=cell_path log_show_vars=short_cell
-  begin_function_hi
-
-    log_debug "Loading context for $short_cell" || fail
-    local item_name last_part dna_full_item suffix \
-      context_make=$context_make \
-
-    if [[ $context_make == t ]]; then
-      echo "#!/usr/env bash
-# WARNING: This file is auto-generated from $dna_path" >$context_path || fail
-      local lock_fd last_type=fun
-      timeout=$lock_timeout \
-        lock_path=$context_path \
-        fd_write_lock || fail
-    fi
-
-    if [[ -d $dna_path ]]; then
-      local dna_roots=$(find -L $dna_path -name up -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
-      prefix= make_or_load_dna_contents $dna_path || fail
-    elif [[ -f $dna_path ]]; then
-      if [[ $context_make == t ]]; then
-        cp $dna_path $context_path || fail
-      fi
-      source $dna_path || fail
-    else
-      log_vars=dna_path log_fatal "dna not found"
-      fail1
-    fi
-
-    make_or_load_context_dims || fail
-    make_or_load_context_expand || fail
-
-    if [[ $context_make == t ]]; then
-      fd_unlock
-    fi
-
-  end_function
-  if failed; then
-    rm $context_path
-  fi
-  handle_return
-}
-
-load_context() {
-  context_make=f make_or_load_context 
-}
-
-make_context() {
-  context_make=t make_or_load_context 
-}
-
 # input must be a folder
 setup_cell_path_vars() {
   cell_path=$1
@@ -1561,23 +1559,28 @@ setup_cell_path_vars() {
   handle_return
 }
 
-# inputs: up_path up_name choice
-link_choice() {
+# inputs: up_path up_name 
+link_choices() {
   begin_function
-    local choice2=${choice//-/_} \
-      up_name2=${up_name//-/_} \
+    local up_name2=${up_name//-/_} \
       dep_path=$up_path/$up_name
-    local path_var=up_${up_name2}_choices_${choice2}_path
-    local -n path=$path_var
-    if [[ ! -v $path_var ]]; then
-      log_fatal "Missing choice path var"
-      fail1
-    fi
-    if [[ ! -d $path ]]; then
-      log_fatal "Missing choice path"
-      fail1
-    fi
-    safe_link $path $dep_path/choices/$choice || fail
+    local choice choices_var=up_${up_name2}_choices
+    local -n choices=$choices_var
+    mkdir -p $dep_path/choices || fail
+    begin_for choice in ${choices[*]}; doo
+      local choice2=${choice//-/_}
+      local path_var=up_${up_name2}_choices_${choice2}_path
+      local -n path=$path_var
+      if [[ ! -v $path_var ]]; then
+        log_fatal "Missing choice path var"
+        fail1
+      fi
+      if [[ ! -d $path ]]; then
+        log_fatal "Missing choice path"
+        fail1
+      fi
+      safe_link $path $dep_path/choices/$choice || fail
+    end_for
   end_function
   handle_return
 }
@@ -1591,12 +1594,7 @@ make_cyto_up() {
         up_name2=${up_name//-/_}
       mkdir $dep_path || fail
       if [[ -v up_${up_name2}_choices ]]; then
-        local choice choices_var=up_${up_name2}_choices
-        local -n choices=$choices_var
-        mkdir $dep_path/choices || fail
-        begin_for choice in ${choices[*]}; doo
-          link_choice || fail
-        end_for
+        link_choices
       else
         log_fatal "Invalid upstream config for $up_path: Missing choices folder."
         fail1
