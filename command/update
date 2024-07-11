@@ -6,18 +6,23 @@ get_needs_update() {
   local log_show_vars=^cell_path
   begin_function_hi
 
-    local localize_dims=${localize_dims:-}
+    # do we need to delete branches of this cell
+    needs_pruning=f
+
+    local localize_dims=${localize_dims:-} \
+      cyto_path=$cell_path/.cyto
     if [[ "${localize_dims:-local}" != local ]]; then
       eval "$localize_dims" || fail
     fi
+
 
     local level=log_verbose
     if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
       level=log_info
     fi
 
-    local status_path=$cell_path/.cyto/status \
-      up_path=$cell_path/.cyto/up \
+    local status_path=$cyto_path/status \
+      up_path=$cyto_path/up \
       log_message="No update needed" \
       check_upstream_depth=${check_upstream_depth:-1}
 
@@ -63,6 +68,19 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because current value does not match intended value"
+    elif 
+      git_commit_check || fail
+      [[ ! -d $cyto_path ]]
+    then
+      needs_update=t
+      needs_pruning=t
+      log_message="Needs update because git repo has changed"
+    elif 
+      broken_link_check || fail
+      [[ ! -d $cyto_path ]]
+    then
+      needs_update=t
+      log_message="Needs update because cyto contains broken links"
     fi
 
   end_function
@@ -177,6 +195,74 @@ prep_upstream() {
   handle_return
 }
 
+repair_update_upstream_choose_single() {
+  begin_function
+    debug_start
+    if [[ ! -e $chosen ]]; then
+      rm $chosen || succeed
+      local choice=${choices##*/} up_name=${upstraem##*/}
+      link_choice || succeed
+      repair_successful=t
+    fi
+  end_function
+  handle_return
+}
+
+update_upstream_choose_single() {
+  begin_function_lo
+    chosen=$choices
+    if [[ ! -e $upstream/chosen ]]; then
+      force=t safe_link $chosen $upstream/chosen || fail
+    fi
+  end_function
+  handle_return
+}
+
+update_upstream_choose_multi() {
+  begin_function
+    local anchor_dims=
+    if [[ "$chosen" ]]; then
+      if [[ -e "$chosen/.dna" ]]; then
+        upstream_cell_link=$chosen
+        cell_path=$chosen
+        switch_context
+        get_needs_update || fail
+      else
+        needs_update=t
+      fi
+      if [[ $needs_update == t ]]; then
+        if [[ $needs_pruning == t ]]; then
+          debug_start
+          local trunk_cell
+          get_trunk_cell $chosen || fail
+          # TODO finish
+        fi
+        chosen=
+      fi
+    fi
+    if [[ ! "$chosen" ]]; then
+      begin_for choice in $choices; doo
+        needs_update=
+        cell_path=$choice
+        get_needs_update || fail
+        if [[ $needs_update == f ]]; then
+          chosen=$choice
+          break
+        fi
+      end_for
+      if [[ ! "$chosen" ]]; then
+        chosen=${choices%% *}
+      fi
+      force=t safe_link $chosen $upstream/chosen || fail
+      upstream_cell_link=$chosen
+      if [[ "$original_choice" == "$chosen" ]]; then
+        needs_update=t
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 # needs_update is guaranteed to be set after this completes successfully
 # returns: chosen needs_update
 update_upstream_choose() {
@@ -200,40 +286,9 @@ update_upstream_choose() {
 
     needs_update=
     if (( ${#choices[*]} == 1 )); then
-      chosen=$choices
-      if [[ ! -e $upstream/chosen ]]; then
-        force=t safe_link $chosen $upstream/chosen || fail
-      fi
+      update_upstream_choose_single
     else # more than one choice available
-      local anchor_dims=
-      if [[ "$chosen" && -e "$chosen/.dna" ]]; then
-        upstream_cell_link=$chosen
-        cell_path=$chosen
-        switch_context
-        get_needs_update || fail
-        if [[ $needs_update == t ]]; then
-          chosen=
-        fi
-      fi
-      if [[ ! "$chosen" ]]; then
-        begin_for choice in $choices; doo
-          needs_update=
-          cell_path=$choice
-          get_needs_update || fail
-          if [[ $needs_update == f ]]; then
-            chosen=$choice
-            break
-          fi
-        end_for
-        if [[ ! "$chosen" ]]; then
-          chosen=${choices%% *}
-        fi
-        force=t safe_link $chosen $upstream/chosen || fail
-        upstream_cell_link=$chosen
-        if [[ "$original_choice" == "$chosen" ]]; then
-          needs_update=t
-        fi
-      fi
+      update_upstream_choose_multi
     fi
 
     cell_path=$original_cell_path

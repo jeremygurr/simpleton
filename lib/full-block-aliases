@@ -1,0 +1,274 @@
+#!/usr/bin/env bash
+
+# depends on: omni-log bash-debugger bash-lib simple-block-aliases
+
+declare -A trace_var_old
+debug_id_current=0
+debug_id_inc() {
+  (( no_trace_depth++ ))
+  (( debug_id_current++ ))
+  if [[ ${show_debug_id:-f} == a ]]; then
+    out -n " $CYAN$debug_id_current$RESET"
+  fi
+  if [[ ${trace_structure:-f} == t ]]; then
+    out " $CYAN$debug_id_current$RESET ${struct_type:-}"
+  fi
+  if [[ "${trace_var:-}" ]]; then
+    local var value='(unbound)'
+    for var in $trace_var; do
+      if is_array $var; then
+        eval "value=\"( \${$var[*]:0:10} )\""
+      elif [[ -v $var ]]; then
+        value=${!var}
+      fi
+      if [[ "${trace_var_old[$var]:-}" != "$value" ]]; then
+        echo "${CYAN}debug_id=$debug_id_current $var=$value$RESET" >&$fd_original_err
+      fi
+      trace_var_old[$var]=$value
+    done
+  fi
+  if [[ "${debug_id:-}" && $debug_id != t && $debug_id_current -ge $debug_id ]]; then
+    if [[ "${debug_debug:-}" == t ]]; then
+      log_debug_debug "debug_id matched: $debug_id" >&$fd_original_err
+    fi
+    debug_ignore_remove ${FUNCNAME[*]:1:4}
+    debug_id=t
+    debug_start o
+  elif [[ "${debug_quick_function:-}" && $debug_quick_function == ${FUNCNAME[1]} ]]; then
+    if [[ "${debug_debug:-}" == t ]]; then
+      log_debug_debug "debug_quick_function matched: $debug_quick_function" >&$fd_original_err
+      show_array FUNCNAME
+    fi
+    debug_ignore_remove ${FUNCNAME[*]:1:4}
+    debug_function_old=$debug_quick_function
+    debug_quick_function=
+    debug_immediate=t
+    debug_start o
+  fi
+  (( no_trace_depth-- ))
+}
+
+trace_time_summarize() {
+  eval "exec $trace_time_fd>&-"
+  trace_time_fd=
+
+  echo "$NL$hbar_equals"
+  echo "trace_time summary by function instance in chronological order:$NL"
+  ( echo "duration(µs) function id_start id_end heat"; sort -n -k3 $trace_time_log ) \
+    | field=0 format_number_stream | field=4 format_number_stream | column -t 
+
+  echo "$NL$hbar_equals"
+  echo "trace_time summary by function instance in heat order:$NL"
+  ( echo "duration(µs) function id_start id_end heat"; sort -n -k5 $trace_time_log ) \
+    | field=0 format_number_stream | field=4 format_number_stream | column -t 
+
+  echo "$NL$hbar_equals"
+  echo "trace_time summary by function instance sorted by name:$NL"
+  ( echo "duration(µs) function id_start id_end heat"; sort -k2 $trace_time_log ) \
+    | field=0 format_number_stream | field=4 format_number_stream | column -t 
+
+  echo "$NL$hbar_equals"
+  echo "trace_time summary by function instance sorted by time:$NL"
+  ( echo "duration(µs) function id_start id_end heat"; sort -n $trace_time_log ) \
+    | field=0 format_number_stream | field=4 format_number_stream | column -t 
+
+  echo "$NL$hbar_equals"
+  echo "trace_time summary by function sorted by time:$NL"
+  ( echo "duration(µs) function executions heat"; sort -k2 $trace_time_log \
+    | awk '
+  BEGIN {
+    prev=""
+  }
+  prev != $2 {
+    if ( prev != "" && total > 0 ) print total " " prev " x" count " " heat
+    prev=$2
+    total=0
+    count=0
+    heat=0
+  }
+  {
+    total+=$1
+    count+=1
+    heat+=$5
+  }
+  END {
+    if ( prev != "" && total > 0 ) print total " " prev " x" count " " heat
+  }
+  ' | sort -n | field=0 format_number_stream | field=3 format_number_stream ) | column -t
+
+  echo "$NL$hbar_equals"
+  echo "trace_time summary by function sorted by heat:$NL"
+  ( echo "duration(µs) function times_executed subs heat"; sort -k2 $trace_time_log \
+    | awk '
+  BEGIN {
+    prev=""
+  }
+  prev != $2 {
+    heat=int(total/(subs+1))
+    if ( prev != "" && total > 0 ) print total " " prev " x" count " " subs " " heat
+    prev=$2
+    total=0
+    count=0
+    subs=0
+  }
+  {
+    total+=$1
+    count+=1
+    subs+=1+$4-$3
+  }
+  END {
+    heat=int(total/(subs+1))
+    if ( prev != "" && total > 0 ) print total " " prev " x" count " " subs " " heat
+  }
+  ' | sort -n -k5 | field=0 format_number_stream | field=4 format_number_stream ) | column -t
+
+}
+
+: ${trace_time:=f}
+
+alias timebox_open='
+  (( no_trace_depth++ ))
+  timebox_stack+=( $timebox )
+  trace_time_open
+  (( no_trace_depth-- ))
+'
+
+alias timebox_close='
+  (( no_trace_depth++ ))
+  trace_time_close
+  unset timebox_stack[-1]
+  timebox=${timebox_stack[-1]}
+  (( no_trace_depth-- ))
+'
+
+alias trace_time_open='
+  if [[ $trace_time == t ]]; then
+    if [[ ! ${trace_time_fd:-} ]]; then
+      : ${trace_time_log:=/tmp/trace_time.log}
+      [[ -e $trace_time_log ]] && rm $trace_time_log
+      exec {trace_time_fd}<>$trace_time_log
+    fi
+    trace_time_start=${EPOCHREALTIME/./}
+    trace_time_start_debug_id=$debug_id_current
+  fi
+'
+
+alias trace_time_close='
+  if [[ $trace_time == t && "${trace_time_fd:-}" ]]; then
+    trace_time_stop=${EPOCHREALTIME/./}
+    (( time_dur = trace_time_stop - trace_time_start ))
+    (( time_heat = time_dur / (debug_id_current - trace_time_start_debug_id + 1) ))
+    echo "$time_dur $timebox $trace_time_start_debug_id $debug_id_current $time_heat" >&$trace_time_fd
+  fi
+'
+
+alias begin_function_hi='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=2 trace_time_start current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_heat time_dur
+  write_to_log_and_save 
+  (( log_depth_current++ ))
+  log_vars= log_show_vars=
+  warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=$current_function" )
+  trace_time_open
+  struct_type="open $current_function" debug_id_inc
+  while true; do
+  (( no_trace_depth-- ))
+'
+
+alias begin_function='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=1 trace_time_start current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_heat time_dur
+  warm_stack+=( "raw_stack_id=${#BASH_SOURCE[*]} debug_id=$((debug_id_current+1)) function=$current_function" )
+  trace_time_open
+  struct_type="open $current_function" debug_id_inc
+  while true; do
+  (( no_trace_depth-- ))
+'
+  
+alias begin_function_lo='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=0 function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_heat time_dur
+  while true; do
+'
+
+alias end_function='
+  (( no_trace_depth++ ))
+  break
+  done
+  local log_return_vars=
+  if (( function_level > 0 )); then
+    unset warm_stack[-1]
+    struct_type="close $current_function" debug_id_inc
+  fi
+  (( no_trace_depth-- ))
+'
+
+alias handle_return='
+  (( no_trace_depth++ ))
+  case $function_level in
+    2)
+      timebox=$FUNCNAME
+      trace_time_close
+      load_log_vars_and_write_to_log
+      (( log_depth_current-- ))
+    ;;
+    1)
+      timebox=$FUNCNAME
+      trace_time_close
+    ;;
+    0)
+      if (( no_trace_depth-- <= 1 )); then 
+        no_trace_depth=1
+      fi
+    ;;
+  esac
+  debug_return_vars=$log_return_vars
+  (( no_trace_depth-- ))
+  return $return_value
+'
+
+alias begin_while='break_out=f; while'
+alias   begin_for='break_out=f; for'
+alias  begin_loop='break_out=f; while true'
+alias   end_while='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
+alias     end_for='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
+alias    end_loop='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
+
+# end_while or end_for or end_loop should usually be used instead of this.
+# This is helpful though if the done part needs to be separated from the break part
+alias maybe_break='debug_id_inc; [[ $break_out == t ]] && break'
+
+alias handle_exit='exit $return_value'
+
+# to avoid bash syntax parsing problems, and provide a hook for loop beginning
+alias         doo='do struct_type="loop iteration" debug_id_inc;'
+
+# This performs the same debug_id advancement that begin_function and others do,
+#   except unlike begin_function this may be placed anywhere within a function,
+#   providing a stopping point for debugging of larger blocks of code that otherwise
+#   can't be split up.
+alias fence='(( no_trace_depth++ )); debug_id_inc; (( no_trace_depth-- ))'
+
+attempt_autorepair() {
+  local repair_successful=f func_name=$1
+  zombie "Failed return value"
+  if [[ ! -v repair_attempted ]]; then
+  zombie "repair_successful variable missing"
+  if declare -pf repair_$func_name &>/dev/null \
+   ; then
+  zombie "Attempting auto-repair of repair_$func_name"
+  repair_$func_name
+  fi fi
+  [[ $repair_successful == t ]]
+}
+
+# used after a direct command which may fail: cd /somewhere || fail
+alias fail='{ return_value=$?; attempt_autorepair $FUNCNAME && { local repair_attempted=t; continue; }; break_out=t; break; }'
+alias fail_later='{ return_value=$?; attempt_autorepair $FUNCNAME && { local repair_attempted=t; continue; }; break_out=t; }'
+# used as a standalone command triggering the failed state and exiting the block
+alias fail1='{ return_value=1; attempt_autorepair $FUNCNAME && { local repair_attempted=t; continue; }; break_out=t; break; }'
+alias fail2='{ return_value=2; attempt_autorepair $FUNCNAME && { local repair_attempted=t; continue; }; break_out=t; break; }'
+  
+log_var_entries_stack=()
+log_var_show_vars_stack=()
+
