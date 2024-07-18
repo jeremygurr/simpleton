@@ -905,6 +905,174 @@ switch_context() {
   return 0
 }
 
+expand_values_check_default_table() {
+  begin_function        
+      
+    local field_count=${#fields[*]} \
+      table_count=${#table[*]} \
+      maybe table_index=0 column_index \
+      found=f value= result= field everything_matches
+
+    local invalid=f
+    begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+      field=${fields[$column_index]}
+      if [[ $field != $dim ]]; then
+        local -n f=d_$field
+        if [[ ! -v f ]]; then
+          invalid=t
+          break
+        fi
+      fi
+    end_for
+
+    if [[ $invalid == f ]]; then
+      begin_while (( table_index < table_count )); doo
+        (( table_index += field_count ))
+        everything_matches=t
+        begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+          field=${fields[$column_index]}
+          value=${table[$((table_index + column_index))]}
+          if [[ $field == $dim ]]; then
+            result=$value
+          else
+            local -n dim2=d_$field
+            if [[ ! -v dim2 || "$dim2" != "$value" ]]; then
+              everything_matches=f
+              break
+            fi
+          fi
+        end_for
+        if [[ $everything_matches == t ]]; then
+          found=t
+          break
+        fi
+      end_while
+
+      if [[ $found == t ]]; then
+        if [[ ! "$result" ]]; then
+          log_fatal "Table for dim $dim is missing the column named $dim"
+          fail1
+        fi
+        values=$result
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
+expand_values_check_default() {
+  begin_function
+
+    local problem
+    value= ${dim_type}_${dim}_expand || fail
+
+    if [[ ! "${values:-}" ]]; then
+
+      local -n is_optional_var=${dim_type}_${dim}_is_optional \
+        table=dim_constraints_${dim}_table \
+        fields=dim_constraints_${dim}_fields
+
+      local is_optional=f
+      if [[ -v is_optional_var && $is_optional_var == t ]]; then
+        is_optional=t
+      fi
+
+      if [[ ! -v table ]]; then
+        local -n table=dim_constraints_all_table \
+          fields=dim_constraints_all_fields
+      fi
+
+      if [[ -v table && $dim_type == trunk_dims ]]; then
+        expand_values_check_default_table || fail
+      elif [[ $can_ask == t && $is_optional == f ]]; then
+        debug_start
+        choose "Enter required value: $dim=" d_$dim || fail
+        # recursive
+        can_ask=f expand_values || fail
+      fi
+
+      if [[ ! "${values:-}" && $is_optional == f ]]; then
+        log_fatal "Missing required $dim_type: $dim"
+        fail1
+      fi
+
+    fi
+
+  end_function
+  handle_return
+}
+
+expand_values_check_if_too_many() {
+  if [[ $check_single == t && ${#values[*]} -gt 1 ]]; then
+    log_fatal "Too many values for a singular dim $dim." \
+      "Use plural dim $dims if you intend to have multiple values."
+    fail1
+  fi
+}
+
+# input: check_single value
+# output: values
+expand_values_check_one() {
+  begin_function
+
+    ${dim_type}_${dim}_expand || fail
+    if [[ "$problem" ]]; then
+      log_fatal "$problem"
+      fail1
+    fi
+    expand_values_check_if_too_many || fail
+
+  end_function
+  handle_return
+}
+
+# input: dim
+# optional inputs: dim_type can_ask
+# output: values 
+expand_values() {
+  local dim_type=${dim_type:-trunk_dims} can_ask=${can_ask:-t}
+  begin_function
+
+    if ! function_exists ${dim_type}_${dim}_expand; then
+      log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
+      fail1
+    fi
+
+    eval "values=\${d_$dim:-\${p_$dim:-\${$dim:-}}}"
+    local check_single=t
+
+    if [[ ! "$values" ]]; then
+      local plural
+      get_plural $dim
+      local dims=$plural 
+      eval "values=\${d_$dims:-\${p_$dims:-\${$dims:-}}}"
+      check_single=f
+    elif [[ ! "$values" =~ ^[a-zA-Z0-9_]+$ ]]; then
+      quotes=single shell_quote_var values
+    fi
+
+    local new_values=()
+    eval "values=( $values )" || fail
+
+    expand_values_check_if_too_many || fail
+
+    if [[ ! "${values:-}" ]]; then
+      expand_values_check_default || fail
+    else
+      local value
+      new_values=()
+      begin_for value in "${values[@]}"; doo
+        check_single=$check_single expand_values_check_one || fail
+        new_values+=( "${values[@]}" )
+      end_for
+      values=( "${new_values[@]}" )
+    fi
+
+  end_function
+  handle_return
+}
+
 execute_command_internal_prep() {
   begin_function
     can_create_cyto=t
@@ -935,6 +1103,7 @@ execute_command_internal_prep() {
 
         if [[ "${leaf_dims:-}" ]]; then
           local dim=$leaf_dims
+          dim_type=trunk_dims \
           expand_values || fail
           get_plural $dim || fail
           eval "unset $dim" || fail
@@ -1866,173 +2035,6 @@ for_each_leaf_flat() {
       fi
       
     end_loop
-
-  end_function
-  handle_return
-}
-
-expand_values_check_default_table() {
-  begin_function        
-      
-    local field_count=${#fields[*]} \
-      table_count=${#table[*]} \
-      maybe table_index=0 column_index \
-      found=f value= result= field everything_matches
-
-    local invalid=f
-    begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-      field=${fields[$column_index]}
-      if [[ $field != $dim ]]; then
-        local -n f=d_$field
-        if [[ ! -v f ]]; then
-          invalid=t
-          break
-        fi
-      fi
-    end_for
-
-    if [[ $invalid == f ]]; then
-      begin_while (( table_index < table_count )); doo
-        (( table_index += field_count ))
-        everything_matches=t
-        begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-          field=${fields[$column_index]}
-          value=${table[$((table_index + column_index))]}
-          if [[ $field == $dim ]]; then
-            result=$value
-          else
-            local -n dim2=d_$field
-            if [[ ! -v dim2 || "$dim2" != "$value" ]]; then
-              everything_matches=f
-              break
-            fi
-          fi
-        end_for
-        if [[ $everything_matches == t ]]; then
-          found=t
-          break
-        fi
-      end_while
-
-      if [[ $found == t ]]; then
-        if [[ ! "$result" ]]; then
-          log_fatal "Table for dim $dim is missing the column named $dim"
-          fail1
-        fi
-        values=$result
-      fi
-    fi
-
-  end_function
-  handle_return
-}
-
-expand_values_check_default() {
-  begin_function
-
-    local problem
-    value= ${dim_type}_${dim}_expand || fail
-
-    if [[ ! "${values:-}" ]]; then
-
-      local -n is_optional_var=${dim_type}_${dim}_is_optional \
-        table=dim_constraints_${dim}_table \
-        fields=dim_constraints_${dim}_fields
-
-      local is_optional=f
-      if [[ -v is_optional_var && $is_optional_var == t ]]; then
-        is_optional=t
-      fi
-
-      if [[ ! -v table ]]; then
-        local -n table=dim_constraints_all_table \
-          fields=dim_constraints_all_fields
-      fi
-
-      if [[ -v table && $dim_type == trunk_dims ]]; then
-        expand_values_check_default_table || fail
-      elif [[ $can_ask == t && $is_optional == f ]]; then
-        debug_start
-        choose "Enter required value: $dim=" d_$dim || fail
-        # recursive
-        can_ask=f expand_values || fail
-      fi
-
-      if [[ ! "${values:-}" && $is_optional == f ]]; then
-        log_fatal "Missing required $dim_type: $dim"
-        fail1
-      fi
-
-    fi
-
-  end_function
-  handle_return
-}
-
-expand_values_check_if_too_many() {
-  if [[ $check_single == t && ${#values[*]} -gt 1 ]]; then
-    log_fatal "Too many values for a singular dim $dim." \
-      "Use plural dim $dims if you intend to have multiple values."
-    fail1
-  fi
-}
-
-# input: check_single value
-# output: values
-expand_values_check_one() {
-  begin_function
-
-    ${dim_type}_${dim}_expand || fail
-    if [[ "$problem" ]]; then
-      log_fatal "$problem"
-      fail1
-    fi
-    expand_values_check_if_too_many || fail
-
-  end_function
-  handle_return
-}
-
-# input: dim
-# output: values 
-expand_values() {
-  local dim_type=${dim_type:-trunk_dims} can_ask=${can_ask:-t}
-  begin_function
-
-    if ! function_exists ${dim_type}_${dim}_expand; then
-      log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
-      fail1
-    fi
-
-    eval "values=\${d_$dim:-\${p_$dim:-\${$dim:-}}}"
-    local check_single=t
-
-    if [[ ! "$values" ]]; then
-      local plural
-      get_plural $dim
-      local dims=$plural 
-      eval "values=\${d_$dims:-\${p_$dims:-\${$dims:-}}}"
-      check_single=f
-    elif [[ ! "$values" =~ ^[a-zA-Z0-9_]+$ ]]; then
-      quotes=single shell_quote_var values
-    fi
-
-    local new_values=()
-    eval "values=( $values )" || fail
-
-    expand_values_check_if_too_many || fail
-
-    if [[ ! "${values:-}" ]]; then
-      expand_values_check_default || fail
-    else
-      local value
-      new_values=()
-      begin_for value in "${values[@]}"; doo
-        check_single=$check_single expand_values_check_one || fail
-        new_values+=( "${values[@]}" )
-      end_for
-      values=( "${new_values[@]}" )
-    fi
 
   end_function
   handle_return
