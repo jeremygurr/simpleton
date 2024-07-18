@@ -1935,8 +1935,15 @@ expand_values_check_default() {
 
     if [[ ! "${values:-}" ]]; then
 
-      local -n table=dim_constraints_${dim}_table \
+      local -n is_optional_var=${dim_type}_${dim}_is_optional \
+        table=dim_constraints_${dim}_table \
         fields=dim_constraints_${dim}_fields
+
+      local is_optional=f
+      if [[ -v is_optional_var && $is_optional_var == t ]]; then
+        is_optional=t
+      fi
+
       if [[ ! -v table ]]; then
         local -n table=dim_constraints_all_table \
           fields=dim_constraints_all_fields
@@ -1944,13 +1951,14 @@ expand_values_check_default() {
 
       if [[ -v table && $dim_type == trunk_dims ]]; then
         expand_values_check_default_table || fail
-      elif [[ $can_ask == t ]]; then
+      elif [[ $can_ask == t && $is_optional == f ]]; then
+        debug_start
         choose "Enter required value: $dim=" d_$dim || fail
         # recursive
         can_ask=f expand_values || fail
       fi
 
-      if [[ ! "${values:-}" ]]; then
+      if [[ ! "${values:-}" && $is_optional == f ]]; then
         log_fatal "Missing required $dim_type: $dim"
         fail1
       fi
