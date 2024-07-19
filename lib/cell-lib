@@ -689,9 +689,31 @@ load_leaf_dims() {
     local i
 
     leaf_dims=()
-    begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
-      leaf_dims+=( ${trunk_dims[$i]} )
-    end_for
+    if [[ ! "${anchor_dims:-}" ]]; then
+      begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
+        leaf_dims+=( ${trunk_dims[$i]} )
+      end_for
+    else
+      local anchor_dim branch_dim leftovers="${trunk_dims[*]}"
+      
+      debug_start
+      begin_for branch_dim in ${branch_dims[*]}; doo
+        remove_word_from_string leftovers $branch_dims
+      end_for
+
+      begin_for anchor_dim in ${anchor_dims[*]}; doo
+        if [[ " $leftovers " != *" $anchor_dim "* ]]; then
+          log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: $leftovers"
+          fail1
+        fi
+        leaf_dims+=( $anchor_dim )
+        remove_word_from_string leftovers $anchor_dim
+      end_for
+
+      if [[ "$leftovers" ]]; then
+        leaf_dims+=( $leftovers )
+      fi
+    fi
 
     leaf_dim_count=${#leaf_dims[*]}
 
@@ -728,6 +750,244 @@ branch_members=( ${members_string% } )
 leaf_dims=( ${leaf_dims[*]} )
 leaf_dim_count=$leaf_dim_count
 cell_is_leaf=$cell_is_leaf" || fail
+
+  end_function
+  handle_return
+}
+
+make_context_expand_find_members() {
+  begin_function
+
+    local branch other_found=f
+    local member_paths=$(find1 $seed_path -name "$dim:*" -type d | sort -g) || fail
+
+    begin_for branch in $member_paths; doo
+      m=${branch##*/*:}
+      if [[ $m == all ]]; then
+        log_fatal "Should not have an all as a dim member: $branch"
+        fail1
+      elif [[ $m == _other ]]; then
+        other_found=t
+      else
+        local member_var_path=$branch/.member
+        if [[ -f $member_var_path ]]; then
+          m=$(<$member_var_path) || fail
+        fi
+        members+=( "$m" )
+      fi
+    end_for
+
+    if [[ "$member_paths" && $other_found == f ]]; then
+      has_explicit_member_list=t
+    fi
+
+  end_function
+  handle_return
+}
+
+make_context_expand_handle_default() {
+  begin_function
+    if [[ -v ${dim_type}_${dim}_default ]]; then
+
+      eval "local default=\"\$${dim_type}_${dim}_default\""
+      code+="
+    '')
+      values=( \"$default\" )
+    ;;"
+
+    elif [[ -v ${dim_type}_${dim}_default_function ]]; then
+
+      code+="
+    '')
+    "
+      local -n default_fun=${dim_type}_${dim}_default_function
+      code+="$(echo "$default_fun" | indent 2)"
+      code+="
+    ;;"
+
+    else
+
+      code+="
+    '')
+      problem=\"Missing required parameter: $dim\"
+    ;;"
+
+    fi
+  end_function
+  handle_return
+}
+
+make_context_expand_members_unknown() {
+  begin_function
+    code+="
+    all)
+      problem=\"'all' member not available for this dim: $dim\"
+    ;;
+    *)
+      values=( \"\$value\" )
+    ;;
+  esac
+}"
+  end_function
+  handle_return
+}
+
+make_context_expand_members_known() {
+  begin_function
+    local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
+    begin_for m in "${members[@]}"; doo
+      quoted_members+="\"$m\" "
+      if [[ $m == *\ * ]]; then
+        need_quotes=t
+      fi
+    end_for
+
+    if [[ $need_quotes == f ]]; then
+      quoted_members="${members[*]}"
+    fi
+
+    local members_with_pipes=${members_with_pipes// /\|}
+
+    code+="
+    all)
+      values=( $quoted_members )
+    ;;
+    $members_with_pipes)
+      values=( \$value )
+    ;;
+    *)
+      problem=\"Invalid $dim: \$value\"
+    ;;
+  esac
+}"
+  end_function
+  handle_return
+}
+
+# input: 
+#   $1 = table var name
+#   $2 = target field name
+# output: values
+get_members_from_table() {
+  begin_function
+    local -n fields=${1}_fields table=${1}_table
+    local target_field=$2
+    if [[ ! -v fields || ! -v table ]]; then
+      log_fatal "Missing expected vars: ${1}_fields or ${1}_table"
+      fail1
+    fi
+    local i r f t row field value target_value \
+      field_count=${#fields[*]} table_count=${#table[*]}
+    local row_count=$((table_count/field_count)) r
+    values=()
+    begin_for (( r = 0; r < row_count; r++ )); doo
+      (( i = row * field_count ))
+      begin_for (( f = 0; f < field_count; f++ )); doo
+        field=${fields[$f]}
+        (( t = i + f ))
+        value=${table[$t]}
+        if [[ $field == $target_field ]]; then
+          target_value=$value
+        else
+          if [[ "$value" == all ]]; then
+            continue # try next field, since this one matches
+          fi
+          if [[ ! -v $dim ]]; then
+            log_fatal "Missing dim value for $dim, which is required to expand values from the given table"
+            fail1
+          fi
+          local -n expected_value=$dim
+          if [[ "$value" != "$expected_value" ]]; then
+            continue 2 # try next row, since row failed to match
+          fi
+        fi
+      end_for
+      values+=( $target_value )
+    end_for
+    if [[ ! "$values" ]]; then
+      log_fatal "No matching values found for dim $dim"
+      fail1
+    fi
+  end_function
+  handle_return
+}
+
+make_context_expand_members_table() {
+  begin_function
+    code+="
+    all)
+      if ! get_members_from_table ${dim_type}_${dim}_members $dim; then
+        problem=\"Invalid $dim: \$value\"
+      fi
+    ;;
+    *)
+      problem=\"Invalid $dim: \$value\"
+    ;;
+  esac
+}"
+  end_function
+  handle_return
+}
+
+make_context_expand_handle_aliases() {
+  begin_function
+    local a_line first remaining
+    begin_for a_line in "${aliases[@]}"; doo
+      first=${a_line%% *}
+      remaining=${a_line#* }
+      code+="
+    $first)
+      values=( $remaining )
+    ;;"
+    end_for
+  end_function
+  handle_return
+}
+
+make_or_load_context_expand2() {
+  begin_function
+
+    local members=() aliases=() has_explicit_member_list=f fun has_table=f
+
+    if [[ -v ${dim_type}_${dim}_members ]]; then
+      eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
+
+      if [[ ${#members[*]} -eq 0 ]]; then
+        log_fatal "There are no members defined for $dim."
+        fail1
+      fi
+
+      has_explicit_member_list=t
+    elif [[ -v ${dim_type}_${dim}_members_table ]]; then
+      has_table=t
+    else
+      make_context_expand_find_members
+    fi
+
+    if [[ -v ${dim_type}_${dim}_aliases ]]; then
+      eval "aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )" || fail
+    fi
+
+    code="
+${dim_type}_${dim}_expand() {
+  problem=
+  case \"\$value\" in"
+
+    make_context_expand_handle_default || fail
+
+    if (( ${#aliases[*]} > 0 )); then
+      make_context_expand_handle_aliases || fail
+    fi
+
+    if [[ $has_explicit_member_list == f ]]; then
+      make_context_expand_members_unknown || fail
+    elif [[ $has_table == t ]]; then
+      make_context_expand_members_table || fail
+    else
+      make_context_expand_members_known || fail
+    fi
+
+    write_or_load fun "$code" || fail
 
   end_function
   handle_return
@@ -986,7 +1246,6 @@ expand_values_check_default() {
       if [[ -v table && $dim_type == trunk_dims ]]; then
         expand_values_check_default_table || fail
       elif [[ $can_ask == t && $is_optional == f ]]; then
-        debug_start
         choose "Enter required value: $dim=" d_$dim || fail
         # recursive
         can_ask=f expand_values || fail
@@ -1456,244 +1715,6 @@ make_or_load_dna_contents() {
       make_array_assignment $current_var array_content || fail
       write_or_load var "$array_assignment" || fail
     fi
-
-  end_function
-  handle_return
-}
-
-make_context_expand_find_members() {
-  begin_function
-
-    local branch other_found=f
-    local member_paths=$(find1 $seed_path -name "$dim:*" -type d | sort -g) || fail
-
-    begin_for branch in $member_paths; doo
-      m=${branch##*/*:}
-      if [[ $m == all ]]; then
-        log_fatal "Should not have an all as a dim member: $branch"
-        fail1
-      elif [[ $m == _other ]]; then
-        other_found=t
-      else
-        local member_var_path=$branch/.member
-        if [[ -f $member_var_path ]]; then
-          m=$(<$member_var_path) || fail
-        fi
-        members+=( "$m" )
-      fi
-    end_for
-
-    if [[ "$member_paths" && $other_found == f ]]; then
-      has_explicit_member_list=t
-    fi
-
-  end_function
-  handle_return
-}
-
-make_context_expand_handle_default() {
-  begin_function
-    if [[ -v ${dim_type}_${dim}_default ]]; then
-
-      eval "local default=\"\$${dim_type}_${dim}_default\""
-      code+="
-    '')
-      values=( \"$default\" )
-    ;;"
-
-    elif [[ -v ${dim_type}_${dim}_default_function ]]; then
-
-      code+="
-    '')
-    "
-      local -n default_fun=${dim_type}_${dim}_default_function
-      code+="$(echo "$default_fun" | indent 2)"
-      code+="
-    ;;"
-
-    else
-
-      code+="
-    '')
-      problem=\"Missing required parameter: $dim\"
-    ;;"
-
-    fi
-  end_function
-  handle_return
-}
-
-make_context_expand_members_unknown() {
-  begin_function
-    code+="
-    all)
-      problem=\"'all' member not available for this dim: $dim\"
-    ;;
-    *)
-      values=( \"\$value\" )
-    ;;
-  esac
-}"
-  end_function
-  handle_return
-}
-
-make_context_expand_members_known() {
-  begin_function
-    local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
-    begin_for m in "${members[@]}"; doo
-      quoted_members+="\"$m\" "
-      if [[ $m == *\ * ]]; then
-        need_quotes=t
-      fi
-    end_for
-
-    if [[ $need_quotes == f ]]; then
-      quoted_members="${members[*]}"
-    fi
-
-    local members_with_pipes=${members_with_pipes// /\|}
-
-    code+="
-    all)
-      values=( $quoted_members )
-    ;;
-    $members_with_pipes)
-      values=( \$value )
-    ;;
-    *)
-      problem=\"Invalid $dim: \$value\"
-    ;;
-  esac
-}"
-  end_function
-  handle_return
-}
-
-# input: 
-#   $1 = table var name
-#   $2 = target field name
-# output: values
-get_members_from_table() {
-  begin_function
-    local -n fields=${1}_fields table=${1}_table
-    local target_field=$2
-    if [[ ! -v fields || ! -v table ]]; then
-      log_fatal "Missing expected vars: ${1}_fields or ${1}_table"
-      fail1
-    fi
-    local i r f t row field value target_value \
-      field_count=${#fields[*]} table_count=${#table[*]}
-    local row_count=$((table_count/field_count)) r
-    values=()
-    begin_for (( r = 0; r < row_count; r++ )); doo
-      (( i = row * field_count ))
-      begin_for (( f = 0; f < field_count; f++ )); doo
-        field=${fields[$f]}
-        (( t = i + f ))
-        value=${table[$t]}
-        if [[ $field == $target_field ]]; then
-          target_value=$value
-        else
-          if [[ "$value" == all ]]; then
-            continue # try next field, since this one matches
-          fi
-          if [[ ! -v $dim ]]; then
-            log_fatal "Missing dim value for $dim, which is required to expand values from the given table"
-            fail1
-          fi
-          local -n expected_value=$dim
-          if [[ "$value" != "$expected_value" ]]; then
-            continue 2 # try next row, since row failed to match
-          fi
-        fi
-      end_for
-      values+=( $target_value )
-    end_for
-    if [[ ! "$values" ]]; then
-      log_fatal "No matching values found for dim $dim"
-      fail1
-    fi
-  end_function
-  handle_return
-}
-
-make_context_expand_members_table() {
-  begin_function
-    code+="
-    all)
-      if ! get_members_from_table ${dim_type}_${dim}_members $dim; then
-        problem=\"Invalid $dim: \$value\"
-      fi
-    ;;
-    *)
-      problem=\"Invalid $dim: \$value\"
-    ;;
-  esac
-}"
-  end_function
-  handle_return
-}
-
-make_context_expand_handle_aliases() {
-  begin_function
-    local a_line first remaining
-    begin_for a_line in "${aliases[@]}"; doo
-      first=${a_line%% *}
-      remaining=${a_line#* }
-      code+="
-    $first)
-      values=( $remaining )
-    ;;"
-    end_for
-  end_function
-  handle_return
-}
-
-make_or_load_context_expand2() {
-  begin_function
-
-    local members=() aliases=() has_explicit_member_list=f fun has_table=f
-
-    if [[ -v ${dim_type}_${dim}_members ]]; then
-      eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
-
-      if [[ ${#members[*]} -eq 0 ]]; then
-        log_fatal "There are no members defined for $dim."
-        fail1
-      fi
-
-      has_explicit_member_list=t
-    elif [[ -v ${dim_type}_${dim}_members_table ]]; then
-      has_table=t
-    else
-      make_context_expand_find_members
-    fi
-
-    if [[ -v ${dim_type}_${dim}_aliases ]]; then
-      eval "aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )" || fail
-    fi
-
-    code="
-${dim_type}_${dim}_expand() {
-  problem=
-  case \"\$value\" in"
-
-    make_context_expand_handle_default || fail
-
-    if (( ${#aliases[*]} > 0 )); then
-      make_context_expand_handle_aliases || fail
-    fi
-
-    if [[ $has_explicit_member_list == f ]]; then
-      make_context_expand_members_unknown || fail
-    elif [[ $has_table == t ]]; then
-      make_context_expand_members_table || fail
-    else
-      make_context_expand_members_known || fail
-    fi
-
-    write_or_load fun "$code" || fail
 
   end_function
   handle_return
