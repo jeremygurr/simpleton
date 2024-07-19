@@ -11,6 +11,29 @@ cell_lib_init() {
   empty_member=_ 
   pretend=${pretend:-f}
 
+  : ${risk_tolerance:=${risk:-0}}
+  case "$risk_tolerance" in
+    l*)
+      risk_tolerance=0
+      ;;
+    m*)
+      risk_tolerance=1
+      ;;
+    h*)
+      risk_tolerance=2
+      ;;
+    v*)
+      risk_tolerance=3
+      ;;
+    [0-9])
+      risk_tolerance=${risk_tolerance:-${risk}}
+      ;;
+    *)
+      log_fatal "Unknown risk level: $risk. Should be one of: low medium high very_high (or 0 1 2 3). Defaults to low."
+      fail1
+      ;;
+  esac
+
   tee_files=( )
   paused_tee_file=
 
@@ -555,6 +578,7 @@ init_context() {
   trunk_dims=() \
   up=() \
   update_cost=1 \
+  update_risk=3 \
 
   unset dim_constraints_all_fields \
     dim_constraints_all_table \
@@ -1392,6 +1416,12 @@ execute_command_internal_prep() {
             fi
             eval "d_$plural=\${values[*]}" || fail
           end_for
+        fi
+
+        if (( update_risk > risk_tolerance )); then
+          log_fatal "The risk of running this update is too high for the specified tolerance ($update_risk > $risk_tolerance)."
+          log_fatal "Try a less risky strategy or increase the risk tolerance of this command (with the risk parameter)"
+          fail1
         fi
 
       ;;
