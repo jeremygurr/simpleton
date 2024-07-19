@@ -698,7 +698,7 @@ load_leaf_dims() {
       
       debug_start
       begin_for branch_dim in ${branch_dims[*]}; doo
-        remove_word_from_string leftovers $branch_dims
+        remove_word_from_string leftovers $branch_dim
       end_for
 
       begin_for anchor_dim in ${anchor_dims[*]}; doo
@@ -947,7 +947,17 @@ make_context_expand_handle_aliases() {
 make_or_load_context_expand2() {
   begin_function
 
-    local members=() aliases=() has_explicit_member_list=f fun has_table=f
+    local members=() aliases=() \
+      has_explicit_member_list=f fun has_table=f \
+      is_optional=f
+
+    if [[ -v ${dim_type}_${dim}_is_optional ]]; then
+      local -n is_optional_var=${dim_type}_${dim}_is_optional
+      if [[ $is_optional_var == t ]]; then
+        is_optional=t
+      fi
+    fi
+    write_or_load var "${dim_type}_${dim}_is_optional=$is_optional" || fail
 
     if [[ -v ${dim_type}_${dim}_members ]]; then
       eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
@@ -1896,12 +1906,15 @@ fork_inside() {
 
 # run outside of the subshell afterwards
 after_fork() {
+  side_log "after_fork"
   if [[ -f "${reply_file:-}" ]]; then
 
     source $reply_file || return 1
-    #side_log "after_fork: omni_log_pos=$omni_log_pos"
+    side_log "after_fork: sourced reply_file"
+    side_log "$(<$reply_file)"
     if [[ ${debugging:-f} == t ]]; then
       local debugging
+      side_log "after_fork: debugging == t"
       debug_load_state || return 1
       debug_immediate=f \
         first_run=f \
