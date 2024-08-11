@@ -238,7 +238,7 @@ load_tab() {
     fi
 
     local row_index=0
-    begin_while IFS= read -r line || [[ "$line" ]]; do
+    begin_while IFS= read -r line || [[ "$line" ]]; doo
       trim_ws line
       if (( row_index == 0 )); then
 
@@ -297,13 +297,14 @@ load_tab() {
 }
 
 load_auto() {
-
   begin_function
-    local full_path=$1 content name=$2 append=f
+    local full_path=$1 content append=f \
+      table_name=$2 prefix=$3
 
-    local tmp_table tmp_fields
-    load_tab $realpath tmp_table || fail
-#    begin_for 
+    debug_start
+    load_tab $realpath "$table_name" || fail
+    code+="auto_tables+=( \"$table_name\" )$NL"
+    code+="auto_table_prefixes+=( \"$prefix\" )$NL"
 
   end_function
   handle_return
@@ -358,7 +359,10 @@ make_or_load_dna_item() {
         load_type=fun
       ;;
       auto)
-        load_auto $var_full_path $item_name || {
+        if [[ "$file_name" != _* ]]; then
+          prefix=${item_name}_
+        fi
+        load_auto $var_full_path "$item_name" "$prefix" || {
           log_fatal "Failed to load auto variable from $var_full_path"
           fail1
         }
@@ -572,7 +576,6 @@ init_context() {
   cell_expiration= \
   cell_is_external=f \
   cell_is_persistent=f \
-  command_path= \
   current_pause=250 \
   default_freshness= \
   default_strategies=crl \
@@ -601,15 +604,6 @@ init_context() {
 
   unset dim_constraints_all_fields \
     dim_constraints_all_table \
-
-  if [[ "${current_command:-}" ]]; then
-    command_path=$path_to_commands/$current_command
-    if [[ -e $command_path.info ]]; then
-      source $command_path.info || return 1
-    else
-      log_warn "Missing file $command_path.info" || return 1
-    fi
-  fi
 
   unset \
     check_op \
@@ -1406,6 +1400,13 @@ execute_command_internal_prep() {
         command_path=$path_to_commands/$current_command
       ;;
       *)
+
+        command_path=$path_to_commands/$current_command
+        if [[ -e $command_path.info ]]; then
+          source $command_path.info || return 1
+        else
+          log_warn "Missing file $command_path.info" || return 1
+        fi
 
         switch_context || {
           log_fatal "Context failed to load for $cell_path"
@@ -4007,6 +4008,93 @@ up_delegate() {
       safe_link $out_item $cell_path/ || fail
     end_for
 
+  end_function
+  handle_return
+}
+
+execute_auto_table_check_row() {
+  begin_function    
+    begin_for (( f = 0; f < field_count; f++ )); doo
+
+      field=${fields[$f]}
+      (( t = i + f ))
+      expected_value=${table[$t]}
+      if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
+        continue # try next field, since this one matches
+      fi
+
+      local -n dim=d_$field
+      local -n var=$field
+      actual_value=
+      if [[ -v dim && "$dim" ]]; then
+        actual_value=$dim
+      elif [[ -v var && "$var" ]]; then
+        actual_value=$var
+      fi
+
+      if [[ "$actual_value" && "$actual_value" != "$expected_value" ]]; then
+        row_is_valid=f
+        break
+      fi
+
+    end_for
+  end_function
+  handle_return
+}
+
+execute_auto_table_add_constraints() {
+  begin_function
+    begin_for (( f = 0; f < field_count; f++ )); doo
+
+      field=${fields[$f]}
+      (( t = i + f ))
+      expected_value=${table[$t]}
+      if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
+        continue # try next field, since this one matches
+      fi
+
+      local -An out_var=${prefix}${field}
+      out_var["$expected_value"]=1
+
+    end_for
+  end_function
+  handle_return
+}
+
+execute_auto_table() {
+  local table_name=$1
+  begin_function
+    debug_start
+    local -n fields=${table_name}_fields table=${table_name}_table
+    if [[ ! -v fields || ! -v table ]]; then
+      log_fatal "Missing expected vars: ${table_name}_fields or ${table_name}_table"
+      fail1
+    fi
+    local i r f t row field expected_value actual_value row_is_valid \
+      field_count=${#fields[*]} table_count=${#table[*]}
+    local row_count=$((table_count/field_count)) r
+    values=()
+    begin_for (( r = 0; r < row_count; r++ )); doo
+      (( i = row * field_count ))
+      row_is_valid=t
+      execute_auto_table_check_row || fail
+      if [[ $row_is_valid == t ]]; then
+        execute_auto_table_add_constraints || fail
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+execute_auto_tables() {
+  local auto_tables=( "$@" )
+  begin_function
+    local table_name prefix i
+    begin_for ((i = 0; i < ${#auto_tables[*]}; i++)); doo
+      table_name=${auto_tables[$i]}
+      prefix=${auto_table_prefixes[$i]}
+      execute_auto_table $table_name || fail
+    end_for
   end_function
   handle_return
 }

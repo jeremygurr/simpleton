@@ -3,7 +3,7 @@
 get_formatted_data() {
   begin_function
 
-    local i field value o c r row row_type
+    local i field value o c r row_type row_begin 
 
     o=
     row_type=header
@@ -21,12 +21,12 @@ get_formatted_data() {
     row_type=data
     begin_for (( r = 0; r < row_count; r++ )); doo
       o=
-      row=( ${data[$r]} )
+      (( row_begin = field_count * r ))
       if function_exists each_field; then
         begin_for (( c = 0; c < selected_count; c++ )); doo
           i=${selected_field_indices[$c]}
           field=${data_fields[$i]}
-          value=${row[$i]}
+          value=${data[$((i + row_begin))]}
           each_field || fail
         end_for
       fi
@@ -275,6 +275,7 @@ get_command_output() {
           selected_count \
           row_count=${#data[*]} \
 
+        (( row_count /= field_count ))
         get_selected_field_indices || fail
         if [[ "$out_sort" ]]; then
           handle_sorting || fail
@@ -340,15 +341,18 @@ get_command_load_data() {
 
     if [[ $cell_is_leaf == t ]]; then
 
-      if [[ -f $out_path/export/data.tab ]]; then
-        local make_or_load=load data data_fields 
-        make_or_load_dna_item $out_path/export/data.tab || fail
+      if [[ -f $out_path/data.tab ]]; then
+        local context_make=f data_table data_fields 
+        make_or_load_dna_item $out_path/data.tab || fail
         if (( ${#agg_data_fields[*]} == 0 )); then
           agg_data_fields=( $prefix_dim "${data_fields[@]}" )
         fi
         local d
-        begin_for d in "${data[@]}"; doo
-          agg_data+=( "$prefix_member $d" )
+        if [[ "$prefix_member" ]]; then
+          agg_data+=( "$prefix_member" )
+        fi
+        begin_for d in "${data_table[@]}"; doo
+          agg_data+=( "$d" )
         end_for
       fi
 
@@ -375,10 +379,10 @@ get_command() {
       agg_data_fields=() \
 
     get_command_load_data || fail
-    data=( "${agg_data[@]}" )
-    data_fields=( "${agg_data_fields[@]}" )
+    local data=( "${agg_data[@]}" )
+    local data_fields=( "${agg_data_fields[@]}" )
 
-    if [[ "$fields" == \? ]]; then
+    if [[ "$out_fields" == \? ]]; then
       fields_choices=( "${data_fields[@]}" )
       show_parameter_help fields || fail
     fi
