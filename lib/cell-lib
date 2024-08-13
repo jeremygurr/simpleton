@@ -4012,20 +4012,30 @@ up_delegate() {
   handle_return
 }
 
+# inputs:
+#   $1           variable name holding array of fields
+#   $2           variable name holding array of cells
+#   row          which row to select from the table
+#   field_count  
+# outputs:
+#   row_is_valid 
 execute_auto_table_check_row() {
+  local -n fields=$1 table=$2
   begin_function    
+    local f t
+    row_is_valid=t
     begin_for (( f = 0; f < field_count; f++ )); doo
 
       field=${fields[$f]}
-      (( t = i + f ))
-      expected_value=${table[$t]}
+      (( t = row * field_count + f ))
+      local expected_value=${table[$t]}
       if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
         continue # try next field, since this one matches
       fi
 
       local -n dim=d_$field
       local -n var=$field
-      actual_value=
+      local actual_value=
       if [[ -v dim && "$dim" ]]; then
         actual_value=$dim
       elif [[ -v var && "$var" ]]; then
@@ -4042,12 +4052,20 @@ execute_auto_table_check_row() {
   handle_return
 }
 
+# inputs:
+#   $1           variable name holding array of fields
+#   $2           variable name holding array of cells
+#   row          which row to select from the table
+#   field_count
+#   prefix       prefix of variable name to set
 execute_auto_table_add_constraints() {
+  local -n fields=$1 table=$2
   begin_function
+    local f t
     begin_for (( f = 0; f < field_count; f++ )); doo
 
       field=${fields[$f]}
-      (( t = i + f ))
+      (( t = row * field_count + f ))
       expected_value=${table[$t]}
       if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
         continue # try next field, since this one matches
@@ -4070,14 +4088,12 @@ execute_auto_table() {
       log_fatal "Missing expected vars: ${table_name}_fields or ${table_name}_table"
       fail1
     fi
-    local i r f t row field expected_value actual_value row_is_valid \
+    local row \
       field_count=${#fields[*]} table_count=${#table[*]}
-    local row_count=$((table_count/field_count)) r
+    local row_count=$((table_count/field_count))
     values=()
-    begin_for (( r = 0; r < row_count; r++ )); doo
-      (( i = row * field_count ))
-      row_is_valid=t
-      execute_auto_table_check_row || fail
+    begin_for (( row = 0; row < row_count; row++ )); doo
+      execute_auto_table_check_row fields table || fail
       if [[ $row_is_valid == t ]]; then
         execute_auto_table_add_constraints || fail
       fi

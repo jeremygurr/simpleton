@@ -3,7 +3,7 @@
 get_formatted_data() {
   begin_function
 
-    local i field value o c r row_type row_begin 
+    local i field value o c row row_type row_begin 
 
     o=
     row_type=header
@@ -19,18 +19,22 @@ get_formatted_data() {
     execute_if_exists after_row || fail
 
     row_type=data
-    begin_for (( r = 0; r < row_count; r++ )); doo
+    begin_for (( row = 0; row < row_count; row++ )); doo
       o=
-      (( row_begin = field_count * r ))
-      if function_exists each_field; then
-        begin_for (( c = 0; c < selected_count; c++ )); doo
-          i=${selected_field_indices[$c]}
-          field=${data_fields[$i]}
-          value=${data[$((i + row_begin))]}
-          each_field || fail
-        end_for
+      (( row_begin = field_count * row ))
+      local row_is_valid
+      execute_auto_table_check_row data_fields data || fail
+      if [[ $row_is_valid == t ]]; then
+        if function_exists each_field; then
+          begin_for (( c = 0; c < selected_count; c++ )); doo
+            i=${selected_field_indices[$c]}
+            field=${data_fields[$i]}
+            value=${data[$((i + row_begin))]}
+            each_field || fail
+          end_for
+        fi
+        execute_if_exists after_row || fail
       fi
-      execute_if_exists after_row || fail
     end_for
 
   end_function
@@ -275,6 +279,11 @@ get_command_output() {
           selected_count \
           row_count=${#data[*]} \
 
+        if (( field_count == 0 )); then
+          log_fatal "field_count can't be 0."
+          fail1
+        fi
+
         (( row_count /= field_count ))
         get_selected_field_indices || fail
         if [[ "$out_sort" ]]; then
@@ -344,10 +353,19 @@ get_command_load_data() {
       if [[ -f $out_path/data.tab ]]; then
         local context_make=f data_table data_fields 
         make_or_load_dna_item $out_path/data.tab || fail
+        local d i
         if (( ${#agg_data_fields[*]} == 0 )); then
           agg_data_fields=( $prefix_dim "${data_fields[@]}" )
+        else
+          i=0
+          begin_for d in  $prefix_dim "${data_fields[@]}" ; doo
+            if [[ -v agg_data_fields[$i] && "${agg_data_fields[$i]}" != "$d" ]]; then
+              log_fatal "Different data columns across cells not supported yet"
+              fail1
+            fi
+            (( i++ ))
+          end_for
         fi
-        local d
         if [[ "$prefix_member" ]]; then
           agg_data+=( "$prefix_member" )
         fi
