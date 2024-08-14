@@ -140,21 +140,23 @@ debug_source_update_hl() {
   fi
 }
 
+debug_source_line_update() {
+  raw_debug_path_to_source_file=${saved_bash_source[$debug_list_stack_pos]}
+  if (( debug_list_stack_pos > 0 )); then
+    debug_line_num=${saved_bash_lineno[$((debug_list_stack_pos-1))]}
+  else
+    debug_line_num=$saved_lineno
+  fi
+  debug_current_function=${saved_funcname[$debug_list_stack_pos]:-}
+}
+
 debug_display_source() {
   local skip_source_update=${skip_source_update:-f}
-  if [[ $skip_source_update == f ]]; then
 
-    raw_debug_path_to_source_file=${saved_bash_source[$debug_list_stack_pos]}
-    if (( debug_list_stack_pos > 0 )); then
-      debug_line_num=${saved_bash_lineno[$((debug_list_stack_pos-1))]}
-    else
-      debug_line_num=$saved_lineno
-    fi
-    debug_current_function=${saved_funcname[$debug_list_stack_pos]:-}
-  
+  if [[ $skip_source_update == f ]]; then
+    debug_source_line_update
     debug_source_update
     debug_source_update_hl
-
   fi
 
   if [[ "$debug_path_to_source_file" == none ]]; then
@@ -306,24 +308,37 @@ debug_get_new_command() {
 debug_move_up_stack() {
   local warm_stack_size=${#warm_stack[*]}
 
-  local new_pos=$((warm_stack_size + debug_warm_stack_pos - 1))
-  if (( new_pos < 0 )); then
-    echo "# Already at top of stack trace" >&$fd_original_err
-  else
+  local old_loc="$raw_debug_path_to_source_file $debug_line_num" new_loc
+  begin_loop; do
+
+    new_pos=$((warm_stack_size + debug_warm_stack_pos - 1))
+    if (( new_pos < 0 )); then
+      echo "# Already at top of stack trace" >&$fd_original_err
+      break
+    fi
 
     (( debug_warm_stack_pos-- ))
     local debug_id raw_stack_id function
     eval "${warm_stack[$new_pos]}"
-    echo "# Up stack to function $function" >&$fd_original_err
-    
+
     local raw_stack_size=${#saved_bash_source[*]}
     (( debug_list_stack_pos = raw_stack_size - raw_stack_id )) 
     (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
+    debug_source_line_update
+    new_loc="$raw_debug_path_to_source_file $debug_line_num"
+    if [[ "$old_loc" == "$new_loc" ]]; then
+      continue
+    fi
+
+    echo "# Up stack to function $function" >&$fd_original_err
     debug_display_source
     debug_list_dir=forwards
     (( debug_list_offset += debug_list_window ))
 
-  fi
+    break
+
+  end_loop
+
 }
 
 debug_move_down_stack() {
@@ -805,7 +820,9 @@ debug_command_loop() {
         force_save=t debug_save_state
         debug_exit=t
         debug_save_state
-        echo "debugging=t" >$reply_file
+        if [[ "$reply_file" ]]; then
+          echo "debugging=t" >$reply_file
+        fi
         exit 0
         ;;
       r)
