@@ -1211,56 +1211,74 @@ switch_context() {
   return 0
 }
 
-expand_values_check_default_table() {
+# inputs:
+#   derive_fields
+#   derive_table
+#   output_field
+#   output_var    (defaults to output_field)
+# outputs:
+#   the var output_var points to will contain an array of all matches
+execute_derive_table() {
   begin_function        
       
-    local field_count=${#fields[*]} \
-      table_count=${#table[*]} \
+    local field_count=${#derive_fields[*]} \
+      table_count=${#derive_table[*]} \
       maybe table_index=0 column_index \
-      found=f value= result= field everything_matches
+      value= row_result field everything_matches \
+      output_field=$output_field \
+      invalid=f
 
-    local invalid=f
-    begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-      field=${fields[$column_index]}
-      if [[ $field != $dim ]]; then
-        local -n f=d_$field
-        if [[ ! -v f ]]; then
-          invalid=t
-          break
-        fi
-      fi
-    end_for
+    local -A all_results
+    local -n output_var=${output_var:-$output_field}
 
-    if [[ $invalid == f ]]; then
-      begin_while (( table_index < table_count )); doo
-        (( table_index += field_count ))
-        everything_matches=t
-        begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-          field=${fields[$column_index]}
-          value=${table[$((table_index + column_index))]}
-          if [[ $field == $dim ]]; then
-            result=$value
-          else
-            local -n dim2=d_$field
-            if [[ ! -v dim2 || "$dim2" != "$value" ]]; then
-              everything_matches=f
-              break
-            fi
+    #begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+    #  field=${derive_fields[$column_index]}
+    #  if [[ $field != $dim ]]; then
+    #    local -n f=d_$field
+    #    if [[ ! -v f ]]; then
+    #      invalid=t
+    #      break
+    #    fi
+    #  fi
+    #end_for
+
+    begin_while (( table_index < table_count )); doo
+      everything_matches=t
+
+      begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+        field=${derive_fields[$column_index]}
+        value=${derive_table[$((table_index + column_index))]}
+        if [[ $field == $output_field ]]; then
+          row_result=$value
+        else
+
+          local -n dim_var=d_$field \
+            field_var=$field
+
+          if [[ -v field_var \
+                && "$field_var" \
+                && "$field_var" != "$value" ]]; then
+            everything_matches=f
+            break
+          elif [[ -v dim_var \
+                && "$dim_var" \
+                && "$dim_var" != "$value" ]]; then
+            everything_matches=f
+            break
           fi
-        end_for
-        if [[ $everything_matches == t ]]; then
-          found=t
-          break
-        fi
-      end_while
 
-      if [[ $found == t ]]; then
-        if [[ ! "$result" ]]; then
-          log_fatal "Table for dim $dim is missing the column named $dim"
-          fail1
         fi
-        values=$result
+      end_for
+
+      if [[ $everything_matches == t ]]; then
+        all_results["$row_result"]=1
       fi
+
+      (( table_index += field_count ))
+    end_while
+
+    if (( ${#all_results[*]} > 0 )); then
+      output_var=( "${!all_results[@]}" )
     fi
 
   end_function
@@ -1276,21 +1294,19 @@ expand_values_check_default() {
     if [[ ! "${values:-}" ]]; then
 
       local -n is_optional_var=${dim_type}_${dim}_is_optional \
-        table=dim_constraints_${dim}_table \
-        fields=dim_constraints_${dim}_fields
+        derive_table=${dim_type}_${dim}_derive_table \
+        derive_fields=${dim_type}_${dim}_derive_fields \
 
       local is_optional=f
       if [[ -v is_optional_var && $is_optional_var == t ]]; then
         is_optional=t
       fi
 
-      if [[ ! -v table ]]; then
-        local -n table=dim_constraints_all_table \
-          fields=dim_constraints_all_fields
-      fi
-
-      if [[ -v table && $dim_type == trunk_dims ]]; then
-        expand_values_check_default_table || fail
+      if [[ -v derive_table ]]; then
+        output_field=$dim \
+        output_var=values \
+        execute_derive_table || fail
+        debug_start
       elif [[ $can_ask == t && $is_optional == f ]]; then
         choose "Enter required value: $dim=" d_$dim || fail
         # recursive
