@@ -227,7 +227,7 @@ load_tab() {
 
   begin_function
     local full_path=$1 content name=$2 append=f
-    local target_var_table=${name}_table target_var_fields=${name}_fields \
+    local target_var_data=${name}_data target_var_fields=${name}_fields \
       fields i
     content=$(<$full_path)
     trim_ws content
@@ -259,9 +259,9 @@ load_tab() {
         code+=")$NL"
 
         if [[ $append == t ]]; then
-          code+="$target_var_table+=($NL"
+          code+="$target_var_data+=($NL"
         else
-          code+="$target_var_table=($NL"
+          code+="$target_var_data=($NL"
         fi
 
       else
@@ -295,19 +295,6 @@ load_tab() {
   end_function
   handle_return
 }
-
-#load_auto() {
-#  begin_function
-#    local full_path=$1 content append=f \
-#      table_name=$2 prefix=$3
-#
-#    load_tab $realpath "$table_name" || fail
-#    code+="auto_tables+=( \"$table_name\" )$NL"
-#    code+="auto_table_prefixes+=( \"$prefix\" )$NL"
-#
-#  end_function
-#  handle_return
-#}
 
 make_or_load_dna_item() {
   begin_function
@@ -906,22 +893,22 @@ make_context_expand_members_known() {
 # output: values
 get_members_from_table() {
   begin_function
-    local -n fields=${1}_fields table=${1}_table
+    local -n fields=${1}_fields data=${1}_data
     local target_field=$2
-    if [[ ! -v fields || ! -v table ]]; then
-      log_fatal "Missing expected vars: ${1}_fields or ${1}_table"
+    if [[ ! -v fields || ! -v data ]]; then
+      log_fatal "Missing expected vars: ${1}_fields or ${1}_data"
       fail1
     fi
     local i r f t row field value target_value \
-      field_count=${#fields[*]} table_count=${#table[*]}
-    local row_count=$((table_count/field_count)) r
+      field_count=${#fields[*]} data_count=${#data[*]}
+    local row_count=$((data_count/field_count)) r
     values=()
     begin_for (( r = 0; r < row_count; r++ )); doo
       (( i = row * field_count ))
       begin_for (( f = 0; f < field_count; f++ )); doo
         field=${fields[$f]}
         (( t = i + f ))
-        value=${table[$t]}
+        value=${data[$t]}
         if [[ $field == $target_field ]]; then
           target_value=$value
         else
@@ -1004,7 +991,7 @@ make_or_load_context_expand2() {
       fi
 
       has_explicit_member_list=t
-    elif [[ -v ${dim_type}_${dim}_members_table ]]; then
+    elif [[ -v ${dim_type}_${dim}_members_data ]]; then
       has_table=t
     else
       make_context_expand_find_members
@@ -1324,7 +1311,7 @@ switch_context() {
 
 # inputs:
 #   derive_fields
-#   derive_table
+#   derive_data
 #   output_field
 #   output_var    (defaults to output_field)
 # outputs:
@@ -1333,8 +1320,8 @@ execute_derive_table() {
   begin_function        
       
     local field_count=${#derive_fields[*]} \
-      table_count=${#derive_table[*]} \
-      maybe table_index=0 column_index \
+      data_count=${#derive_data[*]} \
+      maybe data_index=0 column_index \
       value= row_result field everything_matches \
       output_field=$output_field \
       invalid=f
@@ -1342,23 +1329,12 @@ execute_derive_table() {
     local -A all_results
     local -n output_var=${output_var:-$output_field}
 
-    #begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-    #  field=${derive_fields[$column_index]}
-    #  if [[ $field != $dim ]]; then
-    #    local -n f=d_$field
-    #    if [[ ! -v f ]]; then
-    #      invalid=t
-    #      break
-    #    fi
-    #  fi
-    #end_for
-
-    begin_while (( table_index < table_count )); doo
+    begin_while (( data_index < data_count )); doo
       everything_matches=t
 
       begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
         field=${derive_fields[$column_index]}
-        value=${derive_table[$((table_index + column_index))]}
+        value=${derive_data[$((data_index + column_index))]}
         if [[ $field == $output_field ]]; then
           row_result=$value
         else
@@ -1385,7 +1361,7 @@ execute_derive_table() {
         all_results["$row_result"]=1
       fi
 
-      (( table_index += field_count ))
+      (( data_index += field_count ))
     end_while
 
     if (( ${#all_results[*]} > 0 )); then
@@ -1405,7 +1381,7 @@ expand_values_check_default() {
     if [[ ! "${values:-}" ]]; then
 
       local -n is_optional_var=${dim_type}_${dim}_is_optional \
-        derive_table=${dim_type}_${dim}_derive_table \
+        derive_data=${dim_type}_${dim}_derive_data \
         derive_fields=${dim_type}_${dim}_derive_fields \
 
       local is_optional=f
@@ -1413,7 +1389,7 @@ expand_values_check_default() {
         is_optional=t
       fi
 
-      if [[ -v derive_table ]]; then
+      if [[ -v derive_data ]]; then
         output_field=$dim \
         output_var=values \
         execute_derive_table || fail
@@ -4047,8 +4023,8 @@ up_delegate() {
 }
 
 # inputs:
-#   fields       
-#   table       
+#   table_fields       
+#   table_data
 #   row          which row to select from the table
 #   field_count  
 # outputs:
@@ -4059,9 +4035,9 @@ execute_auto_load_check_row() {
     row_is_valid=t
     begin_for (( f = 0; f < field_count; f++ )); doo
 
-      field=${fields[$f]}
+      field=${table_fields[$f]}
       (( t = row * field_count + f ))
-      local expected_value=${table[$t]}
+      local expected_value=${table_data[$t]}
       if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
         continue # try next field, since this one matches
       fi
@@ -4086,8 +4062,8 @@ execute_auto_load_check_row() {
 }
 
 # inputs:
-#   $1           variable name holding array of fields
-#   $2           variable name holding array of cells
+#   table_fields variable name holding array of fields
+#   table_data   variable name holding array of cells
 #   row          which row to select from the table
 #   field_count
 #   prefix       prefix of variable name to set
@@ -4096,9 +4072,9 @@ execute_auto_load_add_constraints() {
     local f t
     begin_for (( f = 0; f < field_count; f++ )); doo
 
-      field=${fields[$f]}
+      local field=${table_fields[$f]}
       (( t = row * field_count + f ))
-      expected_value=${table[$t]}
+      expected_value=${table_data[$t]}
       if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
         continue # try next field, since this one matches
       fi
@@ -4114,24 +4090,24 @@ execute_auto_load_add_constraints() {
 execute_auto_load_tab() {
   local table_name=$1 prefix=${prefix:-}
   begin_function
-    local -n fields=${table_name}_fields table=${table_name}_table
-    if [[ ! -v fields || ! -v table ]]; then
-      log_fatal "Missing expected vars: ${table_name}_fields or ${table_name}_table"
+    local -n table_fields=${table_name}_fields table_data=${table_name}_data
+    if [[ ! -v table_fields || ! -v table_data ]]; then
+      log_fatal "Missing expected vars: ${table_name}_fields or ${table_name}_data"
       fail1
     fi
     local row \
-      field_count=${#fields[*]} table_count=${#table[*]}
-    local row_count=$((table_count/field_count))
+      field_count=${#table_fields[*]} data_count=${#table_data[*]}
+    local row_count=$((data_count/field_count))
     local -A keys
     begin_for (( row = 0; row < row_count; row++ )); doo
-      execute_auto_load_check_row fields table || fail
+      execute_auto_load_check_row || fail
       if [[ $row_is_valid == t ]]; then
         execute_auto_load_add_constraints || fail
       fi
     end_for
 
     local value key key_field field value
-    begin_for field in "${fields[@]}"; doo
+    begin_for field in "${table_fields[@]}"; doo
       local -n target_field=$field
       if [[ "${target_field:-}" ]]; then
         continue

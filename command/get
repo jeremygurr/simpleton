@@ -10,8 +10,8 @@ get_formatted_data() {
     if function_exists each_field; then
       begin_for (( c = 0; c < selected_count; c++ )); doo
         i=${selected_field_indices[$c]}
-        field=${data_fields[$i]}
-        value=${data_fields[$i]}
+        field=${table_fields[$i]}
+        value=$field
         each_field || fail
       end_for
     fi
@@ -23,13 +23,13 @@ get_formatted_data() {
       o=
       (( row_begin = field_count * row ))
       local row_is_valid
-      execute_auto_table_check_row data_fields data || fail
+      execute_auto_load_check_row || fail
       if [[ $row_is_valid == t ]]; then
         if function_exists each_field; then
           begin_for (( c = 0; c < selected_count; c++ )); doo
             i=${selected_field_indices[$c]}
-            field=${data_fields[$i]}
-            value=${data[$((i + row_begin))]}
+            field=${table_fields[$i]}
+            value=${table_data[$((i + row_begin))]}
             each_field || fail
           end_for
         fi
@@ -99,7 +99,7 @@ display_data_table() {
     local c i f bar="+" length pad
     begin_for (( c = 0; c < selected_count; c++ )); doo
       i=${selected_field_indices[$c]}
-      f="${data_fields[$i]}"
+      f="${table_fields[$i]}"
       length=${apad_size[$f]}
       printf -v pad %$((length-1))s
       pad=${pad// /-}
@@ -178,21 +178,21 @@ get_selected_field_indices() {
     local field i found
 
     out_fields=" $out_fields "
-    out_fields=${out_fields// all / ${data_fields[*]} }
+    out_fields=${out_fields// all / ${table_fields[*]} }
     out_fields=${out_fields# }
     out_fields=${out_fields% }
 
     begin_for field in ${out_fields}; doo
       found=f
       begin_for (( i = 0; i < field_count; i++ )); doo
-        if [[ "${data_fields[$i]}" == "$field" ]]; then
+        if [[ "${table_fields[$i]}" == "$field" ]]; then
           found=t
           selected_field_indices+=( $i )
           break
         fi
       end_for
       if [[ $found == f ]]; then
-        log_fatal "Field not found: $field. Must be one of: ${data_fields[*]}"
+        log_fatal "Field not found: $field. Must be one of: ${table_fields[*]}"
         fail1
       fi
     end_for
@@ -209,7 +209,7 @@ get_single_column() {
 
     single_column=
     begin_for (( r = 0; r < row_count; r++ )); doo
-      row=( ${data[$r]} )
+      row=( ${table_data[$r]} )
       value=${row[$index]}
       single_column+="$value$NL"
     end_for
@@ -229,7 +229,7 @@ handle_sorting() {
 
     local i sort_field_index=
     begin_for (( i = 0; i < field_count; i++ )); doo
-      if [[ "${data_fields[$i]}" == "$out_sort" ]]; then
+      if [[ "${table_fields[$i]}" == "$out_sort" ]]; then
         sort_field_index=$i
         break
       fi
@@ -243,9 +243,9 @@ handle_sorting() {
     local single_column
     get_single_column $sort_field_index || fail
     local result=$(echo -n "$single_column" | sort $sort_flags) || fail
-    local from_data=( "${data[@]}" ) 
+    local from_data=( "${table_data[@]}" ) 
 
-    data=( )
+    table_data=( )
     OIFS=$IFS
     IFS="$NL"
     local r v sort_field_value row
@@ -272,12 +272,12 @@ get_command_output() {
     if [[ "$get_show_file" && -f "$out_path/$get_show_file" ]]; then
       cat $out_path/$get_show_file || fail
     else
-      if is_array data; then
+      if is_array table_data; then
 
         local selected_field_indices=() \
-          field_count=${#data_fields[*]} \
+          field_count=${#table_fields[*]} \
           selected_count \
-          row_count=${#data[*]} \
+          row_count=${#table_data[*]} \
 
         if (( field_count == 0 )); then
           log_fatal "field_count can't be 0."
@@ -317,8 +317,8 @@ get_command_output() {
             fail1
           ;;
         esac
-      elif [[ -v data ]]; then
-        out "$data"
+      elif [[ -v table_data ]]; then
+        out "$table_data"
       else
         out "No data"
       fi
@@ -350,16 +350,16 @@ get_command_load_data() {
 
     if [[ $cell_is_leaf == t ]]; then
 
-      if [[ -f $out_path/data.tab ]]; then
-        local context_make=f data_table data_fields 
-        make_or_load_dna_item $out_path/data.tab || fail
+      if [[ -f $out_path/output.tab ]]; then
+        local context_make=f output_table output_fields
+        make_or_load_dna_item $out_path/output.tab || fail
         local d i
-        if (( ${#agg_data_fields[*]} == 0 )); then
-          agg_data_fields=( $prefix_dim "${data_fields[@]}" )
+        if (( ${#table_fields[*]} == 0 )); then
+          table_fields=( $prefix_dim "${output_fields[@]}" )
         else
           i=0
-          begin_for d in  $prefix_dim "${data_fields[@]}" ; doo
-            if [[ -v agg_data_fields[$i] && "${agg_data_fields[$i]}" != "$d" ]]; then
+          begin_for d in  $prefix_dim "${output_fields[@]}" ; doo
+            if [[ -v table_fields[$i] && "${table_fields[$i]}" != "$d" ]]; then
               log_fatal "Different data columns across cells not supported yet"
               fail1
             fi
@@ -367,11 +367,9 @@ get_command_load_data() {
           end_for
         fi
         if [[ "$prefix_member" ]]; then
-          agg_data+=( "$prefix_member" )
+          table_data+=( "$prefix_member" )
         fi
-        begin_for d in "${data_table[@]}"; doo
-          agg_data+=( "$d" )
-        end_for
+        table_data+=( "${output_data[@]}" )
       fi
 
     else
@@ -393,15 +391,13 @@ get_command() {
       out_fields=${out_fields:-${fields:-${field:-all}}} \
       cell_path=${cell_path:-} \
       out_sort=${out_sort:-${sort:-}} \
-      agg_data=() \
-      agg_data_fields=() \
+      table_data=() \
+      table_fields=() \
 
     get_command_load_data || fail
-    local data=( "${agg_data[@]}" )
-    local data_fields=( "${agg_data_fields[@]}" )
 
     if [[ "$out_fields" == \? ]]; then
-      fields_choices=( "${data_fields[@]}" )
+      fields_choices=( "${table_fields[@]}" )
       show_parameter_help fields || fail
     fi
 
