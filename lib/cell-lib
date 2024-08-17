@@ -296,30 +296,33 @@ load_tab() {
   handle_return
 }
 
-load_auto() {
-  begin_function
-    local full_path=$1 content append=f \
-      table_name=$2 prefix=$3
-
-    debug_start
-    load_tab $realpath "$table_name" || fail
-    code+="auto_tables+=( \"$table_name\" )$NL"
-    code+="auto_table_prefixes+=( \"$prefix\" )$NL"
-
-  end_function
-  handle_return
-}
+#load_auto() {
+#  begin_function
+#    local full_path=$1 content append=f \
+#      table_name=$2 prefix=$3
+#
+#    load_tab $realpath "$table_name" || fail
+#    code+="auto_tables+=( \"$table_name\" )$NL"
+#    code+="auto_table_prefixes+=( \"$prefix\" )$NL"
+#
+#  end_function
+#  handle_return
+#}
 
 make_or_load_dna_item() {
   begin_function
     local var_full_path=$1 prefix=${prefix:-} \
       suffix= code item_name=${2:-} \
-      file_name
+      file_name is_auto=f \
 
     file_name=${var_full_path##*/}
     if [[ $file_name == *.* ]]; then
       suffix=${file_name##*.}
       file_name=${file_name%.*}
+    fi
+    if [[ $file_name == auto-* ]]; then
+      is_auto=t
+      file_name=${file_name#auto-}
     fi
     item_name=$prefix$file_name
     item_name=${item_name//-/_}
@@ -344,12 +347,18 @@ make_or_load_dna_item() {
           fail1
         }
         load_type=fun
+        if [[ $is_auto == t ]]; then
+          auto_load+=( $item_name.fun )
+        fi
       ;;
       tab)
         load_tab $var_full_path $item_name || {
           log_fatal "Failed to load table variable from $var_full_path"
           fail1
         }
+        if [[ $is_auto == t ]]; then
+          auto_load+=( $item_name.tab )
+        fi
       ;;
       raw)
         load_raw $var_full_path $item_name || {
@@ -357,15 +366,6 @@ make_or_load_dna_item() {
           fail1
         }
         load_type=fun
-      ;;
-      auto)
-        if [[ "$file_name" != _* ]]; then
-          prefix=${item_name}_
-        fi
-        load_auto $var_full_path "$item_name" "$prefix" || {
-          log_fatal "Failed to load auto variable from $var_full_path"
-          fail1
-        }
       ;;
       *)
         log_fatal "Unknown dna object: $item."
@@ -1059,6 +1059,117 @@ make_or_load_context_expand() {
   handle_return
 }
 
+make_or_load_dna_contents_dna_root() {
+  begin_function
+    local dna_folder=${dna_folder:-}
+    if [[ $folder == */.dna ]]; then
+      dna_folder=$folder
+    fi
+    local child_path=${folder#$dna_folder} root_path
+    local dna_root
+    begin_for dna_root in $dna_roots; doo
+      if [[ -d $dna_root$child_path ]]; then
+        local new_items=$(find1 $dna_root$child_path -not -name '.*' -not -name 'dna-root' | sort -g) || fail
+        items+="$NL$new_items"
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+make_or_load_dna_contents_dna_root_handle_dir() {
+  begin_function
+    if [[ "$current_var" && $item_name != _* ]]; then
+      array_content+=( "$item_name" )
+      local path
+      if [[ -L $item || -d $item ]]; then
+        path=$(realpath $item)
+        result="${current_var}_${item_var}_path=$path"
+        write_or_load var "$result" || fail
+      fi
+    fi
+
+    if [[ ! -d $item/.dna ]]; then
+
+      local new_pass_thru=f
+
+      if [[ $item_name != _* ]]; then
+        new_prefix+=${item_var}_
+      else
+        new_pass_thru=t
+      fi
+
+      # recursive
+      prefix=$new_prefix pass_thru=$new_pass_thru make_or_load_dna_contents $item || fail
+
+    fi
+  end_function
+  handle_return
+}
+ 
+make_or_load_dna_contents_dna_root_handle_file() {
+  begin_function
+    if [[ -L $item && ! -e $item ]]; then
+      local unlinked_item=$(realpath -m $item) || fail
+      if [[ $unlinked_item == /work/* ]]; then
+        make_or_load_dna_contents_update_cell $unlinked_item || fail
+      else
+        log_fatal "Broken link found: $item"
+        fail1
+      fi
+    fi
+    prefix=$new_prefix make_or_load_dna_item $item || fail
+  end_function
+  handle_return
+}
+
+# requires dna_roots
+make_or_load_dna_contents() {
+  local folder=$1 prefix=${prefix:-} pass_thru=${pass_thru:-f} recursive=${recursive:-t}
+  begin_function
+
+    local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
+
+    if [[ "$dna_roots" && $folder != */dna-root/* ]]; then
+      make_or_load_dna_contents_dna_root || fail
+    fi
+
+    local current_var=${prefix%_} o item_name result 
+    if [[ $pass_thru == f ]]; then
+      local array_content=( )
+    fi
+    current_var=${current_var//-/_}
+
+    begin_for item in $items; doo
+
+      item_name=${item##*/}
+      split_ordinal item_name o item_name item_var
+      item_var=${item_name//-/_}
+
+      local new_prefix= 
+      if [[ "$current_var" ]]; then
+        new_prefix=${current_var}_
+      fi
+
+      if [[ -d $item ]]; then
+        if [[ $recursive == t ]]; then
+          make_or_load_dna_contents_dna_root_handle_dir || fail
+        fi
+      else
+        make_or_load_dna_contents_dna_root_handle_file || fail
+      fi
+
+    end_for
+
+    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
+      make_array_assignment $current_var array_content || fail
+      write_or_load var "$array_assignment" || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 make_or_load_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function_hi
@@ -1306,7 +1417,6 @@ expand_values_check_default() {
         output_field=$dim \
         output_var=values \
         execute_derive_table || fail
-        debug_start
       elif [[ $can_ask == t && $is_optional == f ]]; then
         choose "Enter required value: $dim=" d_$dim || fail
         # recursive
@@ -1702,98 +1812,6 @@ make_or_load_dna_contents_update_cell() {
     if [[ ! -f "$file" ]]; then
       log_fatal "Cell $cell_path did not produce file at $file as required by dna of $original_cell_path"
       fail1
-    fi
-
-  end_function
-  handle_return
-}
-
-# requires dna_roots
-make_or_load_dna_contents() {
-  local folder=$1 prefix=${prefix:-} pass_thru=${pass_thru:-f}
-  begin_function
-
-    local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
-
-    if [[ "$dna_roots" && $folder != */dna-root/* ]]; then
-      local dna_folder=${dna_folder:-}
-      if [[ $folder == */.dna ]]; then
-        dna_folder=$folder
-      fi
-      local child_path=${folder#$dna_folder} root_path
-      local dna_root
-      begin_for dna_root in $dna_roots; doo
-        if [[ -d $dna_root$child_path ]]; then
-          local new_items=$(find1 $dna_root$child_path -not -name '.*' -not -name 'dna-root' | sort -g) || fail
-          items+="$NL$new_items"
-        fi
-      end_for
-    fi
-
-    local current_var=${prefix%_} o item_name result 
-    if [[ $pass_thru == f ]]; then
-      local array_content=( )
-    fi
-    current_var=${current_var//-/_}
-
-    begin_for item in $items; doo
-
-      item_name=${item##*/}
-      split_ordinal item_name o item_name item_var
-      item_var=${item_name//-/_}
-
-      local new_prefix= 
-      if [[ "$current_var" ]]; then
-        new_prefix=${current_var}_
-      fi
-
-      if [[ -d $item ]]; then
-
-        if [[ "$current_var" && $item_name != _* ]]; then
-          array_content+=( "$item_name" )
-          local path
-          if [[ -L $item || -d $item ]]; then
-            path=$(realpath $item)
-            result="${current_var}_${item_var}_path=$path"
-            write_or_load var "$result" || fail
-          fi
-        fi
-
-        if [[ ! -d $item/.dna ]]; then
-
-          local new_pass_thru=f
-
-          if [[ $item_name != _* ]]; then
-            new_prefix+=${item_var}_
-          else
-            new_pass_thru=t
-          fi
-
-          prefix=$new_prefix pass_thru=$new_pass_thru make_or_load_dna_contents $item || fail
-
-        fi
-
-      else # is a file
-
-        if [[ -L $item && ! -e $item ]]; then
-          local unlinked_item=$(realpath -m $item) || fail
-          if [[ $unlinked_item == /work/* ]]; then
-            make_or_load_dna_contents_update_cell $unlinked_item || fail
-          else
-            log_fatal "Broken link found: $item"
-            fail1
-          fi
-        fi
-
-        prefix=$new_prefix make_or_load_dna_item $item || fail
-
-      fi
-
-    end_for
-
-    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
-      make_array_assignment $current_var array_content || fail
-      write_or_load var "$array_assignment" || fail
     fi
 
   end_function
@@ -4029,14 +4047,13 @@ up_delegate() {
 }
 
 # inputs:
-#   $1           variable name holding array of fields
-#   $2           variable name holding array of cells
+#   fields       
+#   table       
 #   row          which row to select from the table
 #   field_count  
 # outputs:
 #   row_is_valid 
-execute_auto_table_check_row() {
-  local -n fields=$1 table=$2
+execute_auto_load_check_row() {
   begin_function    
     local f t
     row_is_valid=t
@@ -4074,8 +4091,7 @@ execute_auto_table_check_row() {
 #   row          which row to select from the table
 #   field_count
 #   prefix       prefix of variable name to set
-execute_auto_table_add_constraints() {
-  local -n fields=$1 table=$2
+execute_auto_load_add_constraints() {
   begin_function
     local f t
     begin_for (( f = 0; f < field_count; f++ )); doo
@@ -4087,18 +4103,17 @@ execute_auto_table_add_constraints() {
         continue # try next field, since this one matches
       fi
 
-      local -An out_var=${prefix}${field}
-      out_var["$expected_value"]=1
+      keys["$field $expected_value"]=1
 
     end_for
+
   end_function
   handle_return
 }
 
-execute_auto_table() {
-  local table_name=$1
+execute_auto_load_tab() {
+  local table_name=$1 prefix=${prefix:-}
   begin_function
-    debug_start
     local -n fields=${table_name}_fields table=${table_name}_table
     if [[ ! -v fields || ! -v table ]]; then
       log_fatal "Missing expected vars: ${table_name}_fields or ${table_name}_table"
@@ -4107,25 +4122,47 @@ execute_auto_table() {
     local row \
       field_count=${#fields[*]} table_count=${#table[*]}
     local row_count=$((table_count/field_count))
-    values=()
+    local -A keys
     begin_for (( row = 0; row < row_count; row++ )); doo
-      execute_auto_table_check_row fields table || fail
+      execute_auto_load_check_row fields table || fail
       if [[ $row_is_valid == t ]]; then
-        execute_auto_table_add_constraints || fail
+        execute_auto_load_add_constraints || fail
       fi
+    end_for
+
+    local value key key_field field value
+    begin_for field in "${fields[@]}"; doo
+      local -n target_field=$field
+      if [[ "${target_field:-}" ]]; then
+        continue
+      fi
+      begin_for key in "${!keys[@]}"; doo
+        key_field=${key%% *}
+        if [[ "$key_field" != "$field" ]]; then
+          continue
+        fi
+        value=${key#$key_field }
+        target_field+=( "$value" )
+      end_for
     end_for
   end_function
   handle_return
 }
 
-execute_auto_tables() {
-  local auto_tables=( "$@" )
+execute_auto_loads() {
+  local auto_loads=( "$@" )
   begin_function
     local table_name prefix i
-    begin_for ((i = 0; i < ${#auto_tables[*]}; i++)); doo
-      table_name=${auto_tables[$i]}
-      prefix=${auto_table_prefixes[$i]}
-      execute_auto_table $table_name || fail
+    begin_for item in "${auto_loads[@]}"; doo
+      case $item in
+        *.tab)
+          execute_auto_load_tab ${item%.tab} || fail
+        ;;
+        *)
+          log_fatal "Can't auto load $item"
+          fail1
+        ;;
+      esac
     end_for
   end_function
   handle_return
