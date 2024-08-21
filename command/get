@@ -201,16 +201,21 @@ get_selected_field_indices() {
   handle_return
 }
 
+# inputs:
+#   $1           field index
+#   field_count
+# output:
+#   single_column
 get_single_column() {
-  local index=$1
+  local field_index=$1
   begin_function
 
-    local value r row
+    local value row t
 
     single_column=
-    begin_for (( r = 0; r < row_count; r++ )); doo
-      row=( ${table_data[$r]} )
-      value=${row[$index]}
+    begin_for (( row = 0; row < row_count; row++ )); doo
+      (( t = row * field_count + field_index ))
+      value=${table_data[$t]}
       single_column+="$value$NL"
     end_for
 
@@ -219,6 +224,13 @@ get_single_column() {
   handle_return
 }
 
+# inputs:
+#   row_count
+#   field_count
+#   out_sort
+#   table_data
+# outputs:
+#   table_data
 handle_sorting() {
   begin_function
     local sort_flags=
@@ -242,23 +254,22 @@ handle_sorting() {
 
     local single_column
     get_single_column $sort_field_index || fail
-    local result=$(echo -n "$single_column" | sort $sort_flags) || fail
+    local result=$(echo -n "$single_column" | sort -u $sort_flags) || fail
     local from_data=( "${table_data[@]}" ) 
 
     table_data=( )
     OIFS=$IFS
     IFS="$NL"
-    local r v sort_field_value row
+    local v sort_field_value row t beginning_of_row
     begin_for v in ${result}; doo
       IFS=$OIFS
-      local from_data_size=${#from_data[@]}
-      begin_for r in ${!from_data[*]}; doo
-        row=( ${from_data[$r]} )
-        sort_field_value=${row[$sort_field_index]}
+      local from_data_size=${#from_data[*]}
+      begin_for (( row = 0; row < row_count; row++ )); doo
+        (( beginning_of_row = row * field_count ))
+        (( t = beginning_of_row + sort_field_index ))
+        sort_field_value=${from_data[$t]}
         if [[ "$sort_field_value" == "$v" ]]; then
-          data+=( "${from_data[$r]}" )
-          unset from_data[$r]
-          break
+          table_data+=( "${from_data[@]:beginning_of_row:field_count}" )
         fi
       end_for
     end_for
@@ -359,7 +370,7 @@ get_command_load_data() {
           table_fields=( $prefix_dim "${output_fields[@]}" )
         else
           i=0
-          begin_for d in  $prefix_dim "${output_fields[@]}" ; doo
+          begin_for d in $prefix_dim "${output_fields[@]}" ; doo
             if [[ -v table_fields[$i] && "${table_fields[$i]}" != "$d" ]]; then
               log_fatal "Different data columns across cells not supported yet"
               fail1
@@ -368,7 +379,7 @@ get_command_load_data() {
           end_for
         fi
         if [[ "$prefix_member" ]]; then
-          table_data+=( "$prefix_member" )
+          table_data+=( "${prefix_member% }" )
         fi
         table_data+=( "${output_data[@]}" )
       fi
