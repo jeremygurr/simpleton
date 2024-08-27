@@ -896,71 +896,6 @@ make_context_expand_members_known() {
   handle_return
 }
 
-# input: 
-#   $1 = table var name
-#   $2 = target field name
-# output: values
-get_members_from_table() {
-  begin_function
-    local -n fields=${1}_fields data=${1}_data
-    local target_field=$2
-    if [[ ! -v fields || ! -v data ]]; then
-      log_fatal "Missing expected vars: ${1}_fields or ${1}_data"
-      fail1
-    fi
-    local i r f t row field value target_value \
-      field_count=${#fields[*]} data_count=${#data[*]}
-    local row_count=$((data_count/field_count)) r
-    values=()
-    begin_for (( r = 0; r < row_count; r++ )); doo
-      (( i = row * field_count ))
-      begin_for (( f = 0; f < field_count; f++ )); doo
-        field=${fields[$f]}
-        (( t = i + f ))
-        value=${data[$t]}
-        if [[ $field == $target_field ]]; then
-          target_value=$value
-        else
-          if [[ "$value" == all ]]; then
-            continue # try next field, since this one matches
-          fi
-          if [[ ! -v $dim ]]; then
-            log_fatal "Missing dim value for $dim, which is required to expand values from the given table"
-            fail1
-          fi
-          local -n expected_value=$dim
-          if [[ "$value" != "$expected_value" ]]; then
-            continue 2 # try next row, since row failed to match
-          fi
-        fi
-      end_for
-      values+=( $target_value )
-    end_for
-    if [[ ! "$values" ]]; then
-      log_fatal "No matching values found for dim $dim"
-      fail1
-    fi
-  end_function
-  handle_return
-}
-
-make_context_expand_members_table() {
-  begin_function
-    code+="
-    all)
-      if ! get_members_from_table ${dim_type}_${dim}_members $dim; then
-        problem=\"Invalid $dim: \$value\"
-      fi
-    ;;
-    *)
-      problem=\"Invalid $dim: \$value\"
-    ;;
-  esac
-}"
-  end_function
-  handle_return
-}
-
 make_context_expand_handle_aliases() {
   begin_function
     local a_line first remaining
@@ -980,7 +915,7 @@ make_or_load_context_expand2() {
   begin_function
 
     local members=() aliases=() \
-      has_explicit_member_list=f fun has_table=f \
+      has_explicit_member_list=f fun \
       is_optional=f
 
     if [[ -v ${dim_type}_${dim}_is_optional ]]; then
@@ -1000,8 +935,6 @@ make_or_load_context_expand2() {
       fi
 
       has_explicit_member_list=t
-    elif [[ -v ${dim_type}_${dim}_members_data ]]; then
-      has_table=t
     else
       make_context_expand_find_members
     fi
@@ -1023,8 +956,6 @@ ${dim_type}_${dim}_expand() {
 
     if [[ $has_explicit_member_list == f ]]; then
       make_context_expand_members_unknown || fail
-    elif [[ $has_table == t ]]; then
-      make_context_expand_members_table || fail
     else
       make_context_expand_members_known || fail
     fi
