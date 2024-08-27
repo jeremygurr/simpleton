@@ -1020,7 +1020,10 @@ enum() {
 }
 
 safe_link() {
-  local from_all="$*" from to force=${force:-f} from_must_exist=${from_must_exist:-t}
+  local from_all="$*" from to \
+    force=${force:-f} \
+    from_must_exist=${from_must_exist:-t} \
+    ignore_existing=${ignore_existing:-f} \
 
   to=${from_all##* }
   from_all=${from_all% $to}
@@ -1039,6 +1042,9 @@ safe_link() {
       if [[ -L $to ]]; then
         rm "$to" || fail
       elif [[ -e $to ]]; then
+        if [[ $ignore_existing == t ]]; then
+          succeed
+        fi
         log_fatal "safe_link: target already exists: $to. If you want to make a link inside of this folder, make the target $to/ instead."
         fail1
       fi
@@ -1047,7 +1053,7 @@ safe_link() {
     begin_for from in $from_all; doo
 
       if [[ "$from" == */\* ]]; then
-        local files=$(find1 ${from%/\*} -not -name ".*")
+        local files=$(find1 ${from%/\*} -not -name ".*") || fail
         if [[ "$files" ]]; then
           safe_link $files $to || fail
         fi
@@ -1061,14 +1067,27 @@ safe_link() {
       fi
 
       local to_parent=${to%/*}
+      local full_to=$to
+      if [[ $to == */ ]]; then
+        full_to+=${from##*/}
+      fi
+
       if [[ ! -d "$to_parent" ]]; then
         log_fatal "Missing target folder for link: $to_parent"
       fi
 
       if [[ $force == t ]]; then
-        ln -sfn "$from" "$to" || fail
+        ln -sfn "$from" "$full_to" || fail
       else
-        ln -sn "$from" "$to" || fail
+        if [[ -e "$full_to" ]]; then
+          if [[ $ignore_existing ]]; then
+            continue
+          else
+            log_fatal "Target of link operation already exists: $full_to"
+            fail1
+          fi
+        fi
+        ln -sn "$from" "$full_to" || fail
       fi
 
     end_for

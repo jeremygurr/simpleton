@@ -81,6 +81,10 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because cyto contains broken links"
+    elif [[ ${mock:-f} != $current_mock ]]
+    then
+      needs_update=t
+      log_message="Mock changed"
     fi
 
   end_function
@@ -961,7 +965,25 @@ update_command() {
       succeed
     fi
 
+    local mock_changed=f
+    if [[ ! "${mock:-}" ]]; then
+      mock=$current_mock
+    elif [[ $mock != $current_mock ]]; then
+      mock_changed=t
+    fi
+
     pre_update || fail
+    if [[ $mock_changed == t ]]; then
+      if [[ $mock != f ]]; then
+        echo "$mock" >$cyto_path/current_mock || fail
+      else
+        rm $cyto_path/current_mock || fail
+      fi
+      local x
+      begin_for x in $cell_path/!(.cyto|.dna|.member|.|..); doo
+        rm -rf "$x" || fail
+      end_for
+    fi
     deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
 
     if [[ "$update_successful" != f ]]; then
