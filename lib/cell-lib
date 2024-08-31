@@ -10,6 +10,7 @@ cell_lib_init() {
 
   empty_member=_ 
   pretend=${pretend:-f}
+  execute_inner=${execute_inner:-${dig:-m}}
 
   : ${risk_tolerance:=${risk:-0}}
   case "$risk_tolerance" in
@@ -1008,15 +1009,13 @@ make_or_load_dna_contents_dna_root_handle_dir() {
   begin_function
     if [[ "$current_var" && $item_name != _* ]]; then
       array_content+=( "$item_name" )
-      local path
       if [[ -L $item || -d $item ]]; then
-        path=$(realpath $item)
-        result="${current_var}_${item_var}_path=$path"
+        result="${current_var}_${item_var}_path=$real_path"
         write_or_load var "$result" || fail
       fi
     fi
 
-    if [[ ! -d $item/.dna ]]; then
+    if [[ ! -d $real_path/.dna ]]; then
 
       local new_pass_thru=f
 
@@ -1037,9 +1036,8 @@ make_or_load_dna_contents_dna_root_handle_dir() {
 make_or_load_dna_contents_dna_root_handle_file() {
   begin_function
     if [[ -L $item && ! -e $item ]]; then
-      local unlinked_item=$(realpath -m $item) || fail
-      if [[ $unlinked_item == /work/* ]]; then
-        make_or_load_dna_contents_update_cell $unlinked_item || fail
+      if [[ $real_path == /work/* ]]; then
+        make_or_load_dna_contents_update_cell $real_path || fail
       else
         log_fatal "Broken link found: $item"
         fail1
@@ -1076,6 +1074,19 @@ make_or_load_dna_contents() {
       local new_prefix= 
       if [[ "$current_var" ]]; then
         new_prefix=${current_var}_
+      fi
+
+      local real_path=$(realpath -m $item)
+
+      if [[ ! -e $real_path ]]; then
+        if [[ $real_path == /work/* ]]; then
+          local seed_path
+          find_seed_path $real_path || fail
+          deep=t plant_seed_internal "$seed_path" "$real_path" || fail
+        else
+          log_fatal "Missing file in dna: $item"
+          fail1
+        fi
       fi
 
       if [[ -d $item ]]; then
@@ -1149,6 +1160,74 @@ make_context() {
   context_make=t make_or_load_context 
 }
 
+# inputs: up_path up_name 
+link_choices() {
+  begin_function
+    local up_name2=${up_name//-/_} \
+      dep_path=$up_path/$up_name
+    local choice choices_var=up_${up_name2}_choices
+    local -n choices=$choices_var
+    mkdir -p $dep_path/choices || fail
+    begin_for choice in ${choices[*]}; doo
+      local choice2=${choice//-/_}
+      local path_var=up_${up_name2}_choices_${choice2}_path
+      local -n path=$path_var
+      if [[ ! -v $path_var ]]; then
+        log_fatal "Missing choice path var"
+        fail1
+      fi
+      if [[ ! -d $path ]]; then
+        log_fatal "Missing choice path"
+        fail1
+      fi
+      safe_link $path $dep_path/choices/$choice || fail
+    end_for
+  end_function
+  handle_return
+}
+
+make_cyto_inner() {
+  begin_function
+    mkdir $inner_path || fail
+    local inner_name
+    begin_for inner_name in ${inner[*]}; doo
+      local dep_path=$inner_path/$inner_name \
+        inner_name2=${inner_name//-/_}
+      local path_var=inner_${inner_name2}_path
+      local -n path=$path_var
+      if [[ ! -v $path_var ]]; then
+        log_fatal "Missing inner path var"
+        fail1
+      fi
+      if [[ ! -d $path ]]; then
+        log_fatal "Missing inner path"
+        fail1
+      fi
+      safe_link $path $dep_path || fail
+    end_for
+  end_function
+  handle_return
+}
+
+make_cyto_up() {
+  begin_function
+    mkdir $up_path || fail
+    local up_name
+    begin_for up_name in ${up[*]}; doo
+      local dep_path=$up_path/$up_name \
+        up_name2=${up_name//-/_}
+      mkdir $dep_path || fail
+      if [[ -v up_${up_name2}_choices ]]; then
+        link_choices
+      else
+        log_fatal "Invalid upstream config for $up_path: Missing choices folder."
+        fail1
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
 switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
@@ -1202,6 +1281,10 @@ switch_context() {
 
         if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
           make_cyto_up || fail
+        fi
+
+        if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
+          make_cyto_inner || fail
         fi
 
         if [[ $update_git_commit == t ]]; then
@@ -1828,6 +1911,7 @@ setup_cell_path_vars() {
     status_path=$cyto_path/status \
     tmp_path=$cyto_path/tmp \
     up_path=$cyto_path/up \
+    inner_path=$cyto_path/inner \
     mock_path=$seed_path/.mock \
 
     if [[ "${job_path:-}" ]]; then
@@ -1836,51 +1920,6 @@ setup_cell_path_vars() {
       unset replay_path
     fi
 
-  end_function
-  handle_return
-}
-
-# inputs: up_path up_name 
-link_choices() {
-  begin_function
-    local up_name2=${up_name//-/_} \
-      dep_path=$up_path/$up_name
-    local choice choices_var=up_${up_name2}_choices
-    local -n choices=$choices_var
-    mkdir -p $dep_path/choices || fail
-    begin_for choice in ${choices[*]}; doo
-      local choice2=${choice//-/_}
-      local path_var=up_${up_name2}_choices_${choice2}_path
-      local -n path=$path_var
-      if [[ ! -v $path_var ]]; then
-        log_fatal "Missing choice path var"
-        fail1
-      fi
-      if [[ ! -d $path ]]; then
-        log_fatal "Missing choice path"
-        fail1
-      fi
-      safe_link $path $dep_path/choices/$choice || fail
-    end_for
-  end_function
-  handle_return
-}
-
-make_cyto_up() {
-  begin_function
-    mkdir $up_path || fail
-    local up_name
-    begin_for up_name in ${up[*]}; doo
-      local dep_path=$up_path/$up_name \
-        up_name2=${up_name//-/_}
-      mkdir $dep_path || fail
-      if [[ -v up_${up_name2}_choices ]]; then
-        link_choices
-      else
-        log_fatal "Invalid upstream config for $up_path: Missing choices folder."
-        fail1
-      fi
-    end_for
   end_function
   handle_return
 }

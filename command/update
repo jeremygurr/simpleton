@@ -153,6 +153,35 @@ pre_update() {
   handle_return
 }
 
+create_outer_links() {
+  begin_function
+
+    local outer_cell_path outer_cell_name
+
+    get_bottom_cell ${inner_cell_link%/*} || fail
+    outer_cell_path=$bottom_cell
+
+    local outer_link=$outer_path/$outer_cell_name
+    if [[ ! -e $outer_link ]]; then
+      if [[ ! -d $outer_path ]]; then
+        mkdir $outer_path || fail
+      fi
+      safe_link $outer_cell_path $outer_link || fail
+    else
+      local link_target=$(readlink $outer_link) || fail
+      if [[ $link_target != $outer_cell_path ]]; then
+        log_fatal "Link conflict: A link already exists but doesn't point to the same place."
+        log_fatal "  source:   $outer_link"
+        log_fatal "  target 1: $outer_cell_path"
+        log_fatal "  target 2: $link_target"
+        fail1
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
 create_downstream_links() {
   begin_function
 
@@ -546,6 +575,43 @@ create_sub_cell() {
   handle_return
 }
 
+update_inner() {
+  begin_function
+
+    local old_link=$inner_cell_link \
+      old_target=$(readlink $inner_cell_link) \
+      new_target=$cell_path || fail
+
+    if [[ $cell_is_leaf == t ]]; then
+      create_outer_links || fail
+    fi
+
+    local update_outer_link=f
+    if [[ ! -e $old_link ]]; then
+      log_debug "Will update outer link because file is missing"
+      update_outer_link=t
+    else
+      local new_target_length=${#new_target} \
+        old_target_length=${#old_target}
+
+      if (( new_target_length > old_target_length )); then
+        log_debug "Will update outer link because new target is more specific"
+        update_outer_link=t
+      elif [[ ${old_target#$new_target} == ${old_target} ]]; then
+        log_debug "Will update outer link because new target is different"
+        update_outer_link=t
+      fi
+    fi
+
+    if [[ $update_outer_link == t ]]; then
+      log_debug "Linking upstream cell to it's outer cell cyto up folder"
+      force=t safe_link $cell_path $old_link || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 update_downstream() {
   begin_function
 
@@ -622,6 +688,7 @@ update_member() {
 
       anchor_dims=${anchor_dims:-} \
       top_level_command=f \
+      downstream_cell_name=${short_cell//\//_} \
       execute_command $member_path update || fail
 
       if [[ $update_successful == f ]]; then
@@ -951,6 +1018,21 @@ get_dep_member() {
   return 0
 }
 
+update_inners() {
+  begin_function
+    local i_path
+    local inners=$(find1 $inner_path -type d -not -name .*) || fail
+    begin_for i_path in $inners; doo
+      anchor_dims= \
+      top_level_command=f \
+      outer_cell_name=${short_cell//\//_} \
+      inner_cell_link=$i_path \
+      execute_command $i_path update || fail
+    end_for
+  end_function
+  handle_return
+}
+
 update_command() {
   begin_function
 
@@ -972,9 +1054,14 @@ update_command() {
     local leave_loop=0 \
       something_changed=f \
       needs_update=${needs_update:-} \
+      needs_inner=f \
 
     if [[ "${upstream_cell_link:-}" ]]; then
       update_downstream || fail
+    fi
+
+    if [[ "${inner_cell_link:-}" ]]; then
+      update_inner || fail
     fi
 
     get_needs_update || fail
@@ -1031,6 +1118,13 @@ update_command() {
     fi
 
     post_update || fail
+
+    if [[ $update_successful == t
+       && $cell_is_leaf == t
+       && $needs_inner == t
+       && "${inner:-}" ]]; then
+      update_inners || fail
+    fi
 
   end_function
 
