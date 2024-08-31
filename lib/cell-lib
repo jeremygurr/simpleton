@@ -568,6 +568,7 @@ init_context() {
   cell_is_external=f \
   cell_is_persistent=f \
   current_pause=250 \
+  default_anchor_dims= \
   default_freshness= \
   default_strategies=crl \
   localize_dims= \
@@ -1228,6 +1229,47 @@ make_cyto_up() {
   handle_return
 }
 
+# input must be a folder
+setup_cell_path_vars() {
+  cell_path=$1
+  begin_function
+
+    if [[ $cell_path == /seed/* ]]; then
+      cell_path=/work${cell_path#/seed}
+    fi
+
+    find_seed_path $cell_path || fail
+
+    if [[ ! "${top_cell:-}" ]]; then
+      get_top_cell $cell_path || fail
+    fi
+
+    dna_path=$cell_path/.dna \
+    cyto_path=$cell_path/.cyto \
+
+    context_path=$cyto_path/context \
+    dna_key_path=$dna_path/key \
+    down_path=$cyto_path/down \
+    job_path=$cyto_path/job \
+    key_path=$cyto_path/key \
+    lock_path=$cyto_path/context \
+    req_path=$cyto_path/req \
+    status_path=$cyto_path/status \
+    tmp_path=$cyto_path/tmp \
+    up_path=$cyto_path/up \
+    inner_path=$cyto_path/inner \
+    mock_path=$seed_path/.mock \
+
+    if [[ "${job_path:-}" ]]; then
+      replay_path=$job_path/pipe_replay
+    else
+      unset replay_path
+    fi
+
+  end_function
+  handle_return
+}
+
 switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
@@ -1322,7 +1364,7 @@ switch_context() {
         localize_dims=
       fi
 
-      if [[ ! "${anchor_dims:-}" ]]; then
+      if [[ ! "${anchor_dims:=${default_anchor_dims:-}}" ]]; then
         anchor_dims=( "${leaf_dims[@]}" )
       else
         local anchor
@@ -1548,14 +1590,15 @@ execute_command_internal_prep() {
       log|dim-*|plant|up-*)
         branch_dims=()
         command_path=$path_to_commands/$current_command
+        setup_cell_path_vars $cell_path || fail
       ;;
       *)
 
         command_path=$path_to_commands/$current_command
         if [[ -e $command_path.info ]]; then
-          source $command_path.info || return 1
+          source $command_path.info || fail
         else
-          log_warn "Missing file $command_path.info" || return 1
+          log_warn "Missing file $command_path.info" || fail
         fi
 
         switch_context || {
@@ -1877,47 +1920,6 @@ make_or_load_dna_contents_update_cell() {
     if [[ ! -f "$file" ]]; then
       log_fatal "Cell $cell_path did not produce file at $file as required by dna of $original_cell_path"
       fail1
-    fi
-
-  end_function
-  handle_return
-}
-
-# input must be a folder
-setup_cell_path_vars() {
-  cell_path=$1
-  begin_function
-
-    if [[ $cell_path == /seed/* ]]; then
-      cell_path=/work${cell_path#/seed}
-    fi
-
-    find_seed_path $cell_path || fail
-
-    if [[ ! "${top_cell:-}" ]]; then
-      get_top_cell $cell_path || fail
-    fi
-
-    dna_path=$cell_path/.dna \
-    cyto_path=$cell_path/.cyto \
-
-    context_path=$cyto_path/context \
-    dna_key_path=$dna_path/key \
-    down_path=$cyto_path/down \
-    job_path=$cyto_path/job \
-    key_path=$cyto_path/key \
-    lock_path=$cyto_path/context \
-    req_path=$cyto_path/req \
-    status_path=$cyto_path/status \
-    tmp_path=$cyto_path/tmp \
-    up_path=$cyto_path/up \
-    inner_path=$cyto_path/inner \
-    mock_path=$seed_path/.mock \
-
-    if [[ "${job_path:-}" ]]; then
-      replay_path=$job_path/pipe_replay
-    else
-      unset replay_path
     fi
 
   end_function
