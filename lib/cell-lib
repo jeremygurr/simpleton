@@ -638,6 +638,12 @@ load_branch_info() {
     trunk_cell=$c
     branch_dim_count=${#branch_dims[*]}
 
+    if (( branch_dim_count > 0 )); then
+      cell_is_trunk=f
+    else
+      cell_is_trunk=t
+    fi
+
     if [[ "${branch_dims:-}" ]]; then
       log_debug "Branch dims found: ${branch_dims[*]}" || fail
     fi
@@ -648,18 +654,6 @@ load_branch_info() {
       dim_string=:${dim_string// /\/}
     fi
     local short_trunk=${trunk_cell#/*/*/}
-    #if   y=${short_trunk%/*/*/*} 
-    #     x=${short_trunk#$y/}
-    #     [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
-    #  short_trunk=$x
-    #elif y=${short_trunk%/*/*} 
-    #     x=${short_trunk#$y/}
-    #     [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
-    #  short_trunk=$x
-    #elif x=${short_trunk##*/} 
-    #     [[ $x != $short_trunk && ${#x} -gt 0 ]]; then
-    #  short_trunk=$x
-    #fi
     short_cell="$short_trunk$dim_string"
 
     log_return_vars=short_cell
@@ -730,23 +724,21 @@ load_leaf_dims() {
     else
       local anchor_dim branch_dim leftovers=" ${trunk_dims[*]} "
       
+      anchor_dims=" $anchor_dims "
       begin_for branch_dim in ${branch_dims[*]}; doo
         remove_word_from_string leftovers $branch_dim
-        remove_array_element anchor_dims $branch_dim
+        remove_word_from_string anchor_dims $branch_dim
       end_for
+      trim_ws anchor_dims
 
-      begin_for anchor_dim in ${anchor_dims[*]}; doo
-        if [[ " $leftovers " != *" $anchor_dim "* ]]; then
+      begin_for anchor_dim in $anchor_dims; doo
+        if [[ "$leftovers" != *" $anchor_dim "* ]]; then
           log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: $leftovers"
           fail1
         fi
         leaf_dims+=( $anchor_dim )
         remove_word_from_string leftovers $anchor_dim
       end_for
-
-      if [[ "${leftovers# }" ]]; then
-        leaf_dims+=( $leftovers )
-      fi
     fi
 
     leaf_dim_count=${#leaf_dims[*]}
@@ -765,6 +757,7 @@ make_or_load_context_dims() {
   begin_function
 
     trunk_dim_count=${#trunk_dims[*]}
+    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
     load_leaf_dims || fail
 
     local dim assignment member i members_string=
@@ -1335,6 +1328,7 @@ switch_context() {
 
       else # $can_create_cyto == f
         load_context || fail
+        : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
       fi
 
       setup_dep_defaults || fail
@@ -1364,7 +1358,7 @@ switch_context() {
         localize_dims=
       fi
 
-      if [[ ! "${anchor_dims:=${default_anchor_dims:-}}" ]]; then
+      if [[ ! "${anchor_dims:-}" ]]; then
         anchor_dims=( "${leaf_dims[@]}" )
       else
         local anchor
@@ -1830,7 +1824,7 @@ execute_command() {
       fail1
     fi
 
-    local anchor_dims=( ${anchor_dims:-} ) \
+    local anchor_dims=${anchor_dims:-} \
       disable_log=${disable_log:-} \
       $branch_local_vars \
       logging_to_file=${logging_to_file:-} \
