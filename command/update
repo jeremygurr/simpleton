@@ -38,7 +38,7 @@ get_needs_update() {
       fail1
     fi
 
-    if [[ ${current_mock:-f} != f ]]
+    if [[ $current_mock != f ]]
     then
       needs_update=f
       log_message="Using mock"
@@ -1029,44 +1029,6 @@ update_inners() {
   handle_return
 }
 
-handle_mock() {
-  begin_function
-    : ${mock:=f}
-
-    if [[ $mock != f && ! -d $mock_path/$mock ]]; then
-      log_fatal "Invalid mock: $mock"
-      if [[ -d $mock_path ]]; then
-        local options=$(find1 $mock_path -printf "%f")
-        log_fatal "Available mocks for this cell: $options"
-      else
-        log_fatal "There are no mocks available for this cell. To create one, create a folder here: $mock_path"
-      fi
-      fail1
-    fi
-
-    local change_mock=f
-    if [[ $mock != f ]]; then
-      if [[ $current_mock != $mock ]]; then
-        change_mock=t
-      fi
-      needs_update=f
-    elif [[ $current_mock != f ]]; then
-      log_warn "Removing mock"
-      rm $cyto_path/current_mock || fail
-      needs_update=t
-    fi
-
-    if [[ $change_mock == t ]]; then
-      log_warn "Switching to mock: $mock"
-      echo "$mock" >$cyto_path/current_mock || fail
-      deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
-    elif [[ $mock != f ]]; then
-      log_warn "Using existing mock: $mock"
-    fi
-  end_function
-  handle_return
-}
-
 update_command() {
   begin_function
 
@@ -1085,43 +1047,47 @@ update_command() {
       update_inner || fail
     fi
 
-    handle_mock || fail
+    if [[ $current_mock != f ]]; then
+      log_warn "Using mock: $current_mock"
+    fi
 
     get_needs_update || fail
 
-    if [[ $needs_update == f ]]; then
+    if [[ $needs_update == t ]]; then
+
+      pre_update || fail
+      deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
+
+      if [[ "$update_successful" != f ]]; then
+        update_upstreams || fail
+      fi
+
+      if [[ $update_successful == t ]]; then
+        if [[ $cell_is_leaf == t ]]; then
+
+          if function_exists update_op; then
+            load_upstream_vars || fail
+            update_successful=
+            update_self_retry_loop || fail
+            check_results || fail
+          fi
+
+        else
+          if [[ "${anchor_dims:-}" ]]; then
+            update_members || fail
+          else
+            log_fatal "Internal error: cell is not a leaf, yet it doesn't have leaf dims?"
+            fail1
+          fi
+        fi
+      fi
+
+      post_update || fail
+
+    else
       update_successful=t
       succeed
     fi
-
-    pre_update || fail
-    deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
-
-    if [[ "$update_successful" != f ]]; then
-      update_upstreams || fail
-    fi
-
-    if [[ $update_successful == t ]]; then
-      if [[ $cell_is_leaf == t ]]; then
-
-        if function_exists update_op; then
-          load_upstream_vars || fail
-          update_successful=
-          update_self_retry_loop || fail
-          check_results || fail
-        fi
-
-      else
-        if [[ "${anchor_dims:-}" ]]; then
-          update_members || fail
-        else
-          log_fatal "Internal error: cell is not a leaf, yet it doesn't have leaf dims?"
-          fail1
-        fi
-      fi
-    fi
-
-    post_update || fail
 
     if [[ $update_successful == t
        && $cell_is_leaf == t
