@@ -58,7 +58,7 @@ cd() {
       local d=$(dirs)
       if (( ${#d} > 2000 )); then
         # remove bottom of stack so we don't grow too big
-        popd -n -0
+        popd -n -0 >/dev/null
       fi
     fi
     builtin cd "$target" || return 1
