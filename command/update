@@ -38,7 +38,7 @@ get_needs_update() {
       fail1
     fi
 
-    if [[ ${current_mock:-f} != f && $current_mock == ${mock:-$current_mock} ]]
+    if [[ ${current_mock:-f} != f ]]
     then
       needs_update=f
       log_message="Using mock"
@@ -85,10 +85,6 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because cyto contains broken links"
-    elif [[ ${mock:-f} != $current_mock ]]
-    then
-      needs_update=t
-      log_message="Mock changed"
     fi
 
   end_function
@@ -1033,28 +1029,53 @@ update_inners() {
   handle_return
 }
 
-update_command() {
+handle_mock() {
   begin_function
+    : ${mock:=f}
 
-    update_successful=f
-    if [[ ${top_level_command:=t} == t && ${mock:-f} != f && ! -d $mock_path/$mock ]]; then
-      log_fatal "Invalid mock: $mock."
+    if [[ $mock != f && ! -d $mock_path/$mock ]]; then
+      log_fatal "Invalid mock: $mock"
       if [[ -d $mock_path ]]; then
         local options=$(find1 $mock_path -printf "%f")
         log_fatal "Available mocks for this cell: $options"
       else
-        log_fatal "There are no mocks available for this cell. To create one, create a folder here $mock_path"
+        log_fatal "There are no mocks available for this cell. To create one, create a folder here: $mock_path"
       fi
       fail1
     fi
-    if [[ ${mock:-f} != f && ! -d $mock_path/$mock ]]; then
-      log_warn "Using mock $mock"
+
+    local change_mock=f
+    if [[ $mock != f ]]; then
+      if [[ $current_mock != $mock ]]; then
+        change_mock=t
+      fi
+      needs_update=f
+    elif [[ $current_mock != f ]]; then
+      log_warn "Removing mock"
+      rm $cyto_path/current_mock || fail
+      needs_update=t
     fi
+
+    if [[ $change_mock == t ]]; then
+      log_warn "Switching to mock: $mock"
+      echo "$mock" >$cyto_path/current_mock || fail
+      deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
+    elif [[ $mock != f ]]; then
+      log_warn "Using existing mock: $mock"
+    fi
+  end_function
+  handle_return
+}
+
+update_command() {
+  begin_function
 
     local leave_loop=0 \
       something_changed=f \
       needs_update=${needs_update:-} \
       needs_inner=f \
+
+    update_successful=f
 
     if [[ "${upstream_cell_link:-}" ]]; then
       update_downstream || fail
@@ -1064,13 +1085,7 @@ update_command() {
       update_inner || fail
     fi
 
-    if [[ ${current_mock:-f} != f ]]; then
-      if [[ $current_mock == ${mock:-$current_mock} ]]; then
-        log_info "Using existing mock: $mock"
-      else
-        log_info "Switching to mock: $mock"
-      fi
-    fi
+    handle_mock || fail
 
     get_needs_update || fail
 
@@ -1079,26 +1094,7 @@ update_command() {
       succeed
     fi
 
-    local mock_changed=f
-    if [[ ! "${mock:-}" ]]; then
-      mock=$current_mock
-    elif [[ ( -d $mock_path/$mock || $mock == f )
-         && $mock != $current_mock ]]; then
-      mock_changed=t
-    fi
-
     pre_update || fail
-    if [[ $mock_changed == t ]]; then
-      if [[ $mock != f ]]; then
-        echo "$mock" >$cyto_path/current_mock || fail
-      else
-        rm $cyto_path/current_mock || fail
-      fi
-      local x
-      begin_for x in $cell_path/!(.cyto|.dna|.member|.|..); doo
-        rm -rf "$x" || fail
-      end_for
-    fi
     deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
 
     if [[ "$update_successful" != f ]]; then
