@@ -67,7 +67,7 @@ cd() {
 }
 
 back() {
-  popd >/dev/null
+  popd &>/dev/null || { echo "Dir doesn't exist."; popd -n &>/dev/null; }
 }
 
 # reverse link
