@@ -3545,41 +3545,39 @@ to_background_process_single() {
       log_debug "Sending output to process with ${timeout}s timeout: $masked_command" || fail
 
       timed_out=f wait_time=0
-      if [[ $pretend == f ]]; then
 
-        if [[ "${background_log:-}" ]]; then
-          echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
-        fi
+      if [[ "${background_log:-}" ]]; then
+        echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
+      fi
 
-        if [[ $pipe_replay_state != replaying ]]; then
-          echo -n "$command" >$pipe_in &
-          pid=$!
+      if [[ $pipe_replay_state != replaying ]]; then
 
-          begin_while ps $pid &>/dev/null; doo
+        echo -n "$command" >$pipe_in &
+        pid=$!
 
-            log_debug "Waiting $delay_s sec for background process to be running" || fail
-            sleep $delay_s || fail
+        begin_while ps $pid &>/dev/null; doo
 
-            (( time_left -= delay_ms 
-             , wait_time += delay_ms ))
+          log_debug "Waiting $delay_s sec for background process to be running" || fail
+          sleep $delay_s || fail
 
-            if (( time_left <= 0 )); then
-              log_debug "Timed out trying to execute: $masked_command" || fail
-              timed_out=t
-              kill $pid || log_warn "Failed to kill $pid"
-              break
-            fi
+          (( time_left -= delay_ms 
+           , wait_time += delay_ms ))
 
-            if (( wait_time > 4000 )) && [[ $wait_message == f ]]; then
-              log_warn "${NL}Waiting for pipe to be open (time_left=$time_left)" || fail
-              wait_message=t
-            fi
+          if (( time_left <= 0 )); then
+            log_debug "Timed out trying to execute: $masked_command" || fail
+            timed_out=t
+            kill $pid || log_warn "Failed to kill $pid"
+            break
+          fi
 
-          end_while
-          local wait_time_s=$(dc -e "$wait_time 1000 / p")
-          log_debug "Finished waiting. Took ${wait_time_s}s." || fail
+          if (( wait_time > 4000 )) && [[ $wait_message == f ]]; then
+            log_warn "${NL}Waiting for pipe to be open (time_left=$time_left)" || fail
+            wait_message=t
+          fi
 
-        fi
+        end_while
+        local wait_time_s=$(dc -e "$wait_time 1000 / p")
+        log_debug "Finished waiting. Took ${wait_time_s}s." || fail
 
       fi
 
@@ -3839,6 +3837,7 @@ flush_background_process() {
 # output:
 #   timed_out 
 #   failed
+# will flush output at end
 from_background_process() {
   local log_vars='pipe interact pipe_replay' \
     log_show_vars='timeout required_output succeed_after fail_after'
@@ -3853,7 +3852,8 @@ from_background_process() {
       secret=${secret:-} \
       pretend_out=${pretend_out:-} \
       pretending=f \
-      timeout=${timeout:-0}
+      timeout=${timeout:-0} \
+      flush_time=${flush_time:-0.5} \
 
     local -n to=$to_var
 
@@ -3993,7 +3993,7 @@ from_background_process() {
       failed=t
     fi
 
-    timeout=0.5 flush_background_process
+    timeout=$flush_time flush_background_process
 
   end_function
 
@@ -4012,12 +4012,17 @@ magic_shell_prompt='>=-=>'$NL
 #   pipe
 #   command
 #   timeout
+#   flush_time=0.5
 # output: 
 #   result
 #   command_successful
+# will flush output at end
 run_pipe_command() {
-  local pipe=$pipe command=$command buffering=${buffering:-line} \
-    shell_prompt=${shell_prompt:-$magic_shell_prompt}
+  local pipe=$pipe \
+    command=$command \
+    buffering=${buffering:-line} \
+    shell_prompt=${shell_prompt:-$magic_shell_prompt} \
+    flush_time=${flush_time:-0.5} \
 
   local log_show_vars=command log_vars='pipe shell_prompt buffering'
   begin_function_hi
