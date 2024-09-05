@@ -229,13 +229,21 @@ prep_upstream() {
     #   exist in branch_dims
     fresh=$down_fresh required_freshness= default_freshness= extra_dims=
 
-    local upstream_name=${upstream##*/}
-    local prep_function=up_${upstream_name//-/_}_prep
+    local upstream_name=${upstream##*/} o
+    extract_simple_name upstream_name o upstream_name
+    local prep_function=up_${upstream_name}_prep
     if function_exists $prep_function; then
       log_debug "Executing upstream prep: $prep_function"
       $prep_function || fail
       setup_dep_defaults || fail
     fi
+
+    local up_chosen_path=$cyto_path/up-chosen
+    if [[ ! -d $up_chosen_path ]]; then
+      mkdir $up_chosen_path || fail
+    fi
+      
+    chosen_target_link=$up_chosen_path/$upstream_name
 
   end_function
   handle_return
@@ -243,10 +251,9 @@ prep_upstream() {
 
 repair_update_upstream_choose_single() {
   begin_function
-    debug_start
     if [[ ! -e $chosen ]]; then
       rm $chosen || succeed
-      local up_name=${upstraem##*/}
+      local up_name=${upstream##*/}
       link_choices || succeed
       repair_successful=t
     fi
@@ -257,8 +264,8 @@ repair_update_upstream_choose_single() {
 update_upstream_choose_single() {
   begin_function_lo
     chosen=$choices
-    if [[ ! -e $upstream/chosen ]]; then
-      force=t safe_link $chosen $upstream/chosen || fail
+    if [[ ! -e $chosen_target_link ]]; then
+      force=t safe_link $chosen $chosen_target_link || fail
     fi
     upstream_cell_link=$chosen
   end_function
@@ -279,6 +286,7 @@ update_upstream_choose_multi() {
       fi
       if [[ $needs_update == t ]]; then
         if [[ $needs_pruning == t ]]; then
+          log_warn "pruning of chosen branches not supported yet"
           debug_start
           local trunk_cell
           get_trunk_cell $chosen || fail
@@ -300,7 +308,7 @@ update_upstream_choose_multi() {
       if [[ ! "$chosen" ]]; then
         chosen=${choices%% *}
       fi
-      force=t safe_link $chosen $upstream/chosen || fail
+      force=t safe_link $chosen $chosen_target_link || fail
       upstream_cell_link=$chosen
       if [[ "$original_choice" == "$chosen" ]]; then
         needs_update=t
@@ -326,7 +334,7 @@ update_upstream_choose() {
     fi
 
     chosen=
-    if [[ -e "$upstream/chosen" ]]; then
+    if [[ -e "$chosen_target_link" ]]; then
       chosen=$(readlink $upstream/chosen) || fail
       original_choice=$chosen
     fi
@@ -392,7 +400,10 @@ update_upstream() {
   local log_show_vars=^upstream 
   begin_function_hi
 
-    local needs_update= upstream_cell_link= chosen= anchor_dims=
+    local needs_update= upstream_cell_link= \
+      chosen= anchor_dims= \
+      chosen_target_link \
+
     eval "$localize_dims" || fail
 
     prep_upstream || fail
