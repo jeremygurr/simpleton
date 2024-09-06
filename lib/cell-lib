@@ -884,10 +884,11 @@ make_context_expand_handle_default() {
 
 make_context_expand_members_unknown() {
   begin_function
+# This needs to be allowed to support derive tables
+#    all)
+#      problem=\"'all' member not available for this dim: $dim\"
+#    ;;
     code+="
-    all)
-      problem=\"'all' member not available for this dim: $dim\"
-    ;;
     *)
       values=( \"\$value\" )
     ;;
@@ -1450,6 +1451,7 @@ switch_context() {
 execute_derive_table() {
   begin_function        
       
+    local out_var=$out_set
     local -n derive_fields=${derive_table}_fields \
              derive_data=${derive_table}_data \
              out_set=$out_set \
@@ -1497,6 +1499,7 @@ execute_derive_table() {
       (( data_index += field_count ))
     end_while
 
+    log_return_vars=out_var
   end_function
   handle_return
 }
@@ -1531,7 +1534,7 @@ expand_values_check_derive() {
       out_field=$dim \
       out_set=new_values \
       execute_derive_table || fail
-      if [[ -v old_values[*] ]]; then
+      if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
         intersect old_values new_values intersected
         copy_set intersected old_values
       else
@@ -1555,10 +1558,6 @@ expand_values_check_default() {
       local is_optional=f
       if [[ -v is_optional_var && $is_optional_var == t ]]; then
         is_optional=t
-      fi
-
-      if [[ "$derive_tables" ]]; then
-        expand_values_check_derive || fail
       fi
 
       if [[ $is_optional == f ]]; then
@@ -1642,7 +1641,9 @@ expand_values() {
 
     if [[ ! "${values:-}" ]]; then
       expand_values_check_default || fail
-    else
+    fi
+
+    if [[ "${values:-}" ]]; then
       local value
       new_values=()
       begin_for value in "${values[@]}"; doo
@@ -1653,7 +1654,6 @@ expand_values() {
       if [[ "$derive_tables" ]]; then
         expand_values_check_derive "${values[*]}" || fail
       fi
-
     fi
 
   end_function
@@ -2813,8 +2813,13 @@ for_each_member() {
     member_count=${#values[*]}
 
     if (( member_count > 1 )); then
-      # don't refine the upstream link if there wuold be multiple matches
+      # don't refine the upstream link if there would be multiple matches
       local upstream_cell_link=
+    fi
+
+    if (( member_count == 0 )); then
+      log_fatal "No members found for $dim"
+      fail1
     fi
 
     loop_over_var=values \
