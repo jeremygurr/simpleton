@@ -301,6 +301,10 @@ load_tab_to_code() {
 
     code+=")$NL"
 
+    if [[ $name == *_derive ]]; then
+      derive_tables+=( $name )
+    fi
+
   end_function
   handle_return
 }
@@ -809,6 +813,7 @@ branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
 leaf_dims=( ${leaf_dims[*]} )
 leaf_dim_count=$leaf_dim_count
+derive_tables=( ${derive_tables[*]} )
 cell_is_leaf=$cell_is_leaf" || fail
 
   end_function
@@ -1158,6 +1163,7 @@ make_or_load_context() {
       local last_type=fun
     fi
 
+    derive_tables=()
     if [[ -d $dna_path ]]; then
       local dna_roots=$(find -L $dna_path -name up -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
       prefix= make_or_load_dna_contents $dna_path || fail
@@ -1301,6 +1307,9 @@ setup_cell_path_vars() {
   handle_return
 }
 
+# inputs:
+#   cell_path
+#   anchor_dims (as a space separated string)
 switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
@@ -1433,24 +1442,24 @@ switch_context() {
 }
 
 # inputs:
-#   derive_fields
-#   derive_data
-#   output_field
-#   output_var    (defaults to output_field)
+#   derive_table   name of var of derive table
+#   out_field      which field to read from the table
+#   out_set        which var to write set of valid members to
 # outputs:
-#   the var output_var points to will contain an array of all matches
+#   the var output_var points to will contain a set of all matches
 execute_derive_table() {
   begin_function        
       
+    local -n derive_fields=${derive_table}_fields \
+             derive_data=${derive_table}_data \
+             out_set=$out_set \
+
     local field_count=${#derive_fields[*]} \
       data_count=${#derive_data[*]} \
       maybe data_index=0 column_index \
       value= row_result field everything_matches \
-      output_field=$output_field \
+      out_field=$out_field \
       invalid=f
-
-    local -A all_results
-    local -n output_var=${output_var:-$output_field}
 
     eval "$localize_reverse_dims" || fail
     begin_while (( data_index < data_count )); doo
@@ -1459,7 +1468,7 @@ execute_derive_table() {
       begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
         field=${derive_fields[$column_index]}
         value=${derive_data[$((data_index + column_index))]}
-        if [[ $field == $output_field ]]; then
+        if [[ $field == $out_field ]]; then
           row_result=$value
         else
 
@@ -1482,20 +1491,53 @@ execute_derive_table() {
       end_for
 
       if [[ $everything_matches == t ]]; then
-        all_results["$row_result"]=1
+        out_set["$row_result"]=1
       fi
 
       (( data_index += field_count ))
     end_while
 
-    if [[ -v all_results[*] ]]; then
-      if (( ${#all_results[*]} > 0 )); then
-        output_var=( "${!all_results[@]}" )
-      fi
-    else
-      output_var=()
-    fi
+  end_function
+  handle_return
+}
 
+expand_values_check_derive() {
+  local old_value_var=${1:-}
+  begin_function
+    local -A old_values new_values intersected
+    if [[ "$old_value_var" ]]; then
+      string_to_set $old_value_var old_values
+    fi
+    local derive_table
+    begin_for derive_table in ${derive_tables[*]}; doo
+
+      local -n fields=${derive_table}_fields
+      if [[ ! -v fields ]]; then
+        log_fatal "Internal error: derive_tables contains $derive_table, but there is no ${derive_table}_fields"
+        fail1
+      fi
+      local field found=f
+      begin_for field in ${fields[*]}; doo
+        if [[ $field == $dim ]]; then
+          found=t
+        fi
+      end_for
+      if [[ $found == f ]]; then
+        # we don't need to check this table since it doesn't contain the dim
+        continue
+      fi
+
+      out_field=$dim \
+      out_set=new_values \
+      execute_derive_table || fail
+      if [[ -v old_values ]]; then
+        intersect old_values new_values intersected
+        copy_set intersected old_values
+      else
+        copy_set new_values old_values
+      fi
+    end_for
+    keys_to_array old_values values
   end_function
   handle_return
 }
@@ -1508,28 +1550,32 @@ expand_values_check_default() {
 
     if [[ ! "${values:-}" ]]; then
 
-      local -n is_optional_var=${dim_type}_${dim}_is_optional \
-        derive_data=${dim_type}_${dim}_derive_data \
-        derive_fields=${dim_type}_${dim}_derive_fields \
-
+      local -n is_optional_var=${dim_type}_${dim}_is_optional
       local is_optional=f
       if [[ -v is_optional_var && $is_optional_var == t ]]; then
         is_optional=t
       fi
 
-      if [[ -v derive_data ]]; then
-        output_field=$dim \
-        output_var=values \
-        execute_derive_table || fail
-      elif [[ $can_ask == t && $is_optional == f ]]; then
-        choose "Enter required value: $dim=" d_$dim || fail
-        # recursive
-        can_ask=f expand_values || fail
+      if [[ "$derive_tables" ]]; then
+        expand_values_check_derive || fail
       fi
 
-      if [[ ! "${values:-}" && $is_optional == f ]]; then
-        log_fatal "Missing required $dim_type: $dim"
-        fail1
+      if [[ $is_optional == f ]]; then
+        if [[ ! "${values:-}" && $can_ask == t ]]; then
+          choose "Enter required value: $dim=" d_$dim || fail
+          # recursive
+          can_ask=f expand_values || fail
+        fi
+
+        if [[ ! "${values:-}" ]]; then
+          if [[ ${ignore_missing_members:-f} == t ]]; then
+            log_verbose "Skipping cell because it isn't a valid combination of members"
+            is_valid_coordinate=f
+          else
+            log_fatal "Missing required $dim_type: $dim"
+            fail1
+          fi
+        fi
       fi
 
     fi
@@ -1603,6 +1649,10 @@ expand_values() {
         new_values+=( "${values[@]}" )
       end_for
       values=( "${new_values[@]}" )
+      if [[ "$derive_tables" ]]; then
+        expand_values_check_derive "${values[*]}" || fail
+      fi
+
     fi
 
   end_function
@@ -1645,8 +1695,8 @@ execute_command_internal_prep() {
           fail1
         }
 
-        if [[ "${leaf_dims:-}" ]]; then
-          local dim=$leaf_dims
+        if [[ "${anchor_dims:-}" ]]; then
+          local dim=$anchor_dims
           dim_type=trunk_dims \
           expand_values || fail
           get_plural $dim || fail
@@ -1668,6 +1718,10 @@ execute_command_internal_prep() {
             fi
             eval "d_$plural=\${values[*]}" || fail
           end_for
+        fi
+
+        if [[ $is_valid_coordinate == f ]]; then
+          succeed
         fi
 
         if function_exists get_update_risk; then
@@ -1821,8 +1875,11 @@ execute_command_internal() {
       eval "$localize_dims" || fail
     fi
 
-    local coordinates=() 
     execute_command_internal_prep || fail
+
+    if [[ $is_valid_coordinate == f ]]; then
+      succeed
+    fi
 
     # This is in this function twice, because it changes after switch_context
     if [[ "${localize_dims:-}" ]]; then
@@ -1861,7 +1918,9 @@ execute_command_internal() {
 
 execute_command() {
   local cell_path=$(realpath $1) current_command=$2 \
-    log_show_vars='^cell_path current_command' 
+    log_show_vars='^cell_path current_command' \
+    is_valid_coordinate=t
+
   begin_function_hi
 
     if [[ $cell_path != /work* ]]; then
