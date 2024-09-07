@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
 
-
-if [[ "${shell_start_already_run:-}" ]]; then
-  return 0
-fi
-
-shell_start_already_run=t
-echo "Executing shell-start.sh"
-
 if [[ "${ADD_PATH:-}" ]]; then
   export PATH=$ADD_PATH:$PATH
 fi
@@ -33,6 +25,7 @@ alias u='builtin cd ..'
 alias uu='builtin cd ../..'
 alias uuu='builtin cd ../../..'
 alias vi=vim
+alias vis='vim /etc/profile.d/shell-start-0.sh'
 
 # saves existing dir before changing to the given dir
 cd() {
@@ -65,6 +58,90 @@ cd() {
     builtin cd "$target" || return 1
   fi
   return 0
+}
+
+menu() {
+  local line key message result remainder
+  for line in "${choices[@]}"; do
+    key=${line%% *}
+    message=${line#$key }
+    remainder=${line#$key $message }
+    echo "$key  $message" >&2
+  done
+  local input
+  read -sp "Where to go? " -n1 input || return 1
+  choice=
+  for line in "${choices[@]}" "${hidden_choices[@]}"; do
+    key=${line%% *}
+    message=${line#$key }
+    remainder=${line#$key $message }
+    if [[ "$remainder" != "$line" ]]; then
+      result=$remainder
+    else
+      result=$message
+    fi
+    if [[ $key == $input ]]; then
+      choice=$result
+      break
+    fi
+  done
+  if [[ "$choice" ]]; then
+    echo "$choice"
+  else
+    echo
+  fi
+}
+ 
+walk() {
+  local hidden_choices choices choice
+  echo "Press ? for more info or q to quit" >&2
+  hidden_choices=(
+    "q quit"
+    "? help"
+    )
+  while true; do
+    choices=()
+    if [[ -d .. ]]; then
+      choices+=( ". .." )
+    fi
+    if [[ -d .cyto ]]; then
+      choices+=( "c .cyto" )
+    fi
+    if [[ -d .dna ]]; then
+      choices+=( "d .dna" )
+    elif [[ -d down ]]; then
+      choices+=( "d down" )
+    fi
+    if [[ -d props ]]; then
+      choices+=( "p props" )
+    fi
+    if [[ -d sub_dims ]]; then
+      choices+=( "s sub_dims" )
+    fi
+    if [[ -d trunk_dims ]]; then
+      choices+=( "t trunk_dims" )
+    fi
+    if [[ -d up ]]; then
+      choices+=( "u up" )
+    fi
+    if [[ "$choices" ]]; then
+      menu || break
+      if [[ "$choice" == help ]]; then
+        echo "Press one of the characters in the menu to go to the corrosponding folders, or q to quit." >&2
+        # later
+        #echo "You can also use / to search for a substring." >&2
+      elif [[ "$choice" == quit ]]; then
+        break
+      elif [[ -d "$choice" ]]; then
+        cd "$choice" || return 1
+      else
+        echo "Invalid selection, try again." >&2
+      fi
+    else
+      echo "Nothing to see here." >&2
+      break
+    fi
+  done
 }
 
 back() {
@@ -462,6 +539,9 @@ GREEN="\[\033[0;32m\]"
 LIGHT_GREEN="\[\033[1;32m\]"
 YELLOW="\[\033[0;33m\]"
 LIGHT_YELLOW="\[\033[1;33m\]"
+
+TAB=$'\t'
+NL=$'\n'
 
 get_cell_location_string() {
   local p= close=f
