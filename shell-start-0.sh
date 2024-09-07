@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+
 if [[ "${shell_start_already_run:-}" ]]; then
   return 0
 fi
@@ -271,12 +272,6 @@ gcm() {
   else
       git commit || return 1
   fi
-}
-
-deep() {
-  git fetch --unshallow
-  git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
-  git fetch origin
 }
 
 unset ifout
