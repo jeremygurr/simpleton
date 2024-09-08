@@ -60,13 +60,13 @@ cd() {
   return 0
 }
 
-menu() {
+walk_menu() {
   local line key message result remainder
   for line in "${choices[@]}"; do
     key=${line%% *}
     message=${line#$key }
-    remainder=${line#$key $message }
-    echo "$key  $message" >&2
+    message=${message%% *}
+    echo "$key  $message"
   done
   local input
   read -sp "Where to go? " -n1 input || return 1
@@ -74,6 +74,7 @@ menu() {
   for line in "${choices[@]}" "${hidden_choices[@]}"; do
     key=${line%% *}
     message=${line#$key }
+    message=${message%% *}
     remainder=${line#$key $message }
     if [[ "$remainder" != "$line" ]]; then
       result=$remainder
@@ -86,7 +87,7 @@ menu() {
     fi
   done
   if [[ "$choice" ]]; then
-    echo "$choice"
+    echo "$message"
   else
     echo
   fi
@@ -94,7 +95,7 @@ menu() {
  
 walk() {
   local hidden_choices choices choice
-  echo "Press ? for more info or q to quit" >&2
+  echo "Press ? for more info or q to quit"
   hidden_choices=(
     "q quit"
     "? help"
@@ -120,25 +121,33 @@ walk() {
     fi
     if [[ -d trunk_dims ]]; then
       choices+=( "t trunk_dims" )
+    elif [[ $PWD == *:* ]]; then
+      local trunk_path=${PWD%%:*}
+      trunk_path=${trunk_path%/*}
+      choices+=( "t trunk $trunk_path" )
     fi
     if [[ -d up ]]; then
       choices+=( "u up" )
     fi
     if [[ "$choices" ]]; then
-      menu || break
+      walk_menu || break
       if [[ "$choice" == help ]]; then
-        echo "Press one of the characters in the menu to go to the corrosponding folders, or q to quit." >&2
+        echo "Press one of the characters in the menu to go to the corrosponding folders, or q to quit."
         # later
-        #echo "You can also use / to search for a substring." >&2
+        #echo "You can also use / to search for a substring."
       elif [[ "$choice" == quit ]]; then
         break
       elif [[ -d "$choice" ]]; then
         cd "$choice" || return 1
       else
-        echo "Invalid selection, try again." >&2
+        echo "Invalid selection, try again."
+        continue
       fi
+      local highlight=$'\033[1;33m' \
+        reset=$'\033[0m'
+      echo "$highlight$(short_path)$reset"
     else
-      echo "Nothing to see here." >&2
+      echo "Nothing to see here."
       break
     fi
   done
