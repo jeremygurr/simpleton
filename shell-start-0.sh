@@ -62,6 +62,25 @@ cd() {
 
 eval "printf -v hbar_equals '%.s=' {1..${COLUMNS:-40}}"
 
+show_array() {
+  local name=$1
+  local -n _array=$name
+  local i size char_array=f
+
+  set +u
+  size=${#_array[*]}
+  set -u
+
+  echo "$name size=$size"
+  for i in "${!_array[@]}"; do
+    if [[ ! -v _array[$i] ]]; then
+      echo "$i: << MISSING >>"
+    else
+      echo "$i: ${_array[$i]:-}"
+    fi
+  done
+}
+
 walk_split_choice() {
   key=${choice%% *}
   code=${choice#$key }
@@ -110,13 +129,28 @@ walk_add_dirs() {
           extra="${extra:0:60}..."
         fi
       fi
-      choices+=( "$i $d ${d##*/}$extra" )
+      walk_add_choice "$i" "$d" "${d##*/}$extra"
     done
+  fi
+}
+
+walk_add_choice() {
+  local hidden=${hidden:-f} key=$1 remaining=$*
+  shift 2
+  local code=${remaining%% *}
+  if [[ ! "${code_set[$code]:-}" ]]; then
+    if [[ $hidden == f ]]; then
+      choices+=( "$key $remaining" )
+    else
+      hidden_choices+=( "$key $remaining" )
+    fi
+    code_set[$code]=1
   fi
 }
 
 walk() {
   local hidden_choices choices choice path i real_stack=()
+  local -A code_set
   echo "Press ? for more info or q to quit"
   hidden_choices=(
     "q quit"
@@ -127,63 +161,56 @@ walk() {
     i=0
 
     if [[ -d .. ]]; then
-      hidden_choices+=( ". .." )
+      hidden=t walk_add_choice "." ".."
     fi
 
     if (( ${#real_stack[*]} > 0 )); then
-      choices+=( "R unreal unreal-path" )
+      walk_add_choice "R" "unreal" "unreal-path"
     fi
     if [[ $PWD == */.dna/* || $PWD == */.dna ]]; then
       path=${PWD%%/.dna/*}
-      choices+=( "b $path branch" )
+      walk_add_choice "b" "$path" "branch"
       if [[ -L $PWD ]]; then
-        choices+=( "r real real-path" )
+        walk_add_choice "r" "real" "real-path"
       fi
-#      if [[ $PWD == */up ]]; then
-#        walk_add_dirs || return 1
-#      elif [[ $PWD == */down ]]; then
-#        walk_add_dirs || return 1
-#      elif [[ $PWD == */choices ]]; then
-#        walk_add_dirs || return 1
-#      else
       if [[ -d choices ]]; then
-        choices+=( "c choices" )
+        walk_add_choice "c" "choices"
       fi
       if [[ -d trunk_dims ]]; then
-        choices+=( "t trunk_dims" )
+        walk_add_choice "t" "trunk_dims"
       fi
       if [[ -d sub_dims ]]; then
-        choices+=( "s sub_dims" )
+        walk_add_choice "s" "sub_dims"
       fi
       if [[ -d props ]]; then
-        choices+=( "p props" )
+        walk_add_choice "p" "props"
       fi
       if [[ -d up ]]; then
-        choices+=( "u up" )
+        walk_add_choice "u" "up"
       fi
       if [[ -d down ]]; then
-        choices+=( "d down" )
+        walk_add_choice "d" "down"
       fi
     elif [[ $PWD == */.cyto/* || $PWD == */.cyto ]]; then
       path=${PWD%%/.cyto/*}
-      choices+=( "b $path branch" )
+      walk_add_choice "b" "$path" "branch"
       if [[ -d up ]]; then
-        choices+=( "u up" )
+        walk_add_choice "u" "up"
       fi
       if [[ -d up-chosen ]]; then
-        choices+=( "U up-chosen" )
+        walk_add_choice "U" "up-chosen"
       fi
     else
       if [[ $PWD == *:* ]]; then
         path=${PWD%%:*}
         path=${path%/*}
-        choices+=( "t $path trunk" )
+        walk_add_choice "t" "$path" "trunk"
       fi
       if [[ -d .cyto ]]; then
-        choices+=( "c .cyto" )
+        walk_add_choice "c" ".cyto"
       fi
       if [[ -d .dna ]]; then
-        choices+=( "d .dna" )
+        walk_add_choice "d" ".dna"
       fi
     fi
     walk_add_dirs || return 1
