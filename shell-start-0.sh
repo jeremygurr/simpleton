@@ -155,6 +155,19 @@ walk() {
   local -A code_set
   echo "Press ? for more info or q to quit"
   while true; do
+
+    local extra=
+    if [[ -f $PWD/.member ]]; then
+      extra=" $(<$PWD/.member)"
+      if (( ${#extra} > 60 )); then
+        extra=" ${extra:0:60}..."
+      fi
+    fi
+
+    local highlight=$'\033[1;33m' \
+      reset=$'\033[0m'
+    echo "$highlight$hbar_equals$NL$(short_path)$reset$extra"
+
     code_set=()
     hidden_choices=(
       "q quit"
@@ -170,12 +183,12 @@ walk() {
     if (( ${#real_stack[*]} > 0 )); then
       walk_add_choice "R" "unreal" "unreal-path"
     fi
+    if [[ -L $PWD ]]; then
+      walk_add_choice "r" "real" "real-path"
+    fi
     if [[ $PWD == */.dna/* || $PWD == */.dna ]]; then
       path=${PWD%%/.dna/*}
       walk_add_choice "b" "$path" "branch"
-      if [[ -L $PWD ]]; then
-        walk_add_choice "r" "real" "real-path"
-      fi
       if [[ -d choices ]]; then
         walk_add_choice "c" "choices"
       fi
@@ -238,9 +251,7 @@ walk() {
         echo "Invalid selection, try again."
         continue
       fi
-      local highlight=$'\033[1;33m' \
-        reset=$'\033[0m'
-      echo "$highlight$hbar_equals$NL$(short_path)$reset"
+
     else
       echo "Nothing to see here."
       break
