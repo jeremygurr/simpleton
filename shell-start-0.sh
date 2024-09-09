@@ -93,8 +93,20 @@ walk_menu() {
   fi
 }
  
+walk_add_dirs() {
+  local dirs i d 
+  dirs=$(find . -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
+  if [[ "$dirs" ]]; then
+    i=0
+    for d in $dirs; do
+      (( i++ ))
+      choices+=( "$i ${d##*/} $d" )
+    done
+  fi
+}
+
 walk() {
-  local hidden_choices choices choice
+  local hidden_choices choices choice path
   echo "Press ? for more info or q to quit"
   hidden_choices=(
     "q quit"
@@ -102,33 +114,56 @@ walk() {
     )
   while true; do
     choices=()
+
     if [[ -d .. ]]; then
       choices+=( ". .." )
     fi
-    if [[ -d .cyto ]]; then
-      choices+=( "c .cyto" )
+
+    if [[ $PWD == */.dna/* ]]; then
+      path=${PWD%%/.dna/*}
+      choices+=( "c cell $path" )
+      if [[ $PWD == */up || $PWD == */down ]]; then
+        walk_add_dirs || return 1
+      else
+        if [[ -d trunk_dims ]]; then
+          choices+=( "t trunk_dims" )
+        fi
+        if [[ -d sub_dims ]]; then
+          choices+=( "s sub_dims" )
+        fi
+        if [[ -d props ]]; then
+          choices+=( "p props" )
+        fi
+        if [[ -d up ]]; then
+          choices+=( "u up" )
+        fi
+        if [[ -d down ]]; then
+          choices+=( "d down" )
+        fi
+      fi
+    elif [[ $PWD == */.cyto/* ]]; then
+      path=${PWD%%/.cyto/*}
+      choices+=( "c cell $path" )
+      if [[ -d up ]]; then
+        choices+=( "u up" )
+      fi
+      if [[ -d up-chosen ]]; then
+        choices+=( "U up-chosen" )
+      fi
+    else
+      if [[ -d .cyto ]]; then
+        choices+=( "c .cyto" )
+      fi
+      if [[ -d .dna ]]; then
+        choices+=( "d .dna" )
+      fi
+      if [[ $PWD == *:* ]]; then
+        path=${PWD%%:*}
+        path=${path%/*}
+        choices+=( "t trunk $path" )
+      fi
     fi
-    if [[ -d .dna ]]; then
-      choices+=( "d .dna" )
-    elif [[ -d down ]]; then
-      choices+=( "d down" )
-    fi
-    if [[ -d props ]]; then
-      choices+=( "p props" )
-    fi
-    if [[ -d sub_dims ]]; then
-      choices+=( "s sub_dims" )
-    fi
-    if [[ -d trunk_dims ]]; then
-      choices+=( "t trunk_dims" )
-    elif [[ $PWD == *:* ]]; then
-      local trunk_path=${PWD%%:*}
-      trunk_path=${trunk_path%/*}
-      choices+=( "t trunk $trunk_path" )
-    fi
-    if [[ -d up ]]; then
-      choices+=( "u up" )
-    fi
+
     if [[ "$choices" ]]; then
       walk_menu || break
       if [[ "$choice" == help ]]; then
@@ -150,6 +185,7 @@ walk() {
       echo "Nothing to see here."
       break
     fi
+
   done
 }
 
