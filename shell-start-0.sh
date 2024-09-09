@@ -60,46 +60,57 @@ cd() {
   return 0
 }
 
+eval "printf -v hbar_equals '%.s=' {1..${COLUMNS:-40}}"
+
+walk_split_choice() {
+  key=${choice%% *}
+  code=${choice#$key }
+  code=${code%% *}
+  remainder=${choice##$key $code }
+  if [[ "$remainder" != "$choice" ]]; then
+    message=$remainder
+  else
+    message=$code
+  fi
+}
+
 walk_menu() {
-  local line key message result remainder
-  for line in "${choices[@]}"; do
-    key=${line%% *}
-    message=${line#$key }
-    message=${message%% *}
+  local choice key code message remainder
+  for choice in "${choices[@]}"; do
+    walk_split_choice
     echo "$key  $message"
   done
   local input
   read -sp "Where to go? " -n1 input || return 1
-  choice=
-  for line in "${choices[@]}" "${hidden_choices[@]}"; do
-    key=${line%% *}
-    message=${line#$key }
-    message=${message%% *}
-    remainder=${line#$key $message }
-    if [[ "$remainder" != "$line" ]]; then
-      result=$remainder
-    else
-      result=$message
-    fi
+  result=
+  for choice in "${choices[@]}" "${hidden_choices[@]}"; do
+    walk_split_choice
     if [[ $key == $input ]]; then
-      choice=$result
+      result=$code
       break
     fi
   done
-  if [[ "$choice" ]]; then
-    echo "$message"
+  if [[ "$result" ]]; then
+    echo "${message%% *}"
   else
     echo
   fi
 }
  
 walk_add_branches() {
-  local dirs d 
+  local dirs d extra
   dirs=$(find -L . -mindepth 1 -maxdepth 1 -type d -not -name ".*" -name "*:*" | sort -g) || return 1
   if [[ "$dirs" ]]; then
     for d in $dirs; do
       (( i++ ))
-      choices+=( "$i ${d##*/} $d" )
+      extra=
+      if [[ -f $d/.member ]]; then
+        extra=" $(<$d/.member)"
+        if (( ${#extra} > 60 )); then
+          extra="${extra:0:60}..."
+        fi
+      fi
+      choices+=( "$i $d ${d##*/}$extra" )
     done
   fi
 }
@@ -110,7 +121,7 @@ walk_add_dirs() {
   if [[ "$dirs" ]]; then
     for d in $dirs; do
       (( i++ ))
-      choices+=( "$i ${d##*/} $d" )
+      choices+=( "$i $d ${d##*/}" )
     done
   fi
 }
@@ -127,47 +138,46 @@ walk() {
     i=0
 
     if [[ -d .. ]]; then
-      choices+=( ". .." )
+      hidden_choices+=( ". .." )
     fi
 
     if (( ${#real_stack[*]} > 0 )); then
-      choices+=( "R unreal-path unreal" )
+      choices+=( "R unreal unreal-path" )
     fi
     if [[ $PWD == */.dna/* || $PWD == */.dna ]]; then
       path=${PWD%%/.dna/*}
-      choices+=( "b branch $path" )
+      choices+=( "b $path branch" )
       if [[ -L $PWD ]]; then
-        choices+=( "r real-path real" )
+        choices+=( "r real real-path" )
       fi
-      if [[ $PWD == */up ]]; then
-        walk_add_dirs || return 1
-      elif [[ $PWD == */down ]]; then
-        walk_add_dirs || return 1
-      elif [[ $PWD == */choices ]]; then
-        walk_add_dirs || return 1
-      else
-        if [[ -d choices ]]; then
-          choices+=( "c choices" )
-        fi
-        if [[ -d trunk_dims ]]; then
-          choices+=( "t trunk_dims" )
-        fi
-        if [[ -d sub_dims ]]; then
-          choices+=( "s sub_dims" )
-        fi
-        if [[ -d props ]]; then
-          choices+=( "p props" )
-        fi
-        if [[ -d up ]]; then
-          choices+=( "u up" )
-        fi
-        if [[ -d down ]]; then
-          choices+=( "d down" )
-        fi
+#      if [[ $PWD == */up ]]; then
+#        walk_add_dirs || return 1
+#      elif [[ $PWD == */down ]]; then
+#        walk_add_dirs || return 1
+#      elif [[ $PWD == */choices ]]; then
+#        walk_add_dirs || return 1
+#      else
+      if [[ -d choices ]]; then
+        choices+=( "c choices" )
+      fi
+      if [[ -d trunk_dims ]]; then
+        choices+=( "t trunk_dims" )
+      fi
+      if [[ -d sub_dims ]]; then
+        choices+=( "s sub_dims" )
+      fi
+      if [[ -d props ]]; then
+        choices+=( "p props" )
+      fi
+      if [[ -d up ]]; then
+        choices+=( "u up" )
+      fi
+      if [[ -d down ]]; then
+        choices+=( "d down" )
       fi
     elif [[ $PWD == */.cyto/* || $PWD == */.cyto ]]; then
       path=${PWD%%/.cyto/*}
-      choices+=( "b branch $path" )
+      choices+=( "b $path branch" )
       if [[ -d up ]]; then
         choices+=( "u up" )
       fi
@@ -178,7 +188,7 @@ walk() {
       if [[ $PWD == *:* ]]; then
         path=${PWD%%:*}
         path=${path%/*}
-        choices+=( "t trunk $path" )
+        choices+=( "t $path trunk" )
       fi
       if [[ -d .cyto ]]; then
         choices+=( "c .cyto" )
@@ -188,30 +198,31 @@ walk() {
         walk_add_branches || return 1
       fi
     fi
+    walk_add_dirs || return 1
 
     if [[ "$choices" ]]; then
       walk_menu || break
-      if [[ "$choice" == help ]]; then
+      if [[ "$result" == help ]]; then
         echo "Press one of the characters in the menu to go to the corrosponding folders, or q to quit."
         # later
         #echo "You can also use / to search for a substring."
-      elif [[ "$choice" == quit ]]; then
+      elif [[ "$result" == quit ]]; then
         break
-      elif [[ "$choice" == real ]]; then
+      elif [[ "$result" == real ]]; then
         real_stack+=( $PWD )
         cd $(realpath $PWD) || return 1
-      elif [[ "$choice" == unreal ]]; then
+      elif [[ "$result" == unreal ]]; then
         cd ${real_stack[-1]} || return 1
         unset real_stack[-1]
-      elif [[ -d "$choice" ]]; then
-        cd "$choice" || return 1
+      elif [[ -d "$result" ]]; then
+        cd "$result" || return 1
       else
         echo "Invalid selection, try again."
         continue
       fi
       local highlight=$'\033[1;33m' \
         reset=$'\033[0m'
-      echo "$highlight$(short_path)$reset"
+      echo "$highlight$hbar_equals$NL$(short_path)$reset"
     else
       echo "Nothing to see here."
       break
