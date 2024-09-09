@@ -93,11 +93,21 @@ walk_menu() {
   fi
 }
  
-walk_add_dirs() {
-  local dirs i d 
-  dirs=$(find . -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
+walk_add_branches() {
+  local dirs d 
+  dirs=$(find -L . -mindepth 1 -maxdepth 1 -type d -not -name ".*" -name "*:*" | sort -g) || return 1
   if [[ "$dirs" ]]; then
-    i=0
+    for d in $dirs; do
+      (( i++ ))
+      choices+=( "$i ${d##*/} $d" )
+    done
+  fi
+}
+
+walk_add_dirs() {
+  local dirs d 
+  dirs=$(find -L . -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
+  if [[ "$dirs" ]]; then
     for d in $dirs; do
       (( i++ ))
       choices+=( "$i ${d##*/} $d" )
@@ -106,7 +116,7 @@ walk_add_dirs() {
 }
 
 walk() {
-  local hidden_choices choices choice path
+  local hidden_choices choices choice path i real_stack=()
   echo "Press ? for more info or q to quit"
   hidden_choices=(
     "q quit"
@@ -114,17 +124,31 @@ walk() {
     )
   while true; do
     choices=()
+    i=0
 
     if [[ -d .. ]]; then
       choices+=( ". .." )
     fi
 
-    if [[ $PWD == */.dna/* ]]; then
+    if (( ${#real_stack[*]} > 0 )); then
+      choices+=( "R unreal-path unreal" )
+    fi
+    if [[ $PWD == */.dna/* || $PWD == */.dna ]]; then
       path=${PWD%%/.dna/*}
-      choices+=( "c cell $path" )
-      if [[ $PWD == */up || $PWD == */down ]]; then
+      choices+=( "b branch $path" )
+      if [[ -L $PWD ]]; then
+        choices+=( "r real-path real" )
+      fi
+      if [[ $PWD == */up ]]; then
+        walk_add_dirs || return 1
+      elif [[ $PWD == */down ]]; then
+        walk_add_dirs || return 1
+      elif [[ $PWD == */choices ]]; then
         walk_add_dirs || return 1
       else
+        if [[ -d choices ]]; then
+          choices+=( "c choices" )
+        fi
         if [[ -d trunk_dims ]]; then
           choices+=( "t trunk_dims" )
         fi
@@ -141,9 +165,9 @@ walk() {
           choices+=( "d down" )
         fi
       fi
-    elif [[ $PWD == */.cyto/* ]]; then
+    elif [[ $PWD == */.cyto/* || $PWD == */.cyto ]]; then
       path=${PWD%%/.cyto/*}
-      choices+=( "c cell $path" )
+      choices+=( "b branch $path" )
       if [[ -d up ]]; then
         choices+=( "u up" )
       fi
@@ -151,16 +175,17 @@ walk() {
         choices+=( "U up-chosen" )
       fi
     else
+      if [[ $PWD == *:* ]]; then
+        path=${PWD%%:*}
+        path=${path%/*}
+        choices+=( "t trunk $path" )
+      fi
       if [[ -d .cyto ]]; then
         choices+=( "c .cyto" )
       fi
       if [[ -d .dna ]]; then
         choices+=( "d .dna" )
-      fi
-      if [[ $PWD == *:* ]]; then
-        path=${PWD%%:*}
-        path=${path%/*}
-        choices+=( "t trunk $path" )
+        walk_add_branches || return 1
       fi
     fi
 
@@ -172,6 +197,12 @@ walk() {
         #echo "You can also use / to search for a substring."
       elif [[ "$choice" == quit ]]; then
         break
+      elif [[ "$choice" == real ]]; then
+        real_stack+=( $PWD )
+        cd $(realpath $PWD) || return 1
+      elif [[ "$choice" == unreal ]]; then
+        cd ${real_stack[-1]} || return 1
+        unset real_stack[-1]
       elif [[ -d "$choice" ]]; then
         cd "$choice" || return 1
       else
