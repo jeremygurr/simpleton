@@ -97,9 +97,9 @@ walk_menu() {
   fi
 }
  
-walk_add_branches() {
+walk_add_dirs() {
   local dirs d extra
-  dirs=$(find -L . -mindepth 1 -maxdepth 1 -type d -not -name ".*" -name "*:*" | sort -g) || return 1
+  dirs=$(find -L . -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
   if [[ "$dirs" ]]; then
     for d in $dirs; do
       (( i++ ))
@@ -111,17 +111,6 @@ walk_add_branches() {
         fi
       fi
       choices+=( "$i $d ${d##*/}$extra" )
-    done
-  fi
-}
-
-walk_add_dirs() {
-  local dirs d 
-  dirs=$(find -L . -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
-  if [[ "$dirs" ]]; then
-    for d in $dirs; do
-      (( i++ ))
-      choices+=( "$i $d ${d##*/}" )
     done
   fi
 }
@@ -195,7 +184,6 @@ walk() {
       fi
       if [[ -d .dna ]]; then
         choices+=( "d .dna" )
-        walk_add_branches || return 1
       fi
     fi
     walk_add_dirs || return 1
