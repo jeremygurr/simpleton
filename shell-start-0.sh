@@ -82,6 +82,7 @@ show_array() {
 }
 
 walk_split_choice() {
+  local remainder
   key=${choice%% *}
   code=${choice#$key }
   code=${code%% *}
@@ -94,7 +95,7 @@ walk_split_choice() {
 }
 
 walk_menu() {
-  local choice key code message remainder
+  local choice key code message
   for choice in "${choices[@]}"; do
     walk_split_choice
     echo "$key  $message"
@@ -116,6 +117,21 @@ walk_menu() {
   fi
 }
  
+walk_add_choice() {
+  local hidden=${hidden:-f} key=$1 
+  shift 1
+  local remaining=$*
+  local code=${remaining%% *}
+  if [[ ! "${code_set[$code]:-}" ]]; then
+    if [[ $hidden == f ]]; then
+      choices+=( "$key $remaining" )
+    else
+      hidden_choices+=( "$key $remaining" )
+    fi
+    code_set[$code]=1
+  fi
+}
+
 walk_add_dirs() {
   local dirs d extra
   dirs=$(find -L . -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
@@ -129,22 +145,8 @@ walk_add_dirs() {
           extra="${extra:0:60}..."
         fi
       fi
-      walk_add_choice "$i" "$d" "${d##*/}$extra"
+      walk_add_choice "$i" "${d#./}" "${d##*/}$extra"
     done
-  fi
-}
-
-walk_add_choice() {
-  local hidden=${hidden:-f} key=$1 remaining=$*
-  shift 2
-  local code=${remaining%% *}
-  if [[ ! "${code_set[$code]:-}" ]]; then
-    if [[ $hidden == f ]]; then
-      choices+=( "$key $remaining" )
-    else
-      hidden_choices+=( "$key $remaining" )
-    fi
-    code_set[$code]=1
   fi
 }
 
@@ -152,11 +154,12 @@ walk() {
   local hidden_choices choices choice path i real_stack=()
   local -A code_set
   echo "Press ? for more info or q to quit"
-  hidden_choices=(
-    "q quit"
-    "? help"
-    )
   while true; do
+    code_set=()
+    hidden_choices=(
+      "q quit"
+      "? help"
+      )
     choices=()
     i=0
 
