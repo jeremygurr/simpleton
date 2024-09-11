@@ -37,11 +37,7 @@ get_needs_update() {
       fail1
     fi
 
-    if [[ $current_mock != f ]]
-    then
-      needs_update=f
-      log_message="Using mock"
-    elif [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
+    if [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
       needs_update=t
       log_message="Needs update because output file doesn't exist"
     elif [[ -v leaf_dims ]]
@@ -145,6 +141,10 @@ pre_update() {
     if [[ $reuse_existing_out == t && -f $status_path/last-good-update-end ]]; then
       # Don't allow cells to reuse old data when it is mid-modification and this update fails
       rm $status_path/last-good-update-end || fail
+    fi
+
+    if [[ $current_mock != f ]]; then
+      kind=data clean_cell $cell_path || fail
     fi
 
   end_function
@@ -573,11 +573,6 @@ create_sub_cell() {
       fail1
     fi
 
-    # if [[ -e $sub_cell ]]; then
-    #   log_fatal "sub_cell already exists: $sub_cell"
-    #   fail1
-    # fi
-
     if [[ "$parent_cell" == "$sub_cell" ]]; then
       log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
       stack_trace
@@ -863,10 +858,30 @@ update_self() {
 
     local missing=t
     tee_output_to_log || fail
-    ignore_missing=t execute_op update || {
-      log_fatal "Internal error while executing update operator."
-      fail1
-    }
+    if [[ $current_mock == f ]]; then
+      ignore_missing=t execute_op update || {
+        log_fatal "Internal error while executing update operator."
+        fail1
+      }
+    else # mocking
+
+      log_warn "Using mock: $current_mock"
+      local -r export_path=$mock_path/$current_mock/export
+
+      if function_exists mock_update_op; then
+        missing=f
+        mock_update_op || fail
+      fi
+
+      if [[ -d $export_path ]]; then
+        pass_thru=t \
+        context_make=f \
+        make_or_load_dna_contents $export_path || fail
+      fi
+
+      update_successful=${update_successful:-t}
+
+    fi
     completion_time=$EPOCHSECONDS
     untee_output || fail
 
@@ -1020,11 +1035,6 @@ post_update() {
   handle_return
 }
 
-is_leaf_cell() {
-  local cell_path=$1
-  [[ ! -d $cell_path/.dna/dim ]]
-}
-
 get_dep_member() {
 
   if [[ -f $dep_cell/.dna/context-before ]]; then
@@ -1084,10 +1094,6 @@ update_command() {
       update_inner || fail
     fi
 
-    if [[ $current_mock != f ]]; then
-      log_warn "Using mock: $current_mock"
-    fi
-
     get_needs_update || fail
 
     if [[ $needs_update == t ]]; then
@@ -1096,19 +1102,21 @@ update_command() {
       deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
 
       if [[ "$update_successful" != f ]]; then
-        update_upstreams || fail
+        if [[ $current_mock == f ]]; then
+          update_upstreams || fail
+          load_upstream_vars || fail
+        else
+          update_successful=t
+        fi
       fi
 
       if [[ $update_successful == t ]]; then
         if [[ $cell_is_leaf == t ]]; then
-
           if function_exists update_op; then
-            load_upstream_vars || fail
             update_successful=
             update_self_retry_loop || fail
             check_results || fail
           fi
-
         else
           if [[ "${anchor_dims:-}" ]]; then
             update_members || fail

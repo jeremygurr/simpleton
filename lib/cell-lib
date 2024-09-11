@@ -463,8 +463,8 @@ plant_seed_internal() {
         if [[ ! -e $target ]]; then
           if [[ -f $x || $x_part == .dna ]]; then
             safe_link $(realpath $x) $to/ || fail
-          elif [[ $x_part == .mock && "${mock:-f}" != f && -d $x/$mock ]]; then
-            safe_link $(realpath $x)/$mock/* $to/ || fail
+          elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
+            safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
           elif [[ $x_part == .* ]]; then
             : # ignore this
           elif [[ $x_part == *:* ]]; then
@@ -1097,7 +1097,7 @@ make_or_load_dna_contents() {
 
     local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
 
-    if [[ "$dna_roots" && $folder != */dna-root/* ]]; then
+    if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
       make_or_load_dna_contents_dna_root || fail
     fi
 
@@ -1172,7 +1172,7 @@ make_or_load_context() {
 
     derive_tables=()
     if [[ -d $dna_path ]]; then
-      local dna_roots=$(find -L $dna_path -name up -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
+      local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
       prefix= make_or_load_dna_contents $dna_path || fail
     elif [[ -f $dna_path ]]; then
       if [[ $context_make == t ]]; then
@@ -1327,7 +1327,7 @@ switch_context() {
     begin_function
 
       if [[ ! -e $cell_path/.dna ]]; then
-        log_fatal "$cell_path is not a cell"
+        log_fatal "$cell_path is not a cell. It's possible that the seed for this cell is missing it's dna folder."
         fail1
       fi
 
@@ -1647,6 +1647,10 @@ expand_values() {
 
     expand_values_check_if_too_many || fail
 
+    if [[ ! "${values:-}" && "${derive_tables:-}" ]]; then
+      expand_values_check_derive "${values[*]}" || fail
+    fi
+
     if [[ ! "${values:-}" ]]; then
       expand_values_check_default || fail
     fi
@@ -1659,9 +1663,6 @@ expand_values() {
         new_values+=( "${values[@]}" )
       end_for
       values=( "${new_values[@]}" )
-      if [[ "${derive_tables:-}" ]]; then
-        expand_values_check_derive "${values[*]}" || fail
-      fi
     fi
 
   end_function
@@ -1704,18 +1705,20 @@ execute_command_internal_prep() {
           fail1
         }
 
-        if [[ "${anchor_dims:-}" ]]; then
-          #   This is already happening in for_each_member
-          :
-          # local dim=$anchor_dims
-          # dim_type=trunk_dims \
-          # expand_values || fail
-          # get_plural $dim || fail
-          # eval "unset $dim" || fail
-          # eval "unset d_$dim" || fail
-          # eval "d_$plural=\${values[*]}" || fail
-        else
-          local prop plural
+        debug_start
+        if [[ $cell_is_leaf == t ]]; then
+          local dim prop plural
+          begin_for dim in ${trunk_dims[*]}; doo
+            if [[ " ${branch_dims[*]} " != *" $dim "* ]]; then
+              dim_type=trunk_dims \
+              expand_values || fail
+              get_plural $dim || fail
+              eval "unset $dim" || fail
+              eval "unset d_$dim" || fail
+              eval "d_$plural=\${values[*]}" || fail
+            fi
+          end_for
+
           begin_for prop in ${props[*]}; doo
             local dim=$prop
             dim_type=props \
@@ -2691,7 +2694,8 @@ trace_step_execution=${trace_step_execution:-f}
 trace_op=${trace_op:-}
 
 # Usage: execute_op {op name}
-# returns 1 if no op found
+# output
+#   missing   set to t if no op found
 execute_op() {
   local op_name=$1 op_function= ignore_missing=${ignore_missing:-f}
 
@@ -2875,6 +2879,13 @@ plant_member() {
       fi
 
       plant_seed_internal $seed_path $new_path || fail
+
+      if [[ -e $parent_path/.cyto/current_mock ]]; then
+        if [[ ! -d $new_path/.cyto ]]; then
+          mkdir $new_path/.cyto || fail
+        fi
+        cp $parent_path/.cyto/current_cell $new_path/.cyto/ || fail
+      fi
 
       if [[ -e $member_path ]]; then
         rm -rf $member_path || fail
