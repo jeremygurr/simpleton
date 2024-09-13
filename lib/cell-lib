@@ -315,9 +315,11 @@ load_tab_to_code() {
 
 # usage: get_simple_name {from var} {ordinal var} {to var}
 extract_simple_name() {
-  local -n _from=$1 _ord=$2 _to=$3
+  local to_var=$3
+  local -n _from=$1 _ord=$2 _to=$to_var
   split_ordinal _from _ord _to
   _to=${_to//-/_}
+  debug_return_vars=$to_var
 }
 
 # usage: get_simple_name {from array} {to array}
@@ -608,7 +610,7 @@ init_context() {
   cell_is_external=f \
   cell_is_persistent=f \
   current_pause=250 \
-  default_anchor_dims= \
+  default_anchor_dims=() \
   default_freshness= \
   default_strategies=crl \
   localize_dims= \
@@ -635,12 +637,10 @@ init_context() {
   update_cost=1 \
   update_risk=3 \
 
-  unset dim_constraints_all_fields \
-    dim_constraints_all_table \
-
   unset \
     check_op \
     update_op \
+    get_op \
 
   return 0
 }
@@ -798,8 +798,6 @@ make_or_load_context_dims() {
   begin_function
 
     trunk_dim_count=${#trunk_dims[*]}
-    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
-    load_leaf_dims || fail
 
     local dim assignment member i members_string=
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
@@ -815,10 +813,7 @@ make_or_load_context_dims() {
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
-leaf_dims=( ${leaf_dims[*]} )
-leaf_dim_count=$leaf_dim_count
-derive_tables=( ${derive_tables[*]} )
-cell_is_leaf=$cell_is_leaf" || fail
+derive_tables=( ${derive_tables[*]} )" || fail
 
   end_function
   handle_return
@@ -1161,8 +1156,7 @@ make_or_load_context() {
   begin_function
 
     log_debug "Loading context for $short_cell" || fail
-    local item_name last_part dna_full_item suffix \
-      context_make=$context_make \
+    local item_name last_part dna_full_item suffix
 
     if [[ $context_make == t ]]; then
       echo "#!/usr/env bash
@@ -1386,7 +1380,6 @@ switch_context() {
 
       else # $can_create_cyto == f
         load_context || fail
-        : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
       fi
 
       setup_dep_defaults || fail
@@ -1397,21 +1390,36 @@ switch_context() {
         out_path=$cell_path/$out_path
       fi
 
-      local o
+      : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
+      load_leaf_dims || fail
+
       localize_dims=local
       localize_reverse_dims=local
-      begin_for dim_type in trunk_dims leaf_dims props; doo
+      local dim_var plural dim_type
+      begin_for dim_type in trunk_dims sub_dims props; doo
         local -n dim_array=$dim_type
-        begin_for dim in ${dim_array[*]}; doo
-          get_plural $dim
-          dim_plural=$plural
-          local ddim=d_$dim ddims=d_$dim_plural pdim=p_$dim pdims=p_$dim_plural
-          localize_dims+=" $ddim=\${$ddim:-\${$pdim:-\${$dim:-}}} $ddims=\${$ddims:-\${$pdims:-\${$dim_plural:-\${$ddim:-\${$pdim:-\${$dim:-}}}}}}"
-          localize_reverse_dims+=" $dim=\${$ddim:-} $dim_plural=\${$ddims:-}"
-          local -n is_secret=${dim_type}_${dim}_is_secret
-          if [[ -v is_secret && $is_secret == t ]]; then
-            add_word_to_string secret_vars "$dim $dim_plural d_$dim d_$dim_plural"
+        begin_for dim_var in ${dim_array[*]}; doo
+          get_plural $dim_var
+          local dims_var=$plural
+          local -n dim=$dim_var dims=$dims_var \
+            ddim=d_$dim_var ddims=d_$dims_var \
+            pdim=p_$dim_var pdims=p_$dims_var
+
+          ddims=${ddims:-${pdims:-${dims:-${ddim:-${pdim:-${dim:-}}}}}}
+          if [[ " ${branch_dims[*]} " == *" $dim_var "* || $dim_type == props ]]; then
+            ddim=${ddim:-${pdim:-${dim:-}}}
+          else
+            ddim=
           fi
+
+          localize_dims+=" d_$dim_var=\${d_$dim_var:-} d_$dims_var=\${d_$dims_var:-}"
+          localize_reverse_dims+=" $dim_var=\${d_$dim_var:-} $dims_var=\${d_$dims_var:-}"
+
+          local -n is_secret=${dim_type}_${dim_var}_is_secret
+          if [[ -v is_secret && $is_secret == t ]]; then
+            add_word_to_string secret_vars "$dim_var $dims_var d_$dim_var d_$dims_var"
+          fi
+
         end_for
       end_for
 
@@ -1419,19 +1427,8 @@ switch_context() {
         localize_dims=
       fi
 
-      if [[ ! "${anchor_dims:-}" ]]; then
-        anchor_dims=( "${leaf_dims[@]}" )
-      else
-        local anchor
-        if ! is_array anchor_dims; then
-          anchor_dims=( $anchor_dims )
-        fi
-        begin_for anchor in "${anchor_dims[@]}"; doo
-          if [[ ! " ${trunk_dims[*]} " == *" $anchor "* ]]; then
-            log_fatal "Internal error: dim from anchor_dims not found in leaf_dims: $anchor"
-            fail1
-          fi
-        end_for
+      if [[ "$localize_reverse_dims" == 'local' ]]; then
+        localize_reverse_dims=
       fi
 
       if [[ -f $cell_path/.mock ]]; then
