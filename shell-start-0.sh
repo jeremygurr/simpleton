@@ -60,6 +60,12 @@ cd() {
   return 0
 }
 
+# inputs: 
+#   $1  path to search for broken links
+find_broken_links() {
+  find -L "$(realpath $1)" -type l -print -o -name '.*' -prune
+}
+
 eval "printf -v hbar_equals '%.s=' {1..${COLUMNS:-40}}"
 
 show_array() {
