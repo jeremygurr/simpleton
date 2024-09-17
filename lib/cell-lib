@@ -763,23 +763,20 @@ load_leaf_dims() {
         leaf_dims+=( ${trunk_dims[$i]} )
       end_for
     else
-      local anchor_dim branch_dim leftovers=" ${trunk_dims[*]} "
+      local anchor_dim branch_dim leftovers=" ${anchor_dims[*]} "
       
-      anchor_dims=" $anchor_dims "
       begin_for branch_dim in ${branch_dims[*]}; doo
         remove_word_from_string leftovers $branch_dim
-        remove_word_from_string anchor_dims $branch_dim
       end_for
-      trim_ws anchor_dims
 
       begin_for anchor_dim in $anchor_dims; doo
-        if [[ "$leftovers" != *" $anchor_dim "* ]]; then
+        if [[ " ${trunk_dims[*]} " != *" $anchor_dim "* ]]; then
           log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: $leftovers"
           fail1
         fi
-        leaf_dims+=( $anchor_dim )
-        remove_word_from_string leftovers $anchor_dim
       end_for
+      
+      leaf_dims=( $leftovers )
     fi
 
     leaf_dim_count=${#leaf_dims[*]}
@@ -1311,6 +1308,119 @@ setup_cell_path_vars() {
   handle_return
 }
 
+switch_context_create() {
+  begin_function
+    if [[ ! -e $cyto_path ]]; then
+      mkdir $cyto_path || fail
+    fi
+
+    if [[ ! -d $status_path ]]; then
+      mkdir $status_path || fail
+    fi
+
+    if [[ ! -e $context_path ]]; then
+      make_context || fail
+    fi
+
+    source $context_path || fail
+    cleanup_dims || fail
+
+    if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
+      make_cyto_up || fail
+    fi
+
+    if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
+      make_cyto_inner || fail
+    fi
+
+    if [[ $update_git_commit == t ]]; then
+      update_only=t git_commit_check || fail
+    fi
+  end_function
+  handle_return
+}
+
+switch_context_calc_dims() {
+  begin_function
+
+    localize_dims=local
+    localize_reverse_dims=local
+    local dim_var plural dim_type
+    begin_for dim_type in trunk_dims sub_dims props; doo
+      local -n dim_array=$dim_type
+      begin_for dim_var in ${dim_array[*]}; doo
+        get_plural $dim_var
+        local dims_var=$plural
+        local -n dim=$dim_var dims=$dims_var \
+          ddim=d_$dim_var ddims=d_$dims_var \
+          pdim=p_$dim_var pdims=p_$dims_var
+
+        if [[ " ${branch_dims[*]} " == *" $dim_var "* || $dim_type == props ]]; then
+          ddim=${ddim:-${pdim:-${dim:-}}}
+          ddims=
+        else
+          ddim=
+          ddims=${ddims:-${pdims:-${dims:-${ddim:-${pdim:-${dim:-}}}}}}
+        fi
+
+        localize_dims+=" d_$dim_var=\${d_$dim_var:-} d_$dims_var=\${d_$dims_var:-}"
+        localize_reverse_dims+=" $dim_var=\${d_$dim_var:-} $dims_var=\${d_$dims_var:-}"
+
+        local -n is_secret=${dim_type}_${dim_var}_is_secret
+        if [[ -v is_secret && $is_secret == t ]]; then
+          add_word_to_string secret_vars "$dim_var $dims_var d_$dim_var d_$dims_var"
+        fi
+
+      end_for
+    end_for
+
+    if [[ "$localize_dims" == 'local' ]]; then
+      localize_dims=
+    fi
+
+    if [[ "$localize_reverse_dims" == 'local' ]]; then
+      localize_reverse_dims=
+    fi
+
+    local dim prop plural
+    if [[ $cell_is_leaf == t ]]; then
+      begin_for dim in ${sub_dims[*]}; doo
+        dim_type=sub_dims \
+        expand_values || fail
+        get_plural $dim || fail
+        eval "unset $dim" || fail
+        eval "unset d_$dim" || fail
+        eval "d_$plural=\${values[*]}" || fail
+      end_for
+
+      begin_for prop in ${props[*]}; doo
+        local dim=$prop
+        dim_type=props \
+        expand_values || fail
+        get_plural $dim || fail
+        eval "unset $dim" || fail
+        if (( ${#values[*]} == 1 )); then
+          eval "d_$dim=\${values[*]}" || fail
+        else
+          eval "unset d_$dim" || fail
+        fi
+        eval "d_$plural=\${values[*]}" || fail
+      end_for
+    else
+      begin_for dim in ${leaf_dims[*]}; doo
+        dim_type=trunk_dims \
+        expand_values || fail
+        get_plural $dim || fail
+        eval "unset $dim" || fail
+        eval "unset d_$dim" || fail
+        eval "d_$plural=\${values[*]}" || fail
+      end_for
+    fi
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   cell_path
 #   anchor_dims (as a space separated string)
@@ -1350,34 +1460,7 @@ switch_context() {
       fi
 
       if [[ $can_create_cyto == t ]]; then
-
-        if [[ ! -e $cyto_path ]]; then
-          mkdir $cyto_path || fail
-        fi
-
-        if [[ ! -d $status_path ]]; then
-          mkdir $status_path || fail
-        fi
-
-        if [[ ! -e $context_path ]]; then
-          make_context || fail
-        fi
-
-        source $context_path || fail
-        cleanup_dims || fail
-
-        if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-          make_cyto_up || fail
-        fi
-
-        if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
-          make_cyto_inner || fail
-        fi
-
-        if [[ $update_git_commit == t ]]; then
-          update_only=t git_commit_check || fail
-        fi
-
+        switch_context_create || fail
       else # $can_create_cyto == f
         load_context || fail
       fi
@@ -1392,44 +1475,7 @@ switch_context() {
 
       : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
       load_leaf_dims || fail
-
-      localize_dims=local
-      localize_reverse_dims=local
-      local dim_var plural dim_type
-      begin_for dim_type in trunk_dims sub_dims props; doo
-        local -n dim_array=$dim_type
-        begin_for dim_var in ${dim_array[*]}; doo
-          get_plural $dim_var
-          local dims_var=$plural
-          local -n dim=$dim_var dims=$dims_var \
-            ddim=d_$dim_var ddims=d_$dims_var \
-            pdim=p_$dim_var pdims=p_$dims_var
-
-          ddims=${ddims:-${pdims:-${dims:-${ddim:-${pdim:-${dim:-}}}}}}
-          if [[ " ${branch_dims[*]} " == *" $dim_var "* || $dim_type == props ]]; then
-            ddim=${ddim:-${pdim:-${dim:-}}}
-          else
-            ddim=
-          fi
-
-          localize_dims+=" d_$dim_var=\${d_$dim_var:-} d_$dims_var=\${d_$dims_var:-}"
-          localize_reverse_dims+=" $dim_var=\${d_$dim_var:-} $dims_var=\${d_$dims_var:-}"
-
-          local -n is_secret=${dim_type}_${dim_var}_is_secret
-          if [[ -v is_secret && $is_secret == t ]]; then
-            add_word_to_string secret_vars "$dim_var $dims_var d_$dim_var d_$dims_var"
-          fi
-
-        end_for
-      end_for
-
-      if [[ "$localize_dims" == 'local' ]]; then
-        localize_dims=
-      fi
-
-      if [[ "$localize_reverse_dims" == 'local' ]]; then
-        localize_reverse_dims=
-      fi
+      switch_context_calc_dims || fail
 
       if [[ -f $cell_path/.mock ]]; then
         current_mock=$(<$cell_path/.mock)
@@ -1702,43 +1748,6 @@ execute_command_internal_prep() {
           fail1
         }
 
-        if [[ $cell_is_leaf == t ]]; then
-          local dim prop plural
-          begin_for dim in ${trunk_dims[*]}; doo
-            if [[ " ${branch_dims[*]} " != *" $dim "* ]]; then
-              dim_type=trunk_dims \
-              expand_values || fail
-              get_plural $dim || fail
-              eval "unset $dim" || fail
-              eval "unset d_$dim" || fail
-              eval "d_$plural=\${values[*]}" || fail
-            fi
-          end_for
-
-          begin_for dim in ${sub_dims[*]}; doo
-            dim_type=sub_dims \
-            expand_values || fail
-            get_plural $dim || fail
-            eval "unset $dim" || fail
-            eval "unset d_$dim" || fail
-            eval "d_$plural=\${values[*]}" || fail
-          end_for
-
-          begin_for prop in ${props[*]}; doo
-            local dim=$prop
-            dim_type=props \
-            expand_values || fail
-            get_plural $dim || fail
-            eval "unset $dim" || fail
-            if (( ${#values[*]} == 1 )); then
-              eval "d_$dim=\${values[*]}" || fail
-            else
-              eval "unset d_$dim" || fail
-            fi
-            eval "d_$plural=\${values[*]}" || fail
-          end_for
-        fi
-
         if [[ $is_valid_coordinate == f ]]; then
           succeed
         fi
@@ -1969,6 +1978,8 @@ execute_command() {
       job_start_time \
       background_log \
       running_job_path \
+      cord_sep=${cord_sep:-|-|} \
+      cords=${cords:-} \
 
     load_branch_info || fail
 
