@@ -1340,7 +1340,20 @@ switch_context_create() {
   handle_return
 }
 
-switch_context_calc_dims() {
+get_plural() {
+  local dim=$1
+  if [[ $dim == *s ]]; then
+    plural=${dim}es
+  elif [[ $dim == *y ]]; then
+    plural=${dim%y}ies
+  else
+    plural=${dim}s
+  fi
+  debug_return_vars=plural
+  return 0
+}
+
+switch_context_prep_dims() {
   begin_function
 
     localize_dims=local
@@ -1348,19 +1361,30 @@ switch_context_calc_dims() {
     local dim_var plural dim_type
     begin_for dim_type in trunk_dims sub_dims props; doo
       local -n dim_array=$dim_type
+      local -n plural_array=${dim_type}_plural
+      plural_array=()
       begin_for dim_var in ${dim_array[*]}; doo
+
         get_plural $dim_var
         local dims_var=$plural
+        plural_array+=( $plural )
+
         local -n dim=$dim_var dims=$dims_var \
           ddim=d_$dim_var ddims=d_$dims_var \
-          pdim=p_$dim_var pdims=p_$dims_var
+          sdim=s_$dim_var sdims=s_$dims_var \
+          pdim=p_$dim_var pdims=p_$dims_var \
+          is_optional=${dim_type}_${dim_var}_is_optional \
+          d_dim_type=${dim_var}_dim_type \
 
-        if [[ " ${branch_dims[*]} " == *" $dim_var "* || $dim_type == props ]]; then
-          ddim=${ddim:-${pdim:-${dim:-}}}
-          ddims=
+        is_optional=${is_optional:-f}
+        sdim=${sdim:-${pdim:-${dim:-}}}
+        sdims=${sdims:-${pdims:-${dims:-}}}
+        if [[ ! "$sdims" && ! "$sdim" ]]; then
+          if [[ $is_optional == f ]]; then
+            missing_dims+=( $dim_var )
+          fi
         else
-          ddim=
-          ddims=${ddims:-${pdims:-${dims:-${ddim:-${pdim:-${dim:-}}}}}}
+          known_dims+=( $dim_var )
         fi
 
         localize_dims+=" d_$dim_var=\${d_$dim_var:-} d_$dims_var=\${d_$dims_var:-}"
@@ -1370,6 +1394,8 @@ switch_context_calc_dims() {
         if [[ -v is_secret && $is_secret == t ]]; then
           add_word_to_string secret_vars "$dim_var $dims_var d_$dim_var d_$dims_var"
         fi
+
+        d_dim_type=$dim_type
 
       end_for
     end_for
@@ -1382,41 +1408,276 @@ switch_context_calc_dims() {
       localize_reverse_dims=
     fi
 
-    local dim prop plural
-    if [[ $cell_is_leaf == t ]]; then
-      begin_for dim in ${sub_dims[*]}; doo
-        dim_type=sub_dims \
-        expand_values || fail
-        get_plural $dim || fail
-        eval "unset $dim" || fail
-        eval "unset d_$dim" || fail
-        eval "d_$plural=\${values[*]}" || fail
-      end_for
+  end_function
+  handle_return
+}
 
-      begin_for prop in ${props[*]}; doo
-        local dim=$prop
-        dim_type=props \
-        expand_values || fail
-        get_plural $dim || fail
-        eval "unset $dim" || fail
-        if (( ${#values[*]} == 1 )); then
-          eval "d_$dim=\${values[*]}" || fail
-        else
-          eval "unset d_$dim" || fail
-        fi
-        eval "d_$plural=\${values[*]}" || fail
-      end_for
-    else
-      begin_for dim in ${leaf_dims[*]}; doo
-        dim_type=trunk_dims \
-        expand_values || fail
-        get_plural $dim || fail
-        eval "unset $dim" || fail
-        eval "unset d_$dim" || fail
-        eval "d_$plural=\${values[*]}" || fail
-      end_for
+# input: dim_var value
+# output: values 
+expand_dim() {
+  local -n dim_type=${dim_var}_dim_type
+  begin_function
+
+    if [[ "${value:-}" ]]; then
+
+      if ! function_exists ${dim_type}_${dim_var}_expand; then
+        log_fatal "Internal error: Missing ${dim_type}_${dim_var}_expand function, which should have been created by make_context method"
+        fail1
+      fi
+
+      ${dim_type}_${dim_var}_expand || fail
+
     fi
 
+  end_function
+  handle_return
+}
+
+# expands aliases for the known dims array
+# collapses singular and plural dims into plural dims
+switch_context_expand_dims() {
+  begin_function
+
+    local dim_var plural dim_type
+    begin_for dim_var in ${known_dims[*]}; doo
+
+      get_plural $dim_var
+      local dims_var=$plural
+      local -n sdim=s_$dim_var sdims=s_$dims_var \
+        d_dim_type=${dim_var}_dim_type \
+
+      local members single=t
+      if [[ "${sdims:-}" ]]; then
+        members=$sdims
+        single=f
+      else
+        members=$sdim
+      fi
+
+      local value new_values
+      begin_for value in $members; doo
+        expand_dim || fail
+        new_values+=( "${values[@]}" )
+      end_for
+
+      if [[ $single == t ]]; then
+        if (( ${#new_values[*]} > 1 )); then
+          log_fatal "Too many values for $dim_var: ${new_values[*]}"
+          fail1
+        fi
+      fi
+
+      sdim=
+      sdims=${new_values[*]}
+
+    end_for
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   dim     dimension to derive
+# output:
+#   values  array of members
+expand_values_check_derive() {
+  local old_values_string=${1:-}
+  begin_function
+    local -A old_values new_values intersected
+    if [[ "$old_values_string" ]]; then
+      string_to_set old_values_string old_values
+    fi
+    local derive_table
+    begin_for derive_table in ${derive_tables[*]}; doo
+
+      local -n fields=${derive_table}_fields
+      if [[ ! -v fields ]]; then
+        log_fatal "Internal error: derive_tables contains $derive_table, but there is no ${derive_table}_fields"
+        fail1
+      fi
+      local field found=f
+      begin_for field in ${fields[*]}; doo
+        if [[ $field == $dim ]]; then
+          found=t
+          break
+        fi
+      end_for
+      if [[ $found == f ]]; then
+        # we don't need to check this table since it doesn't contain the dim
+        continue
+      fi
+
+      out_field=$dim \
+      out_set=new_values \
+      execute_derive_table || fail
+      if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
+        intersect old_values new_values intersected
+        copy_set intersected old_values
+      else
+        copy_set new_values old_values
+      fi
+    end_for
+    keys_to_array old_values values
+  end_function
+  handle_return
+}
+
+calc_coordinates_next_unknown_dim() {
+  local current_dim_index=$1
+  begin_function
+
+    local dim dims changed=f
+    begin_loop; doo
+
+      dim=${all_dims[$current_dim_index]}
+      dims=${all_dims_plural[$current_dim_index]}
+
+      if [[ " ${missing_dims[*]} " == *" $dim "* ]]; then
+
+        if [[ "${derive_tables:-}" ]]; then
+
+          local values
+          expand_values_check_derive || fail
+
+          if [[ "$values" ]]; then
+
+            changed=t
+            remove_array_element missing_dims dim
+            expand_dims values
+            # expand derived / defaulted value since they can be aliases or groups also
+
+            local -n member=$dim \
+              members=$dims
+            if (( ${#members[*]} > 1 )); then
+              calc_coordinates_loop_members || fail
+              break
+            else
+              member=$members
+            fi
+
+          fi
+
+        fi
+
+#        if [[ ! "${values:-}" ]]; then
+#          expand_values_check_default || fail
+#        fi
+
+        # expand derived / defaulted value since they can be aliases or groups also
+
+      fi
+
+      (( current_dim_index++ ))
+      if (( $current_dim_index >= ${#all_dims[*]} )); then
+        if [[ $changed == t ]] && (( ${#missing_dims[*]} > 0 )); then
+          # an unknown dim was resolved, so we need to go through again to see if we can resolve more
+          changed=f
+          current_dim_index=0
+        else
+          break
+        fi
+      fi
+
+    end_loop
+
+    # TODO check cords
+    # TODO record values in coordinates
+    
+  end_function
+  handle_return
+}
+
+# inputs:
+#   members   var containing dim members to loop over
+# outputs:
+#   member    var to set with currently selected member
+#   current_dim_index
+calc_coordinates_loop_members() {
+  begin_function
+    (( current_dim_index++ ))
+    begin_for member in ${members[*]}; doo
+      if (( $current_dim_index < ${#all_dims[*]} )); then
+        # recursive
+        calc_coordinates_next_known_dim $current_dim_index || fail
+      else
+        if (( ${#missing_dims[*]} > 0 )); then
+          calc_coordinates_next_unknown_dim 0 || fail
+        fi
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+# inputs:
+#   all_dims        array of dims to process
+#   all_dims_plural array of dim plurals to process
+#   $1   index of dim to process
+calc_coordinates_next_known_dim() {
+  local current_dim_index=$1
+  begin_function
+    local dim dims
+    begin_loop; doo
+
+      dim=${all_dims[$current_dim_index]}
+      dims=${all_dims_plural[$current_dim_index]}
+
+      if [[ " ${known_dims[*]} " == *" $dim "* ]]; then
+
+        local -n member=$dim \
+          members=$dims
+        if (( ${#members[*]} > 1 )); then
+          calc_coordinates_loop_members || fail
+          break
+        else
+          member=$members
+        fi
+
+      fi
+
+      (( current_dim_index++ ))
+      if (( $current_dim_index >= ${#all_dims[*]} )); then
+        break
+      fi
+
+    end_loop
+
+  end_function
+  handle_return
+}
+
+switch_context_calc_coordinates() {
+  begin_function
+
+    local dim_var
+    coordinates=()
+    if [[ "$known_dims" || "$missing_dims" ]]; then
+      local all_dims=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} ) \
+        all_dims_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
+      calc_coordinates_next_known_dim 0 || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+switch_context_handle_missing() {
+  local can_ask=${can_ask:-t}
+  begin_function
+    begin_for dim_var in ${missing_dims[*]}; doo
+
+      if [[ $can_ask == t ]]; then
+        choose "Enter required value: $dim=" d_$dim || fail
+        local -n value=d_$dim
+        expand_dim || fail
+      fi
+
+      if [[ ! "${values:-}" ]]; then
+        log_fatal "Missing required parameter: $dim_var. Use 'cell . ?' command to get help about how to use this cell."
+        fail1
+      fi
+
+    end_for
   end_function
   handle_return
 }
@@ -1475,7 +1736,23 @@ switch_context() {
 
       : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
       load_leaf_dims || fail
-      switch_context_calc_dims || fail
+
+      local known_dims=()
+      local missing_dims=()
+
+      switch_context_prep_dims || fail
+
+      if [[ "${known_dims:-}" ]]; then
+        switch_context_expand_dims || fail
+      fi
+
+      if [[ ! "${coordinates:-}" ]]; then
+        switch_context_calc_coordinates || fail
+      fi
+
+      if [[ "${missing_dims:-}" ]]; then
+        switch_context_handle_missing || fail
+      fi
 
       if [[ -f $cell_path/.mock ]]; then
         current_mock=$(<$cell_path/.mock)
@@ -1555,48 +1832,6 @@ execute_derive_table() {
   handle_return
 }
 
-expand_values_check_derive() {
-  local old_values_string=${1:-}
-  begin_function
-    local -A old_values new_values intersected
-    if [[ "$old_values_string" ]]; then
-      string_to_set old_values_string old_values
-    fi
-    local derive_table
-    begin_for derive_table in ${derive_tables[*]}; doo
-
-      local -n fields=${derive_table}_fields
-      if [[ ! -v fields ]]; then
-        log_fatal "Internal error: derive_tables contains $derive_table, but there is no ${derive_table}_fields"
-        fail1
-      fi
-      local field found=f
-      begin_for field in ${fields[*]}; doo
-        if [[ $field == $dim ]]; then
-          found=t
-          break
-        fi
-      end_for
-      if [[ $found == f ]]; then
-        # we don't need to check this table since it doesn't contain the dim
-        continue
-      fi
-
-      out_field=$dim \
-      out_set=new_values \
-      execute_derive_table || fail
-      if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
-        intersect old_values new_values intersected
-        copy_set intersected old_values
-      else
-        copy_set new_values old_values
-      fi
-    end_for
-    keys_to_array old_values values
-  end_function
-  handle_return
-}
-
 expand_values_check_default() {
   begin_function
 
@@ -1629,83 +1864,6 @@ expand_values_check_default() {
         fi
       fi
 
-    fi
-
-  end_function
-  handle_return
-}
-
-expand_values_check_if_too_many() {
-  if [[ $check_single == t && ${#values[*]} -gt 1 ]]; then
-    log_fatal "Too many values for a singular dim $dim." \
-      "Use plural dim $dims if you intend to have multiple values."
-    fail1
-  fi
-}
-
-# input: check_single value
-# output: values
-expand_values_check_one() {
-  begin_function
-
-    ${dim_type}_${dim}_expand || fail
-    if [[ "$problem" ]]; then
-      log_fatal "$problem"
-      fail1
-    fi
-    expand_values_check_if_too_many || fail
-
-  end_function
-  handle_return
-}
-
-# input: dim
-# optional inputs: dim_type can_ask
-# output: values 
-expand_values() {
-  local dim_type=${dim_type:-trunk_dims} can_ask=${can_ask:-t}
-  begin_function
-
-    if ! function_exists ${dim_type}_${dim}_expand; then
-      log_fatal "Internal error: Missing ${dim_type}_${dim}_expand function, which should have been created by make_context method"
-      fail1
-    fi
-
-    eval "values=\${d_$dim:-\${p_$dim:-\${$dim:-}}}"
-    local check_single=t
-
-    local plural
-    get_plural $dim
-    local dims=$plural 
-
-    if [[ ! "$values" ]]; then
-      eval "values=\${d_$dims:-\${p_$dims:-\${$dims:-}}}"
-      check_single=f
-    elif [[ ! "$values" =~ ^[a-zA-Z0-9_]+$ ]]; then
-      quotes=single shell_quote_var values
-    fi
-
-    local new_values=()
-    eval "values=( $values )" || fail
-
-    expand_values_check_if_too_many || fail
-
-    if [[ ! "${values:-}" && "${derive_tables:-}" ]]; then
-      expand_values_check_derive || fail
-    fi
-
-    if [[ ! "${values:-}" ]]; then
-      expand_values_check_default || fail
-    fi
-
-    if [[ "${values:-}" ]]; then
-      local value
-      new_values=()
-      begin_for value in "${values[@]}"; doo
-        check_single=$check_single expand_values_check_one || fail
-        new_values+=( "${values[@]}" )
-      end_for
-      values=( "${new_values[@]}" )
     fi
 
   end_function
@@ -3414,19 +3572,6 @@ is_inside_of_cell() {
     done
   fi
   return 1
-}
-
-get_plural() {
-  local dim=$1
-  if [[ $dim == *s ]]; then
-    plural=${dim}es
-  elif [[ $dim == *y ]]; then
-    plural=${dim%y}ies
-  else
-    plural=${dim}s
-  fi
-  debug_return_vars=plural
-  return 0
 }
 
 load_parent_context() {
