@@ -1433,6 +1433,19 @@ expand_dim() {
   handle_return
 }
 
+# inputs:
+#   $*   members to expand
+expand_dims() {
+  begin_function
+    local value
+    begin_for value in "$@"; doo
+      expand_dim || fail
+      new_values+=( "${values[@]}" )
+    end_for
+  end_function
+  handle_return
+}
+
 # expands aliases for the known dims array
 # collapses singular and plural dims into plural dims
 switch_context_expand_dims() {
@@ -1455,10 +1468,7 @@ switch_context_expand_dims() {
       fi
 
       local value new_values
-      begin_for value in $members; doo
-        expand_dim || fail
-        new_values+=( "${values[@]}" )
-      end_for
+      expand_dims "${members[@]}" || fail
 
       if [[ $single == t ]]; then
         if (( ${#new_values[*]} > 1 )); then
@@ -1522,11 +1532,39 @@ expand_values_check_derive() {
   handle_return
 }
 
-calc_coordinates_next_unknown_dim() {
-  local current_dim_index=$1
+# inputs:
+#   phase     known or unknown
+#   members   var containing dim members to loop over
+# outputs:
+#   member    var to set with currently selected member
+#   current_dim_index
+calc_coordinates_loop_members() {
+  local phase=$phase
   begin_function
+    (( current_dim_index++ ))
+    begin_for member in ${members[*]}; doo
+      if (( $current_dim_index < ${#all_dims[*]} )); then
+        if [[ $phase == known ]]; then
+          # recursive
+          calc_coordinates_next_known_dim $current_dim_index || fail
+        else
+          # recursive
+          calc_coordinates_next_unknown_dim $current_dim_index || fail
+        fi
+      else
+        if [[ $phase == known ]] && (( ${#missing_dims[*]} > 0 )); then
+          # recursive
+          calc_coordinates_next_unknown_dim 0 || fail
+        fi
+      fi
+    end_for
+  end_function
+  handle_return
+}
 
-    local dim dims changed=f
+calc_coordinates_next_unknown_dim() {
+  begin_function
+    local dim dims changed=f phase=derive
     begin_loop; doo
 
       dim=${all_dims[$current_dim_index]}
@@ -1534,77 +1572,67 @@ calc_coordinates_next_unknown_dim() {
 
       if [[ " ${missing_dims[*]} " == *" $dim "* ]]; then
 
-        if [[ "${derive_tables:-}" ]]; then
-
-          local values
+        local values
+        if [[ $phase == derive ]]; then
           expand_values_check_derive || fail
+        else
+          expand_values_check_default || fail
+        fi
 
-          if [[ "$values" ]]; then
+        if [[ "$values" ]]; then
 
-            changed=t
-            remove_array_element missing_dims dim
-            expand_dims values
-            # expand derived / defaulted value since they can be aliases or groups also
+          changed=t
+          remove_array_element missing_dims dim
+          local new_values
+          expand_dims "${values[@]}" || fail
 
-            local -n member=$dim \
-              members=$dims
-            if (( ${#members[*]} > 1 )); then
-              calc_coordinates_loop_members || fail
-              break
-            else
-              member=$members
-            fi
-
+          local -n member=$dim \
+            members=$dims
+          if (( ${#members[*]} > 1 )); then
+            phase=unknown \
+            calc_coordinates_loop_members || fail
+            break
+          else
+            member=$members
           fi
 
         fi
-
-#        if [[ ! "${values:-}" ]]; then
-#          expand_values_check_default || fail
-#        fi
-
-        # expand derived / defaulted value since they can be aliases or groups also
 
       fi
 
       (( current_dim_index++ ))
       if (( $current_dim_index >= ${#all_dims[*]} )); then
-        if [[ $changed == t ]] && (( ${#missing_dims[*]} > 0 )); then
-          # an unknown dim was resolved, so we need to go through again to see if we can resolve more
-          changed=f
-          current_dim_index=0
-        else
+        if (( ${#missing_dims[*]} > 0 )); then
+          if [[ $changed == t ]]; then
+            # an unknown dim was resolved, so we need to go through again to see if we can resolve more
+            changed=f
+            current_dim_index=0
+          else
+            if [[ $phase == derive ]]; then
+              phase=default
+              current_dim_index=0
+            else
+              log_fatal "Could not fully resolve dims. Failed to resolve: ${missing_dims[*]}"
+              fail1
+            fi
+          fi
+        else # all dims were resolved
+          local coordinate_valid=t
+          if [[ "$cords" ]]; then
+            local cord cords
+            sep=$dim_cord_sep string_to_array dim_cords cords
+            begin_for cord in "${cords[@]}"; doo
+            end_for
+          fi
+          # TODO check cords
+          # TODO record values in coordinates
+    
           break
         fi
       fi
 
     end_loop
 
-    # TODO check cords
-    # TODO record values in coordinates
-    
-  end_function
-  handle_return
-}
-
-# inputs:
-#   members   var containing dim members to loop over
-# outputs:
-#   member    var to set with currently selected member
-#   current_dim_index
-calc_coordinates_loop_members() {
-  begin_function
-    (( current_dim_index++ ))
-    begin_for member in ${members[*]}; doo
-      if (( $current_dim_index < ${#all_dims[*]} )); then
-        # recursive
-        calc_coordinates_next_known_dim $current_dim_index || fail
-      else
-        if (( ${#missing_dims[*]} > 0 )); then
-          calc_coordinates_next_unknown_dim 0 || fail
-        fi
-      fi
-    end_for
   end_function
   handle_return
 }
@@ -1627,6 +1655,7 @@ calc_coordinates_next_known_dim() {
         local -n member=$dim \
           members=$dims
         if (( ${#members[*]} > 1 )); then
+          phase=known \
           calc_coordinates_loop_members || fail
           break
         else
@@ -2102,6 +2131,14 @@ execute_command_internal() {
   handle_return
 }
 
+add_cord() {
+  if [[ "$dim_cords" ]]; then
+    dim_cords+="$dim_cord_sep$*"
+  else
+    dim_cords="$*"
+  fi
+}
+
 execute_command() {
   local cell_path=$(realpath $1) current_command=$2 \
     log_show_vars='^cell_path current_command' \
@@ -2136,8 +2173,8 @@ execute_command() {
       job_start_time \
       background_log \
       running_job_path \
-      cord_sep=${cord_sep:-|-|} \
-      cords=${cords:-} \
+      dim_cord_sep=${dim_cord_sep:-|-|} \
+      dim_cords=${dim_cords:-} \
 
     load_branch_info || fail
 
