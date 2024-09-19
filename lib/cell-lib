@@ -1342,14 +1342,15 @@ switch_context_create() {
 
 get_plural() {
   local dim=$1
+  local -n target=${2:-plural}
   if [[ $dim == *s ]]; then
-    plural=${dim}es
+    target=${dim}es
   elif [[ $dim == *y ]]; then
-    plural=${dim%y}ies
+    target=${dim%y}ies
   else
-    plural=${dim}s
+    target=${dim}s
   fi
-  debug_return_vars=plural
+  debug_return_vars=target
   return 0
 }
 
@@ -1358,16 +1359,15 @@ switch_context_prep_dims() {
 
     localize_dims=local
     localize_reverse_dims=local
-    local dim_var plural dim_type
+    local dim_var dim_type dims_var
     begin_for dim_type in trunk_dims sub_dims props; doo
       local -n dim_array=$dim_type
       local -n plural_array=${dim_type}_plural
       plural_array=()
       begin_for dim_var in ${dim_array[*]}; doo
 
-        get_plural $dim_var
-        local dims_var=$plural
-        plural_array+=( $plural )
+        get_plural $dim_var dims_var
+        plural_array+=( $dims_var )
 
         local -n dim=$dim_var dims=$dims_var \
           ddim=d_$dim_var ddims=d_$dims_var \
@@ -1454,8 +1454,8 @@ switch_context_expand_dims() {
     local dim_var plural dim_type
     begin_for dim_var in ${known_dims[*]}; doo
 
-      get_plural $dim_var
-      local dims_var=$plural
+      local dims_var
+      get_plural $dim_var dims_var
       local -n sdim=s_$dim_var sdims=s_$dims_var \
         d_dim_type=${dim_var}_dim_type \
 
@@ -1619,14 +1619,40 @@ calc_coordinates_next_unknown_dim() {
         else # all dims were resolved
           local coordinate_valid=t
           if [[ "$cords" ]]; then
-            local cord cords
+            local cord cords matching_cord_found=f
             sep=$dim_cord_sep string_to_array dim_cords cords
             begin_for cord in "${cords[@]}"; doo
+              local cord_array=( $cord )
+              local all_eq_matched=t
+              begin_for eq in "${cord_array[@]}"; doo
+                local cord_dim=${eq%%=*}
+                local cord_value=${eq#$cord_dim}
+                # local cord_dims
+                # get_plural $cord_dim cord_dims
+                local -n dim_value=d_$cord_dim
+                if [[ "$cord_value" != "$dim_value" ]]; then
+                  all_eq_matched=f
+                  break
+                fi
+              end_for
+              if [[ $all_eq_matched == t ]]; then
+                matching_cord_found=t
+                break
+              fi
             end_for
+            
+            if [[ $matching_cord_found == f ]]; then
+              log_debug "No matching cord found, skipping this row"
+              break
+            fi
           fi
-          # TODO check cords
-          # TODO record values in coordinates
     
+          local i dim_count=${#all_dims[*]}
+          begin_for (( i = 0; i < dim_count; i++ )); 
+            local -n dim_value=d_${all_dims[$i]}
+            coordinates+=( "$dim_value" )
+          end_for
+
           break
         fi
       fi
@@ -2132,11 +2158,42 @@ execute_command_internal() {
 }
 
 add_cord() {
+
+  local new_cord=$*
   if [[ "$dim_cords" ]]; then
-    dim_cords+="$dim_cord_sep$*"
+    dim_cords+="$dim_cord_sep$new_cord"
   else
-    dim_cords="$*"
+    dim_cords="$new_cord"
   fi
+
+  new_cord=( $new_cord )
+
+  local eq dim value
+  for eq in $new_cord; do
+
+    dim=${eq%%=*}
+    if [[ "$dim" == "$eq" ]]; then
+      log_fatal "Invalid config: cord missing =: $eq"
+      return 1
+    fi
+
+    value=${eq#$dim}
+    if [[ ! "$value" ]]; then
+      log_fatal "Missing value for cord: $eq"
+      return 1
+    fi
+
+    local dims
+    get_plural $dim dims
+    if [[ "$dim" ]]; then
+      add_to_string_if_missing dim dims
+      dim=
+    fi
+    add_to_string_if_missing value dims
+
+  done
+
+  return 0
 }
 
 execute_command() {
