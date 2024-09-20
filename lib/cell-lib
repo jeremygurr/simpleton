@@ -1489,6 +1489,68 @@ switch_context_expand_dims() {
 }
 
 # inputs:
+#   derive_table   name of var of derive table
+#   out_field      which field to read from the table
+#   out_set        which var to write set of valid members to
+# outputs:
+#   the var output_var points to will contain a set of all matches
+execute_derive_table() {
+  begin_function        
+      
+    local out_var=$out_set
+    local -n derive_fields=${derive_table}_fields \
+             derive_data=${derive_table}_data \
+             out_set=$out_set \
+
+    local field_count=${#derive_fields[*]} \
+      data_count=${#derive_data[*]} \
+      strict_matching=${strict_matching:-f} \
+      maybe data_index=0 column_index \
+      value= row_result field everything_matches \
+      out_field=$out_field \
+      invalid=f
+
+    eval "$localize_reverse_dims" || fail
+    begin_while (( data_index < data_count )); doo
+      everything_matches=t
+
+      begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+        field=${derive_fields[$column_index]}
+        value=${derive_data[$((data_index + column_index))]}
+        if [[ $field == $out_field ]]; then
+          row_result=$value
+        else
+
+          local -n dim=d_$field \
+
+          if [[ "${dim:-}" ]]; then
+            if [[ "$dim" != "$value" && "$value" != any && "$dim" != any ]]; then
+              everything_matches=f
+              break
+            fi
+          else # dim not set
+            if [[ $strict_matching == t && "$value" && "$value" != any ]]; then
+              everything_matches=f
+              break
+            fi
+          fi
+
+        fi
+      end_for
+
+      if [[ $everything_matches == t ]]; then
+        out_set["$row_result"]=1
+      fi
+
+      (( data_index += field_count ))
+    end_while
+
+    log_return_vars=out_var
+  end_function
+  handle_return
+}
+
+# inputs:
 #   dim     dimension to derive
 # output:
 #   values  array of members
@@ -1536,7 +1598,7 @@ expand_values_check_derive() {
 
 # inputs:
 #   phase     known or unknown
-#   members   var containing dim members to loop over
+#   members   array containing dim members to loop over
 # outputs:
 #   member    var to set with currently selected member
 #   current_dim_index
@@ -1578,19 +1640,22 @@ calc_coordinates_next_unknown_dim() {
 
       if [[ ! "${members:-}" ]]; then
 
-        local values
+        local values=
         if [[ $phase == derive ]]; then
           expand_values_check_derive || fail
         else
           expand_values_check_default || fail
         fi
 
-        if [[ "$values" ]]; then
+        if [[ "${values:-}" ]]; then
 
           changed=t
-          remove_array_element missing_dims dim
-          local new_values
-          expand_dims "${values[@]}" || fail
+
+          # don't support aliases here (yet?)
+          # local new_values
+          # expand_dims "${values[@]}" || fail
+
+          members=( "${values[@]}" )
 
           if (( ${#members[*]} > 1 )); then
             phase=unknown \
@@ -1848,67 +1913,6 @@ switch_context() {
   fi
 
   return 0
-}
-
-# inputs:
-#   derive_table   name of var of derive table
-#   out_field      which field to read from the table
-#   out_set        which var to write set of valid members to
-# outputs:
-#   the var output_var points to will contain a set of all matches
-execute_derive_table() {
-  begin_function        
-      
-    local out_var=$out_set
-    local -n derive_fields=${derive_table}_fields \
-             derive_data=${derive_table}_data \
-             out_set=$out_set \
-
-    local field_count=${#derive_fields[*]} \
-      data_count=${#derive_data[*]} \
-      maybe data_index=0 column_index \
-      value= row_result field everything_matches \
-      out_field=$out_field \
-      invalid=f
-
-    eval "$localize_reverse_dims" || fail
-    begin_while (( data_index < data_count )); doo
-      everything_matches=t
-
-      begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-        field=${derive_fields[$column_index]}
-        value=${derive_data[$((data_index + column_index))]}
-        if [[ $field == $out_field ]]; then
-          row_result=$value
-        else
-
-          local -n dim=d_$field \
-
-          if [[ "${dim:-}" ]]; then
-            if [[ "$dim" != "$value" && "$value" != any && "$dim" != any ]]; then
-              everything_matches=f
-              break
-            fi
-          else # dim not set
-            if [[ "$value" && "$value" != any ]]; then
-              everything_matches=f
-              break
-            fi
-          fi
-
-        fi
-      end_for
-
-      if [[ $everything_matches == t ]]; then
-        out_set["$row_result"]=1
-      fi
-
-      (( data_index += field_count ))
-    end_while
-
-    log_return_vars=out_var
-  end_function
-  handle_return
 }
 
 expand_values_check_default() {
