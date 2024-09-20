@@ -1342,7 +1342,8 @@ switch_context_create() {
 
 get_plural() {
   local dim=$1
-  local -n target=${2:-plural}
+  local target_var=${2:-plural}
+  local -n target=$target_var
   if [[ $dim == *s ]]; then
     target=${dim}es
   elif [[ $dim == *y ]]; then
@@ -1350,7 +1351,7 @@ get_plural() {
   else
     target=${dim}s
   fi
-  debug_return_vars=target
+  debug_return_vars=$target_var
   return 0
 }
 
@@ -1434,10 +1435,13 @@ expand_dim() {
 }
 
 # inputs:
-#   $*   members to expand
+#   $*           members to expand
+# outputs:
+#   new_values   array of expanded members
 expand_dims() {
   begin_function
     local value
+    new_values=()
     begin_for value in "$@"; doo
       expand_dim || fail
       new_values+=( "${values[@]}" )
@@ -1467,8 +1471,12 @@ switch_context_expand_dims() {
         members=$sdim
       fi
 
+      local -n ddim=d_$dim_var ddims=d_$dims_var
+      ddim=
+      ddims=
+
       local value new_values
-      expand_dims "${members[@]}" || fail
+      expand_dims "$members" || fail
 
       if [[ $single == t ]]; then
         if (( ${#new_values[*]} > 1 )); then
@@ -1477,10 +1485,12 @@ switch_context_expand_dims() {
         fi
       fi
 
-      sdim=
-      sdims=${new_values[*]}
+      ddims=${new_values[*]}
 
     end_for
+
+    # These need to be discarded, because expansion could have set new dims
+    unset known_dims missing_dims
 
   end_function
   handle_return
@@ -1552,7 +1562,8 @@ calc_coordinates_loop_members() {
           calc_coordinates_next_unknown_dim $current_dim_index || fail
         fi
       else
-        if [[ $phase == known ]] && (( ${#missing_dims[*]} > 0 )); then
+        if [[ $phase == known && "${missing_dims:-}" ]]; then
+          missing_dims=()
           # recursive
           calc_coordinates_next_unknown_dim 0 || fail
         fi
@@ -1569,8 +1580,10 @@ calc_coordinates_next_unknown_dim() {
 
       dim=${all_dims[$current_dim_index]}
       dims=${all_dims_plural[$current_dim_index]}
+      local -n member=d_$dim \
+        members=d_$dims
 
-      if [[ " ${missing_dims[*]} " == *" $dim "* ]]; then
+      if [[ ! "${members:-}" ]]; then
 
         local values
         if [[ $phase == derive ]]; then
@@ -1586,8 +1599,6 @@ calc_coordinates_next_unknown_dim() {
           local new_values
           expand_dims "${values[@]}" || fail
 
-          local -n member=$dim \
-            members=$dims
           if (( ${#members[*]} > 1 )); then
             phase=unknown \
             calc_coordinates_loop_members || fail
@@ -1596,6 +1607,8 @@ calc_coordinates_next_unknown_dim() {
             member=$members
           fi
 
+        else
+          missing_dims+=( $dim )
         fi
 
       fi
@@ -1607,6 +1620,7 @@ calc_coordinates_next_unknown_dim() {
             # an unknown dim was resolved, so we need to go through again to see if we can resolve more
             changed=f
             current_dim_index=0
+            missing_dims=()
           else
             if [[ $phase == derive ]]; then
               phase=default
@@ -1648,7 +1662,7 @@ calc_coordinates_next_unknown_dim() {
           fi
     
           local i dim_count=${#all_dims[*]}
-          begin_for (( i = 0; i < dim_count; i++ )); 
+          begin_for (( i = 0; i < dim_count; i++ )); doo
             local -n dim_value=d_${all_dims[$i]}
             coordinates+=( "$dim_value" )
           end_for
@@ -1675,12 +1689,13 @@ calc_coordinates_next_known_dim() {
 
       dim=${all_dims[$current_dim_index]}
       dims=${all_dims_plural[$current_dim_index]}
+      local -n member=d_$dim \
+        members=d_$dims
 
-      if [[ " ${known_dims[*]} " == *" $dim "* ]]; then
+      if [[ "${members:-}" ]]; then
 
-        local -n member=$dim \
-          members=$dims
-        if (( ${#members[*]} > 1 )); then
+        local member_array=( $members )
+        if (( ${#member_array[*]} > 1 )); then
           phase=known \
           calc_coordinates_loop_members || fail
           break
@@ -1688,14 +1703,21 @@ calc_coordinates_next_known_dim() {
           member=$members
         fi
 
+      else
+        missing_dims+=( $dim )
       fi
 
       (( current_dim_index++ ))
-      if (( $current_dim_index >= ${#all_dims[*]} )); then
+      if (( current_dim_index >= ${#all_dims[*]} )); then
         break
       fi
 
     end_loop
+
+    if [[ "${missing_dims:-}" ]]; then
+      missing_dims=()
+      calc_coordinates_next_unknown_dim 0 || fail
+    fi
 
   end_function
   handle_return
@@ -1706,9 +1728,10 @@ switch_context_calc_coordinates() {
 
     local dim_var
     coordinates=()
-    if [[ "$known_dims" || "$missing_dims" ]]; then
-      local all_dims=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} ) \
-        all_dims_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
+    local all_dims=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} ) \
+      all_dims_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
+    if [[ "$all_dims" ]]; then
+      missing_dims=()
       calc_coordinates_next_known_dim 0 || fail
     fi
 
@@ -2158,42 +2181,46 @@ execute_command_internal() {
 }
 
 add_cord() {
-
   local new_cord=$*
-  if [[ "$dim_cords" ]]; then
-    dim_cords+="$dim_cord_sep$new_cord"
-  else
-    dim_cords="$new_cord"
-  fi
+  begin_function
 
-  new_cord=( $new_cord )
-
-  local eq dim value
-  for eq in $new_cord; do
-
-    dim=${eq%%=*}
-    if [[ "$dim" == "$eq" ]]; then
-      log_fatal "Invalid config: cord missing =: $eq"
-      return 1
+    if [[ "$dim_cords" ]]; then
+      dim_cords+="$dim_cord_sep$new_cord"
+    else
+      dim_cords="$new_cord"
     fi
 
-    value=${eq#$dim}
-    if [[ ! "$value" ]]; then
-      log_fatal "Missing value for cord: $eq"
-      return 1
-    fi
+    new_cord=( $new_cord )
 
-    local dims
-    get_plural $dim dims
-    if [[ "$dim" ]]; then
-      add_to_string_if_missing dim dims
-      dim=
-    fi
-    add_to_string_if_missing value dims
+    local eq dim_var value
+    for eq in "${new_cord[@]}"; do
 
-  done
+      dim_var=${eq%%=*}
+      if [[ "$dim_var" == "$eq" ]]; then
+        log_fatal "Invalid config: cord missing =: $eq"
+        fail1
+      fi
 
-  return 0
+      value=${eq#$dim_var=}
+      if [[ ! "$value" ]]; then
+        log_fatal "Missing value for cord: $eq"
+        fail1
+      fi
+
+      dim_var=d_$dim_var
+      local dims_var
+      get_plural $dim_var dims_var
+      local -n dim=$dim_var dims=$dims_var
+      if [[ "${dim:-}" ]]; then
+        add_to_string_if_missing dim dims
+        dim=
+      fi
+      add_to_string_if_missing value dims
+
+    done
+
+  end_function
+  handle_return
 }
 
 execute_command() {
