@@ -1557,41 +1557,52 @@ execute_derive_table() {
 expand_values_check_derive() {
   local old_values_string=${1:-}
   begin_function
-    local -A old_values new_values intersected
-    if [[ "$old_values_string" ]]; then
-      string_to_set old_values_string old_values
-    fi
-    local derive_table
-    begin_for derive_table in ${derive_tables[*]}; doo
 
-      local -n fields=${derive_table}_fields
-      if [[ ! -v fields ]]; then
-        log_fatal "Internal error: derive_tables contains $derive_table, but there is no ${derive_table}_fields"
-        fail1
+    local dim_type=${dim}_dim_type
+    local -n derive_function=${dim_type}_${dim}_derive
+    values=
+    if function_exists derive_function; then
+      derive_function || fail
+    fi
+
+    if [[ ! "${values:-}" ]]; then
+      local -A old_values new_values intersected
+      if [[ "$old_values_string" ]]; then
+        string_to_set old_values_string old_values
       fi
-      local field found=f
-      begin_for field in ${fields[*]}; doo
-        if [[ $field == $dim ]]; then
-          found=t
-          break
+      local derive_table
+      begin_for derive_table in ${derive_tables[*]}; doo
+
+        local -n fields=${derive_table}_fields
+        if [[ ! -v fields ]]; then
+          log_fatal "Internal error: derive_tables contains $derive_table, but there is no ${derive_table}_fields"
+          fail1
+        fi
+        local field found=f
+        begin_for field in ${fields[*]}; doo
+          if [[ $field == $dim ]]; then
+            found=t
+            break
+          fi
+        end_for
+        if [[ $found == f ]]; then
+          # we don't need to check this table since it doesn't contain the dim
+          continue
+        fi
+
+        out_field=$dim \
+        out_set=new_values \
+        execute_derive_table || fail
+        if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
+          intersect old_values new_values intersected
+          copy_set intersected old_values
+        else
+          copy_set new_values old_values
         fi
       end_for
-      if [[ $found == f ]]; then
-        # we don't need to check this table since it doesn't contain the dim
-        continue
-      fi
+      keys_to_array old_values values
+    fi
 
-      out_field=$dim \
-      out_set=new_values \
-      execute_derive_table || fail
-      if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
-        intersect old_values new_values intersected
-        copy_set intersected old_values
-      else
-        copy_set new_values old_values
-      fi
-    end_for
-    keys_to_array old_values values
   end_function
   handle_return
 }
@@ -1606,7 +1617,9 @@ calc_coordinates_loop_members() {
   local phase=$phase
   begin_function
     (( current_dim_index++ ))
-    begin_for member in ${members[*]}; doo
+    local current_member
+    begin_for current_member in ${members[*]}; doo
+      member=$current_member
       if (( $current_dim_index < ${#all_dims[*]} )); then
         if [[ $phase == known ]]; then
           # recursive
@@ -1919,6 +1932,7 @@ expand_values_check_default() {
   begin_function
 
     local problem
+    local dim_type=${dim}_dim_type
     value= ${dim_type}_${dim}_expand || fail
 
     if [[ ! "${values:-}" ]]; then
