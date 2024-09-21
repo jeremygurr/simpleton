@@ -1633,6 +1633,39 @@ expand_values_check_default() {
   handle_return
 }
 
+calc_coordinates_process_member() {
+  begin_function
+
+    eval "$localize_dims" || fail
+    local -n member=d_$dim \
+      members=d_$dims
+    member=$current_member
+
+    if (( $current_dim_index < ${#all_dims[*]} )); then
+
+      if [[ $phase == known ]]; then
+        # recursive
+        calc_coordinates_next_known_dim $current_dim_index || fail
+      else
+        # recursive
+        calc_coordinates_next_unknown_dim $current_dim_index || fail
+      fi
+
+    else
+
+      if [[ $phase == known && "${missing_dims:-}" ]]; then
+        log_debug "Attempting to resolve unknowns: ${missing_dims[*]}"
+        missing_dims=()
+        # recursive
+        calc_coordinates_next_unknown_dim 0 || fail
+      fi
+
+    fi
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   phase     known or unknown
 #   members   array containing dim members to loop over
@@ -1645,22 +1678,7 @@ calc_coordinates_loop_members() {
     (( current_dim_index++ ))
     local current_member
     begin_for current_member in ${members[*]}; doo
-      member=$current_member
-      if (( $current_dim_index < ${#all_dims[*]} )); then
-        if [[ $phase == known ]]; then
-          # recursive
-          calc_coordinates_next_known_dim $current_dim_index || fail
-        else
-          # recursive
-          calc_coordinates_next_unknown_dim $current_dim_index || fail
-        fi
-      else
-        if [[ $phase == known && "${missing_dims:-}" ]]; then
-          missing_dims=()
-          # recursive
-          calc_coordinates_next_unknown_dim 0 || fail
-        fi
-      fi
+      calc_coordinates_process_member || fail
     end_for
   end_function
   handle_return
@@ -1695,6 +1713,8 @@ calc_coordinates_next_unknown_dim() {
             phase=derive
           fi
 
+          log_debug "Resolved $dim"
+
           # don't support aliases here (yet?)
           # local new_values
           # expand_dims "${values[@]}" || fail
@@ -1710,6 +1730,7 @@ calc_coordinates_next_unknown_dim() {
           fi
 
         else
+          log_debug "Failed to resolve $dim"
           missing_dims+=( $dim )
         fi
 
@@ -1763,11 +1784,14 @@ calc_coordinates_next_unknown_dim() {
             fi
           fi
     
-          local i dim_count=${#all_dims[*]}
+          local i dim_count=${#all_dims[*]} new_coords=()
           begin_for (( i = 0; i < dim_count; i++ )); doo
             local -n dim_value=d_${all_dims[$i]}
             coordinates+=( "$dim_value" )
+            new_coords+=( "$dim_value" )
           end_for
+
+          log_verbose "coordinates+=( ${new_coords[*]} )"
 
           break
         fi
@@ -1817,6 +1841,7 @@ calc_coordinates_next_known_dim() {
     end_loop
 
     if [[ "${missing_dims:-}" ]]; then
+      log_debug "Attempting to resolve unknowns: ${missing_dims[*]}"
       missing_dims=()
       calc_coordinates_next_unknown_dim 0 || fail
     fi
@@ -1833,8 +1858,10 @@ switch_context_calc_coordinates() {
     local all_dims=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} ) \
       all_dims_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
     if [[ "${all_dims:-}" ]]; then
+      log_verbose "Calculating cell coordinates"
       missing_dims=()
       calc_coordinates_next_known_dim 0 || fail
+      log_verbose "${#coordinates[*]:-0} coordinates found" 
     fi
 
   end_function
