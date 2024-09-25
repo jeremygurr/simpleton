@@ -1372,7 +1372,7 @@ switch_context_prep_dims() {
         is_optional=${is_optional:-f}
         sdim=${sdim:-${pdim:-${dim:-}}}
         sdims=${sdims:-${pdims:-${dims:-}}}
-        if [[ ! "$sdims" && ! "$sdim" ]]; then
+        if [[ ! "$sdims" && ! "$sdim" && ! "$ddim" && ! "$ddims" ]]; then
           if [[ $is_optional == f ]]; then
             missing_dims+=( $dim_var )
           fi
@@ -1452,32 +1452,39 @@ switch_context_expand_dims() {
 
       local dims_var
       get_plural $dim_var dims_var
-      local -n sdim=s_$dim_var sdims=s_$dims_var \
-        d_dim_type=${dim_var}_dim_type \
-
-      local members single=t
-      if [[ "${sdims:-}" ]]; then
-        members=$sdims
-        single=f
-      else
-        members=$sdim
-      fi
-
       local -n ddim=d_$dim_var ddims=d_$dims_var
-      ddim=
-      ddims=
 
-      local value new_values
-      expand_dims "$members" || fail
+      if [[ ! "${ddim:-}" && ! "${ddims:-}" ]]; then
 
-      if [[ $single == t ]]; then
-        if (( ${#new_values[*]} > 1 )); then
-          log_fatal "Too many values for $dim_var: ${new_values[*]}"
-          fail1
+        local -n sdim=s_$dim_var sdims=s_$dims_var \
+          d_dim_type=${dim_var}_dim_type \
+
+        local members single=t
+        if [[ "${sdims:-}" ]]; then
+          members=$sdims
+          single=f
+        else
+          members=$sdim
         fi
-      fi
 
-      ddims=${new_values[*]}
+        ddim=
+        ddims=
+
+        local value new_values
+        expand_dims "$members" || fail
+
+        if [[ $single == t ]]; then
+          if (( ${#new_values[*]} > 1 )); then
+            log_fatal "Too many values for $dim_var: ${new_values[*]}"
+            fail1
+          fi
+        fi
+
+        ddims=${new_values[*]}
+
+      else
+        ddims=${ddims:-$ddim}
+      fi
 
     end_for
 
@@ -1988,8 +1995,6 @@ switch_context() {
       if [[ ! "${coordinates:-}" ]]; then
         switch_context_calc_coordinates || fail
       fi
-
-      : ${coordinate_row:=0}
 
       if [[ "${missing_dims:-}" ]]; then
         switch_context_handle_missing || fail
@@ -3176,7 +3181,7 @@ fetch_values_from_coordinates() {
     local row field_offset v c
     local -A results
     field_offset=${coordinate_dim_index[$dim_var]}
-    while (( row = 0; row < coordinate_rows; row++ )); do
+    for (( row = 0; row < coordinate_rows; row++ )); do
       c=$((row + field_offset))
       v=${coordinates[$c]}
       results[$v]=1

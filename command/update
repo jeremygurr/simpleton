@@ -410,6 +410,8 @@ update_upstream() {
   local log_show_vars=^upstream 
   begin_function_hi
 
+    log_debug "Updating upstream ${upstream##*/.cyto/up/}"
+
     local needs_update= upstream_cell_link= \
       chosen= anchor_dims= \
       chosen_target_link \
@@ -678,6 +680,8 @@ update_member() {
     get_sane_value "$member" || fail
     member_path=$cell_path/$dim:$sane_value
 
+    log_debug "Updating member $dim:$sane_value"
+
     local needs_update=
     if [[ ! -d $member_path/.dna ]]; then
       parent_cell=$cell_path \
@@ -704,7 +708,6 @@ update_member() {
         log_debug "Only one member found, passing upstream_cell_link: $upstream_cell_link"
       fi
 
-      anchor_dims=${anchor_dims[*]:-} \
       top_level_command=f \
       downstream_cell_name=${short_cell//\//_} \
       execute_command $member_path update || fail
@@ -723,7 +726,6 @@ update_member() {
 
     #   This is needed as we switch to other members so they can all go off the correct branch
     cell_path=$original_cell_path
-    anchor_dims=$original_anchor_dims
     switch_context || fail
   end_function
   handle_return
@@ -732,13 +734,10 @@ update_member() {
 update_members() {
   begin_function_hi
 
-    local dim=${anchor_dims[0]}
-    local original_anchor_dims=${anchor_dims[*]}
-    local anchor_dims=( ${anchor_dims[*]:1} )
+    local dim=${leaf_dims[0]}
     update_successful=
     par=t fork=f function=update_member for_each_member $dim || fail
 
-    anchor_dims=$original_anchor_dims
     switch_context || fail
     if [[ ${update_successful:=t} == f ]]; then
       log_fatal "Failed to update some member(s)"
@@ -1122,7 +1121,7 @@ update_command() {
             check_results || fail
           fi
         else
-          if [[ "${anchor_dims:-}" ]]; then
+          if [[ "${leaf_dims:-}" ]]; then
             update_members || fail
           else
             log_fatal "Internal error: cell is not a leaf, yet it doesn't have leaf dims?"
