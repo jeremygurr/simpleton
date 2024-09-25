@@ -1856,7 +1856,15 @@ switch_context_calc_coordinates() {
     local dim_var
     coordinates=()
     all_dims=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} )
+    all_dims_count=${#all_dims[*]}
     all_dims_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
+
+    declare -Ag coordinate_dim_index
+    local d i=0
+    for d in ${all_dims[*]}; do
+      coordinate_dim_index[$d]=$i
+      (( i++ ))
+    done
 
     if [[ "${all_dims:-}" ]]; then
       log_verbose "Calculating cell coordinates for dims: ${all_dims[*]}"
@@ -1865,6 +1873,9 @@ switch_context_calc_coordinates() {
       local found=$(( ${#coordinates[*]} / ${#all_dims[*]} ))
       log_verbose "$found coordinates found" 
     fi
+
+    coordinate_count=${#coordinates[*]}
+    coordinate_rows=$(( coordinate_count / all_dims_count ))
 
   end_function
   handle_return
@@ -3102,15 +3113,18 @@ show_parameter_help() {
     end_for
 
     if [[ $found == f ]]; then
-      local dim_type
-      begin_for dim_type in trunk_dims leaf_dims props; doo
-        if [[ -v ${dim_type}_${dim}_description ]]; then
-          eval "local description=\$${dim_type}_${dim}_description" || fail
-          indent=2 out_wrap "$description"
-          # TODO write other parameters
-          found=t
-          break
-        fi
+      local dim_type dim
+      begin_for dim_type in trunk_dims sub_dims props; doo
+        local -n dims=$dim_type
+        begin_for dim in ${dims[*]}; doo
+          if [[ $dim == $name && -v ${dim_type}_${dim}_description ]]; then
+            eval "local description=\$${dim_type}_${dim}_description" || fail
+            indent=2 out_wrap "$description"
+            # TODO write other parameters
+            found=t
+            break
+          fi
+        end_for
       end_for
     fi
 
@@ -3119,7 +3133,7 @@ show_parameter_help() {
     fi
 
     #choose "What should $name be set to? " $name "${choices[@]}" || fail
-    choose "$name=" $name "${choices[@]}" || fail
+    #choose "$name=" $name "${choices[@]}" || fail
 
   end_function
   handle_return
@@ -3128,6 +3142,10 @@ show_parameter_help() {
 execute_command_internal_setup_params() {
   begin_function
     if [[ "${parameter_questions:-}" ]]; then
+      if [[ "$multi_commands" == t ]]; then
+        log_fatal "To use help, only choose one command"
+        fail1
+      fi
       local p i pi 
       begin_for pi in ${!parameter_questions[*]}; doo
         p=${parameter_questions[$pi]}
@@ -3137,6 +3155,22 @@ execute_command_internal_setup_params() {
         show_parameter_help $p || fail
       end_for
     fi
+  end_function
+  handle_return
+}
+
+fetch_values_from_coordinates() {
+  local dim_var=$1
+  begin_function
+    local row field_offset v c
+    local -A results
+    field_offset=${coordinate_dim_index[$dim_var]}
+    while (( row = 0; row < coordinate_rows; row++ )); do
+      c=$((row + field_offset))
+      v=${coordinates[$c]}
+      results[$v]=1
+    done
+    keys_to_array results values
   end_function
   handle_return
 }
@@ -3158,8 +3192,7 @@ for_each_member() {
     log_show_vars='dim function'
   begin_function
 
-    dim_type=trunk_dims \
-    expand_values || fail
+    fetch_values_from_coordinates $dim || fail
 
     member_count=${#values[*]}
 
@@ -3744,10 +3777,10 @@ load_parent_context() {
 new_command() {
   local name=$name description=$description
   command_description=$description
-  parameter_names=( )
-  parameter_descriptions=( )
-  parameter_defaults=( )
-  parameter_choices=( )
+  #parameter_names=( )
+  #parameter_descriptions=( )
+  #parameter_defaults=( )
+  #parameter_choices=( )
 }
 
 add_parameter() {
