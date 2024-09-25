@@ -1684,6 +1684,19 @@ calc_coordinates_loop_members() {
   handle_return
 }
 
+calc_coordinates_add_row() {
+  begin_function
+    local i new_coords=()
+    for (( i = 0; i < all_dims_count; i++ )); do
+      local -n dim_value=d_${all_dims[$i]}
+      coordinates+=( "$dim_value" )
+      new_coords+=( "$dim_value" )
+    done
+    log_verbose "coordinates+=( ${new_coords[*]} )"
+  end_function
+  handle_return
+}
+
 calc_coordinates_next_unknown_dim() {
   local current_dim_index=$1
   begin_function
@@ -1784,14 +1797,7 @@ calc_coordinates_next_unknown_dim() {
             fi
           fi
     
-          local i dim_count=${#all_dims[*]} new_coords=()
-          begin_for (( i = 0; i < dim_count; i++ )); doo
-            local -n dim_value=d_${all_dims[$i]}
-            coordinates+=( "$dim_value" )
-            new_coords+=( "$dim_value" )
-          end_for
-
-          log_verbose "coordinates+=( ${new_coords[*]} )"
+          calc_coordinates_add_row || fail
 
           break
         fi
@@ -1855,6 +1861,8 @@ switch_context_calc_coordinates() {
 
     local dim_var
     coordinates=()
+    coordinate_count=0
+    coordinate_rows=0
     all_dims=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} )
     all_dims_count=${#all_dims[*]}
     all_dims_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
@@ -1870,12 +1878,15 @@ switch_context_calc_coordinates() {
       log_verbose "Calculating cell coordinates for dims: ${all_dims[*]}"
       missing_dims=()
       calc_coordinates_next_known_dim 0 || fail
-      local found=$(( ${#coordinates[*]} / ${#all_dims[*]} ))
-      log_verbose "$found coordinates found" 
-    fi
 
-    coordinate_count=${#coordinates[*]}
-    coordinate_rows=$(( coordinate_count / all_dims_count ))
+      if [[ ! "${coordinates:-}" ]]; then
+        calc_coordinates_add_row || fail
+      fi
+
+      coordinate_count=${#coordinates[*]}
+      coordinate_rows=$(( coordinate_count / all_dims_count ))
+      log_verbose "$coordinate_rows coordinates found" 
+    fi
 
   end_function
   handle_return
