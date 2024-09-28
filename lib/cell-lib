@@ -1709,6 +1709,9 @@ calc_coordinates_loop_members() {
     local current_member
     begin_for current_member in ${members[*]}; doo
       calc_coordinates_process_member || fail
+      if [[ "$missing_dims" ]]; then
+        break
+      fi
     end_for
   end_function
   handle_return
@@ -1791,9 +1794,9 @@ calc_coordinates_next_unknown_dim() {
             if [[ $phase == derive ]]; then
               phase=default
               current_dim_index=0
+              missing_dims=()
             else
-              log_fatal "Could not fully resolve dims. Failed to resolve: ${missing_dims[*]}"
-              fail1
+              break
             fi
           fi
         else # all dims were resolved
@@ -1910,13 +1913,15 @@ switch_context_calc_coordinates() {
       missing_dims=()
       calc_coordinates_next_known_dim 0 || fail
 
-      if [[ ! "${coordinate_data:-}" ]]; then
-        calc_coordinates_add_row || fail
-      fi
+      if [[ ! "$missing_dims" ]]; then
+        if [[ ! "${coordinate_data:-}" ]]; then
+          calc_coordinates_add_row || fail
+        fi
 
-      coordinate_count=${#coordinate_data[*]}
-      coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-      log_verbose "$coordinate_rows coordinates found" 
+        coordinate_count=${#coordinate_data[*]}
+        coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
+        log_verbose "$coordinate_rows coordinates found" 
+      fi
     fi
 
   end_function
@@ -1926,12 +1931,16 @@ switch_context_calc_coordinates() {
 switch_context_handle_missing() {
   local can_ask=${can_ask:-t}
   begin_function
+    local dim_var dims_var
     begin_for dim_var in ${missing_dims[*]}; doo
 
+      get_plural $dim_var dims_var
+      local -n value=d_$dim_var ddims=d_$dims_var
+
       if [[ $can_ask == t ]]; then
-        choose "Enter required value: $dim=" d_$dim || fail
-        local -n value=d_$dim
+        choose "Enter required value: $dim_var=" d_$dim_var || fail
         expand_dim || fail
+        values=( "${new_values[@]}" )
       fi
 
       if [[ ! "${values:-}" ]]; then
@@ -1939,7 +1948,10 @@ switch_context_handle_missing() {
         fail1
       fi
 
+      ddims=( "${values[@]}" )
+
     end_for
+    missing_dims=
   end_function
   handle_return
 }
