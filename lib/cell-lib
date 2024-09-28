@@ -701,6 +701,25 @@ load_branch_info() {
   handle_return
 }
 
+load_repo_paths() {
+  declare -gA repo_paths
+  begin_function
+    local repos=$(find1 /repo -not -name '.*' -type d) || fail
+    local repo 
+    begin_for repo in $repos; doo
+      if [[ -d $repo/seed ]]; then
+        local modules=$(find1 $repo/seed -not -name '.*' -type d) || fail
+        local module
+        begin_for module in $modules; doo
+          module=${module##*/}
+          repo_paths[$module]=$repo
+        end_for
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
 git_commit_check() {
   begin_function
 
@@ -711,7 +730,7 @@ git_commit_check() {
     module_name=${module_name#/seed/}
     module_name=${module_name%%/*}
 
-    if ! is_array repo_paths; then
+    if [[ ! -v repo_paths ]] || ! is_array repo_paths; then
       load_repo_paths || fail
     fi
 
@@ -1508,6 +1527,11 @@ execute_derive_table() {
              derive_data=${derive_table}_data \
              out_set=$out_set \
 
+    if ! is_set out_set; then
+      log_fatal "Internal error: execute_derive_table was called with out_set pointing to a variable that isn't an associative array."
+      fail1
+    fi
+
     local field_count=${#derive_fields[*]} \
       data_count=${#derive_data[*]} \
       strict_matching=${strict_matching:-f} \
@@ -1527,7 +1551,7 @@ execute_derive_table() {
           row_result=$value
         else
 
-          local -n dim=d_$field \
+          local -n dim=d_$field
 
           if [[ "${dim:-}" ]]; then
             if [[ "$dim" != "$value" && "$value" != any && "$dim" != any ]]; then
@@ -1647,7 +1671,7 @@ calc_coordinates_process_member() {
       members=d_$dims
     member=$current_member
 
-    if (( $current_dim_index < ${#all_dims[*]} )); then
+    if (( $current_dim_index < ${#coordinate_fields[*]} )); then
 
       if [[ $phase == known ]]; then
         # recursive
@@ -1693,12 +1717,12 @@ calc_coordinates_loop_members() {
 calc_coordinates_add_row() {
   begin_function
     local i new_coords=()
-    for (( i = 0; i < all_dims_count; i++ )); do
-      local -n dim_value=d_${all_dims[$i]}
-      coordinates+=( "$dim_value" )
+    for (( i = 0; i < coordinate_fields_count; i++ )); do
+      local -n dim_value=d_${coordinate_fields[$i]}
+      coordinate_data+=( "$dim_value" )
       new_coords+=( "$dim_value" )
     done
-    log_verbose "coordinates+=( ${new_coords[*]} )"
+    log_verbose "coordinate_data+=( ${new_coords[*]} )"
   end_function
   handle_return
 }
@@ -1709,8 +1733,8 @@ calc_coordinates_next_unknown_dim() {
     local dim dims changed=f phase=derive
     begin_loop; doo
 
-      dim=${all_dims[$current_dim_index]}
-      dims=${all_dims_plural[$current_dim_index]}
+      dim=${coordinate_fields[$current_dim_index]}
+      dims=${coordinate_fields_plural[$current_dim_index]}
       local -n member=d_$dim \
         members=d_$dims
 
@@ -1756,7 +1780,7 @@ calc_coordinates_next_unknown_dim() {
       fi
 
       (( current_dim_index++ ))
-      if (( $current_dim_index >= ${#all_dims[*]} )); then
+      if (( $current_dim_index >= ${#coordinate_fields[*]} )); then
         if (( ${#missing_dims[*]} > 0 )); then
           if [[ $changed == t ]]; then
             # an unknown dim was resolved, so we need to go through again to see if we can resolve more
@@ -1816,8 +1840,8 @@ calc_coordinates_next_unknown_dim() {
 }
 
 # inputs:
-#   all_dims        array of dims to process
-#   all_dims_plural array of dim plurals to process
+#   coordinate_fields        array of dims to process
+#   coordinate_fields_plural array of dim plurals to process
 #   $1   index of dim to process
 calc_coordinates_next_known_dim() {
   local current_dim_index=$1
@@ -1825,8 +1849,8 @@ calc_coordinates_next_known_dim() {
     local dim dims
     begin_loop; doo
 
-      dim=${all_dims[$current_dim_index]}
-      dims=${all_dims_plural[$current_dim_index]}
+      dim=${coordinate_fields[$current_dim_index]}
+      dims=${coordinate_fields_plural[$current_dim_index]}
       local -n member=d_$dim \
         members=d_$dims
 
@@ -1846,7 +1870,7 @@ calc_coordinates_next_known_dim() {
       fi
 
       (( current_dim_index++ ))
-      if (( current_dim_index >= ${#all_dims[*]} )); then
+      if (( current_dim_index >= ${#coordinate_fields[*]} )); then
         break
       fi
 
@@ -1866,31 +1890,32 @@ switch_context_calc_coordinates() {
   begin_function
 
     local dim_var
-    coordinates=()
+    coordinate_data=()
+    coordinate_fields=()
     coordinate_count=0
     coordinate_rows=0
-    all_dims=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} )
-    all_dims_count=${#all_dims[*]}
-    all_dims_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
+    coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} )
+    coordinate_fields_count=${#coordinate_fields[*]}
+    coordinate_fields_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
 
     declare -Ag coordinate_dim_index
     local d i=0
-    for d in ${all_dims[*]}; do
+    for d in ${coordinate_fields[*]}; do
       coordinate_dim_index[$d]=$i
       (( i++ ))
     done
 
-    if [[ "${all_dims:-}" ]]; then
-      log_verbose "Calculating cell coordinates for dims: ${all_dims[*]}"
+    if [[ "${coordinate_fields:-}" ]]; then
+      log_verbose "Calculating cell coordinates for dims: ${coordinate_fields[*]}"
       missing_dims=()
       calc_coordinates_next_known_dim 0 || fail
 
-      if [[ ! "${coordinates:-}" ]]; then
+      if [[ ! "${coordinate_data:-}" ]]; then
         calc_coordinates_add_row || fail
       fi
 
-      coordinate_count=${#coordinates[*]}
-      coordinate_rows=$(( coordinate_count / all_dims_count ))
+      coordinate_count=${#coordinate_data[*]}
+      coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
       log_verbose "$coordinate_rows coordinates found" 
     fi
 
@@ -2010,7 +2035,7 @@ setup_dims() {
       switch_context_expand_dims || fail
     fi
 
-    if [[ ! "${coordinates:-}" ]]; then
+    if [[ ! "${coordinate_data:-}" ]]; then
       switch_context_calc_coordinates || fail
     fi
 
@@ -2413,25 +2438,6 @@ make_or_load_dna_contents_update_cell() {
       fail1
     fi
 
-  end_function
-  handle_return
-}
-
-load_repo_paths() {
-  declare -gA repo_paths
-  begin_function
-    local repos=$(find1 /repo -not -name '.*' -type d) || fail
-    local repo 
-    begin_for repo in $repos; doo
-      if [[ -d $repo/seed ]]; then
-        local modules=$(find1 $repo/seed -not -name '.*' -type d) || fail
-        local module
-        begin_for module in $modules; doo
-          module=${module##*/}
-          repo_paths[$module]=$repo
-        end_for
-      fi
-    end_for
   end_function
   handle_return
 }
@@ -3180,15 +3186,13 @@ execute_command_internal_setup_params() {
 fetch_values_from_coordinates() {
   local dim_var=$1
   begin_function
-    local row field_offset v c
     local -A results
-    field_offset=${coordinate_dim_index[$dim_var]}
-    for (( row = 0; row < coordinate_rows; row++ )); do
-      c=$((row + field_offset))
-      v=${coordinates[$c]}
-      results[$v]=1
-    done
+    out_field=$dim_var \
+    out_set=results \
+    derive_table=coordinate \
+    execute_derive_table || fail
     keys_to_array results values
+    log_debug "$dim_var fetched from coordinates: ${values[*]}"
   end_function
   handle_return
 }
