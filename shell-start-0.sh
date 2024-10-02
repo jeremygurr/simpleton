@@ -26,6 +26,7 @@ alias uu='builtin cd ../..'
 alias uuu='builtin cd ../../..'
 alias vi=vim
 alias vis='vim /etc/profile.d/shell-start-0.sh'
+alias w=walk
 
 # saves existing dir before changing to the given dir
 cd() {
