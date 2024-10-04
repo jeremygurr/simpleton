@@ -312,6 +312,18 @@ load_tab_to_code() {
   handle_return
 }
 
+# usage: split_ordinal {from_var} {ordinal_part_var} {base_part_var}
+split_ordinal() {
+  local -n _f=$1 _o=$2 _b=$3
+  if [[ $_f =~ ^([0-9]+)-([^/]*)$ ]]; then
+    _o=${BASH_REMATCH[1]}
+    _b=${BASH_REMATCH[2]}
+  else
+    _b=$_f
+  fi
+  debug_return_vars="$2 $3"
+}
+
 # usage: get_simple_name {from var} {ordinal var} {to var}
 extract_simple_name() {
   local to_var=$3
@@ -344,6 +356,9 @@ make_or_load_dna_item() {
       suffix=${file_name##*.}
       file_name=${file_name%.*}
     fi
+
+    file_name=${file_name#dna-}
+
     if [[ $file_name == auto-* ]]; then
       is_auto=t
       file_name=${file_name#auto-}
@@ -1054,7 +1069,7 @@ make_or_load_dna_contents_dna_root() {
   handle_return
 }
 
-make_or_load_dna_contents_dna_root_handle_dir() {
+make_or_load_dna_contents_handle_dir() {
   begin_function
     if [[ "$current_var" && $item_var != _* ]]; then
       array_content+=( "$item_name" )
@@ -1082,7 +1097,7 @@ make_or_load_dna_contents_dna_root_handle_dir() {
   handle_return
 }
  
-make_or_load_dna_contents_dna_root_handle_file() {
+make_or_load_dna_contents_handle_file() {
   begin_function
     if [[ -L $item && ! -e $item ]]; then
       if [[ $real_path == /work/* ]]; then
@@ -1120,10 +1135,17 @@ make_or_load_dna_contents() {
     begin_for item in $items; doo
 
       item_name=${item##*/}
+
+      local dna_prefix=f
+      if [[ "$item_name" == dna-* ]]; then
+        dna_prefix=t
+        item_name=${item_name#dna-}
+      fi
+
       extract_simple_name item_name ord item_var
 
       local new_prefix= 
-      if [[ "$current_var" ]]; then
+      if [[ "$current_var" && $dna_prefix == f ]]; then
         new_prefix=${current_var}_
       fi
 
@@ -1142,10 +1164,10 @@ make_or_load_dna_contents() {
 
       if [[ -d $item ]]; then
         if [[ $recursive == t ]]; then
-          make_or_load_dna_contents_dna_root_handle_dir || fail
+          make_or_load_dna_contents_handle_dir || fail
         fi
       else
-        make_or_load_dna_contents_dna_root_handle_file || fail
+        make_or_load_dna_contents_handle_file || fail
       fi
 
     end_for
@@ -1338,9 +1360,10 @@ switch_context_create() {
 
     if [[ ! -e $context_path ]]; then
       make_context || fail
+    else
+      source $context_path || fail
     fi
 
-    source $context_path || fail
     cleanup_dims || fail
 
     if [[ $update_git_commit == t ]]; then
@@ -1527,7 +1550,7 @@ execute_derive_table() {
              derive_data=${derive_table}_data \
              out_set=$out_set \
 
-    if ! is_set out_set; then
+    if  ! is_set out_set; then
       log_fatal "Internal error: execute_derive_table was called with out_set pointing to a variable that isn't an associative array."
       fail1
     fi
@@ -1709,7 +1732,7 @@ calc_coordinates_loop_members() {
     local current_member
     begin_for current_member in ${members[*]}; doo
       calc_coordinates_process_member || fail
-      if [[ "$missing_dims" ]]; then
+      if [[ "${missing_dims:-}" ]]; then
         break
       fi
     end_for
@@ -1725,7 +1748,7 @@ calc_coordinates_add_row() {
       coordinate_data+=( "$dim_value" )
       new_coords+=( "$dim_value" )
     done
-    log_verbose "coordinate_data+=( ${new_coords[*]} )"
+    log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
   end_function
   handle_return
 }
@@ -1743,7 +1766,7 @@ calc_coordinates_next_unknown_dim() {
 
       if [[ ! "${members:-}" ]]; then
 
-        local values=
+        local values= prev_phase=$phase
         if [[ $phase == derive ]]; then
           expand_values_check_derive || fail
         else
@@ -1759,7 +1782,7 @@ calc_coordinates_next_unknown_dim() {
             phase=derive
           fi
 
-          log_debug "Resolved $dim"
+          log_debug "Resolved $dim with $prev_phase"
 
           # don't support aliases here (yet?)
           # local new_values
@@ -1776,7 +1799,7 @@ calc_coordinates_next_unknown_dim() {
           fi
 
         else
-          log_debug "Failed to resolve $dim"
+          log_debug "Failed to resolve $dim in phase $prev_phase"
           missing_dims+=( $dim )
         fi
 
@@ -1831,7 +1854,6 @@ calc_coordinates_next_unknown_dim() {
           fi
     
           calc_coordinates_add_row || fail
-
           break
         fi
       fi
@@ -1889,17 +1911,41 @@ calc_coordinates_next_known_dim() {
   handle_return
 }
 
+# inputs:
+#   coord_type
 switch_context_calc_coordinates() {
   begin_function
 
+    local coord_type=${coord_type}
     local dim_var
-    coordinate_data=()
-    coordinate_fields=()
-    coordinate_count=0
-    coordinate_rows=0
-    coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} ${props[*]:-} )
+
+    local -n coordinate_data=${coord_type}_coordinate_data \
+      coordinate_count=${coord_type}_coordinate_count \
+      coordinate_rows=${coord_type}_coordinate_rows \
+      coordinate_fields=${coord_type}_coordinate_fields \
+      coordinate_fields_count=${coord_type}_coordinate_fields_count \
+      coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
+
+    coordinate_data=() \
+    coordinate_count=0 \
+    coordinate_rows=0 \
+
+    case $coord_type in
+      branch)
+        coordinate_fields=( ${trunk_dims[*]:-} )
+        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
+      ;;
+      leaf)
+        coordinate_fields=( ${sub_dims[*]:-} ${props[*]:-} )
+        coordinate_fields_plural=( ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
+      ;;
+      *)
+        log_fatal "Internal error: invalid coord_type=$coord_type"
+        fail1
+      ;;
+    esac
+
     coordinate_fields_count=${#coordinate_fields[*]}
-    coordinate_fields_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
 
     declare -Ag coordinate_dim_index
     local d i=0
@@ -1909,7 +1955,7 @@ switch_context_calc_coordinates() {
     done
 
     if [[ "${coordinate_fields:-}" ]]; then
-      log_verbose "Calculating cell coordinates for dims: ${coordinate_fields[*]}"
+      log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
       missing_dims=()
       calc_coordinates_next_known_dim 0 || fail
 
@@ -1920,7 +1966,7 @@ switch_context_calc_coordinates() {
 
         coordinate_count=${#coordinate_data[*]}
         coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-        log_verbose "$coordinate_rows coordinates found" 
+        log_verbose "$coordinate_rows $coord_type coordinates found" 
       fi
     fi
 
@@ -1987,10 +2033,12 @@ switch_context() {
       prev_trunk_cell=${trunk_cell:-}
 
       local update_git_commit=f
-      if [[ $trunk_changed == t && -e $status_path ]]; then
-        git_commit_check || fail
-        broken_link_check || fail
-      else
+      if [[ $trunk_changed == t ]]; then
+        if [[ -e $status_path ]]; then
+          git_commit_check || fail
+          broken_link_check || fail
+        fi
+      else # trunk_changed == f
         update_git_commit=t
       fi
 
@@ -2047,8 +2095,16 @@ setup_dims() {
       switch_context_expand_dims || fail
     fi
 
-    if [[ ! "${coordinate_data:-}" ]]; then
-      switch_context_calc_coordinates || fail
+    if [[ $cell_is_leaf == t ]]; then
+      if [[ ! "${leaf_coordinate_data:-}" ]]; then
+        coord_type=leaf \
+        switch_context_calc_coordinates || fail
+      fi
+    else
+      if [[ ! "${branch_coordinate_data:-}" ]]; then
+        coord_type=branch \
+        switch_context_calc_coordinates || fail
+      fi
     fi
 
     if [[ "${missing_dims:-}" ]]; then
@@ -2874,18 +2930,6 @@ already_in_dep_stack() {
   return 1
 }
 
-# usage: split_ordinal {from_var} {ordinal_part_var} {base_part_var}
-split_ordinal() {
-  local -n _f=$1 _o=$2 _b=$3
-  if [[ $_f =~ ^([0-9]+)-([^/]*)$ ]]; then
-    _o=${BASH_REMATCH[1]}
-    _b=${BASH_REMATCH[2]}
-  else
-    _b=$_f
-  fi
-  debug_return_vars="$2 $3"
-}
-
 trace_step_execution=${trace_step_execution:-f}
 trace_op=${trace_op:-}
 
@@ -3008,12 +3052,12 @@ execute_command_internal_setup_params() {
 }
 
 fetch_values_from_coordinates() {
-  local dim_var=$1
+  local dim_var=$1 coord_type=$coord_type
   begin_function
     local -A results # must not be set to empty string here
     out_field=$dim_var \
     out_set=results \
-    derive_table=coordinate \
+    derive_table=${coord_type}_coordinate \
     execute_derive_table || fail
     keys_to_array results values
     log_debug "$dim_var fetched from coordinates: ${values[*]}"
@@ -3038,6 +3082,7 @@ for_each_member() {
     log_show_vars='dim function'
   begin_function
 
+    coord_type=branch \
     fetch_values_from_coordinates $dim || fail
 
     member_count=${#values[*]}
