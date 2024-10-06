@@ -277,6 +277,9 @@ write_to_log_process_vars() {
     show_vars2=${new_show_vars# }
   fi
 
+  hide_secrets new_vars
+  hide_secrets trace_vars
+
   return 0
 }
 
@@ -398,6 +401,14 @@ write_to_log_console_out() {
   return 0
 }
 
+hide_secrets() {
+  local -n text=$1
+  local secret_var 
+  for secret_var in $secret_vars; do
+    text=${text//$secret_var/****}
+  done
+}
+
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
   pause_tee
@@ -411,6 +422,10 @@ write_to_log() {
 
     if [[ $log_ansi == f ]]; then
       local RESET= COL15= COL45= COL60= COL90= CYAN= YELLOW= RED= 
+    fi
+
+    if [[ "${secret_vars:-}" ]]; then
+      hide_secrets message
     fi
 
     write_to_log_process_vars || fail
@@ -618,11 +633,6 @@ log_and_run() {
     out_to_file=${out_to_file:-} \
     err_to_file=${err_to_file:-}
 
-  local masked_command=$command
-  if [[ "${secret:-}" ]]; then
-    masked_command="${masked_command//$secret/****}"
-  fi
-
   if [[ $pretend == t ]]; then
     prefix="PRETEND: "
   fi
@@ -638,7 +648,7 @@ log_and_run() {
     command+=" 2>$err_to_file"
   fi
 
-  write_to_log verbose command "$prefix$masked_command" || fail
+  write_to_log verbose command "$prefix$command" || fail
 
   if [[ $pretend != t ]]; then
     eval "$command" || return 1
