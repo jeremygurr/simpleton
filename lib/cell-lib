@@ -4205,7 +4205,7 @@ from_background_process() {
         exec {back_fd}<>$replay_file || fail
         defer "exec $back_fd>$-"
       else
-        log_fatal "Missing replay file, can't replay background process."
+        log_fatal "Missing replay file: $replay_file, can't replay background process."
         fail1
       fi
     else
@@ -4238,6 +4238,7 @@ from_background_process() {
         fi
 
       end_loop
+
     elif [[ $buffering == char ]]; then
       line=
       begin_loop; doo
@@ -4251,8 +4252,13 @@ from_background_process() {
         fi
 
         if [[ "$char" ]]; then
-          line+=$char
+
+          if [[ "$char" != "$NL" ]]; then
+            line+=$char
+          fi
+
           from_background_process__check_line || fail
+
           if [[ $succeeded == t || $failed == t ]]; then
             from_background_process__record_line || fail
             line=
@@ -4260,10 +4266,15 @@ from_background_process() {
           elif [[ $interacted == t ]]; then
             from_background_process__record_line || fail
             line=
+          elif [[ "$char" == "$NL" ]]; then
+            from_background_process__record_line || fail
+            line=
           fi
+
         else
           from_background_process__record_line || fail
           line=
+          break
         fi
 
       end_loop
@@ -4274,6 +4285,9 @@ from_background_process() {
 
     if [[ $timed_out == t ]]; then
       if [[ "$line" ]]; then
+        from_background_process__record_line || fail
+        line=
+
         local remaining_hex="$(echo -n "$line" | hexdump -e '60/1 "%_c " "\n"')"
         log_vars=remaining_hex \
           log_debug "Timed out after $timeout seconds with remaining line:$NL$line"  || fail
