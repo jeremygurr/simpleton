@@ -9,7 +9,6 @@ cell_lib_init() {
   umask 0077
 
   empty_member=_ 
-  pretend=${pretend:-f}
   execute_inner=${execute_inner:-${dig:-m}}
 
   : ${risk_tolerance:=${risk:-0}}
@@ -3859,16 +3858,14 @@ to_background_process_single() {
 
     if (( timeout_ms == 0 )); then
       log_debug "Sending output to process without timeout: $command" || fail
-      if [[ $pretend == f ]]; then
-        if [[ "${background_log:-}" ]]; then
-          echo -n "$YELLOW$command$RESET" >>$background_log || fail
-        fi
-        case $pipe_replay_state in recording|replaying)
-          update_replay_hash "$command" || fail
-        esac
-        if [[ $pipe_replay_state != replaying ]]; then
-          echo -n "$command" >$pipe_in || fail
-        fi
+      if [[ "${background_log:-}" ]]; then
+        echo -n "$YELLOW$command$RESET" >>$background_log || fail
+      fi
+      case $pipe_replay_state in recording|replaying)
+        update_replay_hash "$command" || fail
+      esac
+      if [[ $pipe_replay_state != replaying ]]; then
+        echo -n "$command" >$pipe_in || fail
       fi
     else
 
@@ -3928,7 +3925,7 @@ to_background_process() {
   local -n from=$from_var
 
   local log_show_vars='from pipe_replay timeout_to' \
-    log_vars='pipe pretend'
+    log_vars='pipe'
   begin_function_hi
 
     if [[ ! "${pipe_replay_state:-}" ]]; then
@@ -3937,7 +3934,6 @@ to_background_process() {
     fi
 
     local pipe_in=${pipe}_in pipe_out=${pipe}_out \
-      pretend=${pretend:-f} \
       sleep_between_lines=${sleep_between_lines:-0} \
       timeout_to=${timeout_to:-0.5} \
 
@@ -4004,12 +4000,11 @@ from_background_process__check_line() {
     fi
 
     if (( interact_count > 0 )); then
-      local pretend=$pretending
       begin_for ((i=0; i < interact_count; i++)); doo
         if [[ "$line" =~ ${interact_in[$i]} ]]; then
           log_debug "Interact matched [${interact_in[$i]}]" || fail
           local output=${interact_out[$i]}
-          pretend=$pretend from_var=output to_background_process || fail
+          from_var=output to_background_process || fail
           interacted=t
           undefer "exec $back_fd>&-" || fail
           get_replay_file || fail
@@ -4163,7 +4158,6 @@ flush_background_process() {
 #                      the remaining pipe output flushed.
 #   required_output  A regex string which must be found in the output or failed will be 
 #                      set to 't'
-#   pretend_out      fake data that gets fed into the reader for testing purposes
 # output:
 #   timed_out 
 #   failed
@@ -4179,7 +4173,6 @@ from_background_process() {
       fail_after=${fail_after:-} \
       required_output=${required_output:-} \
       interact=${interact:-} \
-      pretend_out=${pretend_out:-} \
       pretending=f \
       timeout=${timeout:-0} \
       flush_time=${flush_time:-0.5} \
@@ -4196,10 +4189,6 @@ from_background_process() {
     succeeded=f \
     interacted=f \
 
-    if [[ "$pretend_out" ]]; then
-      pretending=t
-    fi
-
     local line= char= i \
       interact_in=() interact_out=() \
       succeed_after_count=0 interact_count=0 s \
@@ -4210,9 +4199,7 @@ from_background_process() {
     get_replay_file || fail
 
     local back_fd
-    if [[ $pretending == t ]]; then
-      log_debug "Pretending to read background job output" || fail
-    elif [[ $pipe_replay_state == replaying ]]; then
+    if [[ $pipe_replay_state == replaying ]]; then
       if [[ -f $replay_file ]]; then
         log_debug "Replaying background interaction from $replay_file" || fail
         exec {back_fd}<>$replay_file || fail
@@ -4233,24 +4220,10 @@ from_background_process() {
       begin_loop; doo
 
         interacted=f
-        if [[ $pretending == t ]]; then
-          if [[ "$pretend_out" ]]; then
-            if [[ "$pretend_out" == *"$NL"* ]]; then
-              line=${pretend_out%%$NL*}
-              pretend_out=${pretend_out#*$NL}
-            else
-              line=$pretend_out
-              pretend_out=
-            fi
-          else
-            line=
-          fi
-        else
-          IFS=$NL read -r -t $timeout -u $back_fd line
-          if (( $? > 128 )); then 
-            timed_out=t
-            break
-          fi
+        IFS=$NL read -r -t $timeout -u $back_fd line
+        if (( $? > 128 )); then 
+          timed_out=t
+          break
         fi
 
         if [[ "$line" ]]; then
@@ -4270,16 +4243,7 @@ from_background_process() {
       begin_loop; doo
 
         interacted=f
-        if [[ $pretending == t ]]; then
-          if [[ "$pretend_out" ]]; then
-            char=${pretend_out:0:1}
-            pretend_out=${pretend_out:1}
-          else
-            char=
-          fi
-        else
-          IFS= read -N1 -r -t $timeout -u $back_fd char 
-        fi
+        IFS= read -N1 -r -t $timeout -u $back_fd char 
 
         if (( $? > 128 )); then 
           timed_out=t
