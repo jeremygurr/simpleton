@@ -3853,13 +3853,16 @@ to_background_process_single() {
 
   begin_function
 
+    local masked_command=$command
+    hide_secrets masked_command
+
     local timeout_ms=$(dc -e "$timeout 1000 * p")
     timeout_ms=${timeout_ms%.*}
 
     if (( timeout_ms == 0 )); then
-      log_debug "Sending output to process without timeout: $command" || fail
+      log_debug "Sending output to process without timeout: $masked_command" || fail
       if [[ "${background_log:-}" ]]; then
-        echo -n "$YELLOW$command$RESET" >>$background_log || fail
+        echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
       fi
       case $pipe_replay_state in recording|replaying)
         update_replay_hash "$command" || fail
@@ -3875,12 +3878,12 @@ to_background_process_single() {
         delay_ms=250
       local delay_s=$(dc -e "$delay_ms 1000 3 k / p")
 
-      log_debug "Sending output to process with ${timeout}s timeout: $command" || fail
+      log_debug "Sending output to process with ${timeout}s timeout: $masked_command" || fail
 
       timed_out=f wait_time=0
 
       if [[ "${background_log:-}" ]]; then
-        echo -n "$YELLOW$command$RESET" >>$background_log || fail
+        echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
       fi
 
       if [[ $pipe_replay_state != replaying ]]; then
@@ -3897,7 +3900,7 @@ to_background_process_single() {
            , wait_time += delay_ms ))
 
           if (( time_left <= 0 )); then
-            log_debug "Timed out trying to execute: $command" || fail
+            log_debug "Timed out trying to execute: $masked_command" || fail
             timed_out=t
             kill $pid || log_warn "Failed to kill $pid"
             break
