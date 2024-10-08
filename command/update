@@ -232,9 +232,6 @@ prep_upstream() {
     #   exist in branch_dims
     fresh=$down_fresh required_freshness= default_freshness= extra_dims=
 
-    local upstream_name=${upstream##*/} o
-    split_ordinal upstream_name o upstream_name
-    upstream_var=${upstream_name//-/_}
     local prep_function=up_${upstream_var}_prep
     if function_exists $prep_function; then
       log_debug "Executing upstream prep: $prep_function"
@@ -457,34 +454,33 @@ load_upstream_vars() {
 
     if [[ -d "${up_chosen_path:-}" ]]; then
 
-      upstreams=$(find1 $up_chosen_path -not -name '.*' | sort -g) || fail
-      begin_for upstream in $upstreams; doo
-        update_successful=t
-        local export_path=$upstream/export \
-          out_path=$upstream \
-          prefix=${upstream##*/}_ \
-          auto_load=() \
-          dna_roots= \
+      update_successful=t
+      local export_path=$upstream/export \
+        out_path=$up_chosen_path/$upstream_name \
+        prefix=${upstream##*/}_ \
+        auto_load=() \
+        dna_roots= \
 
+      pass_thru=t \
+      context_make=f \
+      recursive=f \
+      ignore_unknown=t \
+      prefix= \
+      make_or_load_dna_contents $out_path || fail
+
+      if [[ -d $export_path ]]; then
         pass_thru=t \
         context_make=f \
-        recursive=f \
-        ignore_unknown=t \
-        make_or_load_dna_contents $out_path || fail
+        prefix= \
+        make_or_load_dna_contents $export_path || fail
+      fi
 
-        if [[ -d $export_path ]]; then
-          pass_thru=t \
-          context_make=f \
-          make_or_load_dna_contents $export_path || fail
-        fi
+      prefix=
+      execute_auto_loads "${auto_load[@]}" || fail
 
-        prefix=
-        execute_auto_loads "${auto_load[@]}" || fail
-
-        if [[ $update_successful == f ]]; then
-          break
-        fi
-      end_for
+      if [[ $update_successful == f ]]; then
+        break
+      fi
 
     fi
 
@@ -509,11 +505,19 @@ update_upstreams() {
       local original_anchor_dims=${anchor_dims[*]}
 
       upstreams=$(find1 $up_path -not -name '.*' | sort -g) || fail
+      # This will eventually be done in parallel
       begin_for upstream in $upstreams; doo
+
+        local upstream_name=${upstream##*/} o
+        split_ordinal upstream_name o upstream_name
+        local upstream_var=${upstream_name//-/_}
+
         update_upstream || fail
         if [[ $update_successful == f ]]; then
           break
         fi
+        load_upstream_vars || fail
+
       end_for
 
       anchor_dims=$original_anchor_dims
@@ -1104,7 +1108,6 @@ update_command() {
       if [[ "$update_successful" != f ]]; then
         if [[ $current_mock == f ]]; then
           update_upstreams || fail
-          load_upstream_vars || fail
         else
           update_successful=t
         fi
