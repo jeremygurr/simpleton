@@ -3771,15 +3771,35 @@ cell_unlock() {
 }
 
 get_replay_file() {
-  replay_file=$replay_path/pipe_replay.$pipe_replay_hash
-  if [[ ! -d $replay_path ]]; then
-    mkdir -p $replay_path || fail
-  fi
+  if [[ "${replay_pipe:-}" ]]; then
+    if [[ ! "${current_replay_file:-}" ]]; then
+      if [[ -p $replay_pipe ]]; then
+        log_warn "Using manually specified replay file: $replay_pipe. This should be a fifo used for testing that the user is feeding data into."
+        current_replay_file=$replay_pipe
+      else
+        log_fatal "Given replay file doesn't exist: $replay_pipe"
+        fail1
+      fi
+    fi
+  else
+    current_replay_file=$replay_path/pipe_replay.$pipe_replay_hash
+    if [[ $pipe_replay_state == recording ]]; then
+      if [[ ! -d $replay_path ]]; then
+        mkdir -p $replay_path || fail
+      fi
 
-  replay_counter=${replay_counter:-0}
-  (( replay_counter++ ))
-  local replay_counter_file=$replay_path/pipe_replay-$replay_counter
-  ln -sf $replay_file $replay_counter_file || true
+      replay_counter=${replay_counter:-0}
+      (( replay_counter++ ))
+      local replay_counter_file=$replay_path/pipe_replay-$replay_counter
+      ln -sf $current_replay_file $replay_counter_file || true
+    elif [[ $pipe_replay_state == replaying ]]; then
+      if [[ ! -f $current_replay_file ]]; then
+        log_fatal "Replay file doesn't exist: $current_replay_file."
+        log_fatal "This means a complete recording doesn't exist for the given set of commands, so this needs to be re-executed in recording mode before replaying."
+        fail1
+      fi
+    fi
+  fi
 }
 
 update_replay_hash() {
@@ -3806,6 +3826,7 @@ prep_background_communication() {
       case $pipe_replay_state in
         recording)
           update_replay_hash "$command" || fail
+          log_debug "Recording $command responses" || fail
         ;;
         replaying)
           update_replay_hash "$command" || fail
@@ -3979,7 +4000,7 @@ from_background_process__record_line() {
 
   case $pipe_replay_state in
     recording)
-      echo "$line" >>$replay_file || return 1
+      echo "$line" >>$current_replay_file || return 1
       log_debug "Recording line to replay file: $line" || fail
     ;;
     replaying)
@@ -4017,7 +4038,7 @@ from_background_process__check_line() {
           interacted=t
           undefer "exec $back_fd>&-" || fail
           get_replay_file || fail
-          exec {back_fd}<>$replay_file || fail
+          exec {back_fd}<>$current_replay_file || fail
           defer "exec $back_fd>$-"
           break
         fi
@@ -4046,6 +4067,11 @@ from_background_process__check_line() {
 }
 
 from_background_process__prep() {
+
+  timed_out=f \
+  failed=f \
+  succeeded=f \
+  interacted=f \
 
   if [[ "$interact" ]]; then
 
@@ -4139,14 +4165,14 @@ flush_background_process() {
           fi
         done <$pipe_out
         ;;
-      line)
+      line|burst)
         while IFS= read -r -t $timeout -r line; do
           log_debug "Flushing: $line" || fail
           from_background_process__record_line || fail
         done <$pipe_out
         ;;
       *)
-        log_fatal "Invalid buffering type: $buffering. Should be char or line"
+        log_fatal "Invalid buffering type: $buffering. Should be char, line, or burst"
         fail1
         ;;
     esac
@@ -4167,6 +4193,8 @@ flush_background_process() {
 #                      the remaining pipe output flushed.
 #   required_output  A regex string which must be found in the output or failed will be 
 #                      set to 't'
+#   buffering        line, char, or burst. Affects how quickly input is pulled and how 
+#                      interactions can act
 # output:
 #   timed_out 
 #   failed
@@ -4183,6 +4211,7 @@ from_background_process() {
       required_output=${required_output:-} \
       interact=${interact:-} \
       pretending=f \
+      burst_window=${burst_window:-0.1} \
       timeout=${timeout:-0} \
       flush_time=${flush_time:-0.5} \
 
@@ -4192,11 +4221,6 @@ from_background_process() {
       log_fatal "from_background_process was called without running start_background_process first"
       fail1
     fi
-
-    timed_out=f \
-    failed=f \
-    succeeded=f \
-    interacted=f \
 
     local line= char= i \
       interact_in=() interact_out=() \
@@ -4209,14 +4233,9 @@ from_background_process() {
 
     local back_fd
     if [[ $pipe_replay_state == replaying ]]; then
-      if [[ -f $replay_file ]]; then
-        log_debug "Replaying background interaction from $replay_file" || fail
-        exec {back_fd}<>$replay_file || fail
-        defer "exec $back_fd>$-"
-      else
-        log_fatal "Missing replay file: $replay_file, can't replay background process."
-        fail1
-      fi
+      log_debug "Replaying background interaction from $current_replay_file" || fail
+      exec {back_fd}<>$current_replay_file || fail
+      defer "exec $back_fd>$-"
     else
       log_vars=pipe_out \
         log_debug "Waiting for background job output" || fail
@@ -4248,7 +4267,39 @@ from_background_process() {
 
       end_loop
 
+    elif [[ $buffering == burst ]]; then
+
+      local current_timeout=$burst_window timeout_count=0
+      begin_loop; doo
+
+        interacted=f
+        IFS=$NL read -r -t $burst_window -u $back_fd line
+        if (( $? > 128 )); then 
+          (( timeout_count++ ))
+        fi
+
+        if [[ "$line" ]]; then
+          from_background_process__record_line || fail
+          from_background_process__check_line || fail
+          line=
+          if [[ $succeeded == t || $failed == t ]]; then
+            break
+          fi
+          timeout_count=0
+          current_timeout=$burst_window
+        elif (( timeout_count == 1 )); then
+          current_timeout=$timeout
+        elif (( timeout_count == 2 )); then
+          timed_out=t
+          break
+        else
+          break
+        fi
+
+      end_loop
+
     elif [[ $buffering == char ]]; then
+
       line=
       begin_loop; doo
 
