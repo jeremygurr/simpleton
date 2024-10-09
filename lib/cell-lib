@@ -4052,7 +4052,7 @@ from_background_process__check_line() {
     if [[ "$succeed_after" ]]; then
       begin_for ((i=0; i < succeed_after_count; i++)); doo
         if [[ "$line" =~ ${succeed_after[$i]} ]]; then
-          log_debug "Stopped after [${succeed_after[$i]}]" || fail
+          log_debug "Succeeded after [${succeed_after[$i]}]" || fail
           succeeded=t
           succeed
         fi
@@ -4185,6 +4185,151 @@ flush_background_process() {
   handle_return
 }
 
+handle_line_buffering() {
+  begin_function
+    begin_loop; doo
+
+      interacted=f
+      IFS=$NL read -r -t $timeout -u $back_fd line
+      if (( $? > 128 )); then 
+        timed_out=t
+        break
+      fi
+
+      if [[ "$line" ]]; then
+        from_background_process__record_line || fail
+        from_background_process__check_line || fail
+        line=
+        if [[ $succeeded == t || $failed == t ]]; then
+          break
+        fi
+      else
+        break
+      fi
+
+    end_loop
+  end_function
+  handle_return
+}
+
+handle_burst_buffering() {
+  begin_function
+    local short_timeout_ms=${short_timeout_ms:-100} long_timeout_ms=${long_timeout_ms:-1000} \
+      timeout_total_ms=0 complete_line partial_line= loop_done=f target_timeout_ms
+
+    local current_timeout_ms=$short_timeout_ms \
+      current_timeout short_timeout long_timeout
+
+    short_timeout=$(dc -e "$short_timeout_ms 1000 3k / p")
+    long_timeout=$(dc -e "$long_timeout_ms 1000 3k / p")
+    target_timeout_ms=$(dc -e "$timeout 1000 * 0k1/ p")
+
+    current_timeout=$short_timeout
+
+    begin_loop; doo
+
+      interacted=f timed_out=f complete_line=
+      log_debug "burst: current_timeout=$current_timeout timeout_total_ms=$timeout_total_ms"
+      IFS=$NL read -r -t $current_timeout -u $back_fd line
+
+      if (( $? > 128 )); then 
+        timed_out=t
+        (( timeout_total_ms += current_timeout_ms ))
+        partial_line+=$line
+        current_timeout=$long_timeout
+        current_timeout_ms=$long_timeout_ms
+      else
+        complete_line=$partial_line$line
+        partial_line=
+        current_timeout=$short_timeout
+        current_timeout_ms=$short_timeout_ms
+      fi
+
+      if [[ $timed_out == t ]]; then
+        line=$partial_line from_background_process__check_line || fail
+      elif [[ "$complete_line" ]]; then
+        line=$complete_line from_background_process__check_line || fail
+      fi
+
+      if (( timeout_total_ms > target_timeout_ms )); then
+        log_debug "Max timeout of $timeout exceeded"
+        timed_out=t
+        loop_done=t
+      fi
+
+      if [[ $succeeded == t ]]; then
+        timed_out=f
+        loop_done=t
+      elif [[ $failed == t ]]; then
+        timed_out=f
+        loop_done=t
+      elif [[ $interacted == t ]]; then
+        complete_line=$partial_line
+        partial_line=
+      fi
+
+      if [[ "$complete_line" ]]; then
+        line=$complete_line from_background_process__record_line || fail
+      elif [[ "$partial_line" && $loop_done == t ]]; then
+        line=$partial_line from_background_process__record_line || fail
+        partial_line=
+      fi
+
+      if [[ $loop_done == t ]]; then
+        break
+      fi
+
+    end_loop
+  end_function
+  handle_return
+}
+
+handle_char_buffering() {
+  begin_function
+
+    line=
+    begin_loop; doo
+
+      interacted=f
+      IFS= read -N1 -r -t $timeout -u $back_fd char 
+
+      if (( $? > 128 )); then 
+        timed_out=t
+        break
+      fi
+
+      if [[ "$char" ]]; then
+
+        if [[ "$char" != "$NL" ]]; then
+          line+=$char
+        fi
+
+        from_background_process__check_line || fail
+
+        if [[ $succeeded == t || $failed == t ]]; then
+          from_background_process__record_line || fail
+          line=
+          break
+        elif [[ $interacted == t ]]; then
+          from_background_process__record_line || fail
+          line=
+        elif [[ "$char" == "$NL" ]]; then
+          from_background_process__record_line || fail
+          line=
+        fi
+
+      else
+        from_background_process__record_line || fail
+        line=
+        break
+      fi
+
+    end_loop
+
+  end_function
+  handle_return
+}
+
 # input:
 #   pipe             path to pipe to receive commands from
 #   to_var           var to write result to
@@ -4215,7 +4360,6 @@ from_background_process() {
       required_output=${required_output:-} \
       interact=${interact:-} \
       pretending=f \
-      burst_window=${burst_window:-0.1} \
       timeout=${timeout:-0} \
       flush_time=${flush_time:-0.5} \
 
@@ -4248,100 +4392,11 @@ from_background_process() {
     fi
 
     if [[ $buffering == line ]]; then
-
-      begin_loop; doo
-
-        interacted=f
-        IFS=$NL read -r -t $timeout -u $back_fd line
-        if (( $? > 128 )); then 
-          timed_out=t
-          break
-        fi
-
-        if [[ "$line" ]]; then
-          from_background_process__record_line || fail
-          from_background_process__check_line || fail
-          line=
-          if [[ $succeeded == t || $failed == t ]]; then
-            break
-          fi
-        else
-          break
-        fi
-
-      end_loop
-
+      handle_line_buffering || fail
     elif [[ $buffering == burst ]]; then
-
-      local current_timeout=$burst_window timeout_count=0
-      begin_loop; doo
-
-        interacted=f
-        IFS=$NL read -r -t $burst_window -u $back_fd line
-        if (( $? > 128 )); then 
-          (( timeout_count++ ))
-        fi
-
-        if [[ "$line" ]]; then
-          from_background_process__record_line || fail
-          from_background_process__check_line || fail
-          line=
-          if [[ $succeeded == t || $failed == t ]]; then
-            break
-          fi
-          timeout_count=0
-          current_timeout=$burst_window
-        elif (( timeout_count == 1 )); then
-          current_timeout=$timeout
-        elif (( timeout_count == 2 )); then
-          timed_out=t
-          break
-        else
-          break
-        fi
-
-      end_loop
-
+      handle_burst_buffering || fail
     elif [[ $buffering == char ]]; then
-
-      line=
-      begin_loop; doo
-
-        interacted=f
-        IFS= read -N1 -r -t $timeout -u $back_fd char 
-
-        if (( $? > 128 )); then 
-          timed_out=t
-          break
-        fi
-
-        if [[ "$char" ]]; then
-
-          if [[ "$char" != "$NL" ]]; then
-            line+=$char
-          fi
-
-          from_background_process__check_line || fail
-
-          if [[ $succeeded == t || $failed == t ]]; then
-            from_background_process__record_line || fail
-            line=
-            break
-          elif [[ $interacted == t ]]; then
-            from_background_process__record_line || fail
-            line=
-          elif [[ "$char" == "$NL" ]]; then
-            from_background_process__record_line || fail
-            line=
-          fi
-
-        else
-          from_background_process__record_line || fail
-          line=
-          break
-        fi
-
-      end_loop
+      handle_char_buffering || fail
     else
       log_fatal "Invalid buffering type: $buffering. Should be char or line"
       fail1
@@ -4368,7 +4423,7 @@ from_background_process() {
 
   end_function
 
-  if [[ "$back_fd" ]]; then
+  if [[ "${back_fd:-}" ]]; then
     undefer "exec $back_fd>&-"
   fi
 
