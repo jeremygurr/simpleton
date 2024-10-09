@@ -4218,7 +4218,7 @@ handle_burst_buffering() {
       timeout_total_ms=0 complete_line partial_line= loop_done=f target_timeout_ms
 
     local current_timeout_ms=$short_timeout_ms \
-      current_timeout short_timeout long_timeout
+      current_timeout short_timeout long_timeout rc
 
     short_timeout=$(dc -e "$short_timeout_ms 1000 3k / p")
     long_timeout=$(dc -e "$long_timeout_ms 1000 3k / p")
@@ -4230,9 +4230,9 @@ handle_burst_buffering() {
 
       interacted=f timed_out=f complete_line=
       log_debug "burst: current_timeout=$current_timeout timeout_total_ms=$timeout_total_ms"
-      IFS=$NL read -r -t $current_timeout -u $back_fd line
+      IFS=$NL read -r -t $current_timeout -u $back_fd line; rc=$?
 
-      if (( $? > 128 )); then 
+      if (( rc > 128 )); then 
         timed_out=t
         (( timeout_total_ms += current_timeout_ms ))
         partial_line+=$line
@@ -4243,6 +4243,10 @@ handle_burst_buffering() {
         partial_line=
         current_timeout=$short_timeout
         current_timeout_ms=$short_timeout_ms
+      fi
+
+      if (( rc > 0 && rc < 129 )); then
+        loop_done=t
       fi
 
       if [[ $timed_out == t ]]; then
@@ -4452,6 +4456,7 @@ run_pipe_command() {
     command=$command \
     buffering=${buffering:-burst} \
     shell_prompt=${shell_prompt:-$magic_shell_prompt} \
+    host_prompt=${host_prompt:-} \
     flush_time=${flush_time:-0.5} \
     succeed_after=${succeed_after:-} \
     fail_after=${fail_after:-} \
@@ -4490,9 +4495,12 @@ run_pipe_command() {
     log_vars=result \
       log_fatal "Internal error while trying to execute remote command"
     fail1
-  else 
-    log_debug "Command was successful" || fail
+  elif [[ "$succeeded" == t ]]; then
+    log_debug "Command execution successful" || fail
     command_successful=t
+  else 
+    log_debug "Output ended before success criteria was met" || fail
+    command_successful=f
   fi
 
   handle_return
