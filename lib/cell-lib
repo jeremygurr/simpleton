@@ -184,6 +184,7 @@ load_var_to_code() {
     fi
 
     if [[ $append == t ]]; then
+      append_vars[$name]=1
       code="$name+=$content"
     else
       code="$name=$content"
@@ -207,6 +208,7 @@ load_arr_to_code() {
 
     code="$name"
     if [[ $append == t ]]; then
+      append_vars[$name]=1
       code+="+=("
     else
       code+="=("
@@ -255,6 +257,7 @@ load_tab_to_code() {
       if (( row_index == 0 )); then
 
         if [[ $append == t ]]; then
+          append_vars[$target_var_fields]=1
           code="$target_var_fields+=( "
         else
           code="$target_var_fields=( "
@@ -271,6 +274,7 @@ load_tab_to_code() {
         code+=")$NL"
 
         if [[ $append == t ]]; then
+          append_vars[$target_var_data]=1
           code+="$target_var_data+=($NL"
         else
           code+="$target_var_data=($NL"
@@ -459,10 +463,9 @@ make_or_load_context() {
 
     log_debug "Loading context for $short_cell" || fail
     local item_name last_part dna_full_item suffix
+    local -A append_vars
 
     if [[ $context_make == t ]]; then
-      echo "#!/usr/env bash
-# WARNING: This file is auto-generated from $dna_path" >$context_path.new || fail
       local last_type=fun
     fi
 
@@ -485,7 +488,14 @@ make_or_load_context() {
     make_or_load_context_expand || fail
     
     if [[ $context_make == t ]]; then
-      mv $context_path.new $context_path || fail
+      echo "#!/usr/env bash
+# WARNING: This file is auto-generated from $dna_path$NL" >$context_path || fail
+      local v
+      begin_for v in ${!append_vars[*]}; doo
+        echo "$v=" >>$context_path || fail
+      end_for
+      cat $context_path.new >>$context_path || fail
+      rm $context_path.new
     fi
 
   end_function
@@ -1176,8 +1186,6 @@ make_or_load_dna_contents() {
   local folder=$1 prefix=${prefix:-} \
     pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
     ignore_unknown=${ignore_unknown:-f} \
-
-  local -A append_vars
 
   begin_function
 
