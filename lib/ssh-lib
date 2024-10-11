@@ -1,0 +1,506 @@
+#!/bin/bash
+# depends on lib/bash-lib being sourced first to provide needed aliases
+
+type -t ssh_lib_loaded >/dev/null && return 0
+ssh_lib_loaded=t
+
+validate_ssh_startup() {
+  begin_function_hi
+
+    local process_running
+
+    check_process
+    if [[ $process_running == f ]]; then
+      update_successful=f
+      break
+    fi
+
+    sleep .5
+    check_process
+    if [[ $process_running == f ]]; then
+      update_successful=f
+      break
+    fi
+
+    log_debug "SSH startup validated"
+    if [[ "$pid" ]]; then
+      # this needs to persist even after the script exits
+      disown $pid
+      echo "$pid" >$pid_file || fail
+    fi
+
+  end_function
+  if [[ $update_successful == f ]]; then
+    log_error "$(tail -n1 $out_path/ssh-debug)"
+    log_error "Failed to start ssh. See $out_path/ssh-debug for details"
+  fi
+  handle_return
+}
+
+ssh_get_interact() {
+  interact="
+    ssword:
+    $pw
+    continue connecting.*?
+    yes
+    "
+  trim=t escape_regex interact
+}
+
+get_current_host_regex() {
+  local -n hosts_var=${host}_hosts
+  if [[ "${hosts_var:-}" ]]; then
+    current_host_regex="(${hosts_var[*]})"
+    current_host_regex=${current_host_regex// /\|}
+  fi
+}
+
+ssh_setup_prompt() {
+  begin_function
+
+    local new_prompt="$NL\$? \\h $magic_shell_prompt$NL" \
+      host=${host%%.*}
+
+    log_debug "Setting prompt to $new_prompt"
+
+    get_current_host_regex
+
+    command="stty -echo${NL}PS1='$new_prompt'; unset PROMPT_COMMAND" \
+      timeout=5 \
+      shell_prompt=$magic_shell_prompt \
+      host_prompt=$current_host_regex \
+      run_pipe_command || fail
+    if [[ $command_successful == f ]]; then
+      log_debug "Failed, cleaning up"
+      update_successful=f
+      if [[ $pipe_replay_state != replaying ]]; then
+        kill $pid || true
+        eval "exec $fd_out>&- $fd_in>&-"
+        rm $pipe_in $pipe_out
+      fi
+    else
+      log_debug "Successful"
+      # don't need to flush here since run_pipe_command already handles that
+    fi
+
+  end_function
+  handle_return
+}
+
+ssh_get_host_vars() {
+  user=
+
+  if [[ $host =~ : ]]; then
+    port=${host#*:}
+    host=${host%:*}
+  fi
+
+  if [[ $host == @ ]]; then
+    user=${host%@*}
+    host=${host#*@}
+  fi
+
+  user_host_port=$host user_host=$host
+  if [[ "$user" ]]; then
+    user_host="$user@$user_host_port"
+  fi
+
+  user_host_port=$user_host
+  if [[ "$port" ]]; then
+    user_host_port+=":$port"
+  fi
+}
+
+ssh_jump_to_host() {
+  local host=$1 port= user= user_host_port user_host
+
+  begin_function
+
+    prev_host_regex=$current_host_regex
+    ssh_get_host_vars
+
+    log_debug "Jumping to host: $user_host_port"
+    local interact result=
+    ssh_get_interact 
+
+    local port_string=
+    if [[ "$port" ]]; then
+      port_string=" -p $port"
+    fi
+
+    command="ssh -tt $user_host$port_string"
+    from_var=command \
+      timeout=10 \
+      to_background_process || fail
+
+    to_var=result \
+      fail_after="$prev_host_regex" \
+      succeed_after=$initial_prompt \
+      interact=$interact \
+      timeout=20 \
+      buffering=burst \
+      from_background_process || fail
+
+    local command_successful=f
+    if [[ $timed_out == t ]]; then
+      log_vars=result \
+        log_error "Timed out waiting for prompt from remote ssh session"
+    elif [[ $failed == t ]]; then
+      log_vars=result \
+        log_error "Failed to execute command on remote ssh session"
+    elif [[ $succeeded == t ]]; then
+      command_successful=t
+    fi
+
+    if [[ $command_successful == t ]]; then
+      ssh_setup_prompt || fail
+      log_debug "SSH jump was successful"
+    else
+      log_error "Failed to jump to ssh host"
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   user
+#   host
+#   fd_out
+#   fd_in
+#   manual_pw
+# outputs:
+#   ssh_command
+#   ssh_command_essence
+get_ssh_command() {
+  local ssh_debug_path=${ssh_debug_path:-} extra
+  begin_function
+    if [[ "$ssh_debug_path" ]]; then
+      extra="-E $ssh_debug_path"
+    fi
+    ssh_command="ssh 
+      -p $port 
+      $extra
+      -v 
+      -tt $user@$host bash >&$fd_out 2>&1 <&$fd_in & 
+      pid=\$!
+      "
+    compress_ws ssh_command
+
+    command_essence="ssh 
+      -p $port 
+      -v 
+      -tt $user@$host bash
+      "
+    compress_ws ssh_command_essence
+
+    local interact=
+    # must set manual_pw=t if okta is needed for the jumpbox
+    if [[ $manual_pw == f ]]; then
+      local askpass_script=/tmp/askpass_$$
+      rm "$askpass_script" &>/dev/null
+      echo '#!/bin/bash'"
+        echo \"$pw\"" >$askpass_script || fail
+      defer "rm $askpass_script"
+      chmod 700 $askpass_script || fail
+      ssh_command="DISPLAY=: SSH_ASKPASS=$askpass_script setsid $ssh_command"
+      ssh_get_interact
+    fi
+
+    local log_return_vars=ssh_command_essence
+  end_function
+  handle_return
+}
+
+ssh_handle_auth() {
+  begin_function
+    local result= 
+
+    to_var=result \
+      timeout=40 succeed_after=$initial_prompt buffering=burst \
+      interact=$interact fail_after="Authentication failed" \
+      from_background_process || fail
+
+    if [ "$timed_out" == t ]; then
+      log_vars=result \
+        log_error "Timed out waiting for prompt from remote ssh session"
+      break
+    fi
+
+    if [ "$failed" == t ]; then
+      log_vars=result \
+        log_error "Failed to establish remote ssh session"
+      update_successful=f
+      break
+    fi
+
+    log_debug "Auth succeeded"
+
+  end_function
+  handle_return
+}
+
+ssh_switch_to_user() {
+  local user=$1
+  begin_function
+    update_successful=f
+
+    case $d_root_method in
+      fs)
+        log_fatal "This method is no longer allowed"
+        fail1
+        # command="alias fs='pbrun /usr/bin/find / -maxdepth 1 -mindepth 1 -name home -execdir bash \;'${NL}fs${NL}echo 'done'" \
+        # timeout=10 \
+        # succeed_after='done' \
+        # run_pipe_command || fail
+      ;;
+      pb)
+        command="pbrun /bin/su -${NL}echo 'done'" \
+        timeout=10 \
+        succeed_after='done' \
+        run_pipe_command || fail
+      ;;
+      *)
+        log_fatal "Unknown root_method. Must be one of: fs pb"
+        fail1
+      ;;
+    esac
+
+    if [[ $command_successful == t && $user != root ]]; then
+      # switch to user
+      command="su - $user${NL}echo 'done'" \
+        timeout=5 \
+        succeed_after='done' \
+        run_pipe_command || fail
+    fi
+
+    if [[ $command_successful == t ]]; then
+      setup_prompt || fail
+      update_successful=t
+    fi
+
+  end_function
+  handle_return
+}
+
+ssh_enter_docker_container() {
+  local container_name=$1
+  begin_function
+    command="docker exec -it $container_name /bin/sh" \
+    timeout=10 \
+    succeed_after='$ ' \
+    run_pipe_command || fail
+  end_function
+  handle_return
+} 
+
+ssh_process_host_step() {
+  begin_function
+    case $step_type in
+      ssh)
+        ssh_jump_to_host $step || fail
+      ;;
+      user)
+        ssh_switch_to_user $step || fail
+      ;;
+      docker)
+        ssh_enter_docker_container $step || fail
+      ;;
+      *)
+        log_fatal "Internal error: unknown step_type: $step_type"
+        fail1
+      ;;
+    esac
+  end_function
+  handle_return
+}
+
+host_path_split() {
+  begin_function
+    local part=${host_path%%/*}
+    if [[ "$part" == "$host_path" ]]; then
+      host_path=
+    else
+      host_path=${host_path#$part/}
+    fi
+    step_type=${part%%:*}
+    if [[ "$step_type" != "$part" ]]; then
+      step=${part#$step_type:}
+    else
+      step=$path
+      step_type=ssh
+    fi
+  end_function
+  local log_return_vars='step_type step host_path'
+  handle_return
+}
+
+ssh_handle_jumps() {
+  begin_function
+    if [[ $update_successful == t && "$host_path" ]]; then
+      local command_successful=t host_step
+      begin_while [[ "$host_path" ]]; doo
+        host_path_split || fail
+        ssh_process_host_step || fail
+        if [[ $command_successful == f ]]; then
+          break
+        fi
+      end_for
+      if [[ $command_successful == f ]]; then
+        update_successful=f
+      fi
+    fi
+  end_function
+  handle_return
+}
+
+ssh_pipe_setup() {
+  begin_function
+    if [[ -s $pid_file ]]; then
+      pid=$(<$pid_file)
+      if ps $pid &>/dev/null; then
+        kill $pid || true
+        sleep 2
+        if ps $pid &>/dev/null; then
+          kill -9 $pid || true
+        fi
+      fi
+    fi
+
+    if [[ -e $pipe_in ]]; then
+      rm $pipe_in $pipe_out &>/dev/null || true
+    fi
+
+    mkfifo $pipe_out $pipe_in || fail
+
+    exec {fd_out}<>$pipe_out {fd_in}<>$pipe_in
+  end_function
+  handle_return
+}
+
+ssh_prep_vars() {
+  begin_function
+
+    port=22
+    local host=$host
+
+    get_host_vars
+    user=${user:-${d_login_user:-}}
+
+    if [[ ! "$user" ]]; then
+      log_fatal "Missing user dimension"
+      fail1
+    fi
+
+    if [[ ! "$host" ]]; then
+      log_fatal "Internal error: failed to calculate host"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
+
+# inputs:
+#   host_path
+#   pipe_path    (optional) path to pipe files which connect to this ssh process
+#   known_hosts  (optional) path to known hosts file
+#   out_path     where to write logs
+# outputs:
+#   connect_successful
+ssh_connect() {
+  local host_path=$host_path \
+        known_hosts=${known_hosts:-~/.ssh/known_hosts} \
+        pipe_path=${pipe_path:-${out_path}} \
+
+  begin_function_hi
+
+    something_changed=t
+    local host \
+      step step_type \
+      current_host= \
+      current_host_regex= \
+      prev_host_regex= \
+
+    host_path_split || fail
+    if [[ $step_type != ssh ]]; then
+      log_fatal "First step in host_path must be an ssh step"
+      fail1
+    fi
+
+    host=$step
+    host=${host##*@}
+
+    if [[ $host == localhost ]]; then
+      something_changed=f
+      connect_successful=t
+      log_debug "localhost connection doesn't require an ssh tunnel"
+      succeed
+    fi
+
+    local pipe=$pipe_path/pipe 
+    local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+      pid_file=$out_path/pid pid= \
+      fd_out fd_in \
+      manual_pw=${manual_pw:-t} \
+      port=22 \
+      pw \
+      ssh_command \
+      command_essence \
+      user \
+
+    ssh_pipe_setup || fail
+    ssh_prep_vars || fail
+    get_ssh_command || fail
+
+    prep_background_communication "$command_essence" || fail
+
+    if [[ $pipe_replay_state != replaying && -e $known_hosts ]]; then
+      log_and_run "cp $known_hosts $known_hosts.old" || fail
+      log_and_run "grep -v '$host' $known_hosts.old >$known_hosts" || {
+        [[ $? -gt 1 ]] && fail1
+        }
+      rm $known_hosts.old
+    fi
+
+    pid=
+    start_background_process "$ssh_command" && connect_successful=t
+    if [[ $connect_successful == f ]]; then
+      log_error "SSH command failed to launch"
+      break
+    fi
+
+    if [[ $pipe_replay_state != replaying ]]; then
+      validate_ssh_startup || fail
+      if [[ $connect_successful == f ]]; then
+        log_error "Failed to launch ssh process"
+        break
+      fi
+    fi
+
+    local initial_prompt='\$ $' interact=
+    ssh_handle_auth || fail
+    if [[ $connect_successful == f ]]; then
+      log_error "Failed to login to ssh target"
+      break
+    fi
+
+    setup_prompt || fail
+
+    from_must_exist=f safe_link $background_log $out_path/background || fail
+
+    ssh_handle_jumps || fail
+
+  end_function
+
+  if failed; then
+    connect_successful=f
+    if [[ "${fd_out:-}" ]]; then
+      eval "exec $fd_out>&- $fd_in>&-"
+    fi
+  fi
+
+  handle_return
+}
+

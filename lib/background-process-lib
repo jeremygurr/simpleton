@@ -1,0 +1,705 @@
+#!/bin/bash
+
+type -t background_process_lib_loaded >/dev/null && return 0
+background_process_lib_loaded=t
+
+# This can be used directly if a background process is already running
+prep_background_communication() {
+  local command=$1
+  begin_function
+
+    if [[ ! "${pipe_replay_state:-}" ]]; then
+      pipe_replay=${pipe_replay:-${replay:-f}}
+      # pipe_replay may be: replaying recording disabled
+
+      if [[ $pipe_replay == t ]]; then
+        pipe_replay_state=replaying
+      else
+        pipe_replay_state=${pipe_replay_state:-recording}
+      fi
+
+      pipe_replay_hash=none
+      case $pipe_replay_state in
+        recording)
+          update_replay_hash "$command" || fail
+          log_debug "Recording $command responses" || fail
+        ;;
+        replaying)
+          update_replay_hash "$command" || fail
+          log_verbose "Replaying pre-recorded $command responses" || fail
+        ;;
+        disabled)
+          :
+        ;;
+        *)
+          log_fatal "Unknown pipe_replay_state: $pipe_replay_state"
+          fail1
+        ;;
+      esac
+
+    fi
+
+  end_function
+  handle_return
+}
+
+start_background_process() {
+  local command="$*" 
+  begin_function
+    prep_background_communication "$command" || fail
+    case $pipe_replay_state in
+      recording|disabled)
+        log_and_run "$command" || fail
+      ;;
+    esac
+  end_function
+  handle_return
+}
+
+# should not be called outside of to_background_process
+# input:
+#   line             command to send to pipe
+#   pipe_in
+#   pipe_out
+#   timeout_to       number of seconds for timeout
+#   background_log   (optional) file to write all input/output to 
+# output:
+#   
+to_background_process_single() {
+  local command=$1 timeout=$timeout_to
+
+  begin_function
+
+    local masked_command=$command
+    hide_secrets masked_command
+
+    local timeout_ms=$(dc -e "$timeout 1000 * p")
+    timeout_ms=${timeout_ms%.*}
+
+    if (( timeout_ms == 0 )); then
+      log_debug "Sending output to process without timeout: $masked_command" || fail
+      if [[ "${background_log:-}" ]]; then
+        echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
+      fi
+
+      case $pipe_replay_state in recording|replaying)
+        update_replay_hash "$command" || fail
+      esac
+
+      if [[ $pipe_replay_state != replaying ]]; then
+        echo -n "$command" >$pipe_in || fail
+      fi
+    else
+
+      local pid \
+        time_left=$timeout_ms \
+        wait_message=f \
+        delay_ms=250
+      local delay_s=$(dc -e "$delay_ms 1000 3 k / p")
+
+      log_debug "Sending output to process with ${timeout}s timeout: $masked_command" || fail
+
+      timed_out=f wait_time=0
+
+      if [[ "${background_log:-}" ]]; then
+        echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
+      fi
+
+      case $pipe_replay_state in recording|replaying)
+        update_replay_hash "$command" || fail
+      esac
+
+      if [[ $pipe_replay_state != replaying ]]; then
+
+        echo -n "$command" >$pipe_in &
+        pid=$!
+
+        begin_while ps $pid &>/dev/null; doo
+
+          log_debug "Waiting $delay_s sec for background process to be running" || fail
+          sleep $delay_s || fail
+
+          (( time_left -= delay_ms 
+           , wait_time += delay_ms ))
+
+          if (( time_left <= 0 )); then
+            log_debug "Timed out trying to execute: $masked_command" || fail
+            timed_out=t
+            kill $pid || log_warn "Failed to kill $pid"
+            break
+          fi
+
+          if (( wait_time > 4000 )) && [[ $wait_message == f ]]; then
+            log_warn "${NL}Waiting for pipe to be open (time_left=$time_left)" || fail
+            wait_message=t
+          fi
+
+        end_while
+        local wait_time_s=$(dc -e "$wait_time 1000 / p")
+        log_debug "Finished waiting. Took ${wait_time_s}s." || fail
+
+      fi
+
+    fi
+
+  end_function
+  handle_return
+}
+
+to_background_process() {
+
+  local -n from=$from_var
+
+  local log_show_vars='from pipe_replay timeout_to' \
+    log_vars='pipe'
+  begin_function_hi
+
+    if [[ ! "${pipe_replay_state:-}" ]]; then
+      log_fatal "to_background_process was called without running start_background_process first"
+      fail1
+    fi
+
+    local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+      sleep_between_lines=${sleep_between_lines:-0} \
+      timeout_to=${timeout_to:-0.5} \
+
+    if [[ ! -p $pipe_in ]]; then
+      log_fatal "Invalid FIFO: $pipe_in"
+      fail1
+    fi
+
+    from="${from%%*([$NL $TAB])}$NL"
+
+    if (( sleep_between_lines > 0 )); then
+      local line
+      while IFS= read -r line || [[ "$line" ]]; do
+        to_background_process_single "$line" || fail
+        if [[ $timed_out == t ]]; then
+          succeed
+        fi
+        sleep $sleep_between_lines
+      done <<<"$from"
+      handle_break
+    else
+      to_background_process_single "$from" || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+from_background_process__record_line() {
+  local no_newline=${no_newline:-f}
+  local result=$line
+  [[ "$no_newline" == f ]] && result=$result$NL
+  to+=$result
+
+  case $pipe_replay_state in
+    recording)
+      echo "$line" >>$current_replay_file || return 1
+      log_debug "Recording line to replay file: $line" || fail
+    ;;
+    replaying)
+      log_debug "Replaying line: $line" || fail
+    ;;
+  esac
+
+  if [[ "${background_log:-}" ]]; then
+    echo "$line" >>$background_log || return 1
+  fi
+
+  return 0
+}
+
+# sets found or failed
+from_background_process__check_line() {
+  begin_function
+
+    if [[ "$fail_after" ]]; then
+      begin_for ((i=0; i < succeed_after_count; i++)); doo
+        if [[ "$line" =~ ${fail_after[$i]} ]]; then
+          log_debug "Failed after [${fail_after[$i]}]" || fail
+          failed=t
+          succeed
+        fi
+      end_for
+    fi
+
+    if (( interact_count > 0 )); then
+      begin_for ((i=0; i < interact_count; i++)); doo
+        if [[ -v interact_in[$i] && "$line" =~ ${interact_in[$i]} ]]; then
+          log_debug "Interact matched [${interact_in[$i]}]" || fail
+          local output=${interact_out[$i]}
+          from_var=output to_background_process || fail
+          interacted=t
+          undefer "exec $back_fd>&-" || fail
+          get_replay_file || fail
+          exec {back_fd}<>$current_replay_file || fail
+          defer "exec $back_fd>$-"
+          unset interact_in[$i]
+          break
+        fi
+      end_for
+    fi
+
+    if [[ "$succeed_after" ]]; then
+      begin_for ((i=0; i < succeed_after_count; i++)); doo
+        if [[ "$line" =~ ${succeed_after[$i]} ]]; then
+          log_debug "Succeeded after [${succeed_after[$i]}]" || fail
+          succeeded=t
+          succeed
+        fi
+      end_for
+    fi
+
+    if [[ "$required_output" ]]; then
+      if [[ "$line" =~ ${required_output} ]]; then
+        log_debug "Found required text: [$required_output]" || fail
+        requirement_met=t
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
+from_background_process__prep() {
+
+  timed_out=f \
+  failed=f \
+  succeeded=f \
+  interacted=f \
+
+  if [[ "$interact" ]]; then
+
+    split_to_array interact 
+    interact_count=${#interact[*]}
+    local c=0
+    for ((i=0; i<interact_count; i++)); do
+      s=${interact[$i]:-}
+      s=${s##*( )}
+      if [[ "$s" ]]; then
+        if (( i % 2 == 0 )); then
+          # escape_regex s
+          interact_in+=( "$s" )
+        else
+          interact_out+=( "$s" )
+          let c++
+        fi
+      fi
+    done
+    interact_count=$c
+
+  fi
+
+  if [[ "$succeed_after" ]]; then
+
+    split_to_array succeed_after
+    succeed_after_count=${#succeed_after[*]}
+    local new_succeed_after=()
+    for ((i=0; i < succeed_after_count; i++)); do
+      s=${succeed_after[$i]##*( )}
+      if [[ "$s" ]]; then
+        # escape_regex s
+        new_succeed_after+=( "$s" )
+      fi
+    done
+    succeed_after=( "${new_succeed_after[@]}" )
+
+  fi
+
+  if [[ "$fail_after" ]]; then
+
+    split_to_array fail_after
+    fail_after_count=${#fail_after[*]}
+    local new_fail_after=()
+    for ((i=0; i < fail_after_count; i++)); do
+      s=${fail_after[$i]##*( )}
+      if [[ "$s" ]]; then
+        # escape_regex s
+        new_fail_after+=( "$s" )
+      fi
+    done
+    fail_after=( "${new_fail_after[@]}" )
+
+  fi
+
+  if [[ ! -p $pipe_out ]]; then
+    log_fatal "Invalid FIFO: $pipe_out"
+    return 1
+  fi
+
+}
+
+flush_background_process() {
+  local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+    buffering=${buffering:-line} \
+    timeout=${timeout:-0} \
+    line char
+
+  local log_show_vars='pipe timeout buffering'
+  begin_function_hi
+
+    local t=${timeout//./}
+    if (( t > 0 )); then
+      log_debug "Flushing background output with timeout of ${timeout}s" || fail
+    else
+      log_debug "Flushing background output with no timeout" || fail
+    fi
+
+    get_replay_file || fail
+
+    line=
+    case "$buffering" in
+      char)
+        while IFS= read -n1 -r -t $timeout -r char || [[ "$line" ]]; do
+          if [[ "$char" ]]; then
+            line+=$char
+          else
+            log_debug "Flushing: $line" || fail
+            from_background_process__record_line || fail
+            line=
+          fi
+        done <$pipe_out
+        ;;
+      line|burst)
+        while IFS= read -r -t $timeout -r line; do
+          log_debug "Flushing: $line" || fail
+          from_background_process__record_line || fail
+        done <$pipe_out
+        ;;
+      *)
+        log_fatal "Invalid buffering type: $buffering. Should be char, line, or burst"
+        fail1
+        ;;
+    esac
+
+  end_function
+  handle_return
+}
+
+handle_line_buffering() {
+  begin_function
+    begin_loop; doo
+
+      interacted=f
+      IFS=$NL read -r -t $timeout -u $back_fd line
+      if (( $? > 128 )); then 
+        timed_out=t
+        break
+      fi
+
+      if [[ "$line" ]]; then
+        from_background_process__record_line || fail
+        from_background_process__check_line || fail
+        line=
+        if [[ $succeeded == t || $failed == t ]]; then
+          break
+        fi
+      else
+        break
+      fi
+
+    end_loop
+  end_function
+  handle_return
+}
+
+handle_burst_buffering() {
+  begin_function
+    local short_timeout_ms=${short_timeout_ms:-100} long_timeout_ms=${long_timeout_ms:-1000} \
+      timeout_total_ms=0 complete_line partial_line= loop_done=f target_timeout_ms
+
+    local current_timeout_ms=$short_timeout_ms \
+      current_timeout short_timeout long_timeout rc
+
+    short_timeout=$(dc -e "$short_timeout_ms 1000 3k / p")
+    long_timeout=$(dc -e "$long_timeout_ms 1000 3k / p")
+    target_timeout_ms=$(dc -e "$timeout 1000 * 0k1/ p")
+
+    current_timeout=$short_timeout
+
+    begin_loop; doo
+
+      interacted=f timed_out=f complete_line=
+      log_debug "burst: current_timeout=$current_timeout timeout_total_ms=$timeout_total_ms"
+      IFS=$NL read -r -t $current_timeout -u $back_fd line; rc=$?
+
+      if (( rc > 128 )); then 
+        timed_out=t
+        (( timeout_total_ms += current_timeout_ms ))
+        partial_line+=$line
+        current_timeout=$long_timeout
+        current_timeout_ms=$long_timeout_ms
+      else
+        complete_line=$partial_line$line
+        partial_line=
+        current_timeout=$short_timeout
+        current_timeout_ms=$short_timeout_ms
+      fi
+
+      if (( rc > 0 && rc < 129 )); then
+        loop_done=t
+      fi
+
+      if [[ $timed_out == t ]]; then
+        line=$partial_line from_background_process__check_line || fail
+      elif [[ "$complete_line" ]]; then
+        line=$complete_line from_background_process__check_line || fail
+      fi
+
+      if (( timeout_total_ms > target_timeout_ms )); then
+        log_debug "Max timeout of $timeout exceeded"
+        timed_out=t
+        loop_done=t
+      fi
+
+      if [[ $succeeded == t ]]; then
+        timed_out=f
+        loop_done=t
+      elif [[ $failed == t ]]; then
+        timed_out=f
+        loop_done=t
+      elif [[ $interacted == t ]]; then
+        complete_line=$partial_line
+        partial_line=
+      fi
+
+      if [[ "$complete_line" ]]; then
+        line=$complete_line from_background_process__record_line || fail
+      elif [[ "$partial_line" && $loop_done == t ]]; then
+        line=$partial_line from_background_process__record_line || fail
+        partial_line=
+      fi
+
+      if [[ $loop_done == t ]]; then
+        break
+      fi
+
+    end_loop
+  end_function
+  handle_return
+}
+
+handle_char_buffering() {
+  begin_function
+
+    line=
+    begin_loop; doo
+
+      interacted=f
+      IFS= read -N1 -r -t $timeout -u $back_fd char 
+
+      if (( $? > 128 )); then 
+        timed_out=t
+        break
+      fi
+
+      if [[ "$char" ]]; then
+
+        if [[ "$char" != "$NL" ]]; then
+          line+=$char
+        fi
+
+        from_background_process__check_line || fail
+
+        if [[ $succeeded == t || $failed == t ]]; then
+          from_background_process__record_line || fail
+          line=
+          break
+        elif [[ $interacted == t ]]; then
+          from_background_process__record_line || fail
+          line=
+        elif [[ "$char" == "$NL" ]]; then
+          from_background_process__record_line || fail
+          line=
+        fi
+
+      else
+        from_background_process__record_line || fail
+        line=
+        break
+      fi
+
+    end_loop
+
+  end_function
+  handle_return
+}
+
+# input:
+#   pipe             path to pipe to receive commands from
+#   to_var           var to write result to
+#   timeout          0=never timeout, >0=timeout after that many seconds (may be fractional)
+#   fail_after       a newline separated list of regex strings. 
+#                      If a line matches any of these, failed will be set to 't', 
+#                      processing will stop and the remaining pipe output flushed.
+#   succeed_after    a newline separated list of regex strings. If a line matches any of
+#                      these. If a line matches any of these, processing will stop and
+#                      the remaining pipe output flushed.
+#   required_output  A regex string which must be found in the output or failed will be 
+#                      set to 't'
+#   buffering        line, char, or burst. Affects how quickly input is pulled and how 
+#                      interactions can act
+# output:
+#   timed_out 
+#   failed
+# will flush output at end
+from_background_process() {
+  local log_vars='pipe interact pipe_replay' \
+    log_show_vars='timeout required_output succeed_after fail_after'
+  begin_function_hi
+
+    local pipe_in=${pipe}_in pipe_out=${pipe}_out \
+      buffering=${buffering:-line} \
+      succeed_after=${succeed_after:-} \
+      fail_after=${fail_after:-} \
+      required_output=${required_output:-} \
+      interact=${interact:-} \
+      pretending=f \
+      timeout=${timeout:-0} \
+      flush_time=${flush_time:-0.5} \
+
+    local -n to=$to_var
+
+    if [[ ! "${pipe_replay_state:-}" ]]; then
+      log_fatal "from_background_process was called without running start_background_process first"
+      fail1
+    fi
+
+    local line= char= i \
+      interact_in=() interact_out=() \
+      succeed_after_count=0 interact_count=0 s \
+      requirement_met=f
+
+    from_background_process__prep || fail
+
+    get_replay_file || fail
+
+    local back_fd
+    if [[ $pipe_replay_state == replaying ]]; then
+      log_debug "Replaying background interaction from $current_replay_file" || fail
+      exec {back_fd}<>$current_replay_file || fail
+      defer "exec $back_fd>$-"
+    else
+      log_vars=pipe_out \
+        log_debug "Waiting for background job output" || fail
+      exec {back_fd}<>$pipe_out || fail
+      defer "exec $back_fd>$-"
+    fi
+
+    if [[ $buffering == line ]]; then
+      handle_line_buffering || fail
+    elif [[ $buffering == burst ]]; then
+      handle_burst_buffering || fail
+    elif [[ $buffering == char ]]; then
+      handle_char_buffering || fail
+    else
+      log_fatal "Invalid buffering type: $buffering. Should be char or line"
+      fail1
+    fi
+
+    if [[ $timed_out == t ]]; then
+      if [[ "$line" ]]; then
+        from_background_process__record_line || fail
+        line=
+
+        local remaining_hex="$(echo -n "$line" | hexdump -e '60/1 "%_c " "\n"')"
+        log_vars=remaining_hex \
+          log_debug "Timed out after $timeout seconds with remaining line:$NL$line"  || fail
+      else
+        log_debug "Timed out after $timeout seconds" || fail
+      fi
+    fi
+
+    if [[ "$required_output" && $requirement_met == f ]]; then
+      failed=t
+    fi
+
+    timeout=$flush_time flush_background_process
+
+  end_function
+
+  if [[ "${back_fd:-}" ]]; then
+    undefer "exec $back_fd>&-"
+  fi
+
+  handle_return
+}
+
+# This should be different enough from a default shell prompt so that it
+#   can't possibly be confused
+magic_shell_prompt='>=-=>'$NL
+
+# input:
+#   pipe
+#   command
+#   timeout
+#   flush_time=0.5
+#   shell_prompt (optional)
+#   succeed_after (optional) will override shell_prompt check if set
+#   fail_after (optional) will override shell_prompt check if set
+#   interact (optional) allow for automatic reactions to command output
+# output: 
+#   result
+#   command_successful
+# will flush output at end
+run_pipe_command() {
+  local pipe=$pipe \
+    command=$command \
+    buffering=${buffering:-burst} \
+    shell_prompt=${shell_prompt:-$magic_shell_prompt} \
+    host_prompt=${host_prompt:-} \
+    flush_time=${flush_time:-0.5} \
+    succeed_after=${succeed_after:-} \
+    fail_after=${fail_after:-} \
+    interact=${interact:-} \
+
+  local log_show_vars=command log_vars='pipe shell_prompt buffering'
+  begin_function_hi
+
+    timed_out=f failed=f command_successful=f
+    from_var=command \
+      to_background_process || fail
+
+    if [[ $timed_out == t ]]; then
+      break
+    fi
+
+    if [[ ! "$succeed_after" && ! "$fail_after" ]]; then
+      escape_regex shell_prompt
+      shell_prompt=${shell_prompt%%*($NL| |$TAB)}
+      shell_prompt=${shell_prompt##*($NL| |$TAB)}
+      if [[ "$host_prompt" ]]; then
+        succeed_after="^0\ $host_prompt $shell_prompt"
+      else
+        succeed_after="^0\ .*$shell_prompt"
+      fi
+      fail_after="^[1-9][0-9]*\ $shell_prompt"
+    fi
+    to_var=result \
+      from_background_process || fail
+
+  end_function
+
+  if [[ $timed_out == t ]]; then
+    log_vars=result \
+      log_error "Timed out waiting for prompt from remote ssh session" || fail
+  elif [[ "$failed" == t ]]; then
+    log_vars=result \
+      log_error "Command execution on remote ssh session returned a failure" || fail
+  elif failed; then
+    log_vars=result \
+      log_fatal "Internal error while trying to execute remote command"
+    fail1
+  elif [[ "$succeeded" == t ]]; then
+    log_debug "Command execution successful" || fail
+    command_successful=t
+  else 
+    log_debug "Output ended before success criteria was met" || fail
+    command_successful=f
+  fi
+
+  handle_return
+}
+
