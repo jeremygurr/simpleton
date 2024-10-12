@@ -11,14 +11,14 @@ validate_ssh_startup() {
 
     check_process
     if [[ $process_running == f ]]; then
-      update_successful=f
+      connect_successful=f
       break
     fi
 
     sleep .5
     check_process
     if [[ $process_running == f ]]; then
-      update_successful=f
+      connect_successful=f
       break
     fi
 
@@ -30,7 +30,7 @@ validate_ssh_startup() {
     fi
 
   end_function
-  if [[ $update_successful == f ]]; then
+  if [[ $connect_successful == f ]]; then
     log_error "$(tail -n1 $out_path/ssh-debug)"
     log_error "Failed to start ssh. See $out_path/ssh-debug for details"
   fi
@@ -59,7 +59,7 @@ get_current_host_regex() {
     current_host_regex="(${hosts_var[*]})"
     current_host_regex=${current_host_regex// /\|}
   else
-    current_host_regex=
+    current_host_regex=$short_host
   fi
   debug_return_vars=current_host_regex
 }
@@ -81,7 +81,7 @@ ssh_setup_prompt() {
       run_pipe_command || fail
     if [[ $command_successful == f ]]; then
       log_debug "Failed, cleaning up"
-      update_successful=f
+      connect_successful=f
       if [[ $pipe_replay_state != replaying ]]; then
         kill $pid || true
         eval "exec $fd_out>&- $fd_in>&-"
@@ -184,7 +184,7 @@ ssh_jump_to_host() {
 #   ssh_command
 #   ssh_command_essence
 get_ssh_command() {
-  local ssh_debug_path=${ssh_debug_path:-} extra
+  local ssh_debug_path=${ssh_debug_path:-} extra=
   begin_function
     if [[ "$ssh_debug_path" ]]; then
       extra="-E $ssh_debug_path"
@@ -198,7 +198,7 @@ get_ssh_command() {
       "
     compress_ws ssh_command
 
-    command_essence="ssh 
+    ssh_command_essence="ssh 
       -p $port 
       -v 
       -tt $user@$host bash
@@ -241,7 +241,7 @@ ssh_handle_auth() {
     if [ "$failed" == t ]; then
       log_vars=result \
         log_error "Failed to establish remote ssh session"
-      update_successful=f
+      connect_successful=f
       break
     fi
 
@@ -254,7 +254,7 @@ ssh_handle_auth() {
 ssh_switch_to_user() {
   local user=$1
   begin_function
-    update_successful=f
+    connect_successful=f
 
     case $d_root_method in
       fs)
@@ -287,7 +287,7 @@ ssh_switch_to_user() {
 
     if [[ $command_successful == t ]]; then
       setup_prompt || fail
-      update_successful=t
+      connect_successful=t
     fi
 
   end_function
@@ -348,7 +348,7 @@ host_path_split() {
 
 ssh_handle_jumps() {
   begin_function
-    if [[ $update_successful == t && "$host_path" ]]; then
+    if [[ "$host_path" ]]; then
       local command_successful=t host_step
       begin_while [[ "$host_path" ]]; doo
         host_path_split || fail
@@ -358,7 +358,7 @@ ssh_handle_jumps() {
         fi
       end_for
       if [[ $command_successful == f ]]; then
-        update_successful=f
+        connect_successful=f
       fi
     fi
   end_function
@@ -418,6 +418,7 @@ ssh_prep_vars() {
 #   pipe_path    (optional) path to pipe files which connect to this ssh process
 #   known_hosts  (optional) path to known hosts file
 #   out_path     where to write logs
+#   pw           password to use
 # outputs:
 #   connect_successful
 ssh_connect() {
@@ -433,6 +434,11 @@ ssh_connect() {
       current_host= \
       current_host_regex= \
       prev_host_regex= \
+
+    if [[ ! "${pw:-}" ]]; then
+      log_fatal "Missing password."
+      fail1
+    fi
 
     host_path_split || fail
     if [[ $step_type != ssh ]]; then
@@ -458,14 +464,14 @@ ssh_connect() {
       port=22 \
       pw \
       ssh_command \
-      command_essence \
+      ssh_command_essence \
       user \
 
     ssh_pipe_setup || fail
     ssh_prep_vars || fail
     get_ssh_command || fail
 
-    prep_background_communication "$command_essence" || fail
+    prep_background_communication "$ssh_command_essence" || fail
 
     if [[ $pipe_replay_state != replaying && -e $known_hosts ]]; then
       log_and_run "cp $known_hosts $known_hosts.old" || fail
@@ -497,7 +503,7 @@ ssh_connect() {
       break
     fi
 
-    setup_prompt || fail
+    ssh_setup_prompt || fail
 
     from_must_exist=f safe_link $background_log $out_path/background || fail
 
