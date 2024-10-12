@@ -45,14 +45,23 @@ ssh_get_interact() {
     yes
     "
   trim=t escape_regex interact
+  debug_return_vars=interact
 }
 
 get_current_host_regex() {
-  local -n hosts_var=${host}_hosts
+  if [[ ! "${host:-}" ]]; then
+    log_fatal "Missing required parameter host"
+    return 1
+  fi
+  local short_host=${host%%.*}
+  local -n hosts_var=${short_host}_hosts
   if [[ "${hosts_var:-}" ]]; then
     current_host_regex="(${hosts_var[*]})"
     current_host_regex=${current_host_regex// /\|}
+  else
+    current_host_regex=
   fi
+  debug_return_vars=current_host_regex
 }
 
 ssh_setup_prompt() {
@@ -63,7 +72,7 @@ ssh_setup_prompt() {
 
     log_debug "Setting prompt to $new_prompt"
 
-    get_current_host_regex
+    get_current_host_regex || fail
 
     command="stty -echo${NL}PS1='$new_prompt'; unset PROMPT_COMMAND" \
       timeout=5 \
@@ -109,6 +118,8 @@ ssh_get_host_vars() {
   if [[ "$port" ]]; then
     user_host_port+=":$port"
   fi
+
+  debug_return_vars='host user port'
 }
 
 ssh_jump_to_host() {
@@ -384,7 +395,7 @@ ssh_prep_vars() {
     port=22
     local host=$host
 
-    get_host_vars
+    ssh_get_host_vars
     user=${user:-${d_login_user:-}}
 
     if [[ ! "$user" ]]; then
