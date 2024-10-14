@@ -159,6 +159,17 @@ omni_log_init() {
   handle_return
 }
 
+hide_secrets() {
+  local -n text=$1
+  local secret_var 
+  for secret_var in ${secret_vars:-}; do
+    local -n secret=$secret_var
+    if [[ "${secret:-}" ]]; then
+      text=${text//$secret/****}
+    fi
+  done
+}
+
 save_log_vars() {
   local entry entries= var value quoted_value
   for var in ${log_vars:-} ${log_show_vars:-}; do
@@ -172,6 +183,7 @@ save_log_vars() {
     entries+=" $var=$value"
   done
   entries=${entries# }
+  hide_secrets entries
   log_var_entries_stack+=( "$entries" ) 
   log_var_show_vars_stack+=( "$log_show_vars" ) 
 }
@@ -202,17 +214,6 @@ auto_shorten() {
   if (( length > 80 )); then
     shorten_var=${shorten_var:0:78}..
   fi
-}
-
-hide_secrets() {
-  local -n text=$1
-  local secret_var 
-  for secret_var in ${secret_vars:-}; do
-    local -n secret=$secret_var
-    if [[ "${secret:-}" ]]; then
-      text=${text//$secret/****}
-    fi
-  done
 }
 
 write_to_log_process_vars() {
@@ -321,11 +322,11 @@ write_to_log_log_var() {
     to_log+=" log_show_vars=$quoted"
   fi
   to_log+="$new_vars$trace_vars"
-  if [[ "${trace_var:-}" ]]; then
-    quoted=$trace_var
-    shell_quote_var quoted
-    to_log+=" trace_vars=$quoted"
-  fi
+  #if [[ "${trace_var:-}" ]]; then
+  #  quoted=$trace_var
+  #  shell_quote_var quoted
+  #  to_log+=" trace_vars=$quoted"
+  #fi
   local quoted=${message:-}
   if [[ "$message" ]]; then
     shell_quote_var quoted
@@ -352,6 +353,9 @@ write_to_log_update_cooked() {
       local s
       apad s log_id "debug_id=$debug_id_current " function "$function "
       s+="$show_vars$trace_vars"
+      if [[ "${secret_vars:-}" ]]; then
+        hide_secrets s
+      fi
       cooked_stack+=( "$s" )
     ;;
     return*)

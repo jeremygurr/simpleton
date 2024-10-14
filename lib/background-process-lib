@@ -211,6 +211,46 @@ from_background_process__record_line() {
   return 0
 }
 
+get_replay_file() {
+  begin_function_lo
+    if [[ "${replay_pipe:-}" ]]; then
+      if [[ ! "${current_replay_file:-}" ]]; then
+        if [[ -p $replay_pipe ]]; then
+          log_warn "Using manually specified replay file: $replay_pipe. This should be a fifo used for testing that the user is feeding data into."
+          current_replay_file=$replay_pipe
+        else
+          log_fatal "Given replay file doesn't exist: $replay_pipe"
+          fail1
+        fi
+      fi
+    else
+      previous_replay_file=${current_replay_file:-}
+      current_replay_file=$replay_path/pipe_replay.$pipe_replay_hash
+      if [[ $pipe_replay_state == recording ]]; then
+        if [[ ! -d $replay_path ]]; then
+          mkdir -p $replay_path || fail
+        fi
+
+        if [[ "$previous_replay_file" != "$current_replay_file" && -e "$current_replay_file" ]]; then
+          rm $current_replay_file || fail
+        fi
+
+        replay_counter=${replay_counter:-0}
+        (( replay_counter++ ))
+        local replay_counter_file=$replay_path/pipe_replay-$replay_counter
+        ln -sf $current_replay_file $replay_counter_file || true
+      elif [[ $pipe_replay_state == replaying ]]; then
+        if [[ ! -f $current_replay_file ]]; then
+          log_fatal "Replay file doesn't exist: $current_replay_file."
+          log_fatal "This means a complete recording doesn't exist for the given set of commands, so this needs to be re-executed in recording mode before replaying."
+          fail1
+        fi
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 # sets found or failed
 from_background_process__check_line() {
   begin_function
@@ -230,6 +270,7 @@ from_background_process__check_line() {
         if [[ -v interact_in[$i] && "$line" =~ ${interact_in[$i]} ]]; then
           log_debug "Interact matched [${interact_in[$i]}]" || fail
           local output=${interact_out[$i]}
+          output=${output//\\n/$NL}
           from_var=output to_background_process || fail
           interacted=t
           undefer "exec $back_fd>&-" || fail
@@ -418,10 +459,11 @@ handle_burst_buffering() {
     target_timeout_ms=$(dc -e "$timeout 1000 * 0k1/ p")
 
     current_timeout=$short_timeout
+    local previous_line= repeat_count=0
 
     begin_loop; doo
 
-      interacted=f timed_out=f complete_line=
+      interacted=f timed_out=f complete_line= line= 
       log_debug "burst: current_timeout=$current_timeout timeout_total_ms=$timeout_total_ms"
       IFS=$NL read -r -t $current_timeout -u $back_fd line; rc=$?
 
@@ -452,6 +494,19 @@ handle_burst_buffering() {
         log_debug "Max timeout of $timeout exceeded"
         timed_out=t
         loop_done=t
+      fi
+
+      if [[ "$line" == "$previous_line" ]]; then
+        (( repeat_count++ ))
+      else
+        repeat_count=0
+      fi
+      previous_line=$line
+
+      if (( repeat_count > 3 )); then
+        log_debug "Line is repeating too much: $line"
+        loop_done=t
+        timed_out=t
       fi
 
       if [[ $succeeded == t ]]; then
