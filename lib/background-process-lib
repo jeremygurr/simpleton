@@ -3,6 +3,12 @@
 type -t background_process_lib_loaded >/dev/null && return 0
 background_process_lib_loaded=t
 
+update_replay_hash() {
+  pipe_replay_hash_command=$command
+  pipe_replay_hash=$(echo -n "$command" | sha1sum | awk '{print $1}')
+  debug_return_vars=pipe_replay_hash
+}
+
 # This can be used directly if a background process is already running
 prep_background_communication() {
   local command=$1
@@ -196,7 +202,7 @@ from_background_process__record_line() {
 
   case $pipe_replay_state in
     recording)
-      echo "$line" >>$current_replay_file || return 1
+      echo "$line" >>$current_replay_file-out || return 1
       log_debug "Recording line to replay file: $line" || fail
     ;;
     replaying)
@@ -227,21 +233,25 @@ get_replay_file() {
       previous_replay_file=${current_replay_file:-}
       current_replay_file=$replay_path/pipe_replay.$pipe_replay_hash
       if [[ $pipe_replay_state == recording ]]; then
+
         if [[ ! -d $replay_path ]]; then
           mkdir -p $replay_path || fail
         fi
 
-        if [[ "$previous_replay_file" != "$current_replay_file" && -e "$current_replay_file" ]]; then
-          rm $current_replay_file || fail
+        replay_counter=${replay_counter:-0}
+        if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
+          if [[ -e "$current_replay_file-out" ]]; then
+            rm $current_replay_file-out || fail
+          fi
+          echo "$pipe_replay_hash_command" >$current_replay_file-in
+          (( replay_counter++ ))
+          local replay_counter_file=$replay_path/pipe_replay-$replay_counter
+          ln -sf $current_replay_file-in $replay_counter_file || true
         fi
 
-        replay_counter=${replay_counter:-0}
-        (( replay_counter++ ))
-        local replay_counter_file=$replay_path/pipe_replay-$replay_counter
-        ln -sf $current_replay_file $replay_counter_file || true
       elif [[ $pipe_replay_state == replaying ]]; then
-        if [[ ! -f $current_replay_file ]]; then
-          log_fatal "Replay file doesn't exist: $current_replay_file."
+        if [[ ! -f $current_replay_file-out ]]; then
+          log_fatal "Replay file doesn't exist: $current_replay_file-out."
           log_fatal "This means a complete recording doesn't exist for the given set of commands, so this needs to be re-executed in recording mode before replaying."
           fail1
         fi
@@ -275,7 +285,7 @@ from_background_process__check_line() {
           interacted=t
           undefer "exec $back_fd>&-" || fail
           get_replay_file || fail
-          exec {back_fd}<>$current_replay_file || fail
+          exec {back_fd}<>$current_replay_file-out || fail
           defer "exec $back_fd>$-"
           unset interact_in[$i]
           break
@@ -424,6 +434,7 @@ handle_line_buffering() {
     begin_loop; doo
 
       interacted=f
+      log_debug "line buffering: timeout=$timeout"
       IFS=$NL read -r -t $timeout -u $back_fd line
       if (( $? > 128 )); then 
         timed_out=t
@@ -461,24 +472,28 @@ handle_burst_buffering() {
     current_timeout=$short_timeout
     local previous_line= repeat_count=0
 
+    log_debug "burst buffering: short_timeout=$short_timeout long_timeout=$long_timeout timeout=$timeout"
     begin_loop; doo
 
       interacted=f timed_out=f complete_line= line= 
-      log_debug "burst: current_timeout=$current_timeout timeout_total_ms=$timeout_total_ms"
+      log_debug "burst read: current_timeout=$current_timeout timeout_total_ms=$timeout_total_ms"
       IFS=$NL read -r -t $current_timeout -u $back_fd line; rc=$?
 
       if (( rc > 128 )); then 
+        log_debug "burst timed out"
         timed_out=t
         (( timeout_total_ms += current_timeout_ms ))
         partial_line+=$line
         current_timeout=$long_timeout
         current_timeout_ms=$long_timeout_ms
       else
+        log_debug "burst normal read"
         complete_line=$partial_line$line
         partial_line=
         current_timeout=$short_timeout
         current_timeout_ms=$short_timeout_ms
       fi
+      line=
 
       if (( rc > 0 && rc < 129 )); then
         loop_done=t
@@ -496,7 +511,7 @@ handle_burst_buffering() {
         loop_done=t
       fi
 
-      if [[ "$line" == "$previous_line" ]]; then
+      if [[ "$line" == "$previous_line" && "$line" ]]; then
         (( repeat_count++ ))
       else
         repeat_count=0
@@ -504,7 +519,7 @@ handle_burst_buffering() {
       previous_line=$line
 
       if (( repeat_count > 3 )); then
-        log_debug "Line is repeating too much: $line"
+        log_debug "Line is repeating too much: '$line'"
         loop_done=t
         timed_out=t
       fi
@@ -540,6 +555,7 @@ handle_char_buffering() {
   begin_function
 
     line=
+    log_debug "char buffering: timeout=$timeout"
     begin_loop; doo
 
       interacted=f
@@ -633,8 +649,8 @@ from_background_process() {
 
     local back_fd
     if [[ $pipe_replay_state == replaying ]]; then
-      log_debug "Replaying background interaction from $current_replay_file" || fail
-      exec {back_fd}<>$current_replay_file || fail
+      log_debug "Replaying background interaction from $current_replay_file-out" || fail
+      exec {back_fd}<>$current_replay_file-out || fail
       defer "exec $back_fd>$-"
     else
       log_vars=pipe_out \
