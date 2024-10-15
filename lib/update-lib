@@ -346,4 +346,40 @@ check_cell_product() {
   handle_return
 }
 
+get_prop_hash() {
+  local prop= prop_string=
+  for prop in ${data_props[*]:-}; do
+    if [[ -v d_$prop ]]; then
+      eval "value=\$d_$prop"
+      prop_string+="$prop=$value "
+    fi
+  done
+  prop_hash=$(echo "$prop_string" | sha1sum) || return 1
+  return 0
+}
+
+get_data_prop_changed() {
+  local status_path=$cell_path/.cyto/status \
+    prop_hash=0 \
+    value
+  prop_changed=t
+  if [[ ! "${data_props:-}" ]]; then
+    prop_changed=f
+  elif [[ -d $status_path ]]; then
+    local -r status_file=$status_path/last_run_prop_hash
+    get_prop_hash || return 1
+    if [[ -f $status_file && $prop_hash == $(<$status_file) ]]; then
+      prop_changed=f
+    fi
+  fi
+  return 0
+}
+
+update_prop_hash() {
+  local prop_hash
+  get_prop_hash || return 1
+  local -r status_file=$status_path/last_run_prop_hash
+  echo "$prop_hash" >$status_file || return 1
+  return 0
+}
 

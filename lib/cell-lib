@@ -684,7 +684,9 @@ init_context() {
   cell_expiration= \
   cell_is_external=f \
   cell_is_persistent=f \
+  control_props=() \
   current_pause=250 \
+  data_props=() \
   default_anchor_dims=() \
   default_freshness= \
   default_strategies=crl \
@@ -699,7 +701,6 @@ init_context() {
   out_path= \
   post_validate=f \
   pre_validate=f \
-  props=() \
   refresh_less_than=${refresh_less_than:-1} \
   retry_delay=1 \
   retry_max=1 \
@@ -1107,7 +1108,7 @@ make_or_load_context_expand() {
     fi
 
     local dim dim_type o
-    begin_for dim_type in trunk_dims sub_dims props; doo
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
       local -n dims=$dim_type
       begin_for dim in ${dims[*]:-}; doo
         if ! function_exists ${dim_type}_${dim}_expand; then
@@ -1252,7 +1253,7 @@ make_or_load_dna_contents() {
 
 cleanup_dims() {
   local type
-  for type in trunk_dims sub_dims props; do
+  for type in trunk_dims sub_dims control_props data_props; do
     extract_simple_name_across_array $type $type || fail
   done
 }
@@ -1411,7 +1412,7 @@ switch_context_prep_dims() {
     localize_dims=local
     localize_reverse_dims=local
     local dim_var dim_type dims_var
-    begin_for dim_type in trunk_dims sub_dims props; doo
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
       local -n dim_array=$dim_type
       local -n plural_array=${dim_type}_plural
       plural_array=()
@@ -1953,8 +1954,8 @@ switch_context_calc_coordinates() {
         coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
       ;;
       leaf)
-        coordinate_fields=( ${sub_dims[*]:-} ${props[*]:-} )
-        coordinate_fields_plural=( ${sub_dims_plural[*]:-} ${props_plural[*]:-} )
+        coordinate_fields=( ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} )
+        coordinate_fields_plural=( ${sub_dims_plural[*]:-} ${control_props_plural[*]:-} ${data_props_plural[*]:-} )
       ;;
       *)
         log_fatal "Internal error: invalid coord_type=$coord_type"
@@ -2003,7 +2004,6 @@ switch_context_handle_missing() {
       if [[ $can_ask == t ]]; then
         choose "Enter required value: $dim_var=" d_$dim_var || fail
         expand_dim || fail
-        values=( "${new_values[@]}" )
       fi
 
       if [[ ! "${values:-}" ]]; then
@@ -2674,43 +2674,6 @@ fork_bg() {
   background=t fork "$@"
 }
 
-get_prop_changed() {
-  local cell_path=$1 \
-    status_path=$cell_path/.cyto/status \
-    prop_hash=0 \
-    value
-  prop_changed=t
-  if [[ ! "${props:-}" ]]; then
-    prop_changed=f
-  elif [[ -d $status_path ]]; then
-    local -r status_file=$status_path/last_run_prop_hash
-    get_prop_hash || return 1
-    if [[ -f $status_file && "$prop_hash" == $(<$status_file) ]]; then
-      prop_changed=f
-    fi
-  fi
-  return 0
-}
-
-update_prop_hash() {
-  local prop_hash
-  get_prop_hash || return 1
-  local -r status_file=$status_path/last_run_prop_hash
-  echo "$prop_hash" >$status_file || return 1
-  return 0
-}
-
-get_prop_hash() {
-  local prop=
-  for prop in ${props[*]:-}; do
-    if [[ -v d_$prop ]]; then
-      eval "value=\$d_$prop"
-      prop_hash=$(echo "$prop=$value" | sha1sum) || return 1
-    fi
-  done
-  return 0
-}
-
 get_is_stale() {
   local status_path=$status_path
   begin_function
@@ -3025,7 +2988,7 @@ show_parameter_help() {
 
     if [[ $found == f ]]; then
       local dim_type dim
-      begin_for dim_type in trunk_dims sub_dims props; doo
+      begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
         local -n dims=$dim_type
         begin_for dim in ${dims[*]}; doo
           if [[ $dim == $name && -v ${dim_type}_${dim}_description ]]; then
