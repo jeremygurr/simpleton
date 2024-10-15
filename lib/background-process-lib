@@ -258,6 +258,7 @@ get_replay_file() {
       fi
     fi
   end_function
+  debug_return_vars=current_replay_file
   handle_return
 }
 
@@ -400,10 +401,22 @@ flush_background_process() {
 
     get_replay_file || fail
 
+    local back_fd
+    if [[ $pipe_replay_state == replaying ]]; then
+      log_debug "Replaying background interaction from $current_replay_file-out" || fail
+      exec {back_fd}<>$current_replay_file-out || fail
+      defer "exec $back_fd>$-"
+    else
+      log_vars=pipe_out \
+        log_debug "Waiting for background job output" || fail
+      exec {back_fd}<>$pipe_out || fail
+      defer "exec $back_fd>$-"
+    fi
+
     line=
     case "$buffering" in
       char)
-        while IFS= read -n1 -r -t $timeout -r char || [[ "$line" ]]; do
+        while IFS= read -n1 -r -t $timeout -u $back_fd -r char; [[ "${char:-}" ]]; do
           if [[ "$char" ]]; then
             line+=$char
           else
@@ -411,13 +424,14 @@ flush_background_process() {
             from_background_process__record_line || fail
             line=
           fi
-        done <$pipe_out
+        done
         ;;
       line|burst)
-        while IFS= read -r -t $timeout -r line; do
+        while IFS= read -r -t $timeout -u $back_fd -r line; [[ "${line:-}" ]]; do
           log_debug "Flushing: $line" || fail
           from_background_process__record_line || fail
-        done <$pipe_out
+          line=
+        done
         ;;
       *)
         log_fatal "Invalid buffering type: $buffering. Should be char, line, or burst"
@@ -426,6 +440,11 @@ flush_background_process() {
     esac
 
   end_function
+
+  if [[ "${back_fd:-}" ]]; then
+    undefer "exec $back_fd>&-"
+  fi
+
   handle_return
 }
 
