@@ -113,8 +113,7 @@ ENV SIMPLETON_REPO /repo/simpleton
 ENV REPO_CACHE /home/.m2/repository
 
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
-# RUN chmod a+rwx /etc
-# RUN ln -sf $SIMPLETON_REPO/target/shell-start.sh /etc/profile.d/
+RUN chmod a+rwx /etc/profile.d /usr/bin
 RUN ln -sf $SIMPLETON_REPO/target/inputrc /etc/
 COPY target/sudoers /etc/
 RUN chown root /etc/sudoers
@@ -122,7 +121,6 @@ RUN mkdir -p $REPO_CACHE
 
 ARG TIME_ZONE=UTC
 RUN setup-timezone -z $TIME_ZONE
-# RUN ssh-keygen -f /etc/ssh/ssh_host_rsa_key -N '' -t rsa
 
 RUN mkdir -p $HOME/scripts
 RUN mkdir -p $HOME/.ssh
