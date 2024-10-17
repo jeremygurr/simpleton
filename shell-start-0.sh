@@ -222,6 +222,9 @@ walk() {
       if [[ -d up ]]; then
         walk_add_choice "u" "up"
       fi
+      if [[ -d down ]]; then
+        walk_add_choice "d" "down"
+      fi
       if [[ -d up-chosen ]]; then
         walk_add_choice "U" "up-chosen"
       fi
