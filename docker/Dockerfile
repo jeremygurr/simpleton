@@ -110,6 +110,7 @@ ENV HOME /home
 ENV PAGER less
 ENV SIMPLETON_BASE /repo
 ENV SIMPLETON_REPO /repo/simpleton
+ENV SIMPLETON_LIB $SIMPLETON_REPO/lib
 ENV REPO_CACHE /home/.m2/repository
 
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999

@@ -8,8 +8,6 @@ shopt -s extglob dotglob globstar huponexit
 
 complete -r # remove built-in shell completion since it currently has problems
 
-SIMPLETON_LIB=$SIMPLETON_REPO/lib
-
 if [[ -e /tmp/prompt_name ]]; then
   prompt_name=$(</tmp/prompt_name)
   prompt_name=${prompt_name%%*( )}
