@@ -192,7 +192,7 @@ update_upstream() {
     default_freshness= \
     risk_tolerance=$risk_tolerance \
     command_history=${command_history:-} \
-    cell_path=${cell_path:-}
+    cell_path=${cell_path:-} \
 
   if [[ -e $upstream/.dna ]]; then
     log_fatal "update_upstream upstream field should be a path to a upstream spec, not a cell"
@@ -242,6 +242,10 @@ update_upstream() {
   handle_return
 }
 
+# inputs:
+#   up_chosen_path
+#   upstream
+#   upstream_name
 load_upstream_vars() {
   begin_function
 
@@ -287,6 +291,7 @@ load_upstream_vars() {
 }
 
 update_upstreams() {
+  local execute_update=${execute_update:-t}
   begin_function
 
     update_successful=t
@@ -295,8 +300,6 @@ update_upstreams() {
     else
       last_upstream_updated=${up_path:-}
     fi
-
-    touch $status_path/deps-up-to-date || fail
 
     if [[ -d "${up_path:-}" ]]; then
 
@@ -309,19 +312,30 @@ update_upstreams() {
 
         local upstream_name=${upstream##*/} o
         split_ordinal upstream_name o upstream_name
-        local upstream_var=${upstream_name//-/_}
+        local upstream_var=${upstream_name//-/_} \
+          orig_up_chosen_path=$up_chosen_path \
 
-        update_upstream || fail
-        if [[ $update_successful == f ]]; then
-          break
+        if [[ $execute_update == t ]]; then
+          update_upstream || fail
+          if [[ $update_successful == f ]]; then
+            break
+          fi
         fi
+
+        up_chosen_path=$orig_up_chosen_path
         load_upstream_vars || fail
 
       end_for
 
       anchor_dims=$original_anchor_dims
-      switch_context || fail
+      if [[ $execute_update == t ]]; then
+        switch_context || fail
+      fi
 
+    fi
+
+    if [[ $execute_update == t ]]; then
+      touch $status_path/deps-up-to-date || fail
     fi
 
   end_function
@@ -340,8 +354,15 @@ update_upstreams() {
 #   data_valid
 check_cell_product() {
   begin_function
+    local update_successful
+    data_valid=t
+    execute_update=f \
     update_upstreams || fail
-    ignore_missing=t execute_op check || fail
+    if [[ $update_successful == f ]]; then
+      data_valid=f
+    else
+      ignore_missing=t execute_op check || fail
+    fi
   end_function
   handle_return
 }
@@ -395,5 +416,79 @@ update_prop_hash() {
   local -r status_file=$status_path/last_run_prop_hash
   echo "$prop_hash" >$status_file || return 1
   return 0
+}
+
+already_in_dep_stack() {
+  local find_dep=$1
+  local dep
+  for dep in ${dep_stack[*]}; do
+    if [[ $dep == $find_dep ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+propagate_change_to_downstream2() {
+  begin_function
+
+    local cell=$(realpath $value)
+
+    local t1 t2 trunk_cell
+    get_trunk_cell $cell
+    t1=$trunk_cell
+    get_trunk_cell $from_cell
+    t2=$trunk_cell
+    if [[ $t1 == $t2 ]]; then
+      log_fatal "Cell is propagating change to itself: $cell" 
+      fail1
+    fi
+    
+    local status_self=$cell/.cyto/status
+    
+    if already_in_dep_stack $cell; then
+      succeed
+    fi
+    dep_stack+=( $cell )
+
+    if [[ -d $cell ]]; then
+      if [[ -d $status_self ]]; then
+        # can't combine these if statements or it will alter the else condition
+        #   and break things
+        if [[ -f $status_self/deps-up-to-date ]]; then
+          rm $status_self/deps-up-to-date || fail
+          # recursive
+          from_cell=$cell \
+            propagate_change_to_downstream || fail
+        fi
+      else
+        # recursive
+        from_cell=$cell \
+          propagate_change_to_downstream || fail
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
+propagate_change_to_downstream() {
+  begin_function
+
+    local from_cell=$from_cell \
+      down_path=$from_cell/.cyto/down down_folder folders
+
+    if [[ -d $down_path ]]; then
+      local dep_stack=( ${downstream_cell_stack[*]} )
+      folders=( $(find1 $down_path -not -name '.*' -type d) ) || fail
+      loop_over_var=folders \
+      background=f \
+        par=f fork=f \
+        body=propagate_change_to_downstream2 \
+        parallel_loop || fail
+    fi
+
+  end_function
+  handle_return
 }
 
