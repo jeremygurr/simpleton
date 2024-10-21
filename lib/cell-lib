@@ -2142,6 +2142,7 @@ execute_command_internal_prep() {
   begin_function
     can_create_cyto=t
 
+    command_path=$path_to_commands/$current_command
     case $current_command in
       edit)
         if [[ ! "$cell_path" ]]; then
@@ -2157,12 +2158,10 @@ execute_command_internal_prep() {
       ;;
       log|dim-*|plant|up-*)
         branch_dims=()
-        command_path=$path_to_commands/$current_command
         setup_cell_path_vars $cell_path || fail
       ;;
       *)
 
-        command_path=$path_to_commands/$current_command
         if [[ -e $command_path.info ]]; then
           source $command_path.info || fail
         else
@@ -2188,6 +2187,13 @@ execute_command_internal_prep() {
 
       ;;
     esac
+
+    if [[ -f $command_path.info ]]; then
+      execute_command_internal_setup_params || fail
+    fi
+
+    source $command_path || fail
+
   end_function
   handle_return
 }
@@ -2320,6 +2326,26 @@ execute_command_log_prep() {
   handle_return
 }
 
+execute_command_internal_setup_params() {
+  begin_function
+    if [[ "${parameter_questions:-}" ]]; then
+      if [[ "$multi_commands" == t ]]; then
+        log_fatal "To use help, only choose one command"
+        fail1
+      fi
+      local p i pi 
+      begin_for pi in ${!parameter_questions[*]}; doo
+        p=${parameter_questions[$pi]}
+        if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
+          continue
+        fi
+        show_parameter_help $p || fail
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
 execute_command_internal() {
 
   local log_vars='cell_path' \
@@ -2332,6 +2358,13 @@ execute_command_internal() {
 
     if [[ "${localize_dims:-}" ]]; then
       eval "$localize_dims" || fail
+    fi
+
+    if [[ $top_level_command == f ]]; then
+      anchor_dims= \
+      branch_coordinate_data= \
+      leaf_coordinate_data= \
+      dim_cords=
     fi
 
     execute_command_internal_prep || fail
@@ -2354,11 +2387,6 @@ execute_command_internal() {
       log_verbose "Executing cell command: $short_cell $current_command" || fail
     fi
 
-    if [[ -f $command_path.info ]]; then
-      execute_command_internal_setup_params || fail
-    fi
-
-    source $command_path || fail
     local command_function=${current_command//-/_}_command
     if function_exists $command_function; then
       $command_function || fail
@@ -2522,7 +2550,6 @@ make_or_load_dna_contents_update_cell() {
 
     needs_update= \
     top_level_command=f \
-    anchor_dims= \
     execute_command "$cell_path" update || fail
 
     if [[ ! -f "$file" ]]; then
@@ -2941,26 +2968,6 @@ show_parameter_help() {
     #choose "What should $name be set to? " $name "${choices[@]}" || fail
     #choose "$name=" $name "${choices[@]}" || fail
 
-  end_function
-  handle_return
-}
-
-execute_command_internal_setup_params() {
-  begin_function
-    if [[ "${parameter_questions:-}" ]]; then
-      if [[ "$multi_commands" == t ]]; then
-        log_fatal "To use help, only choose one command"
-        fail1
-      fi
-      local p i pi 
-      begin_for pi in ${!parameter_questions[*]}; doo
-        p=${parameter_questions[$pi]}
-        if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
-          continue
-        fi
-        show_parameter_help $p || fail
-      end_for
-    fi
   end_function
   handle_return
 }
