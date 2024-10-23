@@ -1658,12 +1658,14 @@ expand_values_check_derive() {
           fail1
         fi
         local field found=f
-        begin_for field in ${fields[*]}; doo
+
+        for field in ${fields[*]}; do
           if [[ $field == $dim ]]; then
             found=t
             break
           fi
-        end_for
+        done
+
         if [[ $found == f ]]; then
           # we don't need to check this table since it doesn't contain the dim
           continue
@@ -1678,8 +1680,20 @@ expand_values_check_derive() {
         else
           copy_set new_values old_values
         fi
+
       end_for
       keys_to_array old_values values
+
+    fi
+
+    if [[ "${values:-}" ]]; then
+      local -n derived_from=${dim_type}_${dim}_derived_from
+      if [[ -v derived_from ]]; then
+        local d
+        for d in $derived_from; do
+          add_to_string_if_missing dims derive_downstream[$d]
+        done
+      fi
     fi
 
   end_function
@@ -1808,6 +1822,16 @@ calc_coordinates_next_unknown_dim() {
             # go back to derive phase since calculating a new default could
             # open up new derive possibilities
             phase=derive
+          fi
+
+          local d downstream_dims=${derive_downstream[$dim]:-}
+          if [[ "$downstream_dims" ]]; then
+            for d in $downstream_dims; do
+              log_debug "Invalidated $d because $dim was changed"
+              local -n ds=d_$d
+              ds=
+              changed=t
+            done
           fi
 
           log_debug "Resolved $dim with $prev_phase"
@@ -1985,6 +2009,7 @@ switch_context_calc_coordinates() {
     if [[ "${coordinate_fields:-}" ]]; then
       log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
       missing_dims=()
+      local -A derive_downstream
       calc_coordinates_next_known_dim 0 || fail
 
       if [[ ! "${missing_dims:-}" ]]; then
