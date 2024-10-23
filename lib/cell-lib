@@ -1471,6 +1471,7 @@ expand_dim() {
   local -n dim_type=${dim_var}_dim_type
   begin_function
 
+    values=
     if [[ "${value:-}" ]]; then
 
       if ! function_exists ${dim_type}_${dim_var}_expand; then
@@ -1478,7 +1479,12 @@ expand_dim() {
         fail1
       fi
 
+      local problem
       ${dim_type}_${dim_var}_expand || fail
+      if [[ "${problem:-}" ]]; then
+        log_fatal "$problem"
+        fail1
+      fi
 
     fi
 
@@ -1492,11 +1498,13 @@ expand_dim() {
 #   new_values   array of expanded members
 expand_dim_members() {
   begin_function
-    local value
+    local value values
     new_values=()
     begin_for value in "$@"; doo
       expand_dim || fail
-      new_values+=( "${values[@]}" )
+      if [[ "$values" ]]; then
+        new_values+=( "${values[@]}" )
+      fi
     end_for
   end_function
   handle_return
@@ -1785,6 +1793,7 @@ calc_coordinates_next_unknown_dim() {
 
       if [[ ! "${members:-}" ]]; then
 
+        #log_debug "Finding values for dim $dim in phase $phase"
         local values= prev_phase=$phase
         if [[ $phase == derive ]]; then
           expand_values_check_derive || fail
