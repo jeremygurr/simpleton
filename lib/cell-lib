@@ -1887,36 +1887,6 @@ calc_coordinates_next_unknown_dim() {
             fi
           fi
         else # all dims were resolved
-          local coordinate_valid=t
-          if [[ "$dim_cords" ]]; then
-            local cord cords matching_cord_found=f
-            sep=$dim_cord_sep string_to_array dim_cords cords
-            begin_for cord in "${cords[@]}"; doo
-              local cord_array=( $cord )
-              local all_eq_matched=t
-              begin_for eq in "${cord_array[@]}"; doo
-                local cord_dim=${eq%%=*}
-                local cord_value=${eq#$cord_dim=}
-                # local cord_dims
-                # get_plural $cord_dim cord_dims
-                local -n dim_value=d_$cord_dim
-                if [[ "$cord_value" != "$dim_value" ]]; then
-                  all_eq_matched=f
-                  break
-                fi
-              end_for
-              if [[ $all_eq_matched == t ]]; then
-                matching_cord_found=t
-                break
-              fi
-            end_for
-            
-            if [[ $matching_cord_found == f ]]; then
-              log_debug "No matching cord found, skipping this row"
-              break
-            fi
-          fi
-    
           calc_coordinates_add_row || fail
           break
         fi
@@ -2409,7 +2379,6 @@ execute_command_internal() {
       anchor_dims= \
       branch_coordinate_data= \
       leaf_coordinate_data= \
-      dim_cords=
     fi
 
     execute_command_internal_prep || fail
@@ -2439,49 +2408,6 @@ execute_command_internal() {
       log_fatal "Missing command function $command_function which should be in $command_path"
       fail1
     fi
-
-  end_function
-  handle_return
-}
-
-add_cord() {
-  local new_cord=$*
-  begin_function
-
-    if [[ "$dim_cords" ]]; then
-      dim_cords+="$dim_cord_sep$new_cord"
-    else
-      dim_cords="$new_cord"
-    fi
-
-    new_cord=( $new_cord )
-
-    local eq dim_var value
-    for eq in "${new_cord[@]}"; do
-
-      dim_var=${eq%%=*}
-      if [[ "$dim_var" == "$eq" ]]; then
-        log_fatal "Invalid config: cord missing =: $eq"
-        fail1
-      fi
-
-      value=${eq#$dim_var=}
-      if [[ ! "$value" ]]; then
-        log_fatal "Missing value for cord: $eq"
-        fail1
-      fi
-
-      dim_var=d_$dim_var
-      local dims_var
-      get_plural $dim_var dims_var
-      local -n dim=$dim_var dims=$dims_var
-      if [[ "${dim:-}" ]]; then
-        add_to_string_if_missing dim dims
-        dim=
-      fi
-      add_to_string_if_missing value dims
-
-    done
 
   end_function
   handle_return
@@ -2520,8 +2446,6 @@ execute_command() {
       job_start_time \
       background_log \
       running_job_path \
-      dim_cord_sep=${dim_cord_sep:-|-|} \
-      dim_cords=${dim_cords:-} \
 
     load_branch_info || fail
 
