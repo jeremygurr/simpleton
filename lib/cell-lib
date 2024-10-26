@@ -1638,8 +1638,40 @@ expand_values_check_derive() {
   local old_values_string=${1:-}
   begin_function
 
-    local -n dim_type=${dim}_dim_type
+    local -n dim_type=${dim}_dim_type \
+      derived_from=${dim_type}_${dim}_derived_from
     values=
+
+    local derived_from_row derived_from_dim complete_row derived_from_incomplete=f
+    if [[ "$derived_from" ]]; then
+      local one_row_complete=f
+      begin_for derived_from_row in $derived_from; doo
+        if [[ "$derived_from_row" ]]; then
+          debug_start
+          complete_row=t
+          for derived_from_dim in $derived_from_row; do
+            local -n derive_from_dim_value=d_$derived_from_dim
+            if [[ ! "$derive_from_dim_value" ]]; then
+              complete_row=f
+              break
+            fi
+          done
+          if [[ $complete_row == t ]];then
+            one_row_complete=t
+            break
+          fi
+        fi
+      end_for
+      if [[ $one_row_complete == f ]]; then
+        derived_from_incomplete=t
+      fi
+    fi
+
+    if [[ $derived_from_incomplete == f ]]; then
+      # can't proceed with deriving values if the derived_from dims are not yet resolved
+      succeed
+    fi
+
     if function_exists ${dim_type}_${dim}_derive; then
       ${dim_type}_${dim}_derive || fail
     fi
@@ -1684,16 +1716,6 @@ expand_values_check_derive() {
       end_for
       keys_to_array old_values values
 
-    fi
-
-    if [[ "${values:-}" ]]; then
-      local -n derived_from=${dim_type}_${dim}_derived_from
-      if [[ -v derived_from ]]; then
-        local d
-        for d in $derived_from; do
-          add_to_string_if_missing dims derive_downstream[$d]
-        done
-      fi
     fi
 
   end_function
@@ -1822,16 +1844,6 @@ calc_coordinates_next_unknown_dim() {
             # go back to derive phase since calculating a new default could
             # open up new derive possibilities
             phase=derive
-          fi
-
-          local d downstream_dims=${derive_downstream[$dim]:-}
-          if [[ "$downstream_dims" ]]; then
-            for d in $downstream_dims; do
-              log_debug "Invalidated $d because $dim was changed"
-              local -n ds=d_$d
-              ds=
-              changed=t
-            done
           fi
 
           log_debug "Resolved $dim with $prev_phase"
@@ -2009,7 +2021,6 @@ switch_context_calc_coordinates() {
     if [[ "${coordinate_fields:-}" ]]; then
       log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
       missing_dims=()
-      local -A derive_downstream
       calc_coordinates_next_known_dim 0 || fail
 
       if [[ ! "${missing_dims:-}" ]]; then
