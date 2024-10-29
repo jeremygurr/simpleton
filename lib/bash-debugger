@@ -444,6 +444,19 @@ debug_shell() {
   done
 }
 
+debug_show_var() {
+  local display_var=$1
+  if [[ "$display_var" =~ ^[a-zA-Z_0-9]+$ ]]; then
+    eval 'echo "$'$display_var'"' >&$fd_original_err 
+  elif [[ "$display_var" == \** ]]; then
+    eval "declare -p | grep \"${display_var#\*}\"" >&$fd_original_err
+  elif [[ "${display_var:-}" == \$* ]]; then
+    eval 'echo "'${display_var}'"' >&$fd_original_err
+  elif [[ "${display_var:-}" ]]; then
+    eval 'echo "[${!display_var}]"' >&$fd_original_err
+  fi
+}
+
 debug_command_loop() {
   local debug_c no_follow_once=f
 
@@ -596,19 +609,13 @@ debug_command_loop() {
         echo >&$fd_original_err
         read -u $fd_original_in -e -p "Display: " debug_display >&$fd_original_err
         set +u
-        if [[ "$debug_display" =~ ^[a-zA-Z_0-9]+$ ]]; then
-          eval 'echo "$'$debug_display'"' >&$fd_original_err 
-        elif [[ "$debug_display" == \** ]]; then
-          eval "declare -p | grep \"${debug_display#\*}\"" >&$fd_original_err
-        elif [[ "${debug_display:-}" ]]; then
-          eval 'echo "[${!debug_display}]"' >&$fd_original_err
-        fi
+        debug_show_var "$debug_display" || fail
         no_follow_once=t
         ;;
       D)
         if [[ "$debug_display" ]]; then
           echo "# Showing $debug_display" >&$fd_original_err
-          eval 'echo "[${!debug_display}]"' >&$fd_original_err
+          debug_show_var "$debug_display" || fail
         else
           echo "# No previous display var." >&$fd_original_err
         fi

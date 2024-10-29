@@ -1619,7 +1619,11 @@ execute_derive_table() {
       end_for
 
       if [[ $everything_matches == t ]]; then
+        #log_debug "Matching row found"
         out_set["$row_result"]=1
+      else
+        #log_debug "No matching row found"
+        :
       fi
 
       (( data_index += field_count ))
@@ -1642,7 +1646,10 @@ expand_values_check_derive() {
     local -n derived_from=${dim_type}_${dim}_derived_from
     values=
 
-    local derived_from_row derived_from_dim complete_row derived_from_incomplete=f
+    local derived_from_row derived_from_dim \
+      complete_row derived_from_incomplete=f \
+      resolved_dependencies=()
+
     if [[ "${derived_from:-}" ]]; then
       local one_row_complete=f
       begin_for derived_from_row in "${derived_from[@]}"; doo
@@ -1657,7 +1664,7 @@ expand_values_check_derive() {
           done
           if [[ $complete_row == t ]];then
             one_row_complete=t
-            break
+            resolved_dependencies+=( "$derived_from_row" )
           fi
         fi
       end_for
@@ -1667,12 +1674,12 @@ expand_values_check_derive() {
     fi
 
     if [[ $derived_from_incomplete == t ]]; then
-      # can't proceed with deriving values if the derived_from dims are not yet resolved
-      log_debug "Can't derive $dim because dims it depends on aren't resolved yet."
+      #log_debug "Can't derive $dim because it has unresolved dependencies"
       succeed
     fi
 
     if function_exists ${dim_type}_${dim}_derive; then
+      #log_debug "Trying derive function ${dim_type}_${dim}_derive"
       ${dim_type}_${dim}_derive || fail
     fi
 
@@ -1689,18 +1696,33 @@ expand_values_check_derive() {
           log_fatal "Internal error: derive_tables contains $derive_table, but there is no ${derive_table}_fields"
           fail1
         fi
-        local field found=f
 
-        for field in ${fields[*]}; do
-          if [[ $field == $dim ]]; then
-            found=t
-            break
-          fi
-        done
-
-        if [[ $found == f ]]; then
+        if [[ " ${fields[*]} " != *" $dim "* ]]; then
           # we don't need to check this table since it doesn't contain the dim
           continue
+        fi
+
+        if [[ "${derived_from:-}" ]]; then
+          local found=f
+
+          local resolved_row resolved_dim
+          for resolved_row in "${resolved_dependencies[@]}"; do
+            found=t
+            for resolved_dim in $resolved_row; do
+              if [[ " ${fields[*]} " != *" $resolved_dim "* ]]; then
+                found=f
+                break
+              fi
+            done
+            if [[ $found == t ]]; then
+              break
+            fi
+          done
+
+          if [[ $found == f ]]; then
+            # we don't need to check this table since it doesn't use enough set dependent dims
+            continue
+          fi
         fi
 
         out_field=$dim \
@@ -1829,7 +1851,7 @@ calc_coordinates_next_unknown_dim() {
 
       if [[ ! "${members:-}" ]]; then
 
-        #log_debug "Finding values for dim $dim in phase $phase"
+        #log_debug "Finding values for $dim in phase $phase"
         local values= prev_phase=$phase
         if [[ $phase == derive ]]; then
           expand_values_check_derive || fail
@@ -1846,7 +1868,7 @@ calc_coordinates_next_unknown_dim() {
             phase=derive
           fi
 
-          log_debug "Resolved $dim with $prev_phase"
+          log_debug "Resolved $dim with $prev_phase: ${values[*]:0:10}"
 
           # don't support aliases here (yet?)
           # local new_values
