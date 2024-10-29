@@ -293,6 +293,29 @@ debug_output_expansion() {
   fi
 }
 
+# input:
+#   new_bisect
+# output:
+#   new_command
+debug_get_new_bisect() {
+  new_command=$original_cmd
+  local pre post
+  if [[ "$new_command" =~ ^(.*)\ (debug_)?bisect=[^\ ]+(\ .*)?$ ]]; then
+    pre=${BASH_REMATCH[1]}
+    post=${BASH_REMATCH[3]}
+    new_command="$pre$post"
+  fi
+  debug_bisect_min=${new_bisect%..*}
+  debug_bisect_max=${new_bisect#*..}
+  if (( debug_bisect_min == debug_bisect_max )); then
+    new_command+=" debug=$((debug_bisect_max - 1))"
+    echo "${YELLOW}Bisect complete, debugging just before issue occurs: ${RESET}$new_command" >&$fd_original_err
+  else
+    new_command+=" bisect=$new_bisect"
+    echo "${CYAN}Starting next bisect: ${RESET}$new_command" >&$fd_original_err
+  fi
+}
+
 debug_get_new_command() {
   new_command=$original_cmd
   local pre post
@@ -1674,6 +1697,8 @@ debugger_init() {
   debug_id_current=0
   debugger_available=t
   debug_list_stack_pos=0
+  debug_bisect_min=
+  debug_bisect_max=
 
   if [[ "$first_run" == t ]]; then
     rm $tmp_folder/debug-* $tmp_folder/side-log-* &>/dev/null || true
@@ -1813,6 +1838,24 @@ debug_setup() {
 
   if [[ "${debug_unignore:-}" ]]; then
     debug_ignore_remove "$debug_unignore"
+  fi
+
+  : ${debug_bisect:=${bisect:-}}
+  if [[ "$debug_bisect" ]]; then
+    if [[ "$debug_bisect" == *..* ]]; then
+      debug_bisect_min=${debug_bisect%..*}
+      debug_bisect_max=${debug_bisect#*..}
+      if (( debug_bisect_max == debug_bisect_min )); then
+        debug_id=$debug_bisect_max
+        echo "  ${CYAN}Not bisecting since we are already at a single id${RESET}" >&$fd_original_err
+      else
+        debug_id=$(( (debug_bisect_max - debug_bisect_min) / 2 + debug_bisect_min ))
+        echo "  ${CYAN}Will bisect $debug_bisect_min to $debug_bisect_max at $debug_id${RESET}" >&$fd_original_err
+      fi
+    else
+      echo "Invalid bisect value. Must be a range with .. between, like 5..100" >&$fd_original_err
+      exit 1
+    fi
   fi
 
   debug=${debug:-f}
