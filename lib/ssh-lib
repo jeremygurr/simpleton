@@ -76,7 +76,6 @@ ssh_setup_prompt() {
 
     command="if [[ ! \"\$BASH_VERSION\" ]]; then bash; fi ${NL} stty -echo ${NL} PS1='$new_prompt'; unset PROMPT_COMMAND" \
       timeout=5 \
-      shell_prompt=$magic_shell_prompt \
       host_prompt=$current_host_regex \
       run_pipe_command || fail
     if [[ $command_successful == f ]]; then
@@ -490,29 +489,27 @@ ssh_connect() {
 
     if [[ $pipe_replay_state != replaying ]]; then
       validate_ssh_startup || fail
-      if [[ $connect_successful == f ]]; then
-        log_error "Failed to launch ssh process"
-        break
-      fi
     fi
 
     local initial_prompt='\$ $' interact=
-    ssh_handle_auth || fail
-    if [[ $connect_successful == f ]]; then
-      log_error "Failed to login to ssh target"
-      break
+    if [[ $connect_successful == t ]]; then
+      ssh_handle_auth || fail
     fi
 
-    ssh_setup_prompt || fail
+    if [[ $connect_successful == t ]]; then
+      ssh_setup_prompt || fail
+    fi
 
-    from_must_exist=f safe_link $background_log $out_path/background || fail
-
-    ssh_handle_jumps || fail
+    if [[ $connect_successful == t ]]; then
+      from_must_exist=f safe_link $background_log $out_path/background || fail
+      ssh_handle_jumps || fail
+    fi
 
   end_function
 
-  if failed; then
+  if failed || [[ $connect_successful == f ]]; then
     connect_successful=f
+    log_error "Failed to login to ssh target"
     if [[ "${fd_out:-}" ]]; then
       eval "exec $fd_out>&- $fd_in>&-"
     fi
