@@ -219,6 +219,7 @@ from_background_process__record_line() {
 
 get_replay_file() {
   begin_function_lo
+    replay_changed=f
     if [[ "${replay_pipe:-}" ]]; then
       if [[ ! "${current_replay_file:-}" ]]; then
         if [[ -p $replay_pipe ]]; then
@@ -230,8 +231,13 @@ get_replay_file() {
         fi
       fi
     else
+
       previous_replay_file=${current_replay_file:-}
       current_replay_file=$replay_path/pipe_replay.$pipe_replay_hash
+      if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
+        replay_changed=t
+      fi
+
       if [[ $pipe_replay_state == recording ]]; then
 
         if [[ ! -d $replay_path ]]; then
@@ -285,7 +291,7 @@ from_background_process__check_line() {
           from_var=output to_background_process || fail
           interacted=t
           get_replay_file || fail
-          if [[ $pipe_replay_state == replaying ]]; then
+          if [[ $pipe_replay_state == replaying && $replay_changed == t ]]; then
             undefer "exec $back_fd>&-" || fail
             exec {back_fd}<>$current_replay_file-out || fail
             defer "exec $back_fd>&-"
@@ -403,12 +409,15 @@ flush_background_process() {
 
     get_replay_file || fail
 
-    local back_fd
     if [[ $pipe_replay_state == replaying ]]; then
-      log_debug "Replaying background interaction from $current_replay_file-out" || fail
-      exec {back_fd}<>$current_replay_file-out || fail
-      defer "exec $back_fd>&-"
+      if [[ $replay_changed == t ]]; then
+        local back_fd
+        log_debug "Replaying background interaction from $current_replay_file-out" || fail
+        exec {back_fd}<>$current_replay_file-out || fail
+        defer "exec $back_fd>&-"
+      fi
     else
+      local back_fd
       log_vars=pipe_out \
         log_debug "Waiting for background job output" || fail
       exec {back_fd}<>$pipe_out || fail
@@ -668,12 +677,15 @@ from_background_process() {
 
     get_replay_file || fail
 
-    local back_fd
     if [[ $pipe_replay_state == replaying ]]; then
-      log_debug "Replaying background interaction from $current_replay_file-out" || fail
-      exec {back_fd}<>$current_replay_file-out || fail
-      defer "exec $back_fd>&-"
+      if [[ $replay_changed == t ]]; then
+        local back_fd
+        log_debug "Replaying background interaction from $current_replay_file-out" || fail
+        exec {back_fd}<>$current_replay_file-out || fail
+        defer "exec $back_fd>&-"
+      fi
     else
+      local back_fd
       log_vars=pipe_out \
         log_debug "Waiting for background job output" || fail
       exec {back_fd}<>$pipe_out || fail
