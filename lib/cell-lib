@@ -427,14 +427,14 @@ make_or_load_dna_item() {
 
 make_array_assignment() {
   local arr_name=$1
-  local -n arr=$2
+  local -n arr=${2:-$1}
   begin_function
     array_assignment="$arr_name=("
     local v
-    begin_for v in "${arr[@]}"; doo
+    for v in "${arr[@]}"; do
       shell_quote_var v
       array_assignment+=" $v"
-    end_for
+    done
     array_assignment+=" )"
   end_function
   debug_return_vars=array_assignment
@@ -496,6 +496,7 @@ make_or_load_context() {
       end_for
       cat $context_path.new >>$context_path || fail
       rm $context_path.new
+      made_new_context=t
     fi
 
   end_function
@@ -2099,6 +2100,7 @@ switch_context() {
         update_git_commit=t
       fi
 
+      made_new_context=f
       if [[ $can_create_cyto == t ]]; then
         switch_context_create || fail
       else # $can_create_cyto == f
@@ -2148,9 +2150,9 @@ setup_dims() {
 
     if [[ $cell_is_leaf == t ]]; then
       prep_dims sub_dims control_props data_props || fail
-    else
-      prep_dims trunk_dims || fail
     fi
+
+    prep_dims trunk_dims || fail
 
     if [[ "${known_dims:-}" ]]; then
       expand_dims || fail
@@ -2161,11 +2163,17 @@ setup_dims() {
         coord_type=leaf \
         switch_context_calc_coordinates || fail
       fi
-    else
-      if [[ ! "${branch_coordinate_data:-}" ]]; then
-        coord_type=branch \
-        switch_context_calc_coordinates || fail
-      fi
+    fi
+
+    if [[ ! "${branch_coordinate_data:-}" ]]; then
+      coord_type=branch \
+      switch_context_calc_coordinates || fail
+    fi
+
+    if [[ $cell_is_leaf == t && $made_new_context == t ]]; then
+      local array_assignment
+      make_array_assignment branch_coordinate_data
+      echo "$array_assignment" >>$context_path || fail
     fi
 
     if [[ "${missing_dims:-}" ]]; then
