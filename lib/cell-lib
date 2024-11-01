@@ -728,6 +728,12 @@ load_branch_info() {
 
   begin_function
 
+    if [[ "${prev_branch_info_cell:-}" == $cell_path ]]; then
+      # already loaded
+      succeed
+    fi
+    prev_branch_info_cell=$cell_path
+
     branch_dims=() \
     branch_members=() \
     branch_hashes=() \
@@ -775,6 +781,14 @@ load_branch_info() {
     short_cell="$short_trunk$dim_string"
 
     log_return_vars=short_cell
+
+    if [[ $cell_is_leaf == t && ! "${branch_coordinate_data:-}" ]]; then
+      coord_type=branch \
+      switch_context_calc_coordinates || fail
+      # do we need to set individual dim vars here?
+      debug_start
+    fi
+
   end_function
   handle_return
 }
@@ -901,14 +915,26 @@ make_or_load_context_dims() {
     trunk_dim_count=${#trunk_dims[*]}
 
     local dim assignment member i members_string=
-    begin_for ((i = 0; i < branch_dim_count; i++)); doo
-      dim=${branch_dims[$i]}
-      member=${branch_members[$i]}
-      quotes=single shell_quote_var member
-      members_string+="$member "
-      assignment="d_$dim=$member"
-      write_or_load var "$assignment" || fail
-    end_for
+    if [[ $cell_is_leaf == t ]]; then
+      # there should only be one row of coordinate data for leaves, so this should work fine
+      begin_for ((i = 0; i < branch_coordinate_fields_count; i++)); doo
+        dim=${branch_coordinate_fields[$i]}
+        member=${branch_coordinate_data[$i]}
+        quotes=single shell_quote_var member
+        members_string+="$member "
+        assignment="d_$dim=$member"
+        write_or_load var "$assignment" || fail
+      end_for
+    else
+      begin_for ((i = 0; i < branch_dim_count; i++)); doo
+        dim=${branch_dims[$i]}
+        member=${branch_members[$i]}
+        quotes=single shell_quote_var member
+        members_string+="$member "
+        assignment="d_$dim=$member"
+        write_or_load var "$assignment" || fail
+      end_for
+    fi
 
     write_or_load var "trunk_dim_count=$trunk_dim_count
 branch_dims=( ${branch_dims[*]} )
