@@ -484,6 +484,11 @@ make_or_load_context() {
     fi
 
     cleanup_dims || fail
+
+    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
+    load_leaf_dims || fail
+    setup_dims || fail
+
     make_or_load_context_dims || fail
     make_or_load_context_expand || fail
     
@@ -754,6 +759,9 @@ load_branch_info() {
           m=$(<$member_var_path) || fail
         fi
         branch_members=( "$m" "${branch_members[@]}" )
+
+        local -n dim_var=d_$d
+        dim_var=$m
 
       fi
       c=${c%/*}
@@ -1774,7 +1782,7 @@ expand_values_check_default() {
       ${dim_type}_${dim}_default || fail
     fi
 
-    if [[ ! "${values:-}" ]]; then
+    if [[ ! "${values:-}" ]] && function_exists ${dim_type}_${dim}_expand; then
       value= ${dim_type}_${dim}_expand || fail
     fi
 
@@ -1888,7 +1896,7 @@ calc_coordinates_next_unknown_dim() {
             phase=derive
           fi
 
-          log_debug "Resolved $dim with $prev_phase: ${values[*]:0:10}"
+          log_debug "Resolved $dim with $prev_phase: ${values[*]:0:30}"
 
           # don't support aliases here (yet?)
           # local new_values
@@ -2092,27 +2100,34 @@ setup_dims() {
       expand_dims || fail
     fi
 
-    if [[ $cell_is_leaf == t ]]; then
-      if [[ ! "${leaf_coordinate_data:-}" ]]; then
-        coord_type=leaf \
-        switch_context_calc_coordinates || fail
-      fi
-    fi
-
     if [[ ! "${branch_coordinate_data:-}" ]]; then
       coord_type=branch \
       switch_context_calc_coordinates || fail
     fi
 
-    if [[ $cell_is_leaf == t && $made_new_context == t ]]; then
-      local array_assignment
-      make_array_assignment branch_coordinate_data
-      echo "$array_assignment" >>$context_path || fail
+    if [[ "${missing_dims:-}" ]]; then
+      switch_context_handle_missing || fail
+    fi
+
+    if [[ $cell_is_leaf == t ]]; then
+
+      if [[ ! "${leaf_coordinate_data:-}" ]]; then
+        coord_type=leaf \
+        switch_context_calc_coordinates || fail
+      fi
+
+      if [[ $made_new_context == t ]]; then
+        local array_assignment
+        make_array_assignment branch_coordinate_data
+        echo "$array_assignment" >>$context_path || fail
+      fi
+
     fi
 
     if [[ "${missing_dims:-}" ]]; then
       switch_context_handle_missing || fail
     fi
+
   end_function
   handle_return
 }
@@ -2173,9 +2188,6 @@ switch_context() {
         out_path=$cell_path/$out_path
       fi
 
-      : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
-      load_leaf_dims || fail
-
       if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
         make_cyto_up || fail
       fi
@@ -2193,8 +2205,6 @@ switch_context() {
       if [[ ! -f $context_path ]]; then
         maybe_incomplete=t
       fi
-
-      setup_dims || fail
 
       if [[ $maybe_incomplete == f ]]; then
         # need to attempt to load the context each time it could have changed
@@ -2493,7 +2503,6 @@ execute_command() {
 
     local anchor_dims=${anchor_dims:-} \
       disable_log=${disable_log:-} \
-      $branch_local_vars \
       logging_to_file=${logging_to_file:-} \
       omni_log_job_id=${omni_log_job_id:-} \
       omni_log_fork_id=${omni_log_fork_id:-} \
