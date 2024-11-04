@@ -782,13 +782,6 @@ load_branch_info() {
 
     log_return_vars=short_cell
 
-    if [[ $cell_is_leaf == t && ! "${branch_coordinate_data:-}" ]]; then
-      coord_type=branch \
-      switch_context_calc_coordinates || fail
-      # do we need to set individual dim vars here?
-      debug_start
-    fi
-
   end_function
   handle_return
 }
@@ -2084,26 +2077,65 @@ switch_context_handle_missing() {
   handle_return
 }
 
+setup_dims() {
+  begin_function
+    local known_dims=()
+    local missing_dims=()
+
+    if [[ $cell_is_leaf == t ]]; then
+      prep_dims sub_dims control_props data_props || fail
+    fi
+
+    prep_dims trunk_dims || fail
+
+    if [[ "${known_dims:-}" ]]; then
+      expand_dims || fail
+    fi
+
+    if [[ $cell_is_leaf == t ]]; then
+      if [[ ! "${leaf_coordinate_data:-}" ]]; then
+        coord_type=leaf \
+        switch_context_calc_coordinates || fail
+      fi
+    fi
+
+    if [[ ! "${branch_coordinate_data:-}" ]]; then
+      coord_type=branch \
+      switch_context_calc_coordinates || fail
+    fi
+
+    if [[ $cell_is_leaf == t && $made_new_context == t ]]; then
+      local array_assignment
+      make_array_assignment branch_coordinate_data
+      echo "$array_assignment" >>$context_path || fail
+    fi
+
+    if [[ "${missing_dims:-}" ]]; then
+      switch_context_handle_missing || fail
+    fi
+  end_function
+  handle_return
+}
+
 # inputs:
 #   cell_path
 #   anchor_dims (as a space separated string)
 switch_context() {
+  cell_path=${1:-$cell_path}
+  local can_create_cyto=${can_create_cyto:-t}
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
 
-    local log_vars=last_context_loaded log_show_vars=^cell_path
+    local log_vars=last_context_loaded log_show_vars=^cell_path maybe_incomplete=f
     begin_function
 
       if [[ ! -e $cell_path/.dna ]]; then
-        log_fatal "$cell_path is not a cell. It's possible that the seed for this cell is missing it's dna folder."
-        fail1
+        maybe_incomplete=t
       fi
 
       log_debug "Switching context to $cell_path"
 
       load_branch_info $cell_path || fail
-
-      last_context_loaded=$cell_path
 
       setup_cell_path_vars $cell_path || fail
       init_context || fail
@@ -2158,6 +2190,17 @@ switch_context() {
         current_mock=f
       fi
 
+      if [[ ! -f $context_path ]]; then
+        maybe_incomplete=t
+      fi
+
+      setup_dims || fail
+
+      if [[ $maybe_incomplete == f ]]; then
+        # need to attempt to load the context each time it could have changed
+        last_context_loaded=$cell_path
+      fi
+
     end_function
     handle_return
 
@@ -2167,46 +2210,6 @@ switch_context() {
   fi
 
   return 0
-}
-
-setup_dims() {
-  begin_function
-    local known_dims=()
-    local missing_dims=()
-
-    if [[ $cell_is_leaf == t ]]; then
-      prep_dims sub_dims control_props data_props || fail
-    fi
-
-    prep_dims trunk_dims || fail
-
-    if [[ "${known_dims:-}" ]]; then
-      expand_dims || fail
-    fi
-
-    if [[ $cell_is_leaf == t ]]; then
-      if [[ ! "${leaf_coordinate_data:-}" ]]; then
-        coord_type=leaf \
-        switch_context_calc_coordinates || fail
-      fi
-    fi
-
-    if [[ ! "${branch_coordinate_data:-}" ]]; then
-      coord_type=branch \
-      switch_context_calc_coordinates || fail
-    fi
-
-    if [[ $cell_is_leaf == t && $made_new_context == t ]]; then
-      local array_assignment
-      make_array_assignment branch_coordinate_data
-      echo "$array_assignment" >>$context_path || fail
-    fi
-
-    if [[ "${missing_dims:-}" ]]; then
-      switch_context_handle_missing || fail
-    fi
-  end_function
-  handle_return
 }
 
 execute_command_internal_prep() {
@@ -2243,7 +2246,6 @@ execute_command_internal_prep() {
           log_fatal "Context failed to load for $cell_path"
           fail1
         }
-        setup_dims || fail
 
         if function_exists get_update_risk; then
           get_update_risk || fail
@@ -2503,7 +2505,7 @@ execute_command() {
       background_log \
       running_job_path \
 
-    load_branch_info || fail
+    switch_context || fail
 
     if [[ ! -e "$cell_path" ]]; then
       plant_seed $cell_path || {
