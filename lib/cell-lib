@@ -457,6 +457,167 @@ get_bottom_cell() {
   return 0
 }
 
+make_or_load_context_dims() {
+  begin_function
+
+    trunk_dim_count=${#trunk_dims[*]}
+
+    local dim assignment member i members_string=
+    if [[ $cell_is_leaf == t ]]; then
+      # there should only be one row of coordinate data for leaves, so this should work fine
+      begin_for ((i = 0; i < branch_coordinate_fields_count; i++)); doo
+        dim=${branch_coordinate_fields[$i]}
+        member=${branch_coordinate_data[$i]}
+        quotes=single shell_quote_var member
+        members_string+="$member "
+        assignment="d_$dim=$member"
+        write_or_load var "$assignment" || fail
+      end_for
+    else
+      begin_for ((i = 0; i < branch_dim_count; i++)); doo
+        dim=${branch_dims[$i]}
+        member=${branch_members[$i]}
+        quotes=single shell_quote_var member
+        members_string+="$member "
+        assignment="d_$dim=$member"
+        write_or_load var "$assignment" || fail
+      end_for
+    fi
+
+    write_or_load var "trunk_dim_count=$trunk_dim_count
+branch_dims=( ${branch_dims[*]} )
+branch_dim_count=$branch_dim_count
+branch_members=( ${members_string% } )
+derive_tables=( ${derive_tables[*]} )" || fail
+
+  end_function
+  handle_return
+}
+
+make_or_load_context_expand2() {
+  begin_function
+
+    local members=() aliases=() \
+      has_explicit_member_list=f fun \
+      is_optional=f
+
+    if [[ -v ${dim_type}_${dim}_is_optional ]]; then
+      local -n is_optional_var=${dim_type}_${dim}_is_optional
+      if [[ $is_optional_var == t ]]; then
+        is_optional=t
+      fi
+    fi
+    write_or_load var "${dim_type}_${dim}_is_optional=$is_optional" || fail
+
+    if [[ -v ${dim_type}_${dim}_members ]]; then
+      eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
+
+      if [[ ${#members[*]} -eq 0 ]]; then
+        log_fatal "There are no members defined for $dim."
+        fail1
+      fi
+
+      has_explicit_member_list=t
+    else
+      make_context_expand_find_members
+    fi
+
+    if [[ -v ${dim_type}_${dim}_aliases ]]; then
+      eval "aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )" || fail
+    fi
+
+    code="
+${dim_type}_${dim}_expand() {
+  problem=
+  case \"\$value\" in"
+
+    make_context_expand_handle_default || fail
+
+    if (( ${#aliases[*]} > 0 )); then
+      make_context_expand_handle_aliases || fail
+    fi
+
+    if [[ $has_explicit_member_list == f ]]; then
+      make_context_expand_members_unknown || fail
+    else
+      make_context_expand_members_known || fail
+    fi
+
+    write_or_load fun "$code" || fail
+
+  end_function
+  handle_return
+}
+
+make_or_load_context_expand() {
+  begin_function
+
+    if [[ ! -d $seed_path ]]; then
+      log_fatal "No configuration in seed at $seed_path"
+      fail1
+    fi
+
+    local dim dim_type o
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
+      local -n dims=$dim_type
+      begin_for dim in ${dims[*]:-}; doo
+        if ! function_exists ${dim_type}_${dim}_expand; then
+          make_or_load_context_expand2 || fail
+        fi
+      end_for
+    end_for
+
+  end_function
+  handle_return
+}
+
+setup_dims() {
+  begin_function
+    local known_dims=()
+    local missing_dims=()
+
+    if [[ $cell_is_leaf == t ]]; then
+      prep_dims sub_dims control_props data_props || fail
+    fi
+
+    prep_dims trunk_dims || fail
+
+    if [[ "${known_dims:-}" ]]; then
+      expand_dims || fail
+    fi
+
+    if [[ ! "${branch_coordinate_data:-}" ]]; then
+      coord_type=branch \
+      switch_context_calc_coordinates || fail
+    fi
+
+    if [[ "${missing_dims:-}" ]]; then
+      switch_context_handle_missing || fail
+    fi
+
+    if [[ $cell_is_leaf == t ]]; then
+
+      if [[ ! "${leaf_coordinate_data:-}" ]]; then
+        coord_type=leaf \
+        switch_context_calc_coordinates || fail
+      fi
+
+      if [[ $made_new_context == t ]]; then
+        local array_assignment
+        make_array_assignment branch_coordinate_data
+        echo "$array_assignment" >>$context_path || fail
+      fi
+
+    fi
+
+    if [[ "${missing_dims:-}" ]]; then
+      switch_context_handle_missing || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 make_or_load_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
@@ -487,10 +648,9 @@ make_or_load_context() {
 
     : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
     load_leaf_dims || fail
-    setup_dims || fail
-
-    make_or_load_context_dims || fail
     make_or_load_context_expand || fail
+    setup_dims || fail
+    make_or_load_context_dims || fail
     
     if [[ $context_make == t ]]; then
       echo "#!/usr/env bash
@@ -910,43 +1070,6 @@ load_leaf_dims() {
   handle_return
 }
 
-make_or_load_context_dims() {
-  begin_function
-
-    trunk_dim_count=${#trunk_dims[*]}
-
-    local dim assignment member i members_string=
-    if [[ $cell_is_leaf == t ]]; then
-      # there should only be one row of coordinate data for leaves, so this should work fine
-      begin_for ((i = 0; i < branch_coordinate_fields_count; i++)); doo
-        dim=${branch_coordinate_fields[$i]}
-        member=${branch_coordinate_data[$i]}
-        quotes=single shell_quote_var member
-        members_string+="$member "
-        assignment="d_$dim=$member"
-        write_or_load var "$assignment" || fail
-      end_for
-    else
-      begin_for ((i = 0; i < branch_dim_count; i++)); doo
-        dim=${branch_dims[$i]}
-        member=${branch_members[$i]}
-        quotes=single shell_quote_var member
-        members_string+="$member "
-        assignment="d_$dim=$member"
-        write_or_load var "$assignment" || fail
-      end_for
-    fi
-
-    write_or_load var "trunk_dim_count=$trunk_dim_count
-branch_dims=( ${branch_dims[*]} )
-branch_dim_count=$branch_dim_count
-branch_members=( ${members_string% } )
-derive_tables=( ${derive_tables[*]} )" || fail
-
-  end_function
-  handle_return
-}
-
 make_context_expand_find_members() {
   begin_function
 
@@ -1068,83 +1191,6 @@ make_context_expand_handle_aliases() {
       values=( $remaining )
     ;;"
     end_for
-  end_function
-  handle_return
-}
-
-make_or_load_context_expand2() {
-  begin_function
-
-    local members=() aliases=() \
-      has_explicit_member_list=f fun \
-      is_optional=f
-
-    if [[ -v ${dim_type}_${dim}_is_optional ]]; then
-      local -n is_optional_var=${dim_type}_${dim}_is_optional
-      if [[ $is_optional_var == t ]]; then
-        is_optional=t
-      fi
-    fi
-    write_or_load var "${dim_type}_${dim}_is_optional=$is_optional" || fail
-
-    if [[ -v ${dim_type}_${dim}_members ]]; then
-      eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
-
-      if [[ ${#members[*]} -eq 0 ]]; then
-        log_fatal "There are no members defined for $dim."
-        fail1
-      fi
-
-      has_explicit_member_list=t
-    else
-      make_context_expand_find_members
-    fi
-
-    if [[ -v ${dim_type}_${dim}_aliases ]]; then
-      eval "aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )" || fail
-    fi
-
-    code="
-${dim_type}_${dim}_expand() {
-  problem=
-  case \"\$value\" in"
-
-    make_context_expand_handle_default || fail
-
-    if (( ${#aliases[*]} > 0 )); then
-      make_context_expand_handle_aliases || fail
-    fi
-
-    if [[ $has_explicit_member_list == f ]]; then
-      make_context_expand_members_unknown || fail
-    else
-      make_context_expand_members_known || fail
-    fi
-
-    write_or_load fun "$code" || fail
-
-  end_function
-  handle_return
-}
-
-make_or_load_context_expand() {
-  begin_function
-
-    if [[ ! -d $seed_path ]]; then
-      log_fatal "No configuration in seed at $seed_path"
-      fail1
-    fi
-
-    local dim dim_type o
-    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
-      local -n dims=$dim_type
-      begin_for dim in ${dims[*]:-}; doo
-        if ! function_exists ${dim_type}_${dim}_expand; then
-          make_or_load_context_expand2 || fail
-        fi
-      end_for
-    end_for
-
   end_function
   handle_return
 }
@@ -1879,7 +1925,7 @@ calc_coordinates_next_unknown_dim() {
 
       if [[ ! "${members:-}" ]]; then
 
-        #log_debug "Finding values for $dim in phase $phase"
+        log_debug "Finding values for $dim in phase $phase"
         local values= prev_phase=$phase
         if [[ $phase == derive ]]; then
           expand_values_check_derive || fail
@@ -2081,53 +2127,6 @@ switch_context_handle_missing() {
 
     end_for
     missing_dims=
-  end_function
-  handle_return
-}
-
-setup_dims() {
-  begin_function
-    local known_dims=()
-    local missing_dims=()
-
-    if [[ $cell_is_leaf == t ]]; then
-      prep_dims sub_dims control_props data_props || fail
-    fi
-
-    prep_dims trunk_dims || fail
-
-    if [[ "${known_dims:-}" ]]; then
-      expand_dims || fail
-    fi
-
-    if [[ ! "${branch_coordinate_data:-}" ]]; then
-      coord_type=branch \
-      switch_context_calc_coordinates || fail
-    fi
-
-    if [[ "${missing_dims:-}" ]]; then
-      switch_context_handle_missing || fail
-    fi
-
-    if [[ $cell_is_leaf == t ]]; then
-
-      if [[ ! "${leaf_coordinate_data:-}" ]]; then
-        coord_type=leaf \
-        switch_context_calc_coordinates || fail
-      fi
-
-      if [[ $made_new_context == t ]]; then
-        local array_assignment
-        make_array_assignment branch_coordinate_data
-        echo "$array_assignment" >>$context_path || fail
-      fi
-
-    fi
-
-    if [[ "${missing_dims:-}" ]]; then
-      switch_context_handle_missing || fail
-    fi
-
   end_function
   handle_return
 }
