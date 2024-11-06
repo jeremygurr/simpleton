@@ -2151,11 +2151,13 @@ switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
 
-    local log_vars=last_context_loaded log_show_vars=^cell_path maybe_incomplete=f
+    local log_vars=last_context_loaded log_show_vars=^cell_path \
+      maybe_incomplete=f dna_missing=f
     begin_function
 
       if [[ ! -e $cell_path/.dna ]]; then
         maybe_incomplete=t
+        dna_missing=t
       fi
 
       log_debug "Switching context to $cell_path"
@@ -2184,10 +2186,12 @@ switch_context() {
       fi
 
       made_new_context=f
-      if [[ $can_create_cyto == t ]]; then
-        switch_context_create || fail
-      else # $can_create_cyto == f
-        load_context || fail
+      if [[ $dna_missing == f ]]; then
+        if [[ $can_create_cyto == t ]]; then
+          switch_context_create || fail
+        else # $can_create_cyto == f
+          load_context || fail
+        fi
       fi
 
       setup_dep_defaults || fail
@@ -2198,12 +2202,14 @@ switch_context() {
         out_path=$cell_path/$out_path
       fi
 
-      if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-        make_cyto_up || fail
-      fi
+      if [[ $dna_missing == f ]]; then
+        if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
+          make_cyto_up || fail
+        fi
 
-      if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
-        make_cyto_inner || fail
+        if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
+          make_cyto_inner || fail
+        fi
       fi
 
       if [[ -f $cell_path/.mock ]]; then
@@ -2524,14 +2530,14 @@ execute_command() {
       background_log \
       running_job_path \
 
-    switch_context || fail
-
     if [[ ! -e "$cell_path" ]]; then
       plant_seed $cell_path || {
         log_fatal "Not a cell: $cell_path"
         fail1
       }
     fi
+
+    switch_context || fail
 
     if [[ ! "${disable_log:-}" ]]; then
       case $current_command in 
