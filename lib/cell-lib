@@ -492,6 +492,7 @@ make_or_load_context_dims() {
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
+leaf_dims=( ${leaf_dims[*]} )
 derive_tables=( ${derive_tables[*]} )
 cell_is_leaf=$cell_is_leaf
 cell_is_trunk=$cell_is_trunk
@@ -573,6 +574,69 @@ make_or_load_context_expand() {
         fi
       end_for
     end_for
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   coord_type
+switch_context_calc_coordinates() {
+  begin_function
+
+    local coord_type=${coord_type}
+    local dim_var
+
+    local -n coordinate_data=${coord_type}_coordinate_data \
+      coordinate_count=${coord_type}_coordinate_count \
+      coordinate_rows=${coord_type}_coordinate_rows \
+      coordinate_fields=${coord_type}_coordinate_fields \
+      coordinate_fields_count=${coord_type}_coordinate_fields_count \
+      coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
+
+    coordinate_data=() \
+    coordinate_count=0 \
+    coordinate_rows=0 \
+
+    case $coord_type in
+      branch)
+        coordinate_fields=( ${trunk_dims[*]:-} )
+        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
+      ;;
+      leaf)
+        coordinate_fields=( ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} )
+        coordinate_fields_plural=( ${sub_dims_plural[*]:-} ${control_props_plural[*]:-} ${data_props_plural[*]:-} )
+      ;;
+      *)
+        log_fatal "Internal error: invalid coord_type=$coord_type"
+        fail1
+      ;;
+    esac
+
+    coordinate_fields_count=${#coordinate_fields[*]}
+
+    declare -Ag coordinate_dim_index
+    local d i=0
+    for d in ${coordinate_fields[*]}; do
+      coordinate_dim_index[$d]=$i
+      (( i++ ))
+    done
+
+    if [[ "${coordinate_fields:-}" ]]; then
+      log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+      missing_dims=()
+      calc_coordinates_next_known_dim 0 || fail
+
+      if [[ ! "${missing_dims:-}" ]]; then
+        if [[ ! "${coordinate_data:-}" ]]; then
+          calc_coordinates_add_row || fail
+        fi
+
+        coordinate_count=${#coordinate_data[*]}
+        coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
+        log_verbose "$coordinate_rows $coord_type coordinates found" 
+      fi
+    fi
 
   end_function
   handle_return
@@ -1667,6 +1731,11 @@ execute_derive_table() {
       fail1
     fi
 
+    if [[ ! -v derive_fields ]]; then
+      log_fatal "Interal error: Missing ${derive_table}_fields"
+      fail1
+    fi
+
     local field_count=${#derive_fields[*]} \
       data_count=${#derive_data[*]} \
       strict_matching=${strict_matching:-f} \
@@ -2052,69 +2121,6 @@ calc_coordinates_next_known_dim() {
   handle_return
 }
 
-# inputs:
-#   coord_type
-switch_context_calc_coordinates() {
-  begin_function
-
-    local coord_type=${coord_type}
-    local dim_var
-
-    local -n coordinate_data=${coord_type}_coordinate_data \
-      coordinate_count=${coord_type}_coordinate_count \
-      coordinate_rows=${coord_type}_coordinate_rows \
-      coordinate_fields=${coord_type}_coordinate_fields \
-      coordinate_fields_count=${coord_type}_coordinate_fields_count \
-      coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
-
-    coordinate_data=() \
-    coordinate_count=0 \
-    coordinate_rows=0 \
-
-    case $coord_type in
-      branch)
-        coordinate_fields=( ${trunk_dims[*]:-} )
-        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
-      ;;
-      leaf)
-        coordinate_fields=( ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} )
-        coordinate_fields_plural=( ${sub_dims_plural[*]:-} ${control_props_plural[*]:-} ${data_props_plural[*]:-} )
-      ;;
-      *)
-        log_fatal "Internal error: invalid coord_type=$coord_type"
-        fail1
-      ;;
-    esac
-
-    coordinate_fields_count=${#coordinate_fields[*]}
-
-    declare -Ag coordinate_dim_index
-    local d i=0
-    for d in ${coordinate_fields[*]}; do
-      coordinate_dim_index[$d]=$i
-      (( i++ ))
-    done
-
-    if [[ "${coordinate_fields:-}" ]]; then
-      log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-      missing_dims=()
-      calc_coordinates_next_known_dim 0 || fail
-
-      if [[ ! "${missing_dims:-}" ]]; then
-        if [[ ! "${coordinate_data:-}" ]]; then
-          calc_coordinates_add_row || fail
-        fi
-
-        coordinate_count=${#coordinate_data[*]}
-        coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-        log_verbose "$coordinate_rows $coord_type coordinates found" 
-      fi
-    fi
-
-  end_function
-  handle_return
-}
-
 switch_context_handle_missing() {
   local can_ask=${can_ask:-t}
   begin_function
@@ -2187,11 +2193,25 @@ switch_context() {
 
       made_new_context=f
       if [[ $dna_missing == f ]]; then
+
         if [[ $can_create_cyto == t ]]; then
           switch_context_create || fail
         else # $can_create_cyto == f
           load_context || fail
         fi
+
+#        if [[ $cell_is_leaf == t ]]; then
+#          if [[ ! "${leaf_coordinate_data:-}" ]]; then
+#            coord_type=leaf \
+#            switch_context_calc_coordinates || fail
+#          fi
+#        fi
+
+        if [[ ! "${branch_coordinate_data:-}" ]]; then
+          coord_type=branch \
+          switch_context_calc_coordinates || fail
+        fi
+
       fi
 
       setup_dep_defaults || fail
