@@ -460,42 +460,23 @@ get_bottom_cell() {
 make_or_load_context_dims() {
   begin_function
 
-    trunk_dim_count=${#trunk_dims[*]}
-
     local dim assignment member i members_string=
-    if [[ $cell_is_leaf == t ]]; then
-      # there should only be one row of coordinate data for leaves, so this should work fine
-      begin_for ((i = 0; i < branch_coordinate_fields_count; i++)); doo
-        dim=${branch_coordinate_fields[$i]}
-        member=${branch_coordinate_data[$i]}
-        quotes=single shell_quote_var member
-        assignment="d_$dim=$member"
-        write_or_load var "$assignment" || fail
-      end_for
-    else
-      begin_for ((i = 0; i < branch_dim_count; i++)); doo
-        dim=${branch_dims[$i]}
-        member=${branch_members[$i]}
-        quotes=single shell_quote_var member
-        assignment="d_$dim=$member"
-        write_or_load var "$assignment" || fail
-      end_for
-    fi
-
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
+      dim=${branch_dims[$i]}
       member=${branch_members[$i]}
       quotes=single shell_quote_var member
+      assignment="d_$dim=$member"
       members_string+="$member "
+      write_or_load var "$assignment" || fail
     end_for
 
-    write_or_load var "trunk_dim_count=$trunk_dim_count
+    write_or_load var "
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
-leaf_dims=( ${leaf_dims[*]} )
 derive_tables=( ${derive_tables[*]} )
-cell_is_leaf=$cell_is_leaf
 cell_is_trunk=$cell_is_trunk
+default_anchor_dims=\"$default_anchor_dims\"
 " || fail
 
   end_function
@@ -642,13 +623,67 @@ switch_context_calc_coordinates() {
   handle_return
 }
 
-setup_dims() {
+prep_dims() {
+  local dim_types=$*
   begin_function
 
-    if [[ "${setup_dims_for_cell:-}" == "$cell_path" ]]; then
-      succeed
+    localize_dims=local
+    localize_reverse_dims=local
+    local dim_var dim_type dims_var
+    begin_for dim_type in $dim_types; doo
+      local -n dim_array=$dim_type
+      local -n plural_array=${dim_type}_plural
+      plural_array=()
+      begin_for dim_var in ${dim_array[*]}; doo
+
+        get_plural $dim_var dims_var
+        plural_array+=( $dims_var )
+
+        local -n dim=$dim_var dims=$dims_var \
+          ddim=d_$dim_var ddims=d_$dims_var \
+          sdim=s_$dim_var sdims=s_$dims_var \
+          pdim=p_$dim_var pdims=p_$dims_var \
+          is_optional=${dim_type}_${dim_var}_is_optional \
+          d_dim_type=${dim_var}_dim_type \
+
+        is_optional=${is_optional:-f}
+        sdim=${sdim:-${pdim:-${dim:-}}}
+        sdims=${sdims:-${pdims:-${dims:-}}}
+        if [[ ! "${sdims:-}" && ! "${sdim:-}" && ! "${ddim:-}" && ! "${ddims:-}" ]]; then
+          if [[ $is_optional == f ]]; then
+            missing_dims+=( $dim_var )
+          fi
+        else
+          known_dims+=( $dim_var )
+        fi
+
+        localize_dims+=" d_$dim_var=\${d_$dim_var:-} d_$dims_var=\${d_$dims_var:-}"
+        localize_reverse_dims+=" $dim_var=\${d_$dim_var:-} $dims_var=\${d_$dims_var:-}"
+
+        local -n is_secret=${dim_type}_${dim_var}_is_secret
+        if [[ -v is_secret && $is_secret == t ]]; then
+          add_word_to_string secret_vars "$dim_var $dims_var d_$dim_var d_$dims_var"
+        fi
+
+        d_dim_type=$dim_type
+
+      end_for
+    end_for
+
+    if [[ "$localize_dims" == 'local' ]]; then
+      localize_dims=
     fi
-    setup_dims_for_cell=$cell_path
+
+    if [[ "$localize_reverse_dims" == 'local' ]]; then
+      localize_reverse_dims=
+    fi
+
+  end_function
+  handle_return
+}
+
+setup_dims() {
+  begin_function
 
     local known_dims=()
     local missing_dims=()
@@ -668,7 +703,7 @@ setup_dims() {
       switch_context_calc_coordinates || fail
     fi
 
-    if [[ "${missing_dims:-}" ]]; then
+    if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
       switch_context_handle_missing || fail
     fi
 
@@ -687,8 +722,47 @@ setup_dims() {
 
     fi
 
-    if [[ "${missing_dims:-}" ]]; then
+    if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
       switch_context_handle_missing || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+load_leaf_dims() {
+  begin_function
+    local i
+
+    leaf_dims=()
+    local trunk_dim_count=${#trunk_dims[*]}
+    if [[ ! "${anchor_dims:-}" ]]; then
+      begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
+        leaf_dims+=( ${trunk_dims[$i]} )
+      end_for
+    else
+      local anchor_dim branch_dim leftovers=" ${anchor_dims[*]} "
+      
+      begin_for branch_dim in ${branch_dims[*]}; doo
+        remove_word_from_string leftovers $branch_dim
+      end_for
+
+      begin_for anchor_dim in $anchor_dims; doo
+        if [[ " ${trunk_dims[*]} " != *" $anchor_dim "* ]]; then
+          log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: $leftovers"
+          fail1
+        fi
+      end_for
+      
+      leaf_dims=( $leftovers )
+    fi
+
+    leaf_dim_count=${#leaf_dims[*]}
+
+    if (( leaf_dim_count > 0 )); then
+      cell_is_leaf=f
+    else
+      cell_is_leaf=t
     fi
 
   end_function
@@ -699,7 +773,12 @@ make_or_load_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
 
-    log_debug "Loading context for $short_cell" || fail
+    local action=Loading
+    if [[ $context_make == t ]]; then
+      action=Making
+    fi
+    log_debug "$action context for $short_cell" || fail
+
     local item_name last_part dna_full_item suffix
     local -A append_vars
 
@@ -725,13 +804,12 @@ make_or_load_context() {
     fi
 
     cleanup_dims || fail
-
-    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
-    load_leaf_dims || fail
     make_or_load_context_expand || fail
-    setup_dims || fail
+    if [[ ! "${default_anchor_dims:-}" ]]; then
+      calculate_default_anchors || fail
+    fi
     make_or_load_context_dims || fail
-    
+
     if [[ $context_make == t ]]; then
       echo "#!/usr/env bash
 # This file is generated from $dna_path$NL" >$context_path || fail
@@ -1104,49 +1182,10 @@ git_commit_check() {
 broken_link_check() {
   begin_function
     local broken_links=( $(find -L $cyto_path -type l -print -o -name ".*" -prune) ) || fail
-     if [[ "${broken_links:-}" ]]; then
-       log_debug "Broken links found in cyto: $broken_links. Will rebuild cyto."
-       rm -rf $cyto_path/up $context_path || fail
-     fi
-  end_function
-  handle_return
-}
-
-load_leaf_dims() {
-  begin_function
-    local i
-
-    leaf_dims=()
-    local trunk_dim_count=${#trunk_dims[*]}
-    if [[ ! "${anchor_dims:-}" ]]; then
-      begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
-        leaf_dims+=( ${trunk_dims[$i]} )
-      end_for
-    else
-      local anchor_dim branch_dim leftovers=" ${anchor_dims[*]} "
-      
-      begin_for branch_dim in ${branch_dims[*]}; doo
-        remove_word_from_string leftovers $branch_dim
-      end_for
-
-      begin_for anchor_dim in $anchor_dims; doo
-        if [[ " ${trunk_dims[*]} " != *" $anchor_dim "* ]]; then
-          log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: $leftovers"
-          fail1
-        fi
-      end_for
-      
-      leaf_dims=( $leftovers )
+    if [[ "${broken_links:-}" ]]; then
+      log_debug "Broken links found in cyto: $broken_links. Will rebuild cyto."
+      rm -rf $cyto_path/up $context_path || fail
     fi
-
-    leaf_dim_count=${#leaf_dims[*]}
-
-    if (( leaf_dim_count > 0 )); then
-      cell_is_leaf=f
-    else
-      cell_is_leaf=t
-    fi
-
   end_function
   handle_return
 }
@@ -1185,7 +1224,7 @@ make_context_expand_handle_default() {
   begin_function
     if [[ -v ${dim_type}_${dim}_default ]]; then
 
-      eval "local default=\"\$${dim_type}_${dim}_default\""
+      local -n default=${dim_type}_${dim}_default
       code+="
     '')
       values=( \"$default\" )
@@ -1537,9 +1576,6 @@ switch_context_create() {
 
     source $context_path || fail
 
-    cleanup_dims || fail
-    setup_dims || fail
-
     if [[ $update_git_commit == t ]]; then
       update_only=t git_commit_check || fail
     fi
@@ -1560,65 +1596,6 @@ get_plural() {
   fi
   debug_return_vars=$target_var
   return 0
-}
-
-prep_dims() {
-  local dim_types=$*
-  begin_function
-
-    localize_dims=local
-    localize_reverse_dims=local
-    local dim_var dim_type dims_var
-    begin_for dim_type in $dim_types; doo
-      local -n dim_array=$dim_type
-      local -n plural_array=${dim_type}_plural
-      plural_array=()
-      begin_for dim_var in ${dim_array[*]}; doo
-
-        get_plural $dim_var dims_var
-        plural_array+=( $dims_var )
-
-        local -n dim=$dim_var dims=$dims_var \
-          ddim=d_$dim_var ddims=d_$dims_var \
-          sdim=s_$dim_var sdims=s_$dims_var \
-          pdim=p_$dim_var pdims=p_$dims_var \
-          is_optional=${dim_type}_${dim_var}_is_optional \
-          d_dim_type=${dim_var}_dim_type \
-
-        is_optional=${is_optional:-f}
-        sdim=${sdim:-${pdim:-${dim:-}}}
-        sdims=${sdims:-${pdims:-${dims:-}}}
-        if [[ ! "${sdims:-}" && ! "${sdim:-}" && ! "${ddim:-}" && ! "${ddims:-}" ]]; then
-          if [[ $is_optional == f ]]; then
-            missing_dims+=( $dim_var )
-          fi
-        else
-          known_dims+=( $dim_var )
-        fi
-
-        localize_dims+=" d_$dim_var=\${d_$dim_var:-} d_$dims_var=\${d_$dims_var:-}"
-        localize_reverse_dims+=" $dim_var=\${d_$dim_var:-} $dims_var=\${d_$dims_var:-}"
-
-        local -n is_secret=${dim_type}_${dim_var}_is_secret
-        if [[ -v is_secret && $is_secret == t ]]; then
-          add_word_to_string secret_vars "$dim_var $dims_var d_$dim_var d_$dims_var"
-        fi
-
-        d_dim_type=$dim_type
-
-      end_for
-    end_for
-
-    if [[ "$localize_dims" == 'local' ]]; then
-      localize_dims=
-    fi
-
-    if [[ "$localize_reverse_dims" == 'local' ]]; then
-      localize_reverse_dims=
-    fi
-
-  end_function
-  handle_return
 }
 
 # input: dim_var value
@@ -2155,6 +2132,58 @@ switch_context_handle_missing() {
   handle_return
 }
 
+calculate_default_anchors() {
+  begin_function
+    local dim 
+    local -A remaining_deps valid_anchors
+
+    debug_start
+    begin_for dim in ${trunk_dims[*]}; doo
+      valid_anchors[$dim]=1
+      local -n deps=trunk_dims_${dim}_derived_from
+      if [[ "${deps:-}" ]]; then
+        remaining_deps[$dim]=$deps
+      fi
+    end_for
+
+    begin_loop
+
+      local max_dep_count=0 dim_with_most_deps= array max_deps_array
+
+      begin_for dim in ${!valid_anchors[*]}; doo
+        if [[ "${remaining_deps[$dim]:-}" ]]; then
+          array=( ${remaining_deps[$dim]} )
+          if (( ${#array[*]} > max_dep_count )); then
+            max_dep_count=${#array[*]}
+            dim_with_most_deps=$dim
+            max_deps_array=( ${array[*]} )
+          fi
+        fi
+      end_for
+
+      if (( max_dep_count > 0 )); then
+        begin_for dim in ${max_deps_array[*]}; doo
+          unset valid_anchors[$dim]
+        end_for
+        remaining_deps[$dim_with_most_deps]=
+      else
+        break
+      fi
+
+    end_loop
+
+    default_anchor_dims=
+    begin_for dim in ${trunk_dims[*]}; doo
+      if [[ -v valid_anchors[$dim] ]]; then
+        default_anchor_dims+="$dim "
+      fi
+    end_for
+    default_anchor_dims=${default_anchor_dims% }
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   cell_path
 #   anchor_dims (as a space separated string)
@@ -2205,21 +2234,15 @@ switch_context() {
           switch_context_create || fail
         else # $can_create_cyto == f
           load_context || fail
-          setup_dims || fail
         fi
 
-#        if [[ $cell_is_leaf == t ]]; then
-#          if [[ ! "${leaf_coordinate_data:-}" ]]; then
-#            coord_type=leaf \
-#            switch_context_calc_coordinates || fail
-#          fi
-#        fi
-
-        if [[ ! "${branch_coordinate_data:-}" ]]; then
-          coord_type=branch \
-          switch_context_calc_coordinates || fail
-        fi
-
+        # all anchors and non-branch dim calculations are dynamic per command execution
+        # and so can't be precalculated and stored in the context
+        : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
+        cleanup_dims || fail
+        load_leaf_dims || fail
+        setup_dims || fail
+        
       fi
 
       setup_dep_defaults || fail
@@ -2270,50 +2293,10 @@ execute_command_internal_prep() {
   begin_function
     can_create_cyto=t
 
-    command_path=$path_to_commands/$current_command
-    case $current_command in
-      edit)
-        if [[ ! "$cell_path" ]]; then
-          log_fatal "You must execute this command from within a cell"
-          fail1
-        fi
-        dna_path=$cell_path/.dna
-        key_path=$dna_path/key
-        status_path=
-        if [[ ! -e $key_path ]]; then
-          mkdir $key_path || fail
-        fi
-      ;;
-      log|dim-*|plant|up-*)
-        branch_dims=()
-        setup_cell_path_vars $cell_path || fail
-      ;;
-      *)
-
-        if [[ -e $command_path.info ]]; then
-          source $command_path.info || fail
-        else
-          log_warn "Missing file $command_path.info" || fail
-        fi
-
-        switch_context || {
-          log_fatal "Context failed to load for $cell_path"
-          fail1
-        }
-
-        if function_exists get_update_risk; then
-          get_update_risk || fail
-        fi
-
-        if (( update_risk > risk_tolerance )); then
-          log_fatal "Risk too high"
-          log_fatal "The risk of updating $short_cell is too high for the specified tolerance ($update_risk > $risk_tolerance)."
-          log_fatal "Try a less risky strategy or increase the risk tolerance of this command (with the risk parameter)"
-          fail1
-        fi
-
-      ;;
-    esac
+    switch_context || {
+      log_fatal "Context failed to load for $cell_path"
+      fail1
+    }
 
     if [[ -f $command_path.info ]]; then
       execute_command_internal_setup_params || fail
@@ -2565,17 +2548,23 @@ execute_command() {
       }
     fi
 
+    command_path=$path_to_commands/$current_command
+    command_requires_resolved_dims=f
+    command_allows_logs=f
+    if [[ -e $command_path.info ]]; then
+      source $command_path.info || fail
+    else
+      log_warn "Missing file $command_path.info" || fail
+    fi
+
     switch_context || fail
 
     if [[ ! "${disable_log:-}" ]]; then
-      case $current_command in 
-        log|edit|dim-*|up-*|plant|get)
-          disable_log=t
-        ;;
-        *)
-          disable_log=f
-        ;;
-      esac
+      if [[ $command_allows_logs == t ]]; then
+        disable_log=f
+      else
+        disable_log=t
+      fi
     fi
 
     if [[ $disable_log == t ]]; then
