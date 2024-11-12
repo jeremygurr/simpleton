@@ -2132,40 +2132,72 @@ switch_context_handle_missing() {
   handle_return
 }
 
-calculate_default_anchors() {
+calculate_default_anchors_check_dims() {
   begin_function
+
     local dim 
-    local -A remaining_deps valid_anchors
+    begin_for dim in ${!valid_anchors[*]}; doo
+      local -n remaining=remaining_deps_$dim
+      if [[ "${remaining:-}" ]]; then
 
-    debug_start
-    begin_for dim in ${trunk_dims[*]}; doo
-      valid_anchors[$dim]=1
-      local -n deps=trunk_dims_${dim}_derived_from
-      if [[ "${deps:-}" ]]; then
-        remaining_deps[$dim]=$deps
-      fi
-    end_for
+        local remaining_row 
+        for remaining_row in "${remaining[@]}"; do
 
-    begin_loop
+          local array=( ${remaining_row} )
+          local valid_count=0 d
+          for d in ${array[*]}; do
+            if [[ "${valid_anchors[$d]:-}" ]]; then
+              (( valid_count++ ))
+            fi
+          done
 
-      local max_dep_count=0 dim_with_most_deps= array max_deps_array
+          if (( valid_count == 0 )); then
+            unset valid_anchors[$dim]
+            continue 2
+          fi
 
-      begin_for dim in ${!valid_anchors[*]}; doo
-        if [[ "${remaining_deps[$dim]:-}" ]]; then
-          array=( ${remaining_deps[$dim]} )
-          if (( ${#array[*]} > max_dep_count )); then
-            max_dep_count=${#array[*]}
+          if (( valid_count > max_dep_count )); then
+            max_dep_count=$valid_count
             dim_with_most_deps=$dim
             max_deps_array=( ${array[*]} )
           fi
-        fi
-      end_for
+
+        done
+
+      fi
+    end_for
+
+  end_function
+  handle_return
+}
+
+calculate_default_anchors() {
+  begin_function
+    local dim 
+    local -A valid_anchors removed_anchors
+
+    for dim in ${trunk_dims[*]}; do
+      valid_anchors[$dim]=1
+      eval "local remaining_deps_$dim"
+      local -n deps=trunk_dims_${dim}_derived_from \
+        remaining=remaining_deps_$dim
+      if [[ "${deps:-}" ]]; then
+        remaining=( "${deps[@]}" )
+      fi
+    done
+
+    begin_loop; doo
+
+      local max_dep_count=0 dim_with_most_deps= \
+        max_deps_array
+
+      calculate_default_anchors_check_dims || fail
 
       if (( max_dep_count > 0 )); then
-        begin_for dim in ${max_deps_array[*]}; doo
+        for dim in ${max_deps_array[*]}; do
           unset valid_anchors[$dim]
-        end_for
-        remaining_deps[$dim_with_most_deps]=
+        done
+        unset remaining_deps_$dim_with_most_deps
       else
         break
       fi
