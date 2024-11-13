@@ -61,6 +61,27 @@ cd() {
   return 0
 }
 
+CLEAR_SCREEN=$'\033[2J\r\033[H'
+exec {fd_original_in}<&0
+window() {
+  local size=${1:-5} i line
+  while true; do
+    echo -n "$CLEAR_SCREEN"
+    for ((i=0; i<size; i++)); do
+      IFS= read line || break 2
+      echo "$line"
+      line=
+    done
+    read -u $fd_original_in -s -n 1 -p "-------- Press q to quit, any other key to continue --------" i
+    if [[ $i == q ]]; then
+      break
+    fi
+  done
+  if [[ "${line:-}" ]]; then
+    echo "$line"
+  fi
+}
+
 # inputs: 
 #   $1  path to search for broken links
 find_broken_links() {
