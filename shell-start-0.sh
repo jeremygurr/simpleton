@@ -81,6 +81,7 @@ window() {
     echo "$line"
   fi
 }
+alias wi=window
 
 # inputs: 
 #   $1  path to search for broken links
