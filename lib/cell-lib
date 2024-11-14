@@ -353,6 +353,8 @@ make_or_load_dna_item() {
     local var_full_path=$1 prefix=${prefix:-} \
       suffix= code \
       file_name is_auto=f \
+      context_make=${context_make:-t} \
+      last_type=${last_type:-fun} \
 
     file_name=${var_full_path##*/}
     if [[ $file_name == *.* ]]; then
@@ -2473,6 +2475,66 @@ execute_command_log_prep() {
   handle_return
 }
 
+show_parameter_help() {
+  local name=$1
+  begin_function
+
+    local found=f choices=()
+
+    # TODO this should go away and get replaced with props
+    begin_for i in ${!parameter_names[*]}; doo
+      if [[ "${parameter_names[$i]}" == $name ]]; then
+        out "Parameter: $name"
+
+        if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
+          indent=2 out_wrap "${parameter_descriptions[$i]}"
+        fi
+
+        if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
+          indent=2 out_wrap "default: ${parameter_defaults[$i]}"
+        fi
+
+        local choices=
+        if [[ -v parameter_choices[$i] && "${parameter_choices[$i]}" ]]; then
+          eval "choices=( ${parameter_choices[$i]} )"
+        elif [[ -v ${name}_choices ]]; then
+          eval "choices=${name}_choices"
+        elif function_exists ${name}_get_choices; then
+          ${name}_get_choices || fail
+        fi
+        found=t
+        break
+      fi
+    end_for
+
+    if [[ $found == f ]]; then
+      local dim_type dim
+      begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
+        local -n dims=$dim_type
+        begin_for dim in ${dims[*]}; doo
+          if [[ $dim == $name && -v ${dim_type}_${dim}_description ]]; then
+            eval "local description=\$${dim_type}_${dim}_description" || fail
+            indent=2 out_wrap "$description"
+            # TODO write other parameters
+            found=t
+            break
+          fi
+        end_for
+      end_for
+    fi
+
+    if [[ $found == t ]]; then
+      if [[ "$choices" ]]; then
+        indent=2 out_wrap "choices: ${choices[*]}"
+      fi
+    else
+      log_warn "No description found for parameter $name" || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 execute_command_internal_setup_params() {
   begin_function
     if [[ "${parameter_questions:-}" ]]; then
@@ -3013,64 +3075,6 @@ execute_op() {
       fi
 
     fi
-
-  end_function
-  handle_return
-}
-
-show_parameter_help() {
-  local name=$1
-  begin_function
-
-    local found=f choices=()
-
-    # TODO this should go away and get replaced with props
-    begin_for i in ${!parameter_names[*]}; doo
-      if [[ "${parameter_names[$i]}" == $name ]]; then
-        out "Parameter: $name"
-
-        if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
-          indent=2 out_wrap "${parameter_descriptions[$i]}"
-        fi
-
-        if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
-          indent=2 out_wrap "default: ${parameter_defaults[$i]}"
-        fi
-
-        if [[ -v parameter_choices[$i] && "${parameter_choices[$i]}" ]]; then
-          eval "local choices=( ${parameter_choices[$i]} )"
-        elif [[ -v ${name}_choices ]]; then
-          eval "local -n choices=${name}_choices"
-        elif function_exists ${name}_get_choices; then
-          ${name}_get_choices || fail
-        fi
-        found=t
-        break
-      fi
-    end_for
-
-    if [[ $found == f ]]; then
-      local dim_type dim
-      begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
-        local -n dims=$dim_type
-        begin_for dim in ${dims[*]}; doo
-          if [[ $dim == $name && -v ${dim_type}_${dim}_description ]]; then
-            eval "local description=\$${dim_type}_${dim}_description" || fail
-            indent=2 out_wrap "$description"
-            # TODO write other parameters
-            found=t
-            break
-          fi
-        end_for
-      end_for
-    fi
-
-    if [[ $found == f ]]; then
-      log_warn "No description found for parameter $name" || fail
-    fi
-
-    #choose "What should $name be set to? " $name "${choices[@]}" || fail
-    #choose "$name=" $name "${choices[@]}" || fail
 
   end_function
   handle_return
