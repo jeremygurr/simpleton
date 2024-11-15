@@ -54,17 +54,18 @@ repair_update_upstream_choose_single() {
   handle_return
 }
 
-update_upstream_choose_single() {
+maybe_fix_choice() {
+  local choice=$1
   begin_function
-    chosen=$choices
-    if [[ ! -e $chosen_target_link ]]; then
-      force=t safe_link $chosen $chosen_target_link || fail
+    if [[ ! -e "$choice" ]]; then
+      local choice_target=$(realpath $choice) trunk_cell
+      get_trunk_cell $choice_target || fail
+      if [[ ! -e $trunk_cell ]]; then
+        log_fatal "Invalid upstream link in $upstream/choices: $trunk_cell. Maybe try a clean build."
+        fail1
+      fi
+      safe_link $trunk_cell $choice || fail
     fi
-    upstream_cell_link=$chosen
-    cell_path=$(realpath $chosen)
-    anchor_dims= \
-    switch_context
-    get_needs_update || fail
   end_function
   handle_return
 }
@@ -72,6 +73,7 @@ update_upstream_choose_single() {
 update_upstream_choose_multi() {
   begin_function
     local anchor_dims=
+
     if [[ "$chosen" ]]; then
       if [[ -e "$chosen/.dna" ]]; then
         upstream_cell_link=$chosen
@@ -82,18 +84,15 @@ update_upstream_choose_multi() {
         needs_update=t
       fi
       if [[ $needs_update == t ]]; then
-        if [[ $needs_pruning == t ]]; then
-          log_warn "pruning of chosen branches not supported yet"
-          debug_start
-          local trunk_cell
-          get_trunk_cell $chosen || fail
-          # TODO finish
-        fi
         chosen=
       fi
     fi
+
+    # This must be separate from the previous if block because chosen may have been unset in the
+    #   previous block.
     if [[ ! "$chosen" ]]; then
-      begin_for choice in $choices; doo
+      begin_for choice in "${choices[@]}"; doo
+        maybe_fix_choice $choice || fail
         needs_update=
         cell_path=$(realpath $choice)
         switch_context
@@ -104,14 +103,10 @@ update_upstream_choose_multi() {
         fi
       end_for
       if [[ ! "$chosen" ]]; then
-        chosen=${choices%% *}
-      fi
-      force=t safe_link $chosen $chosen_target_link || fail
-      upstream_cell_link=$chosen
-      if [[ "$original_choice" == "$chosen" ]]; then
-        needs_update=t
+        chosen=${choices[0]}
       fi
     fi
+
   end_function
   handle_return
 }
@@ -139,10 +134,20 @@ update_upstream_choose() {
 
     needs_update=
     if (( ${#choices[*]} == 1 )); then
-      update_upstream_choose_single
+      chosen=$choices
+      maybe_fix_choice $chosen || fail
     else # more than one choice available
       update_upstream_choose_multi
     fi
+
+    if [[ ! -e $chosen_target_link ]]; then
+      safe_link $chosen $chosen_target_link || fail
+    fi
+    upstream_cell_link=$chosen
+    cell_path=$(realpath $chosen)
+    anchor_dims= \
+    switch_context
+    get_needs_update || fail
 
     if [[ $needs_update == f ]]; then
       cell_path=$original_cell_path
