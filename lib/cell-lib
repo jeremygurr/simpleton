@@ -2280,7 +2280,9 @@ switch_context() {
         : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
         cleanup_dims || fail
         load_leaf_dims || fail
-        setup_dims || fail
+        if [[ ! "${parameter_questions:-}" ]]; then
+          setup_dims || fail
+        fi
         
       fi
 
@@ -2473,8 +2475,39 @@ execute_command_log_prep() {
   handle_return
 }
 
+show_dimension() {
+  local dim=$1 help_depth=${help_depth:-2} indent=${indent:-0}
+  begin_function
+    out_wrap "Dimension: $dim"
+    (( indent += 2 ))
+    if [[ -v ${dim_type}_${dim}_description ]]; then
+      eval "description=\$${dim_type}_${dim}_description" || fail
+    else
+      description='No description'
+    fi
+    out_wrap "$dim: $description"
+    if (( help_depth > 1 )); then
+      indent=$((indent+2)) show_dimension_details $dim || fail
+    fi
+  end_function
+  handle_return
+}
+
+show_dimensions() {
+  local dims=( $* ) dim dim_type=$dim_type description values 
+  begin_function
+    begin_for dim in ${dims[*]}; doo
+      if [[ " ${branch_dims[*]:-} " == *" $dim "* ]]; then
+        continue
+      fi
+      show_dimension $dim || fail
+    end_for
+  end_function
+  handle_return
+}
+
 show_parameter_help() {
-  local name=$1
+  local name=$1 indent=${indent:-0}
   begin_function
 
     local found=f choices=()
@@ -2482,14 +2515,15 @@ show_parameter_help() {
     # TODO this should go away and get replaced with props
     begin_for i in ${!parameter_names[*]}; doo
       if [[ "${parameter_names[$i]}" == $name ]]; then
-        out "Parameter: $name"
+        out_wrap "Parameter: $name"
+        (( indent += 2 ))
 
         if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
-          indent=2 out_wrap "${parameter_descriptions[$i]}"
+          out_wrap "${parameter_descriptions[$i]}"
         fi
 
         if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
-          indent=2 out_wrap "default: ${parameter_defaults[$i]}"
+          out_wrap "default: ${parameter_defaults[$i]}"
         fi
 
         local choices=
@@ -2501,7 +2535,7 @@ show_parameter_help() {
           ${name}_get_choices || fail
         fi
         if [[ "$choices" ]]; then
-          indent=2 out_wrap "choices: ${choices[*]}"
+          out_wrap "choices: ${choices[*]}"
         fi
         found=t
         break
