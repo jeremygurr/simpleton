@@ -364,28 +364,30 @@ show_cell_help() {
     trunk_changed=f \
     command_allows_logs=f \
       switch_context || fail
+    indent=0
 
     if [[ $multi_cell == t ]]; then
       out "$hbar_equals"
     fi
 
-    out "Cell: $short_cell"
+    out_wrap "Cell: $short_cell"
+    (( indent += 2 ))
     if [[ "${cell_description:-}" ]]; then
-      out "  $cell_description"
+      out_wrap "$cell_description"
     else
-      out "  No description for this cell. Set cell_description variable in context file."
+      out_wrap "No description for this cell. Set cell_description variable in context file."
     fi
 
     local required=()
 
     if [[ "${trunk_dims:-}" ]]; then
-      out "${NL}Dimensions: (add {dim}=? to command to see details, or cell . ?? to show all details)"
+      out_wrap "${NL}Dimensions: (add {dim}=? to command to see details, or cell . ?? to show all details)"
       dim_type=trunk_dims \
       show_dimensions ${trunk_dims[*]} || fail
     fi
 
     if [[ "${sub_dims:-}" || "${data_props:-}" || "${control_props:-}" ]]; then
-      out "${NL}Other parameters:"
+      out_wrap "${NL}Other parameters:"
       if [[ "${sub_dims:-}" ]]; then
         dim_type=sub_dims \
         show_dimensions ${sub_dims[*]} || fail
@@ -401,23 +403,40 @@ show_cell_help() {
     fi
 
     if [[ "${required:-}" ]]; then
-      out "${NL}Required parameters: ${required[*]}"
+      out_wrap "${NL}Required parameters: ${required[*]}"
     fi
 
-    if [[ "${branch_dims:-}" ]]; then
-      out "${NL}Branch dimensions:"
+    if [[ "${trunk_dims:-}" ]]; then
+      out_wrap "${NL}Branch dimensions:"
       local i pretty_form= member dim
-      begin_for (( i = 0; i < ${#branch_dims[*]}; i++ )); doo
-        dim=${branch_dims[$i]}
-        eval "member=\${branch_members[$i]}"
-        local pretty_function_name=trunk_dims_${dim}_pretty
+      #begin_for (( i = 0; i < ${#branch_dims[*]}; i++ )); doo
+      #  dim=${branch_dims[$i]}
+      #  eval "member=\${branch_members[$i]}"
+      #  local pretty_function_name=trunk_dims_${dim}_pretty
+      #  if function_exists $pretty_function_name; then
+      #    eval "$pretty_function_name member" || fail
+      #    pretty_form=" ($member)"
+      #  else
+      #    pretty_form=
+      #  fi
+      #  out "  $dim=${branch_members[$i]}$pretty_form"
+      #end_for
+      (( indent += 2 ))
+      begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
+        dim_var=${trunk_dims[$i]}
+        local -n dim=d_$dim_var
+        local pretty_function_name=trunk_dims_${dim_var}_pretty
         if function_exists $pretty_function_name; then
-          eval "$pretty_function_name member" || fail
-          pretty_form=" ($member)"
+          eval "$pretty_function_name $dim_var" || fail
+          pretty_form=" ($value)"
         else
           pretty_form=
         fi
-        out "  $dim=${branch_members[$i]}$pretty_form"
+        local value=${dim:-(unset)}
+        if [[ "$value" == $empty_member ]]; then
+          value='(empty)'
+        fi
+        out_wrap "$dim_var=$value$pretty_form"
       end_for
     fi
 
@@ -478,6 +497,12 @@ top_level() {
       multi_cell=f \
       multi_commands=f \
       commands=() \
+
+    if [[ "${parameter_questions:-}" ]]; then
+      : ${help_depth:=2}
+    else
+      : ${help_depth:=0}
+    fi
 
     if [[ "${cells:-}" ]]; then
       cells=( $cells )
