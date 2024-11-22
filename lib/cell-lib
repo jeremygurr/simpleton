@@ -554,7 +554,6 @@ make_or_load_context_expand() {
     begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
       local -n dims=$dim_type
       begin_for dim in ${dims[*]:-}; doo
-        log_debug "Making expand function for $dim"
         if ! function_exists ${dim_type}_${dim}_expand; then
           make_or_load_context_expand2 || fail
         fi
@@ -2145,38 +2144,68 @@ switch_context_handle_missing() {
 calculate_default_anchors_check_dims() {
   begin_function
 
-    local dim 
-    begin_for dim in ${!valid_anchors[*]}; doo
-      local -n remaining=remaining_deps_$dim
-      if [[ "${remaining:-}" ]]; then
+    local dim parent
+    begin_for parent in ${!valid_anchors[*]}; doo
+      local -n children=children_of_$parent
+      if is_set children && (( ${#children[*]} > 0 )); then
 
-        local remaining_row 
-        for remaining_row in "${remaining[@]}"; do
-
-          local array=( ${remaining_row} )
-          local valid_count=0 d
-          for d in ${array[*]}; do
-            if [[ "${valid_anchors[$d]:-}" ]]; then
-              (( valid_count++ ))
-            fi
-          done
-
-          if (( valid_count == 0 )); then
-            unset valid_anchors[$dim]
-            continue 2
+        local child_dim valid_count=0
+        for child_dim in "${!children[@]}"; do
+          if [[ "${valid_anchors[$child_dim]:-}" ]]; then
+            (( valid_count++ ))
           fi
-
-          if (( valid_count > max_dep_count )); then
-            max_dep_count=$valid_count
-            dim_with_most_deps=$dim
-            max_deps_array=( ${array[*]} )
-          fi
-
         done
+
+        if (( valid_count > max_dep_count )); then
+          max_dep_count=$valid_count
+          dim_with_most_deps=$parent
+          max_deps_array=( ${!children[*]} )
+        fi
 
       fi
     end_for
 
+  end_function
+  handle_return
+}
+
+calculate_default_anchors_gather_children() {
+  begin_function
+    local dim
+    for dim in ${trunk_dims[*]}; do
+      valid_anchors[$dim]=1
+      local -n deps=trunk_dims_${dim}_derived_from
+      if [[ "${deps:-}" ]]; then
+        local row
+        for row in "${deps[@]}"; do
+          local array=( ${row} )
+          local parent
+          for parent in ${array[*]}; do
+            eval "declare -gA children_of_$parent"
+            local -n children=children_of_$parent
+            children[$dim]=1
+          done
+        done
+      fi
+    done
+  end_function
+  handle_return
+}
+
+calculate_default_anchors_recursive_unset() {
+  local dim=$1
+  begin_function
+    if [[ -v valid_anchors[$dim] ]]; then
+      unset valid_anchors[$dim]
+      local -n children=children_of_$dim
+      local child
+      if is_set children; then
+        for child in "${!children[@]}"; do
+          unset children[$child]
+          calculate_default_anchors_recursive_unset $child || fail 
+        done
+      fi
+    fi
   end_function
   handle_return
 }
@@ -2186,15 +2215,7 @@ calculate_default_anchors() {
     local dim 
     local -A valid_anchors removed_anchors
 
-    for dim in ${trunk_dims[*]}; do
-      valid_anchors[$dim]=1
-      eval "local remaining_deps_$dim"
-      local -n deps=trunk_dims_${dim}_derived_from \
-        remaining=remaining_deps_$dim
-      if [[ "${deps:-}" ]]; then
-        remaining=( "${deps[@]}" )
-      fi
-    done
+    calculate_default_anchors_gather_children || fail
 
     begin_loop; doo
 
@@ -2205,9 +2226,8 @@ calculate_default_anchors() {
 
       if (( max_dep_count > 0 )); then
         for dim in ${max_deps_array[*]}; do
-          unset valid_anchors[$dim]
+          calculate_default_anchors_recursive_unset $dim || fail
         done
-        unset remaining_deps_$dim_with_most_deps
       else
         break
       fi
