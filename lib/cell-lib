@@ -2141,62 +2141,88 @@ switch_context_handle_missing() {
   handle_return
 }
 
-calculate_default_anchors_check_dims() {
-  begin_function
+is_derivable_from_valid_anchors() {
+  local dim=$1 row derivable=f is_derivable_skip_dims=${is_derivable_skip_dims:-}
+  local -n derived_from=trunk_dims_${dim}_derived_from
+  if [[ -v derived_from ]]; then
 
-    local dim parent
-    begin_for parent in ${!valid_anchors[*]}; doo
-      local -n children=children_of_$parent
-      if is_set children && (( ${#children[*]} > 0 )); then
+    if [[ "${is_derivable_skip_dims:-}" ]]; then
+      is_derivable_skip_dims+=" $dim"
+    else
+      is_derivable_skip_dims=$dim
+    fi
 
-        local child_dim valid_count=0
-        for child_dim in "${!children[@]}"; do
-          if [[ "${valid_anchors[$child_dim]:-}" ]]; then
+    for row in "${derived_from[@]}"; do
+
+      local valid_count=0 derived_from_dim
+      derived_from_dims=( $row ) 
+      derived_from_count=${#derived_from_dims[*]}
+
+      if (( derived_from_count > 0 )); then
+
+        for derived_from_dim in ${derived_from_dims[*]}; do
+
+          if [[ " $is_derivable_skip_dims " == *" $derived_from_dim "* ]]; then
+            break
+          fi
+
+          if [[ "${valid_anchors[$derived_from_dim]:-}" ]] \
+             || is_derivable_from_valid_anchors $derived_from_dim; then
             (( valid_count++ ))
           fi
+
         done
 
-        if (( valid_count > max_dep_count )); then
-          max_dep_count=$valid_count
-          dim_with_most_deps=$parent
-          max_deps_array=( ${!children[*]} )
+        if (( valid_count == derived_from_count )); then
+          derivable=t
+          break
         fi
 
       fi
+
+    done
+  fi
+  [[ $derivable == t ]]
+}
+
+calculate_default_anchors_check_dims() {
+  begin_function
+
+    local derived_dim
+    begin_for derived_dim in ${trunk_dims[*]}; doo
+
+      if [[ ! -v valid_anchors[$derived_dim] ]]; then
+        continue
+      fi
+
+      local row derived_from_count derived_from_dims
+      local -n derived_from=trunk_dims_${derived_dim}_derived_from
+
+      if is_derivable_from_valid_anchors $derived_dim; then
+        if (( derived_from_count > 0 && derived_from_count < min_derived_from_count )); then
+          min_derived_from_count=$derived_from_count
+          dim_with_least_deps=$derived_dim
+          deps_array=( ${derived_from_dims[*]} )
+          if (( derived_from_count == 1 )); then
+            # we don't need to keep looking since 1 is the lowest possible number here
+            break
+          fi
+        fi
+      fi
+
     end_for
 
   end_function
   handle_return
 }
 
-calculate_default_anchors_gather_children() {
-  begin_function
-    local dim
-    for dim in ${trunk_dims[*]}; do
-      valid_anchors[$dim]=1
-      local -n deps=trunk_dims_${dim}_derived_from
-      if [[ "${deps:-}" ]]; then
-        local row
-        for row in "${deps[@]}"; do
-          local array=( ${row} )
-          local parent
-          for parent in ${array[*]}; do
-            eval "declare -gA children_of_$parent"
-            local -n children=children_of_$parent
-            children[$dim]=1
-          done
-        done
-      fi
-    done
-  end_function
-  handle_return
-}
-
 calculate_default_anchors_recursive_unset() {
-  local dim=$1
+  local dim=$1 recursive_unset_skip=${recursive_unset_skip:-}
   begin_function
-    if [[ -v valid_anchors[$dim] ]]; then
+    if [[ -v valid_anchors[$dim] && " $recursive_unset_skip " != *" $dim "* ]]; then
+      log_debug "Unsetting $dim"
       unset valid_anchors[$dim]
+      recursive_unset_skip+=" $dim"
       local -n children=children_of_$dim
       local child
       if is_set children; then
@@ -2215,19 +2241,20 @@ calculate_default_anchors() {
     local dim 
     local -A valid_anchors removed_anchors
 
-    calculate_default_anchors_gather_children || fail
+    for dim in ${trunk_dims[*]}; do
+      valid_anchors[$dim]=1
+    done
 
     begin_loop; doo
 
-      local max_dep_count=0 dim_with_most_deps= \
-        max_deps_array
+      local min_derived_from_count=1000 dim_with_least_deps= \
+        deps_array
 
       calculate_default_anchors_check_dims || fail
 
-      if (( max_dep_count > 0 )); then
-        for dim in ${max_deps_array[*]}; do
-          calculate_default_anchors_recursive_unset $dim || fail
-        done
+      if (( min_derived_from_count < 1000 )); then
+        log_debug "Removing dim with the least deps: $dim_with_least_deps"
+        unset valid_anchors[$dim_with_least_deps]
       else
         break
       fi
@@ -2241,6 +2268,8 @@ calculate_default_anchors() {
       fi
     end_for
     default_anchor_dims=${default_anchor_dims% }
+    log_debug "Default anchors calculated: $default_anchor_dims"
+    debug_start
 
   end_function
   handle_return
