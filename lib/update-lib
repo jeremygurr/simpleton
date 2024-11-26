@@ -70,6 +70,117 @@ maybe_fix_choice() {
   handle_return
 }
 
+# returns needs_update
+# context should already be loaded for target cell before this is called
+get_needs_update() {
+  local log_show_vars=^cell_path
+  begin_function_hi
+
+    # do we need to delete branches of this cell
+    needs_pruning=f
+
+    local localize_dims=${localize_dims:-} \
+      cyto_path=$cell_path/.cyto
+    if [[ "${localize_dims:-local}" != local ]]; then
+      eval "$localize_dims" || fail
+    fi
+
+    local level=log_verbose
+    if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
+      level=log_info
+    fi
+
+    local status_path=$cyto_path/status \
+      up_path=$cyto_path/up \
+      log_message="No update needed" \
+      check_upstream_depth=${check_upstream_depth:-1}
+
+    if [[ "$needs_update" ]]; then
+      # needs_update is already known, don't need to compute it again
+      log_message="needs_update is already set to $needs_update"
+      level=log_debug
+      succeed
+    fi
+
+    if [[ ! -e $cell_path/.dna ]]; then
+      log_fatal "Attempted to run get_needs_update on folder that is not a cell: $cell_path"
+      fail1
+    fi
+
+    if [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
+      needs_update=t
+      log_message="Needs update because output file doesn't exist"
+    elif [[ -v leaf_dims ]]
+    then
+      needs_update=t
+      log_message="Needs update because cell has leaves"
+    elif (( refresh_less_than > update_cost ))
+    then
+      needs_update=t
+      log_message="Needs update because update_cost ($update_cost) < refresh_less_than ($refresh_less_than)"
+    elif [[ ! -e $status_path/last-good-update-end ]]
+    then
+      needs_update=t
+      log_message="Needs update because cell has never been updated successfully"
+    elif [[ ! -e $status_path/up-to-date ]]
+    then
+      needs_update=t
+      log_message="Needs update because cell definition has changed"
+    elif [[ ! -e $status_path/deps-up-to-date ]]
+    then
+      needs_update=t
+      log_message="Needs update because upstream has changed"
+    elif get_is_stale $status_path || fail
+         [[ $is_stale == t ]]
+    then
+      needs_update=t
+      log_message="Needs update because cell is stale"
+    elif local data_valid
+      check_cell_product || fail
+      [[ $data_valid == f ]]
+    then
+      needs_update=t
+      log_message="Needs update because validity check failed"
+    elif local prop_changed
+      get_data_prop_changed || fail
+      [[ $prop_changed == t ]]
+    then
+      needs_update=t
+      log_message="Needs update because a data property was changed"
+    elif 
+      git_commit_check || fail
+      [[ ! -d $cyto_path ]]
+    then
+      needs_update=t
+      needs_pruning=t
+      log_message="Needs update because git repo has changed"
+    elif 
+      broken_link_check || fail
+      [[ ! -d $cyto_path ]]
+    then
+      needs_update=t
+      log_message="Needs update because cyto contains broken links"
+    fi
+
+  end_function
+
+  if succeeded; then
+    if [[ ${needs_update:-f} == f && $top_level_command == f ]]; then
+      level=log_verbose
+    fi
+    action=update_check $level "$log_message ($short_cell)"
+  else
+    action=update_check log_fatal "Failed to check update need"
+  fi
+
+  if [[ ! "$needs_update" ]]; then
+    needs_update=f
+  fi
+
+  local log_return_vars=needs_update
+  handle_return
+}
+
 update_upstream_choose_multi() {
   begin_function
     local anchor_dims=
@@ -224,6 +335,7 @@ update_upstream() {
 
       top_level_command=f \
       downstream_cell_name=${short_cell//\//_} \
+      default_anchor_dims=() \
       execute_command "$up_cell" update || fail
 
       if [[ $something_changed == t ]]; then
@@ -491,6 +603,749 @@ propagate_change_to_downstream() {
     fi
 
   end_function
+  handle_return
+}
+
+pre_update() {
+  begin_function_hi
+
+    update_successful= \
+    something_changed=f \
+    member_count=0 \
+    cell_locks= \
+
+    if [[ "${pretend_filter:-}" ]]; then
+      local filter
+      local pretend=f
+      begin_for filter in ${pretend_filter}; doo
+        if [[ "$cell_path" == *"$filter"* ]]; then
+          pretend=t
+        fi
+      end_for
+    fi
+
+    write_lock=t \
+      timeout=$lock_timeout \
+      cell_lock $cell_path || fail
+
+    defer "cell_unlock $cell_path"
+
+    if [[ "${current_job_path:-}" ]]; then
+      safe_link $current_job_path $running_job_path || fail
+      defer "rm $running_job_path"
+    else
+      log_fatal "Missing current_job_path"
+      fail1
+    fi
+
+    touch $status_path/last-update-start || fail
+    # this needs to be at the beginning of the update so other processes
+    #   could potentially invalidate it, requiring another update
+    touch $status_path/up-to-date || fail
+
+    if [[ $reuse_existing_out == t && -f $status_path/last-good-update-end ]]; then
+      # Don't allow cells to reuse old data when it is mid-modification and this update fails
+      rm $status_path/last-good-update-end || fail
+    fi
+
+    if [[ $current_mock != f ]]; then
+      kind=data clean_cell $cell_path || fail
+    fi
+
+    if [[ $cell_is_leaf == t ]]; then
+      local known_dims=()
+      local missing_dims=()
+      prep_dims sub_dims control_props data_props || fail
+      expand_dims || fail
+      coord_type=leaf \
+      switch_context_calc_coordinates || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+create_outer_links() {
+  begin_function
+
+    local outer_cell_path outer_cell_name
+
+    get_bottom_cell ${inner_cell_link%/*} || fail
+    outer_cell_path=$bottom_cell
+
+    local outer_link=$outer_path/$outer_cell_name
+    if [[ ! -e $outer_link ]]; then
+      if [[ ! -d $outer_path ]]; then
+        mkdir $outer_path || fail
+      fi
+      safe_link $outer_cell_path $outer_link || fail
+    else
+      local link_target=$(readlink $outer_link) || fail
+      if [[ $link_target != $outer_cell_path ]]; then
+        log_fatal "Link conflict: A link already exists but doesn't point to the same place."
+        log_fatal "  source:   $outer_link"
+        log_fatal "  target 1: $outer_cell_path"
+        log_fatal "  target 2: $link_target"
+        fail1
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
+create_downstream_links() {
+  begin_function
+
+    local down_cell_path down_cell_name
+
+    get_bottom_cell ${upstream_cell_link%/*} || fail
+    down_cell_path=$bottom_cell
+
+    local down_link=$down_path/$downstream_cell_name
+    if [[ ! -d $down_path ]]; then
+      mkdir $down_path || fail
+    fi
+    force=t safe_link $down_cell_path $down_link || fail
+
+#      let's just replace this each time for now
+#    if [[ -e $down_link ]]; then
+#      local link_target=$(readlink $down_link) || fail
+#      if [[ $link_target != $down_cell_path ]]; then
+#        log_fatal "Link conflict: A link already exists but doesn't point to the same place."
+#        log_fatal "  source:   $down_link"
+#        log_fatal "  target 1: $down_cell_path"
+#        log_fatal "  target 2: $link_target"
+#        fail1
+#      fi
+#    fi
+
+  end_function
+  handle_return
+}
+
+link_dim_parts() {
+  local from_path=$from_path to_path=$to_path
+  begin_function
+    local contents=$(find1 $from_path -not -name '.*') || fail
+    begin_for part in $contents; doo
+      if [[ "$part" == */up \
+         || "$part" == */down \
+         || "$part" == */out \
+         ]]; then
+        continue
+      elif [[ "$part" == */var \
+           || "$part" == */fun \
+           ]]; then
+        contents=$(find1 $part -not -name '.*') || fail
+        local folder=${part##*/} part2
+        begin_for part2 in $contents; doo
+          if [[ ! -d $to_path/$folder ]]; then
+            mkdir $to_path/$folder || fail
+          fi
+          safe_link $(realpath $part2) $to_path/$folder/ || fail
+        end_for
+      else
+        safe_link $(realpath $part) $to_path/ || fail
+      fi
+    end_for 
+  end_function
+  handle_return
+}
+
+create_sub_cell() {
+  local sub_cell=$sub_cell \
+    parent_cell=$parent_cell \
+    parent_seed=$parent_seed
+
+  local log_show_vars='^sub_cell'
+  begin_function
+
+    switch_context $sub_cell || fail
+    log_debug "Creating sub cell $short_cell"
+
+    if [[ "$sub_cell" == */.dna* ]]; then
+      log_fatal "Internal error: Invalid sub_cell $sub_cell."
+      log_fatal "We should not be creating a sub cell inside of a dna folder"
+      fail1
+    fi
+
+    if [[ "$parent_cell" == "$sub_cell" ]]; then
+      log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
+      stack_trace
+      fail1
+    fi
+
+    deep=t \
+    parent_path=$parent_cell \
+    seed_path=$parent_seed \
+    member=$member \
+    repair=t \
+    plant_member || fail
+
+  end_function
+  handle_return
+}
+
+update_inner() {
+  begin_function
+
+    local old_link=$inner_cell_link \
+      old_target=$(readlink $inner_cell_link) \
+      new_target=$cell_path || fail
+
+    if [[ $cell_is_leaf == t ]]; then
+      create_outer_links || fail
+    fi
+
+    local update_outer_link=f
+    if [[ ! -e $old_link ]]; then
+      log_debug "Will update outer link because file is missing"
+      update_outer_link=t
+    else
+      local new_target_length=${#new_target} \
+        old_target_length=${#old_target}
+
+      if (( new_target_length > old_target_length )); then
+        log_debug "Will update outer link because new target is more specific"
+        update_outer_link=t
+      elif [[ ${old_target#$new_target} == ${old_target} ]]; then
+        log_debug "Will update outer link because new target is different"
+        update_outer_link=t
+      fi
+    fi
+
+    if [[ $update_outer_link == t ]]; then
+      log_debug "Linking upstream cell to it's outer cell cyto up folder"
+      force=t safe_link $cell_path $old_link || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+update_downstream() {
+  begin_function
+
+    local old_link=$upstream_cell_link \
+      old_target=$(readlink $upstream_cell_link) \
+      new_target=$cell_path || fail
+
+    if [[ $cell_is_leaf == t ]]; then
+      create_downstream_links || fail
+    fi
+
+    local update_downstream_link=f
+    if [[ ! -e $old_link ]]; then
+      log_debug "Will update downstream link because chosen file is missing"
+      update_downstream_link=t
+    else
+      local new_target_length=${#new_target} \
+        old_target_length=${#old_target}
+
+      if (( new_target_length > old_target_length )); then
+        log_debug "Will update downstream link because new target is more specific"
+        update_downstream_link=t
+      elif [[ ${old_target#$new_target} == ${old_target} ]]; then
+        log_debug "Will update downstream link because new target is different"
+        update_downstream_link=t
+      fi
+    fi
+
+    if [[ $update_downstream_link == t ]]; then
+      log_debug "Linking upstream cell to it's downstream cell cyto up folder"
+      force=t safe_link $cell_path $old_link || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+update_member() {
+  local sane_value member_path \
+    log_vars=member log_show_vars=member \
+    upstream_cell_link=${upstream_cell_link:-} \
+    original_cell_path=$cell_path \
+    anchor_dims=${anchor_dims[*]:-} \
+
+  begin_function_hi
+
+    get_sane_value "$member" || fail
+    member_path=$cell_path/$dim:$sane_value
+
+    log_debug "Updating member $dim:$sane_value"
+
+    local needs_update=
+    if [[ ! -d $member_path/.dna ]]; then
+      parent_cell=$cell_path \
+      parent_seed=$seed_path \
+      sub_cell=$member_path \
+      create_sub_cell || fail
+      needs_update=t
+    else
+      cell_path=$member_path
+      switch_context || fail
+      get_needs_update $member_path || fail
+    fi
+
+    if [[ "${upstream_cell_link:-}" ]]; then
+      cell_path=$member_path update_downstream || fail
+    fi
+
+    if [[ $needs_update == t ]]; then
+
+      if (( member_count > 1 )); then
+        log_debug "More than one member found ($member_count), not passing upstream_cell_link."
+        upstream_cell_link=
+      elif [[ "$upstream_cell_link" ]]; then
+        log_debug "Only one member found, passing upstream_cell_link: $upstream_cell_link"
+      fi
+
+      top_level_command=f \
+      downstream_cell_name=${short_cell//\//_} \
+      execute_command $member_path update || fail
+
+      if [[ $update_successful == f ]]; then
+        log_error "Failed to update member cell $member"
+        reply_to_caller "update_successful=f" || fail
+      else 
+        update_successful=
+      fi
+    fi
+
+    if (( member_count == 1 )); then
+      upstream_cell_link=
+    fi
+
+    #   This is needed as we switch to other members so they can all go off the correct branch
+    cell_path=$original_cell_path
+    switch_context || fail
+  end_function
+  handle_return
+}
+
+update_members() {
+  begin_function_hi
+
+    local dim=${leaf_dims[0]}
+    update_successful=
+    par=t fork=f function=update_member for_each_member $dim || fail
+
+    switch_context || fail
+    if [[ ${update_successful:=t} == f ]]; then
+      log_fatal "Failed to update some member(s)"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
+compare_files_or_dirs() {
+  local left=$1 right=$2
+  begin_function
+    if [[ -d $left ]]; then
+      if [[ -d $right ]]; then
+        local sub_full sub already_checked files
+
+        files=$(find1 $left -not -name '.*') || fail
+        begin_for sub_full in $files; doo
+          sub=${sub_full##*/}
+          compare_files_or_dirs $left/$sub $right/$sub || fail
+          if [[ $changed == t ]]; then
+            succeed
+          fi
+          already_checked+=" $sub"
+        end_for
+        already_checked+=' '
+
+        files=$(find1 $right -not -name '.*') || fail
+        begin_for sub_full in $files; doo
+          sub=${sub_full##*/}
+          if [[ "$already_checked" =~ \ "$sub"\  ]]; then
+            continue
+          fi
+          compare_files_or_dirs $right/$sub $left/$sub || fail
+          if [[ $changed == t ]]; then
+            succeed
+          fi
+        end_for
+
+      else
+        changed=t
+      fi
+    elif [[ -f $left ]]; then
+      if [[ -f $right ]]; then
+        if files_are_different $left $right &>/dev/null; then
+          changed=t
+        else
+          changed=f
+        fi
+      else
+        changed=t
+      fi
+    else
+      changed=f
+    fi
+  end_function
+  handle_return
+}
+
+update_self_move_out_path() {
+  begin_function
+
+    if [[ -e $out_path.old ]]; then
+      rm -rf $out_path.old || fail
+    fi
+
+    local f
+    begin_for f in .dna .cyto .dim; doo
+      if [[ -e $out_path/$f ]]; then
+        if [[ ! -e $out_path.new/$f ]]; then
+          mv $out_path/$f $out_path.new/$f || fail
+        else
+          log_fatal "Target $f folder already exists, when it shouldn't"
+          fail1
+        fi
+      fi
+    end_for
+
+    if [[ -d $out_path ]]; then
+      mv $out_path $out_path.old || fail
+    fi
+
+    mv $out_path.new $out_path || fail
+    something_changed=t
+
+    if [[ -e $out_path.old ]]; then
+      rm -rf $out_path.old || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+update_self() {
+  local log_vars='short_cell'
+  begin_function
+
+    log_debug "Executing local update of $short_cell$attempt_string" 
+
+    update_successful=
+    can_retry=f
+
+    local reuse_existing_out=${reuse_existing_out:-t}
+
+    local original_out_path=$out_path out_path=$out_path
+    if [[ $reuse_existing_out == f ]]; then
+      if [[ -d $out_path.new ]]; then
+        rm -rf $out_path.new || fail
+      fi
+      if [[ ! -d $out_path.new ]] && ! mkdir $out_path.new 2>/dev/null; then
+        log_debug "Could not make dir $out_path.new, falling back to $out_path"
+      fi
+      out_path=$out_path.new
+    else
+      # allow update code to set this, since we can't compare when changes are made in place
+      something_changed=
+    fi
+
+    local missing=t
+    tee_output_to_log || fail
+    if [[ $current_mock == f ]]; then
+      ignore_missing=t execute_op update || {
+        log_fatal "Internal error while executing update operator."
+        fail1
+      }
+    else # mocking
+
+      log_warn "Using mock: $current_mock"
+      local -r export_path=$mock_path/$current_mock/export
+
+      if function_exists mock_update_op; then
+        missing=f
+        mock_update_op || fail
+      fi
+
+      if [[ -d $export_path ]]; then
+        pass_thru=t \
+        context_make=f \
+        make_or_load_dna_contents $export_path || fail
+      fi
+
+      update_successful=${update_successful:-t}
+
+    fi
+    completion_time=$EPOCHSECONDS
+    untee_output || fail
+
+    if [[ $missing == t ]]; then
+      update_successful=t
+    else
+      update_successful=${update_successful:-f}
+    fi
+
+    if [[ $reuse_existing_out == f && -d $out_path ]]; then
+      out_path=$original_out_path
+      if [[ $update_successful == t ]]; then
+        local changed
+        compare_files_or_dirs $out_path $out_path.new || fail
+        if [[ $changed == f ]]; then
+          rm -rf $out_path.new || fail
+        else
+          update_self_move_out_path || fail
+        fi
+      fi
+    else # $reuse_existing_out == t
+      # if update code didn't set this, we must assume the worst
+      if [[ ! "$something_changed" ]]; then
+        something_changed=t
+      fi
+    fi
+
+  end_function
+  untee_output  # in case update failed and block was exited early
+  handle_return
+}
+
+update_self_retry_loop() {
+  begin_function_hi
+
+    ref_group=none \
+    delay=$retry_delay \
+    can_update=t \
+
+    if [[ "$update_successful" ]]; then
+      can_update=f
+    fi
+
+    if [[ $can_update == t ]]; then
+      for ((retry=0; retry < retry_max; retry++)); do
+
+        if [[ $retry -gt 0 ]]; then
+          log_info "Waiting $delay seconds before trying again" 
+          sleep $delay
+          let 'delay *= retry_scale' || true
+        fi
+
+        local attempt_string=
+        if (( retry_max > 1 )); then
+          attempt_string=", attempt $((retry+1)) of $retry_max"
+        fi
+          
+        update_self || fail
+
+        [[ $can_retry == f || $update_successful == t ]] && break
+
+      done
+    fi
+
+    update_successful=${update_successful:-t}
+
+  end_function
+  handle_return
+}
+
+check_results() {
+  begin_function_hi
+
+    if [[ $can_update == t ]]; then
+      if [[ $update_successful == t && $post_validate == t ]]; then
+        log_debug "Post validating"
+        local data_valid=f
+        can_retry=f
+        execute_op check || return 1
+        if [[ $data_valid == f ]]; then
+          log_warn "Data is not valid"
+          update_successful=f
+        else
+          log_debug "Data is valid"
+        fi
+      fi
+    else
+      update_successful=t
+    fi
+
+  end_function
+  handle_return
+}
+
+post_update() {
+  local result_string
+  begin_function_hi
+
+    completion_time=${completion_time:-$EPOCHSECONDS}
+    if [[ $update_successful == t ]]; then
+      result_string="successful"
+    else
+      result_string="failed"
+      update_successful=f
+    fi
+
+    if [[ $update_successful == t ]]; then
+      touch -d @$completion_time $status_path/last-good-update-end || fail
+      cp -a $status_path/last-update-start \
+            $status_path/last-good-update-start || fail
+      if [[ -v current_job_path ]]; then
+        force=t safe_link $current_job_path $job_path/last-success || fail
+      fi
+      if [[ "${data_props:-}" ]]; then
+        update_prop_hash || fail
+      fi
+      if [[ $something_changed == t ]]; then
+        from_cell=$cell_path \
+          propagate_change_to_downstream || fail
+      fi
+    else
+      touch -d @$completion_time $status_path/last-bad-update-end || fail
+      force=t safe_link $current_job_path $job_path/last-failure || fail
+      cp -a $status_path/last-update-start \
+            $status_path/last-bad-update-start || fail
+    fi
+
+    if [[ $cell_is_leaf == t || $show_branches == t ]]; then
+      log_info "Update $result_string. ($short_cell)"
+    else
+      log_debug "Update $result_string. ($short_cell)"
+    fi
+
+    if [[ "${reply_file:-}" ]]; then
+      echo "update_successful=${update_successful:-}" >>$reply_file || fail
+    fi
+
+    cell_unlock $cell_path || fail
+
+    if [[ -v running_job_path && -e $running_job_path ]]; then
+      rm $running_job_path || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+get_dep_member() {
+
+  if [[ -f $dep_cell/.dna/context-before ]]; then
+    source $dep_cell/.dna/context-before || return 1
+  else
+    log_fatal "Missing context-before in $dep_cell/.dna."
+    log_fatal "Should have been generated by update of it's trunk."
+    log_fatal "Maybe try to run a clean on it and update again."
+    return 1
+  fi
+
+  if [[ ! -v $dep_dim ]]; then
+    log_fatal "Missing member for $dep_dim."
+    log_fatal "This should have been defined in $dep_cell/.dna/context-before"
+    return 1
+  fi
+
+  dep_member=${!dep_dim}
+  return 0
+}
+
+update_inners() {
+  begin_function
+    local i_path needs_update=
+    local inners=$(find1 $inner_path -type d -not -name '.*') || fail
+    begin_for i_path in $inners; doo
+      top_level_command=f \
+      outer_cell_name=${short_cell//\//_} \
+      inner_cell_link=$i_path \
+      default_anchor_dims=() \
+      execute_command $i_path update || fail
+    end_for
+  end_function
+  handle_return
+}
+
+update_command() {
+  begin_function_hi
+
+    local leave_loop=0 \
+      something_changed=f \
+      needs_update=${needs_update:-} \
+      needs_inner=f \
+
+    if [[ ${branches_only:-f} == t && $cell_is_leaf == t ]]; then
+      update_successful=t
+      succeed
+    fi
+
+    update_successful=f
+
+    if function_exists get_update_risk; then
+      get_update_risk || fail
+    fi
+
+    if (( update_risk > risk_tolerance )); then
+      log_fatal "Risk too high"
+      log_fatal "The risk of updating $short_cell is too high for the specified tolerance ($update_risk > $risk_tolerance)."
+      log_fatal "Try a less risky strategy or increase the risk tolerance of this command (with the risk parameter)"
+      fail1
+    fi
+
+    if [[ "${upstream_cell_link:-}" ]]; then
+      update_downstream || fail
+    fi
+
+    if [[ "${inner_cell_link:-}" ]]; then
+      update_inner || fail
+    fi
+
+    get_needs_update || fail
+
+    if [[ $needs_update == t ]]; then
+
+      pre_update || fail
+      deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
+
+      if [[ "$update_successful" != f ]]; then
+        if [[ $current_mock == f ]]; then
+          update_upstreams || fail
+        else
+          update_successful=t
+        fi
+      fi
+
+      if [[ $update_successful == t ]]; then
+        if [[ $cell_is_leaf == t ]]; then
+          if function_exists update_op; then
+            update_successful=
+            update_self_retry_loop || fail
+            check_results || fail
+          fi
+        else
+          if [[ "${leaf_dims:-}" ]]; then
+            update_members || fail
+          else
+            log_fatal "Internal error: cell is not a leaf, yet it doesn't have leaf dims?"
+            fail1
+          fi
+        fi
+      fi
+
+      post_update || fail
+
+    else
+      update_successful=t
+      succeed
+    fi
+
+    if [[ $update_successful == t
+       && $cell_is_leaf == t
+       && $needs_inner == t
+       && "${inner:-}" ]]; then
+      log_debug "Updating inner cells"
+      update_inners || fail
+    fi
+
+  end_function
+
+  if [[ "$update_successful" == t ]]; then
+    command_successful=t
+  fi
+
   handle_return
 }
 

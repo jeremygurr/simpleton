@@ -761,6 +761,44 @@ load_leaf_dims() {
   handle_return
 }
 
+calculate_default_anchors() {
+  begin_function
+    local dim 
+    local -A valid_anchors removed_anchors
+
+    for dim in ${trunk_dims[*]}; do
+      valid_anchors[$dim]=1
+    done
+
+    begin_loop; doo
+
+      local min_derived_from_count=1000 dim_with_least_deps= \
+        deps_array
+
+      calculate_default_anchors_check_dims || fail
+
+      if (( min_derived_from_count < 1000 )); then
+        #log_debug "Removing dim with the least deps: $dim_with_least_deps"
+        unset valid_anchors[$dim_with_least_deps]
+      else
+        break
+      fi
+
+    end_loop
+
+    default_anchor_dims=
+    begin_for dim in ${trunk_dims[*]}; doo
+      if [[ -v valid_anchors[$dim] ]]; then
+        default_anchor_dims+="$dim "
+      fi
+    end_for
+    default_anchor_dims=${default_anchor_dims% }
+    log_debug "Default anchors calculated: $default_anchor_dims"
+
+  end_function
+  handle_return
+}
+
 make_or_load_context() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
@@ -1003,7 +1041,6 @@ init_context() {
   control_props=() \
   current_pause=250 \
   data_props=() \
-  default_anchor_dims=() \
   default_freshness= \
   default_strategies=crl \
   localize_dims= \
@@ -2239,44 +2276,6 @@ calculate_default_anchors_recursive_unset() {
   handle_return
 }
 
-calculate_default_anchors() {
-  begin_function
-    local dim 
-    local -A valid_anchors removed_anchors
-
-    for dim in ${trunk_dims[*]}; do
-      valid_anchors[$dim]=1
-    done
-
-    begin_loop; doo
-
-      local min_derived_from_count=1000 dim_with_least_deps= \
-        deps_array
-
-      calculate_default_anchors_check_dims || fail
-
-      if (( min_derived_from_count < 1000 )); then
-        log_debug "Removing dim with the least deps: $dim_with_least_deps"
-        unset valid_anchors[$dim_with_least_deps]
-      else
-        break
-      fi
-
-    end_loop
-
-    default_anchor_dims=
-    begin_for dim in ${trunk_dims[*]}; doo
-      if [[ -v valid_anchors[$dim] ]]; then
-        default_anchor_dims+="$dim "
-      fi
-    end_for
-    default_anchor_dims=${default_anchor_dims% }
-    log_debug "Default anchors calculated: $default_anchor_dims"
-
-  end_function
-  handle_return
-}
-
 # inputs:
 #   cell_path
 #   anchor_dims (as a space separated string)
@@ -2724,6 +2723,8 @@ execute_command_internal() {
 
     if [[ $top_level_command == f ]]; then
       unset anchor_dims
+    else
+      default_anchor_dims=()
     fi
 
     execute_command_internal_prep || fail
@@ -2735,7 +2736,6 @@ execute_command_internal() {
 
     if [[ " ${command_history:-}" == *" $cell_command $short_cell "* ]]; then
       log_fatal "Circular dependency found: arrived at $cell_command $short_cell a second time."
-      debug_start
       fail1
     fi
 
