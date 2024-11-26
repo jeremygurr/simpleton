@@ -2383,6 +2383,26 @@ switch_context() {
   return 0
 }
 
+execute_command_internal_setup_params() {
+  begin_function
+    if [[ "${parameter_questions:-}" ]]; then
+      if [[ "$multi_commands" == t ]]; then
+        log_fatal "To use help, only choose one command"
+        fail1
+      fi
+      local p i pi 
+      begin_for pi in ${!parameter_questions[*]}; doo
+        p=${parameter_questions[$pi]}
+        if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
+          continue
+        fi
+        show_parameter_help $p || fail
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
 execute_command_internal_prep() {
   begin_function
     can_create_cyto=t
@@ -2392,9 +2412,7 @@ execute_command_internal_prep() {
       fail1
     }
 
-    if [[ -f $command_path.info ]]; then
-      execute_command_internal_setup_params || fail
-    fi
+    execute_command_internal_setup_params || fail
 
   end_function
   handle_return
@@ -2642,7 +2660,7 @@ show_parameter_help() {
         (( indent += 2 ))
 
         if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
-          out_wrap "${parameter_descriptions[$i]}"
+          out "${parameter_descriptions[$i]}"
         fi
 
         if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
@@ -2683,26 +2701,6 @@ show_parameter_help() {
       log_warn "No description found for parameter $name" || fail
     fi
 
-  end_function
-  handle_return
-}
-
-execute_command_internal_setup_params() {
-  begin_function
-    if [[ "${parameter_questions:-}" ]]; then
-      if [[ "$multi_commands" == t ]]; then
-        log_fatal "To use help, only choose one command"
-        fail1
-      fi
-      local p i pi 
-      begin_for pi in ${!parameter_questions[*]}; doo
-        p=${parameter_questions[$pi]}
-        if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
-          continue
-        fi
-        show_parameter_help $p || fail
-      end_for
-    fi
   end_function
   handle_return
 }
@@ -2802,6 +2800,11 @@ execute_command() {
     command_path=$path_to_commands/$cell_command
     command_requires_resolved_dims=f
     command_allows_logs=f
+
+    if [[ -e $path_to_commands/all.info ]]; then
+      source $path_to_commands/all.info || fail
+    fi
+
     if [[ -e $command_path.info ]]; then
       source $command_path.info || fail
     else
