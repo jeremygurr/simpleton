@@ -733,7 +733,7 @@ load_leaf_dims() {
         leaf_dims+=( ${trunk_dims[$i]} )
       end_for
     else
-      local anchor_dim branch_dim leftovers=" ${anchor_dims[*]} "
+      local anchor_dim branch_dim leftovers=" $anchor_dims "
       
       begin_for branch_dim in ${branch_dims[*]}; doo
         remove_word_from_string leftovers $branch_dim
@@ -941,14 +941,14 @@ find_seed_path() {
 
     s=/seed${s#/work}
 
-    begin_while [[ ! -d $s && $s == *:* ]]; doo
+    while [[ ! -d $s && $s == *:* ]]; do
       s=${s%/*}
-    end_while
+    done
 
     if [[ ${ignore_nonexistent:-f} == t ]]; then
-      begin_while [[ ! -d $s && $s == */*/*/* ]]; doo
+      while [[ ! -d $s && $s == */*/*/* ]]; do
         s=${s%/*}
-      end_while
+      done
     fi
 
     if [[ ! -d $s ]]; then
@@ -969,7 +969,7 @@ find_seed_path() {
         local seed_dim=${dim_folder##*/}
         seed_dim=${seed_dim%%:*}
 
-        begin_for (( i = 0; i < branch_dim_count; i++ )); doo
+        for (( i = 0; i < branch_dim_count; i++ )); do
 
           dim=${branch_dims[$i]}
           if [[ $dim == $seed_dim ]]; then
@@ -984,7 +984,7 @@ find_seed_path() {
             break
           fi
 
-        end_for
+        done
 
       fi
 
@@ -1459,8 +1459,9 @@ make_or_load_dna_contents() {
       if [[ ! -e $real_path ]]; then
         if [[ $real_path == /work/* ]]; then
           local seed_path
+          ignore_nonexistent=t \
           find_seed_path $real_path || fail
-          deep=t plant_seed_internal "$seed_path" "$real_path" || fail
+          deep=t plant_seed_internal "$seed_path" "$work_path" || fail
         else
           log_fatal "Missing file in dna: $item"
           fail1
@@ -2288,6 +2289,18 @@ calculate_default_anchors_recursive_unset() {
   handle_return
 }
 
+setup_dep_defaults() {
+  required_freshness=${fresh:-${default_freshness:-}}
+  if [[ ${top_level_command:=t} == t ]]; then
+    # this can be used in upstream prep functions to pass freshness to upstream
+    top_fresh=$required_freshness
+  fi
+  # Make this go back to default for any further contexts loaded
+  # fresh passed in by user should only apply to top level cell, not to deps or subs
+  fresh=
+  return 0
+}
+
 # inputs:
 #   cell_path
 #   anchor_dims (as a space separated string)
@@ -2335,6 +2348,9 @@ switch_context() {
       if [[ $dna_missing == f ]]; then
 
         if [[ $can_create_cyto == t ]]; then
+          # This is executed twice in this function, because we need the top_fresh here,
+          #   and yet may get updated info to calculate a better value later
+          setup_dep_defaults || fail
           switch_context_create || fail
         else # $can_create_cyto == f
           load_context || fail
@@ -2389,7 +2405,6 @@ switch_context() {
 
   else
     log_debug "Context already loaded" || fail
-    anchor_dims=( ${anchor_dims[*]} )
   fi
 
   return 0
@@ -2734,7 +2749,7 @@ execute_command_internal() {
     if [[ $top_level_command == f ]]; then
       unset anchor_dims
     else
-      default_anchor_dims=()
+      default_anchor_dims=
     fi
 
     execute_command_internal_prep || fail
@@ -2896,18 +2911,6 @@ make_or_load_dna_contents_update_cell() {
 
   end_function
   handle_return
-}
-
-setup_dep_defaults() {
-  required_freshness=${fresh:-${default_freshness:-}}
-  if [[ ${top_level_command:=t} == t ]]; then
-    # this can be used in upstream prep functions to pass freshness to upstream
-    top_fresh=$required_freshness
-  fi
-  # Make this go back to default for any further contexts loaded
-  # fresh passed in by user should only apply to top level cell, not to deps or subs
-  fresh=
-  return 0
 }
 
 reply_to_caller() {
