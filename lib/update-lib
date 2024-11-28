@@ -58,13 +58,20 @@ maybe_fix_choice() {
   local choice=$1
   begin_function
     if [[ ! -e "$choice" ]]; then
-      local choice_target=$(realpath $choice) trunk_cell
-      get_trunk_cell $choice_target || fail
-      if [[ ! -e $trunk_cell ]]; then
-        log_fatal "Invalid upstream link in $upstream/choices: $trunk_cell. Maybe try a clean build."
+      local choice_target trunk_cell invalid_dep=f
+      choice_target=$(realpath $choice) || invalid_dep=t
+      if [[ $invalid_dep == f ]]; then
+        get_trunk_cell $choice_target || fail
+        if [[ ! -e $trunk_cell ]]; then
+          invalid_dep=t
+        fi
+      fi
+      if [[ $invalid_dep == f ]]; then
+        safe_link $trunk_cell $choice || fail
+      else
+        log_fatal "Invalid upstream link in $upstream/choices: ${choice##*/}. Maybe try a clean build."
         fail1
       fi
-      safe_link $trunk_cell $choice || fail
     fi
   end_function
   handle_return
