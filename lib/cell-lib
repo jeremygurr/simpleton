@@ -65,7 +65,6 @@ cell_lib_init() {
     function_exists
     get_bottom_cell
     get_new_reply_file
-    get_top_cell
     load_log_vars
     load_log_vars_and_write_to_log
     log_debug
@@ -111,15 +110,29 @@ get_tmp_file() {
   return 0
 }
 
-write_or_load() {
-  local new_type=$1 content=$2
+write_vars_to_context() {
+  local context_type=$1 vars_to_write=$*
+  begin_function
+    local var val quoted_val
+    begin_for var in $vars_to_write; doo
+      local -n val=$var
+      local quoted_val=$val
+      shell_quote_var quoted_val
+      write_to_context $context_type var "$var=$quoted_val" || fail
+    end_for
+  end_function
+  handle_return
+}
+
+write_to_context() {
+  local context_type=$1 new_type=$2 content=$3
   begin_function_lo
     if [[ $context_make == t ]]; then
       if [[ $last_type == fun && $new_type == var 
          || $last_type == var && $new_type == fun ]]; then
-        echo >>$context_path.new || fail
+        echo >>$context_path-$context_type || fail
       fi
-      echo "$content" >>$context_path.new || fail
+      echo "$content" >>$context_path-$context_type || fail
       last_type=$new_type
     fi
     eval "$content" || {
@@ -422,7 +435,7 @@ make_or_load_dna_item() {
         fi
       ;;
     esac
-    write_or_load $load_type "$code" || fail
+    write_to_context $load_type "$code" || fail
   end_function
   handle_return
 }
@@ -459,32 +472,6 @@ get_bottom_cell() {
   return 0
 }
 
-make_or_load_context_dims() {
-  begin_function
-
-    local dim assignment member i members_string=
-    begin_for ((i = 0; i < branch_dim_count; i++)); doo
-      dim=${branch_dims[$i]}
-      member=${branch_members[$i]}
-      quotes=single shell_quote_var member
-      assignment="d_$dim=$member"
-      members_string+="$member "
-      write_or_load var "$assignment" || fail
-    end_for
-
-    write_or_load var "
-branch_dims=( ${branch_dims[*]} )
-branch_dim_count=$branch_dim_count
-branch_members=( ${members_string% } )
-derive_tables=( ${derive_tables[*]} )
-cell_is_trunk=$cell_is_trunk
-default_anchor_dims=\"$default_anchor_dims\"
-" || fail
-
-  end_function
-  handle_return
-}
-
 make_or_load_context_expand2() {
   begin_function
 
@@ -498,7 +485,7 @@ make_or_load_context_expand2() {
         is_optional=t
       fi
     fi
-    write_or_load var "${dim_type}_${dim}_is_optional=$is_optional" || fail
+    write_to_context var "${dim_type}_${dim}_is_optional=$is_optional" || fail
 
     if [[ -v ${dim_type}_${dim}_members ]]; then
       eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
@@ -536,7 +523,7 @@ ${dim_type}_${dim}_expand() {
       make_context_expand_members_known || fail
     fi
 
-    write_or_load fun "$code" || fail
+    write_to_context fun "$code" || fail
 
   end_function
   handle_return
@@ -799,7 +786,7 @@ calculate_default_anchors() {
   handle_return
 }
 
-make_or_load_context() {
+build_context_dna() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
 
@@ -849,7 +836,6 @@ make_or_load_context() {
       end_for
       cat $context_path.new >>$context_path || fail
       rm $context_path.new
-      made_new_context=t
     fi
 
   end_function
@@ -859,14 +845,6 @@ make_or_load_context() {
     fi
   fi
   handle_return
-}
-
-load_context() {
-  context_make=f make_or_load_context 
-}
-
-make_context() {
-  context_make=t make_or_load_context 
 }
 
 plant_seed_internal() {
@@ -1083,6 +1061,21 @@ init_context() {
       update_op \
       get_op \
 
+    dna_key_path=$dna_path/key \
+    down_path=$cyto_path/down \
+    job_path=$cyto_path/job \
+    key_path=$cyto_path/key \
+    lock_path=$context_path \
+    req_path=$cyto_path/req \
+    status_path=$cyto_path/status \
+    tmp_path=$cyto_path/tmp \
+    up_path=$cyto_path/up \
+    up_chosen_path=$cyto_path/up-chosen \
+    inner_path=$cyto_path/inner \
+    outer_path=$cyto_path/outer \
+
+    replay_path=$job_path/pipe_replay
+
   end_function
   handle_return
 }
@@ -1148,7 +1141,25 @@ load_branch_info() {
     local short_trunk=${trunk_cell#/*/*/}
     short_cell="$short_trunk$dim_string"
 
-    log_return_vars=short_cell
+    local dim assignment member i members_string=
+    begin_for ((i = 0; i < branch_dim_count; i++)); doo
+      dim=${branch_dims[$i]}
+      member=${branch_members[$i]}
+      quotes=single shell_quote_var member
+      assignment="d_$dim=$member"
+      members_string+="$member "
+      write_to_context trunk var "$assignment" || fail
+    end_for
+
+    write_to_context trunk var "
+trunk_cell=$trunk_cell
+branch_dims=( ${branch_dims[*]} )
+branch_dim_count=$branch_dim_count
+branch_members=( ${members_string% } )
+branch_hashes=( ${branch_hashes[*]} )
+cell_is_trunk=$cell_is_trunk
+short_cell=$short_cell
+" || fail
 
   end_function
   handle_return
@@ -1173,60 +1184,12 @@ load_repo_paths() {
   handle_return
 }
 
-git_commit_check() {
-  # skip this for now
-  # not sure we really want this to be automatic anyway. User should update manually
-  return 0
-
-  begin_function
-
-    local status_file=$status_path/git-commit-when-built \
-      changed=f \
-      update_only=${update_only:-f} \
-      module_name=$(realpath $dna_path)
-    module_name=${module_name#/seed/}
-    module_name=${module_name%%/*}
-
-    if [[ ! -v repo_paths ]] || ! is_array repo_paths; then
-      load_repo_paths || fail
-    fi
-
-    local repo_path=${repo_paths[$module_name]}
-    local new_hash=$(git -C $repo_path rev-list HEAD --max-count=1) || fail
-
-    if [[ $update_only == f ]]; then
-      if [[ ! -f $status_file ]]; then
-        log_debug "git_commit_check: status file missing"
-        changed=t
-      else
-        local old_hash=$(<$status_file)
-        if [[ "$old_hash" != "$new_hash" ]]; then
-          log_debug "git_commit_check: status file shows different commit"
-          changed=t
-        fi
-      fi
-    fi
-
-    if [[ $changed == t ]]; then
-      log_debug "git_commit_check: removing context"
-      rm -rf $cyto_path/up $context_path || fail
-    fi
-
-    if [[ $changed == t || $update_only == t ]]; then
-      log_debug "git_commit_check: updating hash to $new_hash"
-      echo "$new_hash" >$status_file || fail
-    fi
-
-  end_function
-  handle_return
-}
-
 broken_link_check() {
   begin_function
     local broken_links=( $(find -L $cyto_path -type l -print -o -name ".*" -prune) ) || fail
     if [[ "${broken_links:-}" ]]; then
       log_debug "Broken links found in cyto: $broken_links. Will rebuild cyto."
-      rm -rf $cyto_path/up $context_path || fail
+      problem_found=t
     fi
   end_function
   handle_return
@@ -1381,7 +1344,7 @@ make_or_load_dna_contents_handle_dir() {
       array_content+=( "$item_name" )
       if [[ -L $item || -d $item ]]; then
         result="${current_var}_${item_var}_path=$real_path"
-        write_or_load var "$result" || fail
+        write_to_context var "$result" || fail
       fi
     fi
 
@@ -1481,7 +1444,7 @@ make_or_load_dna_contents() {
 
     if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
       make_array_assignment $current_var array_content || fail
-      write_or_load var "$array_assignment" || fail
+      write_to_context var "$array_assignment" || fail
     fi
 
   end_function
@@ -1581,72 +1544,6 @@ make_cyto_up() {
     begin_for up_name in ${up[*]}; doo
       make_cyto_up_single $up_name || fail
     end_for
-  end_function
-  handle_return
-}
-
-# input must be a folder
-setup_cell_path_vars() {
-  cell_path=$1
-  begin_function
-
-    if [[ $cell_path == /seed/* ]]; then
-      cell_path=/work${cell_path#/seed}
-    fi
-
-    find_seed_path $cell_path || fail
-
-    if [[ ! "${top_cell:-}" ]]; then
-      get_top_cell $cell_path || fail
-    fi
-
-    dna_path=$cell_path/.dna \
-    cyto_path=$cell_path/.cyto \
-
-    context_path=$cyto_path/context \
-    dna_key_path=$dna_path/key \
-    down_path=$cyto_path/down \
-    job_path=$cyto_path/job \
-    key_path=$cyto_path/key \
-    lock_path=$cyto_path/context \
-    req_path=$cyto_path/req \
-    status_path=$cyto_path/status \
-    tmp_path=$cyto_path/tmp \
-    up_path=$cyto_path/up \
-    up_chosen_path=$cyto_path/up-chosen \
-    inner_path=$cyto_path/inner \
-    outer_path=$cyto_path/outer \
-    mock_path=$seed_path/.mock \
-
-    if [[ "${job_path:-}" ]]; then
-      replay_path=$job_path/pipe_replay
-    else
-      unset replay_path
-    fi
-
-  end_function
-  handle_return
-}
-
-switch_context_create() {
-  begin_function
-    if [[ ! -e $cyto_path ]]; then
-      mkdir $cyto_path || fail
-    fi
-
-    if [[ ! -d $status_path ]]; then
-      mkdir $status_path || fail
-    fi
-
-    if [[ ! -e $context_path ]]; then
-      make_context || fail
-    fi
-
-    source $context_path || fail
-
-    if [[ $update_git_commit == t ]]; then
-      update_only=t git_commit_check || fail
-    fi
   end_function
   handle_return
 }
@@ -2298,7 +2195,7 @@ calculate_default_anchors_recursive_unset() {
   handle_return
 }
 
-setup_dep_defaults() {
+get_required_freshness() {
   required_freshness=${fresh:-${default_freshness:-}}
   if [[ ${top_level_command:=t} == t ]]; then
     # this can be used in upstream prep functions to pass freshness to upstream
@@ -2310,104 +2207,174 @@ setup_dep_defaults() {
   return 0
 }
 
+build_context_trunk() {
+  begin_function
+
+    init_context || fail
+    load_branch_info || fail
+    find_seed_path $cell_path || fail
+    mock_path=$seed_path/.mock
+    write_vars_to_context trunk seed_path mock_path || fail
+
+    build_context_dna || fail
+
+    if [[ ! -d $status_path ]]; then
+      mkdir -p $status_path || fail
+    fi
+
+    if [[ ! "${out_path:-}" ]]; then
+      out_path=$cell_path
+    elif [[ "$out_path" != /* ]]; then
+      out_path=$cell_path/$out_path
+    fi
+    write_vars_to_context trunk out_path || fail
+
+    if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
+      make_cyto_up || fail
+    fi
+
+    if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
+      make_cyto_inner || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+build_context_branch() {
+  begin_function
+    incomplete
+    load_branch_info || fail
+  end_function
+  handle_return
+]
+
+build_context_leaf() {
+  begin_function
+    incomplete
+      # all anchors and non-branch dim calculations are dynamic per command execution
+      # and so can't be precalculated and stored in the context
+      : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
+
+      # should not need this any more, dna load should auto-strip ordinals
+      cleanup_dims || fail
+
+      # should not be called leaf dims but child_dims
+      load_leaf_dims || fail
+      if [[ ! "${parameter_questions:-}" ]]; then
+        setup_dims || fail
+      fi
+      
+  end_function
+  handle_return
+}
+
+build_context() {
+  begin_function
+
+    if [[ ! -f $context_path-trunk ]]; then
+      build_context_trunk || fail
+    else
+      source $context_path-trunk || fail
+    fi
+
+    if [[ ! -f $context_path-branch ]]; then
+      build_context_branch || fail
+    else
+      source $context_path-branch || fail
+    fi
+
+    if [[ ! -f $context_path-leaf ]]; then
+      build_context_leaf || fail
+    else
+      source $context_path-leaf || fail
+    fi
+
+    cat $context_path-trunk \
+      $context_path-branch \
+      $context_path-leaf \
+      >$context_path || fail
+
+  end_function
+  handle_return
+}
+
+load_post_context_dynamic_vars() {
+  begin_function
+    incomplete # should have coordinate calculations here
+
+    get_required_freshness || fail
+
+    if [[ -f $cell_path/.mock ]]; then
+      current_mock=$(<$cell_path/.mock)
+    else
+      current_mock=f
+    fi
+
+  end_function
+  handle_return
+}
+
+switch_context_check_for_problems() {
+  begin_function
+
+    local trunk_changed
+    if [[ "${prev_trunk_cell:-}" != "$trunk_cell" ]]; then
+      trunk_changed=t
+      prev_trunk_cell=$trunk_cell
+    else
+      trunk_changed=f
+    fi
+    
+    if [[ $trunk_changed == t && -e $cyto_path/context ]]; then
+      broken_link_check || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 # inputs:
-#   cell_path
+#   $1   cell_path
 #   anchor_dims (as a space separated string)
 switch_context() {
-  cell_path=${1:-$cell_path}
-  local can_create_cyto=${can_create_cyto:-t}
+  cell_path=$1
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
 
-    local log_vars=last_context_loaded log_show_vars=^cell_path \
-      maybe_incomplete=f dna_missing=f
+    local log_show_vars=^cell_path rebuild_attempted=f
     begin_function
-
-      if [[ ! -e $cell_path/.dna ]]; then
-        maybe_incomplete=t
-        dna_missing=t
-      fi
 
       log_debug "Loading context for $cell_path"
 
-      load_branch_info $cell_path || fail
+      dna_path=$cell_path/.dna \
+      cyto_path=$cell_path/.cyto \
 
-      setup_cell_path_vars $cell_path || fail
-      init_context || fail
-
-      local trunk_changed
-      if [[ "${prev_trunk_cell:-}" != "$trunk_cell" ]]; then
-        trunk_changed=t
-      else
-        trunk_changed=f
-      fi
-      prev_trunk_cell=${trunk_cell:-}
-
-      local update_git_commit=f
-      if [[ $trunk_changed == t ]]; then
-        if [[ -e $status_path ]]; then
-          git_commit_check || fail
-          broken_link_check || fail
-        fi
-      else # trunk_changed == f
-        update_git_commit=t
-      fi
-
-      made_new_context=f
-      if [[ $dna_missing == f ]]; then
-
-        if [[ $can_create_cyto == t ]]; then
-          # This is executed twice in this function, because we need the top_fresh here,
-          #   and yet may get updated info to calculate a better value later
-          setup_dep_defaults || fail
-          switch_context_create || fail
-        else # $can_create_cyto == f
-          load_context || fail
-        fi
-
-        # all anchors and non-branch dim calculations are dynamic per command execution
-        # and so can't be precalculated and stored in the context
-        : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
-        cleanup_dims || fail
-        load_leaf_dims || fail
-        if [[ ! "${parameter_questions:-}" ]]; then
-          setup_dims || fail
-        fi
-        
-      fi
-
-      setup_dep_defaults || fail
-
-      if [[ ! "${out_path:-}" ]]; then
-        out_path=$cell_path
-      elif [[ "$out_path" != /* ]]; then
-        out_path=$cell_path/$out_path
-      fi
-
-      if [[ $dna_missing == f ]]; then
-        if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-          make_cyto_up || fail
-        fi
-
-        if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
-          make_cyto_inner || fail
-        fi
-      fi
-
-      if [[ -f $cell_path/.mock ]]; then
-        current_mock=$(<$cell_path/.mock)
-      else
-        current_mock=f
-      fi
+      context_path=$cyto_path/context \
 
       if [[ ! -f $context_path ]]; then
-        maybe_incomplete=t
+        build_context || fail
+      else
+        source $context_path || fail
       fi
 
-      if [[ $maybe_incomplete == f ]]; then
-        # need to attempt to load the context each time it could have changed
-        last_context_loaded=$cell_path
+      local problem_found=f
+      switch_context_check_for_problems || fail
+      if [[ $problem_found == t ]]; then
+        if [[ $rebuild_attempted == f ]]; then
+          log_verbose "Problem found, rebuilding context"
+          rm -rf $cyto_path/up* $context_path* || fail
+          rebuild_attempted=t
+          continue
+        else
+          log_fatal "Context rebuild failed to resolve problem"
+          fail1
+        fi
       fi
+
+      load_post_context_dynamic_vars || fail
+
+      last_context_loaded=$cell_path
 
     end_function
     handle_return
@@ -2435,21 +2402,6 @@ execute_command_internal_setup_params() {
         show_parameter_help $p || fail
       end_for
     fi
-  end_function
-  handle_return
-}
-
-execute_command_internal_prep() {
-  begin_function
-    can_create_cyto=t
-
-    switch_context || {
-      log_fatal "Context failed to load for $cell_path"
-      fail1
-    }
-
-    execute_command_internal_setup_params || fail
-
   end_function
   handle_return
 }
@@ -2567,7 +2519,6 @@ execute_command_log_prep() {
     fi
 
     background_log=$log_path/background
-
     running_job_path=$job_path/running
 
     local link_target
@@ -2761,7 +2712,20 @@ execute_command_internal() {
       unset default_anchor_dims
     fi
 
-    execute_command_internal_prep || fail
+    can_create_cyto=t
+
+    switch_context || {
+      log_fatal "Context failed to load for $cell_path"
+      fail1
+    }
+
+    if [[ $disable_log == t ]]; then
+      log_debug "Logging disabled." || fail
+    else
+      execute_command_log_prep || fail
+    fi
+
+    execute_command_internal_setup_params || fail
 
     # This is in this function twice, because it changes after switch_context
     if [[ "${localize_dims:-}" ]]; then
@@ -2849,20 +2813,12 @@ execute_command() {
 
     source $command_path || fail
 
-    switch_context || fail
-
     if [[ ! "${disable_log:-}" ]]; then
       if [[ $command_allows_logs == t ]]; then
         disable_log=f
       else
         disable_log=t
       fi
-    fi
-
-    if [[ $disable_log == t ]]; then
-      log_debug "Logging disabled." || fail
-    else
-      execute_command_log_prep || fail
     fi
 
     local should_fork=t 
@@ -3210,14 +3166,6 @@ parallel_loop() {
 
   end_function
   handle_return
-}
-
-get_trunk_cell() {
-  trunk_cell=$1
-  while [[ $trunk_cell == */*:* ]]; do
-    trunk_cell=${trunk_cell%/*}
-  done
-  debug_return_vars=trunk_cell
 }
 
 trace_step_execution=${trace_step_execution:-f}
@@ -3617,21 +3565,6 @@ update_modify_times() {
   return 0
 }
 
-# finds the farthest ancestor of the given path which has .dna in it
-# will set top_cell, which will be empty if no cell cells are found
-get_top_cell() {
-  local subject=$1
-  top_cell=
-  while [[ "$subject" == /*/* ]]; do
-    if [[ -e $subject/.dna ]]; then
-      top_cell=$subject
-    fi
-    subject=${subject%/*}
-  done
-  debug_return_vars=top_cell
-  return 0
-}
-
 setup_context_defaults() {
   return 0
 }
@@ -3673,21 +3606,6 @@ setup_tmp_path() {
     mkdir -p $tmp_path || return 1
   fi
   return 0
-}
-
-# params: $1 (subject)
-# output: workspace
-get_workspace() {
-  local subject=$1
-  workspace=
-  while [[ ${#subject} -gt 1 && $subject == */* ]]; do
-    if [[ "$subject" == "$top_cell"/* ]]; then
-      workspace=$subject
-      break
-    fi
-    subject=${subject%/*}
-  done
-  [[ "$workspace" ]]
 }
 
 # inputs:
@@ -3830,26 +3748,6 @@ get_sane_value() {
 
 is_cell() {
   [[ -d "$1/.dna" ]]
-}
-
-is_inside_of_cell() {
-  local c=$1
-  if [[ $c == "$top_cell"/* ]]; then
-    while [[ $c == "$top_cell"/* ]]; do
-      if [[ -d $c/.dna ]]; then
-        return 0
-      fi
-      c=${c%/*}
-    done
-  else
-    while [[ $c == /*/* ]]; do
-      if [[ -d $c/.dna ]]; then
-        return 0
-      fi
-      c=${c%/*}
-    done
-  fi
-  return 1
 }
 
 load_parent_context() {
