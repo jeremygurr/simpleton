@@ -111,7 +111,7 @@ get_tmp_file() {
 }
 
 write_vars_to_context() {
-  local context_type=$1 vars_to_write=$*
+  local context_type=$context_type vars_to_write=$*
   begin_function
     local var val quoted_val
     begin_for var in $vars_to_write; doo
@@ -125,7 +125,7 @@ write_vars_to_context() {
 }
 
 write_to_context() {
-  local context_type=$1 new_type=$2 content=$3
+  local context_type=$context_type new_type=$2 content=$3
   begin_function_lo
     if [[ $context_make == t ]]; then
       if [[ $last_type == fun && $new_type == var 
@@ -361,12 +361,11 @@ extract_simple_name_across_array() {
   return 0
 }
 
-make_or_load_dna_item() {
+load_dna_item() {
   begin_function
     local var_full_path=$1 prefix=${prefix:-} \
       suffix= code \
       file_name is_auto=f \
-      context_make=${context_make:-t} \
       last_type=${last_type:-fun} \
 
     file_name=${var_full_path##*/}
@@ -472,7 +471,132 @@ get_bottom_cell() {
   return 0
 }
 
-make_or_load_context_expand2() {
+load_context_expand_find_members() {
+  begin_function
+
+    local branch other_found=f
+    local member_paths=$(find1 $seed_path -name "$dim:*" -type d | sort -g) || fail
+
+    begin_for branch in $member_paths; doo
+      m=${branch##*/*:}
+      if [[ $m == all ]]; then
+        log_fatal "Should not have an all as a dim member: $branch"
+        fail1
+      elif [[ $m == _other ]]; then
+        other_found=t
+      else
+        local member_var_path=$branch/.member
+        if [[ -f $member_var_path ]]; then
+          m=$(<$member_var_path) || fail
+        fi
+        members+=( "$m" )
+      fi
+    end_for
+
+    if [[ "$member_paths" && $other_found == f ]]; then
+      has_explicit_member_list=t
+    fi
+
+  end_function
+  handle_return
+}
+
+load_context_expand_handle_default() {
+  begin_function
+    if [[ -v ${dim_type}_${dim}_default ]]; then
+
+      local -n default=${dim_type}_${dim}_default
+      code+="
+    '')
+      values=( \"$default\" )
+    ;;"
+
+    elif [[ -v ${dim_type}_${dim}_default_function ]]; then
+
+      code+="
+    '')
+    "
+      local -n default_fun=${dim_type}_${dim}_default_function
+      code+="$(echo "$default_fun" | indent 2)"
+      code+="
+    ;;"
+
+    else
+
+      code+="
+    '')
+      problem=\"Missing required parameter: $dim\"
+    ;;"
+
+    fi
+  end_function
+  handle_return
+}
+
+load_context_expand_handle_aliases() {
+  begin_function
+    local a_line first remaining
+    begin_for a_line in "${aliases[@]}"; doo
+      first=${a_line%% *}
+      remaining=${a_line#* }
+      code+="
+    $first)
+      values=( $remaining )
+    ;;"
+    end_for
+  end_function
+  handle_return
+}
+
+load_context_expand_members_unknown() {
+  begin_function
+# This needs to be allowed to support derive tables
+#    all)
+#      problem=\"'all' member not available for this dim: $dim\"
+#    ;;
+    code+="
+    *)
+      values=( \"\$value\" )
+    ;;
+  esac
+}"
+  end_function
+  handle_return
+}
+
+load_context_expand_members_known() {
+  begin_function
+    local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
+    begin_for m in "${members[@]}"; doo
+      quoted_members+="\"$m\" "
+      if [[ $m == *\ * ]]; then
+        need_quotes=t
+      fi
+    end_for
+
+    if [[ $need_quotes == f ]]; then
+      quoted_members="${members[*]}"
+    fi
+
+    local members_with_pipes=${members_with_pipes// /\|}
+
+    code+="
+    all)
+      values=( $quoted_members )
+    ;;
+    $members_with_pipes)
+      values=( \$value )
+    ;;
+    *)
+      problem=\"Invalid $dim: \$value\"
+    ;;
+  esac
+}"
+  end_function
+  handle_return
+}
+
+load_context_expand2() {
   begin_function
 
     local members=() aliases=() \
@@ -485,7 +609,6 @@ make_or_load_context_expand2() {
         is_optional=t
       fi
     fi
-    write_to_context var "${dim_type}_${dim}_is_optional=$is_optional" || fail
 
     if [[ -v ${dim_type}_${dim}_members ]]; then
       eval "members=( \"\${${dim_type}_${dim}_members[@]}\" )" || fail
@@ -497,7 +620,7 @@ make_or_load_context_expand2() {
 
       has_explicit_member_list=t
     else
-      make_context_expand_find_members
+      load_context_expand_find_members
     fi
 
     if [[ -v ${dim_type}_${dim}_aliases ]]; then
@@ -510,17 +633,17 @@ ${dim_type}_${dim}_expand() {
   case \"\$value\" in"
 
     if [[ $is_optional == f ]]; then
-      make_context_expand_handle_default || fail
+      load_context_expand_handle_default || fail
     fi
 
     if (( ${#aliases[*]} > 0 )); then
-      make_context_expand_handle_aliases || fail
+      load_context_expand_handle_aliases || fail
     fi
 
     if [[ $has_explicit_member_list == f ]]; then
-      make_context_expand_members_unknown || fail
+      load_context_expand_members_unknown || fail
     else
-      make_context_expand_members_known || fail
+      load_context_expand_members_known || fail
     fi
 
     write_to_context fun "$code" || fail
@@ -529,7 +652,7 @@ ${dim_type}_${dim}_expand() {
   handle_return
 }
 
-make_or_load_context_expand() {
+load_context_expand() {
   begin_function
 
     if [[ ! -d $seed_path ]]; then
@@ -542,7 +665,7 @@ make_or_load_context_expand() {
       local -n dims=$dim_type
       begin_for dim in ${dims[*]:-}; doo
         if ! function_exists ${dim_type}_${dim}_expand; then
-          make_or_load_context_expand2 || fail
+          load_context_expand2 || fail
         fi
       end_for
     end_for
@@ -689,22 +812,6 @@ setup_dims() {
       expand_dims || fail
     fi
 
-    coord_type=branch \
-    switch_context_calc_coordinates || fail
-
-    if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
-      switch_context_handle_missing || fail
-    fi
-
-    if [[ $cell_is_leaf == t ]]; then
-      coord_type=leaf \
-      switch_context_calc_coordinates || fail
-    fi
-
-    if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
-      switch_context_handle_missing || fail
-    fi
-
   end_function
   handle_return
 }
@@ -744,6 +851,104 @@ load_leaf_dims() {
       cell_is_leaf=t
     fi
 
+  end_function
+  handle_return
+}
+
+is_derivable_from_valid_anchors() {
+  local dim=$1 row derivable=f is_derivable_skip_dims=${is_derivable_skip_dims:-}
+  local -n derived_from=trunk_dims_${dim}_derived_from
+  if [[ -v derived_from ]]; then
+
+    if [[ "${is_derivable_skip_dims:-}" ]]; then
+      is_derivable_skip_dims+=" $dim"
+    else
+      is_derivable_skip_dims=$dim
+    fi
+
+    for row in "${derived_from[@]}"; do
+
+      derived_from_dims=( $row ) 
+      derived_from_count=${#derived_from_dims[*]}
+
+      local valid_count=0 derived_from_dim \
+        orig_derived_from_count=$derived_from_count
+
+      if (( derived_from_count > 0 )); then
+
+        for derived_from_dim in ${derived_from_dims[*]}; do
+
+          if [[ " $is_derivable_skip_dims " == *" $derived_from_dim "* ]]; then
+            break
+          fi
+
+          if [[ "${valid_anchors[$derived_from_dim]:-}" ]] \
+             || is_derivable_from_valid_anchors $derived_from_dim; then
+            (( valid_count++ ))
+          fi
+
+        done
+
+        derived_from_count=$orig_derived_from_count
+        if (( valid_count == derived_from_count )); then
+          derivable=t
+          break
+        fi
+
+      fi
+
+    done
+  fi
+  [[ $derivable == t ]]
+}
+
+calculate_default_anchors_check_dims() {
+  begin_function
+
+    local derived_dim
+    begin_for derived_dim in ${trunk_dims[*]}; doo
+
+      if [[ ! -v valid_anchors[$derived_dim] ]]; then
+        continue
+      fi
+
+      local row derived_from_count derived_from_dims
+      local -n derived_from=trunk_dims_${derived_dim}_derived_from
+
+      if is_derivable_from_valid_anchors $derived_dim; then
+        if (( derived_from_count > 0 && derived_from_count < min_derived_from_count )); then
+          min_derived_from_count=$derived_from_count
+          dim_with_least_deps=$derived_dim
+          deps_array=( ${derived_from_dims[*]} )
+          if (( derived_from_count == 1 )); then
+            # we don't need to keep looking since 1 is the lowest possible number here
+            break
+          fi
+        fi
+      fi
+
+    end_for
+
+  end_function
+  handle_return
+}
+
+calculate_default_anchors_recursive_unset() {
+  local dim=$1 recursive_unset_skip=${recursive_unset_skip:-}
+  begin_function
+    if [[ -v valid_anchors[$dim] && " $recursive_unset_skip " != *" $dim "* ]]; then
+      log_debug "Unsetting $dim"
+      unset valid_anchors[$dim]
+      recursive_unset_skip+=" $dim"
+      local -n children=children_of_$dim
+      local child
+      if is_set children; then
+        for child in "${!children[@]}"; do
+          unset children[$child]
+          calculate_default_anchors_recursive_unset $child || fail 
+        done
+      fi
+    fi
   end_function
   handle_return
 }
@@ -790,42 +995,32 @@ build_context_dna() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
 
-    local context_action=Loading
-    if [[ $context_make == t ]]; then
-      context_action=Making
-    fi
-    log_debug "$context_action context for $short_cell" || fail
-
     local item_name last_part dna_full_item suffix
     local -A append_vars
 
-    if [[ $context_make == t ]]; then
-      local last_type=fun
-      if [[ -e $context_path.new ]]; then
-        rm $context_path.new || fail
-      fi
-    fi
-
-    derive_tables=()
-    if [[ -d $dna_path ]]; then
-      local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
-      prefix= make_or_load_dna_contents $dna_path || fail
-    elif [[ -f $dna_path ]]; then
-      if [[ $context_make == t ]]; then
-        cp $dna_path $context_path || fail
-      fi
-      source $dna_path || fail
-    else
-      log_vars=dna_path log_fatal "dna not found"
+    local last_type=fun
+    if [[ -e $context_path-trunk ]]; then
+      log_fatal "Internal error: Trunk context already exists. Should have been deleted before calling this function."
       fail1
     fi
 
-    cleanup_dims || fail
-    make_or_load_context_expand || fail
+    derive_tables=()
+    local context_type=trunk
+    if [[ -d $dna_path ]]; then
+      local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
+      prefix= load_dna_contents $dna_path || fail
+    elif [[ -f $dna_path ]]; then
+      safe_link $dna_path $context_path-trunk || fail
+      source $dna_path || fail
+    else
+      log_vars=dna_path log_fatal "Internal error: dna not found"
+      fail1
+    fi
+
+    load_context_expand || fail
     if [[ ! "${default_anchor_dims:-}" ]]; then
       calculate_default_anchors || fail
     fi
-    make_or_load_context_dims || fail
 
     if [[ $context_make == t ]]; then
       echo "#!/usr/env bash
@@ -834,16 +1029,9 @@ build_context_dna() {
       begin_for v in ${!append_vars[*]}; doo
         echo "$v=" >>$context_path || fail
       end_for
-      cat $context_path.new >>$context_path || fail
-      rm $context_path.new
     fi
 
   end_function
-  if failed; then
-    if [[ -e $context_path.new ]]; then
-      rm $context_path.new
-    fi
-  fi
   handle_return
 }
 
@@ -1141,17 +1329,17 @@ load_branch_info() {
     local short_trunk=${trunk_cell#/*/*/}
     short_cell="$short_trunk$dim_string"
 
-    local dim assignment member i members_string=
+    local dim assignment member i members_string= context_type=trunk
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
       dim=${branch_dims[$i]}
       member=${branch_members[$i]}
       quotes=single shell_quote_var member
       assignment="d_$dim=$member"
       members_string+="$member "
-      write_to_context trunk var "$assignment" || fail
+      write_to_context var "$assignment" || fail
     end_for
 
-    write_to_context trunk var "
+    write_to_context var "
 trunk_cell=$trunk_cell
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
@@ -1195,132 +1383,7 @@ broken_link_check() {
   handle_return
 }
 
-make_context_expand_find_members() {
-  begin_function
-
-    local branch other_found=f
-    local member_paths=$(find1 $seed_path -name "$dim:*" -type d | sort -g) || fail
-
-    begin_for branch in $member_paths; doo
-      m=${branch##*/*:}
-      if [[ $m == all ]]; then
-        log_fatal "Should not have an all as a dim member: $branch"
-        fail1
-      elif [[ $m == _other ]]; then
-        other_found=t
-      else
-        local member_var_path=$branch/.member
-        if [[ -f $member_var_path ]]; then
-          m=$(<$member_var_path) || fail
-        fi
-        members+=( "$m" )
-      fi
-    end_for
-
-    if [[ "$member_paths" && $other_found == f ]]; then
-      has_explicit_member_list=t
-    fi
-
-  end_function
-  handle_return
-}
-
-make_context_expand_handle_default() {
-  begin_function
-    if [[ -v ${dim_type}_${dim}_default ]]; then
-
-      local -n default=${dim_type}_${dim}_default
-      code+="
-    '')
-      values=( \"$default\" )
-    ;;"
-
-    elif [[ -v ${dim_type}_${dim}_default_function ]]; then
-
-      code+="
-    '')
-    "
-      local -n default_fun=${dim_type}_${dim}_default_function
-      code+="$(echo "$default_fun" | indent 2)"
-      code+="
-    ;;"
-
-    else
-
-      code+="
-    '')
-      problem=\"Missing required parameter: $dim\"
-    ;;"
-
-    fi
-  end_function
-  handle_return
-}
-
-make_context_expand_members_unknown() {
-  begin_function
-# This needs to be allowed to support derive tables
-#    all)
-#      problem=\"'all' member not available for this dim: $dim\"
-#    ;;
-    code+="
-    *)
-      values=( \"\$value\" )
-    ;;
-  esac
-}"
-  end_function
-  handle_return
-}
-
-make_context_expand_members_known() {
-  begin_function
-    local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
-    begin_for m in "${members[@]}"; doo
-      quoted_members+="\"$m\" "
-      if [[ $m == *\ * ]]; then
-        need_quotes=t
-      fi
-    end_for
-
-    if [[ $need_quotes == f ]]; then
-      quoted_members="${members[*]}"
-    fi
-
-    local members_with_pipes=${members_with_pipes// /\|}
-
-    code+="
-    all)
-      values=( $quoted_members )
-    ;;
-    $members_with_pipes)
-      values=( \$value )
-    ;;
-    *)
-      problem=\"Invalid $dim: \$value\"
-    ;;
-  esac
-}"
-  end_function
-  handle_return
-}
-
-make_context_expand_handle_aliases() {
-  begin_function
-    local a_line first remaining
-    begin_for a_line in "${aliases[@]}"; doo
-      first=${a_line%% *}
-      remaining=${a_line#* }
-      code+="
-    $first)
-      values=( $remaining )
-    ;;"
-    end_for
-  end_function
-  handle_return
-}
-
-make_or_load_dna_contents_dna_root() {
+load_dna_contents_dna_root() {
   begin_function
     local dna_folder=${dna_folder:-}
     if [[ $folder == */.dna ]]; then
@@ -1338,10 +1401,10 @@ make_or_load_dna_contents_dna_root() {
   handle_return
 }
 
-make_or_load_dna_contents_handle_dir() {
+load_dna_contents_handle_dir() {
   begin_function
     if [[ "$current_var" && $item_var != _* ]]; then
-      array_content+=( "$item_name" )
+      array_content+=( "$item_var" )
       if [[ -L $item || -d $item ]]; then
         result="${current_var}_${item_var}_path=$real_path"
         write_to_context var "$result" || fail
@@ -1359,40 +1422,41 @@ make_or_load_dna_contents_handle_dir() {
       fi
 
       # recursive
-      prefix=$new_prefix pass_thru=$new_pass_thru make_or_load_dna_contents $item || fail
+      prefix=$new_prefix pass_thru=$new_pass_thru load_dna_contents $item || fail
 
     fi
   end_function
   handle_return
 }
  
-make_or_load_dna_contents_handle_file() {
+load_dna_contents_handle_file() {
   begin_function
     if [[ -L $item && ! -e $item ]]; then
       if [[ $real_path == /work/* ]]; then
-        make_or_load_dna_contents_update_cell $real_path || fail
+        load_dna_contents_update_cell $real_path || fail
       else
         log_fatal "Broken link found: $item"
         fail1
       fi
     fi
-    prefix=$new_prefix make_or_load_dna_item $item || fail
+    prefix=$new_prefix load_dna_item $item || fail
   end_function
   handle_return
 }
 
 # requires dna_roots
-make_or_load_dna_contents() {
+load_dna_contents() {
   local folder=$1 prefix=${prefix:-} \
     pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
     ignore_unknown=${ignore_unknown:-f} \
+    context_type=$context_type \
 
   begin_function
 
     local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
 
     if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
-      make_or_load_dna_contents_dna_root || fail
+      load_dna_contents_dna_root || fail
     fi
 
     local current_var=${prefix%_} ord item_name item_var= result 
@@ -1434,10 +1498,10 @@ make_or_load_dna_contents() {
 
       if [[ -d $item ]]; then
         if [[ $recursive == t ]]; then
-          make_or_load_dna_contents_handle_dir || fail
+          load_dna_contents_handle_dir || fail
         fi
       else
-        make_or_load_dna_contents_handle_file || fail
+        load_dna_contents_handle_file || fail
       fi
 
     end_for
@@ -1449,13 +1513,6 @@ make_or_load_dna_contents() {
 
   end_function
   handle_return
-}
-
-cleanup_dims() {
-  local type
-  for type in trunk_dims sub_dims control_props data_props; do
-    extract_simple_name_across_array $type $type || fail
-  done
 }
 
 # inputs: up_path up_name 
@@ -2097,104 +2154,6 @@ switch_context_handle_missing() {
   handle_return
 }
 
-is_derivable_from_valid_anchors() {
-  local dim=$1 row derivable=f is_derivable_skip_dims=${is_derivable_skip_dims:-}
-  local -n derived_from=trunk_dims_${dim}_derived_from
-  if [[ -v derived_from ]]; then
-
-    if [[ "${is_derivable_skip_dims:-}" ]]; then
-      is_derivable_skip_dims+=" $dim"
-    else
-      is_derivable_skip_dims=$dim
-    fi
-
-    for row in "${derived_from[@]}"; do
-
-      derived_from_dims=( $row ) 
-      derived_from_count=${#derived_from_dims[*]}
-
-      local valid_count=0 derived_from_dim \
-        orig_derived_from_count=$derived_from_count
-
-      if (( derived_from_count > 0 )); then
-
-        for derived_from_dim in ${derived_from_dims[*]}; do
-
-          if [[ " $is_derivable_skip_dims " == *" $derived_from_dim "* ]]; then
-            break
-          fi
-
-          if [[ "${valid_anchors[$derived_from_dim]:-}" ]] \
-             || is_derivable_from_valid_anchors $derived_from_dim; then
-            (( valid_count++ ))
-          fi
-
-        done
-
-        derived_from_count=$orig_derived_from_count
-        if (( valid_count == derived_from_count )); then
-          derivable=t
-          break
-        fi
-
-      fi
-
-    done
-  fi
-  [[ $derivable == t ]]
-}
-
-calculate_default_anchors_check_dims() {
-  begin_function
-
-    local derived_dim
-    begin_for derived_dim in ${trunk_dims[*]}; doo
-
-      if [[ ! -v valid_anchors[$derived_dim] ]]; then
-        continue
-      fi
-
-      local row derived_from_count derived_from_dims
-      local -n derived_from=trunk_dims_${derived_dim}_derived_from
-
-      if is_derivable_from_valid_anchors $derived_dim; then
-        if (( derived_from_count > 0 && derived_from_count < min_derived_from_count )); then
-          min_derived_from_count=$derived_from_count
-          dim_with_least_deps=$derived_dim
-          deps_array=( ${derived_from_dims[*]} )
-          if (( derived_from_count == 1 )); then
-            # we don't need to keep looking since 1 is the lowest possible number here
-            break
-          fi
-        fi
-      fi
-
-    end_for
-
-  end_function
-  handle_return
-}
-
-calculate_default_anchors_recursive_unset() {
-  local dim=$1 recursive_unset_skip=${recursive_unset_skip:-}
-  begin_function
-    if [[ -v valid_anchors[$dim] && " $recursive_unset_skip " != *" $dim "* ]]; then
-      log_debug "Unsetting $dim"
-      unset valid_anchors[$dim]
-      recursive_unset_skip+=" $dim"
-      local -n children=children_of_$dim
-      local child
-      if is_set children; then
-        for child in "${!children[@]}"; do
-          unset children[$child]
-          calculate_default_anchors_recursive_unset $child || fail 
-        done
-      fi
-    fi
-  end_function
-  handle_return
-}
-
 get_required_freshness() {
   required_freshness=${fresh:-${default_freshness:-}}
   if [[ ${top_level_command:=t} == t ]]; then
@@ -2210,12 +2169,11 @@ get_required_freshness() {
 build_context_trunk() {
   begin_function
 
-    init_context || fail
-    load_branch_info || fail
-    find_seed_path $cell_path || fail
-    mock_path=$seed_path/.mock
-    write_vars_to_context trunk seed_path mock_path || fail
+    local context_type=trunk
 
+    log_debug "Building trunk context for $cell_path" || fail
+
+    init_context || fail
     build_context_dna || fail
 
     if [[ ! -d $status_path ]]; then
@@ -2227,7 +2185,7 @@ build_context_trunk() {
     elif [[ "$out_path" != /* ]]; then
       out_path=$cell_path/$out_path
     fi
-    write_vars_to_context trunk out_path || fail
+    write_vars_to_context out_path || fail
 
     if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
       make_cyto_up || fail
@@ -2243,28 +2201,46 @@ build_context_trunk() {
 
 build_context_branch() {
   begin_function
-    incomplete
+    local context_type=branch
+    log_debug "Building branch context for $cell_path" || fail
     load_branch_info || fail
+    find_seed_path $cell_path || fail
+    mock_path=$seed_path/.mock
+    write_vars_to_context seed_path mock_path || fail
+
+    coord_type=branch \
+    switch_context_calc_coordinates || fail
+    if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
+      switch_context_handle_missing || fail
+    fi
+
+    incomplete # TODO write coordinates to context
+
   end_function
   handle_return
 ]
 
 build_context_leaf() {
   begin_function
-    incomplete
-      # all anchors and non-branch dim calculations are dynamic per command execution
-      # and so can't be precalculated and stored in the context
-      : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
+    local context_type=leaf
+    log_debug "Building leaf context for $cell_path" || fail
+    incomplete # TODO
 
-      # should not need this any more, dna load should auto-strip ordinals
-      cleanup_dims || fail
+    # all anchors and non-branch dim calculations are dynamic per command execution
+    # and so can't be precalculated and stored in the context
+    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
 
-      # should not be called leaf dims but child_dims
-      load_leaf_dims || fail
-      if [[ ! "${parameter_questions:-}" ]]; then
-        setup_dims || fail
+    # should not be called leaf dims but child_dims
+    load_leaf_dims || fail
+    if [[ ! "${parameter_questions:-}" ]]; then
+      setup_dims || fail
+      coord_type=leaf \
+      switch_context_calc_coordinates || fail
+      if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
+        switch_context_handle_missing || fail
       fi
-      
+    fi
+
   end_function
   handle_return
 }
@@ -2848,7 +2824,7 @@ execute_command() {
   handle_return
 }
 
-make_or_load_dna_contents_update_cell() {
+load_dna_contents_update_cell() {
   local file=$1 original_cell_path=$cell_path cell_path work_path
   begin_function
 
