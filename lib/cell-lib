@@ -796,6 +796,59 @@ prep_dims() {
   handle_return
 }
 
+# expands aliases for the known dims array
+# collapses singular and plural dims into plural dims
+expand_dims() {
+  begin_function
+
+    local dim_var plural dim_type
+    begin_for dim_var in ${known_dims[*]}; doo
+
+      local dims_var
+      get_plural $dim_var dims_var
+      local -n ddim=d_$dim_var ddims=d_$dims_var
+
+      if [[ ! "${ddim:-}" && ! "${ddims:-}" ]]; then
+
+        local -n sdim=s_$dim_var sdims=s_$dims_var \
+          d_dim_type=${dim_var}_dim_type \
+
+        local members single=t
+        if [[ "${sdims:-}" ]]; then
+          members=$sdims
+          single=f
+        else
+          members=$sdim
+        fi
+
+        ddim=
+        ddims=
+
+        local value new_values
+        expand_dim_members $members || fail
+
+        if [[ $single == t ]]; then
+          if (( ${#new_values[*]} > 1 )); then
+            log_fatal "Too many values for $dim_var: ${new_values[*]}"
+            fail1
+          fi
+        fi
+
+        ddims=${new_values[*]}
+
+      else
+        ddims=${ddims:-$ddim}
+      fi
+
+    end_for
+
+    # These need to be discarded, because expansion could have set new dims
+    unset known_dims missing_dims
+
+  end_function
+  handle_return
+}
+
 setup_dims() {
   begin_function
 
@@ -1665,59 +1718,6 @@ expand_dim_members() {
   handle_return
 }
 
-# expands aliases for the known dims array
-# collapses singular and plural dims into plural dims
-expand_dims() {
-  begin_function
-
-    local dim_var plural dim_type
-    begin_for dim_var in ${known_dims[*]}; doo
-
-      local dims_var
-      get_plural $dim_var dims_var
-      local -n ddim=d_$dim_var ddims=d_$dims_var
-
-      if [[ ! "${ddim:-}" && ! "${ddims:-}" ]]; then
-
-        local -n sdim=s_$dim_var sdims=s_$dims_var \
-          d_dim_type=${dim_var}_dim_type \
-
-        local members single=t
-        if [[ "${sdims:-}" ]]; then
-          members=$sdims
-          single=f
-        else
-          members=$sdim
-        fi
-
-        ddim=
-        ddims=
-
-        local value new_values
-        expand_dim_members $members || fail
-
-        if [[ $single == t ]]; then
-          if (( ${#new_values[*]} > 1 )); then
-            log_fatal "Too many values for $dim_var: ${new_values[*]}"
-            fail1
-          fi
-        fi
-
-        ddims=${new_values[*]}
-
-      else
-        ddims=${ddims:-$ddim}
-      fi
-
-    end_for
-
-    # These need to be discarded, because expansion could have set new dims
-    unset known_dims missing_dims
-
-  end_function
-  handle_return
-}
-
 # inputs:
 #   derive_table   name of var of derive table
 #   out_field      which field to read from the table
@@ -2208,12 +2208,6 @@ build_context_branch() {
     mock_path=$seed_path/.mock
     write_vars_to_context seed_path mock_path || fail
 
-    coord_type=branch \
-    switch_context_calc_coordinates || fail
-    if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
-      switch_context_handle_missing || fail
-    fi
-
     incomplete # TODO write coordinates to context
 
   end_function
@@ -2226,19 +2220,17 @@ build_context_leaf() {
     log_debug "Building leaf context for $cell_path" || fail
     incomplete # TODO
 
-    # all anchors and non-branch dim calculations are dynamic per command execution
-    # and so can't be precalculated and stored in the context
-    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
-
     # should not be called leaf dims but child_dims
     load_leaf_dims || fail
+
     if [[ ! "${parameter_questions:-}" ]]; then
       setup_dims || fail
-      coord_type=leaf \
+      coord_type=branch \
       switch_context_calc_coordinates || fail
       if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
         switch_context_handle_missing || fail
       fi
+
     fi
 
   end_function
@@ -2285,6 +2277,17 @@ load_post_context_dynamic_vars() {
       current_mock=$(<$cell_path/.mock)
     else
       current_mock=f
+    fi
+
+    # all anchors and non-branch dim calculations are dynamic per command execution
+    # and so can't be precalculated and stored in the context
+    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
+
+    setup_dims || fail
+    coord_type=leaf \
+    switch_context_calc_coordinates || fail
+    if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
+      switch_context_handle_missing || fail
     fi
 
   end_function
