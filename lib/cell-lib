@@ -2240,28 +2240,46 @@ build_context_leaf() {
 build_context() {
   begin_function
 
-    if [[ ! -f $context_path-trunk ]]; then
-      build_context_trunk || fail
-    else
-      source $context_path-trunk || fail
+    if [[ -e $dna_path ]]; then
+
+      if [[ ! -f $context_path-trunk ]]; then
+        build_context_trunk || fail
+      else
+        source $context_path-trunk || fail
+      fi
+
+      if [[ ! -f $context_path-branch ]]; then
+        build_context_branch || fail
+      else
+        source $context_path-branch || fail
+      fi
+
+      if [[ ! -f $context_path-leaf ]]; then
+        build_context_leaf || fail
+      else
+        source $context_path-leaf || fail
+      fi
+
     fi
 
-    if [[ ! -f $context_path-branch ]]; then
-      build_context_branch || fail
-    else
-      source $context_path-branch || fail
+    if [[ -e $context_path ]]; then
+      rm $context_path || fail
     fi
 
-    if [[ ! -f $context_path-leaf ]]; then
-      build_context_leaf || fail
-    else
-      source $context_path-leaf || fail
+    if [[ -e $context_path-trunk ]]; then
+      cat $context_path-trunk >>$context_path || fail
+      context_exists=t
     fi
 
-    cat $context_path-trunk \
-      $context_path-branch \
-      $context_path-leaf \
-      >$context_path || fail
+    if [[ -e $context_path-trunk ]]; then
+      cat $context_path-trunk >>$context_path || fail
+      context_exists=t
+    fi
+
+    if [[ -e $context_path-leaf ]]; then
+      cat $context_path-leaf >>$context_path || fail
+      context_exists=t
+    fi
 
   end_function
   handle_return
@@ -2321,7 +2339,7 @@ switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
 
-    local log_show_vars=^cell_path rebuild_attempted=f
+    local log_show_vars=^cell_path rebuild_attempted=f context_exists=f
     begin_function
 
       log_debug "Loading context for $cell_path"
@@ -2335,6 +2353,7 @@ switch_context() {
         build_context || fail
       else
         source $context_path || fail
+        context_exists=t
       fi
 
       local problem_found=f
@@ -2351,7 +2370,9 @@ switch_context() {
         fi
       fi
 
-      load_post_context_dynamic_vars || fail
+      if [[ $context_exists == t ]]; then
+        load_post_context_dynamic_vars || fail
+      fi
 
       last_context_loaded=$cell_path
 
@@ -2693,7 +2714,7 @@ execute_command_internal() {
 
     can_create_cyto=t
 
-    switch_context || {
+    switch_context $cell_path || {
       log_fatal "Context failed to load for $cell_path"
       fail1
     }
@@ -2768,6 +2789,7 @@ execute_command() {
       job_start_time \
       background_log \
       running_job_path \
+      recursive_command=${recursive_command:-${recursive:-f}} \
 
     if [[ ! -e "$cell_path" ]]; then
       plant_seed $cell_path || {

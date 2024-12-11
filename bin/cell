@@ -16,6 +16,79 @@ if [[ "${real_params:-}" ]]; then
 fi
 cell_lib_init || exit 1
 
+handle_flag() {
+  local flags=$1
+  begin_function
+
+    local flags=${flags#-}
+    local flag
+
+    begin_while [[ "$flags" ]]; doo
+      flag=${flags:0:1}
+      flags=${flags#?}
+      case $flag in
+        d)
+          log=debug
+          ;;
+        i)
+          log=id2
+          ;;
+        r)
+          recursive_command=t
+          ;;
+        v)
+          log=verbose
+          ;;
+        *)
+          log_fatal "Unknown flag: $flag"
+          out "Flags are shortcuts for longer settings, and only the following are defined:"
+          out "  Flag   Equivalent setting"
+          out "  ------ -----------------------------"
+          out "  -d     log=debug"
+          out "  -i     log=id2"
+          out "  -r     recursive_command=t"
+          out "  -v     log=verbose"
+          fail1
+          ;;
+      esac
+    end_while
+    
+  end_function
+  handle_return
+}
+
+show_usage() {
+  begin_function
+    out "Usage: ${0##*/} {any combinations of commands and cell paths}"
+
+    local d
+    d="The given commands are executed on each of the given cells in order. "
+    d+="If no cell path is specified, the cell path is taken from the current folder. "
+    d+="If help or -h or --help or ? is given as any of the parameters, "
+    d+="documentation for the given cells or commands is printed instead of executing commands. "
+    d+="$NL$NL"
+    d+="Use \`cell . help\` to see help specific to the current cell (you can replace . with any cell name also)."
+    echo "$d" | fold -s -w $((COLUMNS-1)) | indent
+
+    out "${NL}Possible Commands:"
+    local command_info command_name
+    begin_for command_info in $(find1 $path_to_commands -name '*.info' | sort -g); doo
+      command_name=${command_info%.info}
+      command_name=${command_name##*/}
+      source $command_info || fail
+      if [[ "$command_description" ]]; then
+        local short_desc=$command_description
+        trim_ws short_desc
+        short_desc=${short_desc%%$NL*}
+        out "  $command_name $COL20$short_desc"
+      else
+        out "  $command_name ${COL20}Please add a description to this command in $cell_command"
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
 scan_commands() {
   begin_function
     local parameter leftovers=() leftover_command
@@ -41,6 +114,8 @@ scan_commands() {
             leftovers=()
           elif [[ -e $parameter/.dna ]]; then
             cells+=( $parameter )
+          elif [[ $parameter == -* ]]; then
+            handle_flag $parameter || fail
           else
             leftovers+=( $parameter )
           fi
@@ -431,8 +506,6 @@ top_level() {
 
   begin_function
 
-    command="$original_cmd" omni_log_init || fail
-
     local cell_path \
       path_to_commands=$SIMPLETON_REPO/command \
       first_command=t \
@@ -453,6 +526,8 @@ top_level() {
     fi
 
     scan_commands || fail
+
+    command="$original_cmd" omni_log_init || fail
 
     if (( ${#commands[*]} > 1 )); then
       multi_commands=t
@@ -485,38 +560,6 @@ top_level() {
   if [[ $trace_time == t ]]; then
     trace_time_summarize
   fi
-  handle_return
-}
-
-show_usage() {
-  begin_function
-    out "Usage: ${0##*/} {any combinations of commands and cell paths}"
-
-    local d
-    d="The given commands are executed on each of the given cells in order. "
-    d+="If no cell path is specified, the cell path is taken from the current folder. "
-    d+="If help or -h or --help or ? is given as any of the parameters, "
-    d+="documentation for the given cells or commands is printed instead of executing commands. "
-    d+="$NL$NL"
-    d+="Use \`cell . help\` to see help specific to the current cell (you can replace . with any cell name also)."
-    echo "$d" | fold -s -w $((COLUMNS-1)) | indent
-
-    out "${NL}Possible Commands:"
-    local command_info command_name
-    begin_for command_info in $(find1 $path_to_commands -name '*.info' | sort -g); doo
-      command_name=${command_info%.info}
-      command_name=${command_name##*/}
-      source $command_info || fail
-      if [[ "$command_description" ]]; then
-        local short_desc=$command_description
-        trim_ws short_desc
-        short_desc=${short_desc%%$NL*}
-        out "  $command_name $COL20$short_desc"
-      else
-        out "  $command_name ${COL20}Please add a description to this command in $cell_command"
-      fi
-    end_for
-  end_function
   handle_return
 }
 
