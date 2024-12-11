@@ -110,31 +110,15 @@ get_tmp_file() {
   return 0
 }
 
-write_vars_to_context() {
-  local context_type=$context_type vars_to_write=$*
-  begin_function
-    local var val quoted_val
-    begin_for var in $vars_to_write; doo
-      local -n val=$var
-      local quoted_val=$val
-      shell_quote_var quoted_val
-      write_to_context $context_type var "$var=$quoted_val" || fail
-    end_for
-  end_function
-  handle_return
-}
-
 write_to_context() {
-  local context_type=$context_type new_type=$2 content=$3
+  local context_type=$context_type new_type=$1 content=$2
   begin_function_lo
-    if [[ $context_make == t ]]; then
-      if [[ $last_type == fun && $new_type == var 
-         || $last_type == var && $new_type == fun ]]; then
-        echo >>$context_path-$context_type || fail
-      fi
-      echo "$content" >>$context_path-$context_type || fail
-      last_type=$new_type
+    if [[ $last_type == fun && $new_type == var 
+       || $last_type == var && $new_type == fun ]]; then
+      echo >>$context_path-$context_type || fail
     fi
+    echo "$content" >>$context_path-$context_type || fail
+    last_type=$new_type
     eval "$content" || {
       if [[ "${var_full_path:-}" ]]; then
         log_fatal "Invalid dna file: $var_full_path"
@@ -144,6 +128,20 @@ write_to_context() {
       fi
       fail1
     }
+  end_function
+  handle_return
+}
+
+write_vars_to_context() {
+  local context_type=$context_type vars_to_write=$*
+  begin_function
+    local var val quoted_val
+    begin_for var in $vars_to_write; doo
+      local -n val=$var
+      local quoted_val=$val
+      shell_quote_var quoted_val
+      write_to_context var "$var=$quoted_val" || fail
+    end_for
   end_function
   handle_return
 }
@@ -1075,14 +1073,12 @@ build_context_dna() {
       calculate_default_anchors || fail
     fi
 
-    if [[ $context_make == t ]]; then
-      echo "#!/usr/env bash
-# This file is generated from $dna_path$NL" >$context_path || fail
-      local v
-      begin_for v in ${!append_vars[*]}; doo
-        echo "$v=" >>$context_path || fail
-      end_for
-    fi
+    echo "#!/usr/env bash
+# This file is generated from $dna_path$NL" >$context_path-trunk || fail
+    local v
+    for v in ${!append_vars[*]}; do
+      echo "$v=" >>$context_path-trunk || fail
+    done
 
   end_function
   handle_return
@@ -2271,8 +2267,8 @@ build_context() {
       context_exists=t
     fi
 
-    if [[ -e $context_path-trunk ]]; then
-      cat $context_path-trunk >>$context_path || fail
+    if [[ -e $context_path-branch ]]; then
+      cat $context_path-branch >>$context_path || fail
       context_exists=t
     fi
 
@@ -2349,6 +2345,10 @@ switch_context() {
 
       context_path=$cyto_path/context \
 
+      if [[ -e $dna_path && ! -d $cyto_path ]]; then
+        mkdir $cyto_path || fail
+      fi
+
       if [[ ! -f $context_path ]]; then
         build_context || fail
       else
@@ -2411,8 +2411,8 @@ execute_command_internal_setup_params() {
 cell_open_log_file() {
   begin_function
     if [[ ! "${log_path:-}" ]]; then
-      log_fatal "Internal error: log_path should be set at this point"
-      fail1
+      # can't log until this is set
+      succeed
     fi
      
     if [[ "${omni_log_job_id:-0}" != 0 ]]; then
@@ -2827,7 +2827,7 @@ execute_command() {
     local should_fork=t 
     if [[ ${top_level_command:=t} == t ]]; then
       should_fork=f
-    elif [[ "$prev_trunk_cell" == "$trunk_cell" ]]; then
+    elif [[ "${prev_trunk_cell:-}" == "$trunk_cell" ]]; then
       should_fork=f
     fi
     
