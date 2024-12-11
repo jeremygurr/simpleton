@@ -1,4 +1,4 @@
-ARG ALPINE_IMAGE=alpine:v3.20
+ARG ALPINE_IMAGE=alpine:v3.21.0
 
 FROM $ALPINE_IMAGE
 
@@ -106,12 +106,12 @@ RUN --mount=type=cache,target=/var/cache/apk \
     zlib-doc \
     $end_of_packages
 
-ENV HOME /home
-ENV PAGER less
-ENV SIMPLETON_BASE /repo
-ENV SIMPLETON_REPO /repo/simpleton
-ENV SIMPLETON_LIB $SIMPLETON_REPO/lib
-ENV REPO_CACHE /home/.m2/repository
+ENV HOME=/home
+ENV PAGER=less
+ENV SIMPLETON_BASE=/repo
+ENV SIMPLETON_REPO=/repo/simpleton
+ENV SIMPLETON_LIB=$SIMPLETON_REPO/lib
+ENV REPO_CACHE=/home/.m2/repository
 
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
 RUN chmod a+rwx /etc/profile.d /usr/bin
@@ -130,5 +130,5 @@ RUN chown -R autouser $HOME
 RUN rm /etc/motd
 
 WORKDIR /work
-CMD /bin/bash $SIMPLETON_REPO/target/init
+CMD [ "/bin/bash", "$SIMPLETON_REPO/target/init" ]
 

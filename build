@@ -25,6 +25,7 @@ SIMPLETON_BASE=${SIMPLETON_BASE:-${PWD%/*}}
 SIMPLETON_REPO=$SIMPLETON_BASE/simpleton
 SIMPLETON_HOME=${SIMPLETON_HOME:-$HOME/.simpletonHome}
 SIMPLETON_WORK=${SIMPLETON_WORK:-$HOME/.simpletonWork}
+SIMPLETON_CACHE=${SIMPLETON_CACHE:-$HOME/.simpletonCache}
 
 if [[ $debug == t ]]; then
   source $SIMPLETON_REPO/lib/bash-debugger || exit 1
@@ -34,15 +35,19 @@ fi
 if [[ $clean == t ]]; then
   if [[ -d "$SIMPLETON_HOME" ]]; then
     echo "Cleaning $SIMPLETON_HOME"
-    rm -rf $SIMPLETON_HOME 
+    rm -rf $SIMPLETON_HOME || exit 1
   fi
   if [[ -d "$SIMPLETON_WORK" ]]; then
     echo "Cleaning $SIMPLETON_WORK"
-    rm -rf $SIMPLETON_WORK 
+    rm -rf $SIMPLETON_WORK || exit 1
   fi
   if [[ -d target ]]; then
     echo "Cleaning target"
-    rm -rf target
+    rm -rf target || exit 1
+  fi
+  if [[ -d "$SIMPLETON_CACHE" ]]; then
+    echo "Cleaning $SIMPLETON_CACHE"
+    rm -rf "$SIMPLETON_CACHE" || exit 1
   fi
 fi
 
@@ -52,6 +57,10 @@ fi
 
 if [[ ! -d $SIMPLETON_WORK ]]; then
   mkdir $SIMPLETON_WORK || exit 1
+fi
+
+if [[ ! -d $SIMPLETON_CACHE ]]; then
+  mkdir $SIMPLETON_CACHE || exit 1
 fi
 
 if [[ ! "${TIME_ZONE:-}" ]]; then
@@ -137,24 +146,30 @@ echo '  -e prompt_name=\"$name \" \
 
 echo '"' >>$build_dir/docker-copy-command
 
-ALPINE_IMAGE=${ALPINE_IMAGE:-alpine:latest}
+ALPINE_IMAGE=${ALPINE_IMAGE:-alpine:3.21.0}
 ALPINE_REPO=${ALPINE_REPO:-https://dl-cdn.alpinelinux.org/alpine/}
 
-if [[ "$debug" == t ]]; then
-  set -x
-  DOCKER_BUILDKIT=0 docker build -f $build_dir/Dockerfile --rm=false -t simpleton \
-    --build-arg TIME_ZONE=$TIME_ZONE \
-    --build-arg ALPINE_IMAGE=$ALPINE_IMAGE \
-    --build-arg ALPINE_REPO=$ALPINE_REPO \
-    .
-  set +x
-else
-  set -x
-  docker build -f $build_dir/Dockerfile -t simpleton \
-    --build-arg TIME_ZONE=$TIME_ZONE \
-    --build-arg ALPINE_IMAGE=$ALPINE_IMAGE \
-    --build-arg ALPINE_REPO=$ALPINE_REPO \
-    .
-  set +x
+#  This requires a later version of docker desktop that not all user may have, so will add this back later
+extra=
+if [[ ${use_cache:-f} == t ]]; then
+  extra+="--cache-from type=local,src=$SIMPLETON_CACHE
+  --cache-to type=local,dest=$SIMPLETON_CACHE
+  "
 fi
+
+if [[ ${debug_build:-f} == t ]]; then
+  extra+="-D
+  "
+fi
+
+set -x
+docker buildx build \
+  $extra \
+  -f $build_dir/Dockerfile \
+  -t simpleton \
+  --build-arg TIME_ZONE=$TIME_ZONE \
+  --build-arg ALPINE_IMAGE=$ALPINE_IMAGE \
+  --build-arg ALPINE_REPO=$ALPINE_REPO \
+  .
+set +x
 
