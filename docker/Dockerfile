@@ -115,7 +115,7 @@ ENV REPO_CACHE=/home/.m2/repository
 
 RUN adduser -h /home -s /bin/bash -D autouser -u 99999
 RUN chmod a+rwx /etc/profile.d /usr/bin
-RUN ln -sf $SIMPLETON_REPO/target/inputrc /etc/
+RUN ln -sf /repo/simpleton/target/inputrc /etc/
 COPY target/sudoers /etc/
 RUN chown root /etc/sudoers
 RUN mkdir -p $REPO_CACHE
@@ -130,5 +130,5 @@ RUN chown -R autouser $HOME
 RUN rm /etc/motd
 
 WORKDIR /work
-CMD [ "/bin/bash", "$SIMPLETON_REPO/target/init" ]
+CMD [ "/bin/bash", "/repo/simpleton/target/init" ]
 

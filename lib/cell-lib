@@ -115,9 +115,9 @@ write_to_context() {
   begin_function_lo
     if [[ $last_type == fun && $new_type == var 
        || $last_type == var && $new_type == fun ]]; then
-      echo >>$context_path-$context_type || fail
+      echo >>$context_path-$context_type.new || fail
     fi
-    echo "$content" >>$context_path-$context_type || fail
+    echo "$content" >>$context_path-$context_type.new || fail
     last_type=$new_type
     eval "$content" || {
       if [[ "${var_full_path:-}" ]]; then
@@ -867,39 +867,41 @@ setup_dims() {
   handle_return
 }
 
-load_leaf_dims() {
+load_child_dims() {
   begin_function
     local i
 
-    leaf_dims=()
-    local trunk_dim_count=${#trunk_dims[*]}
-    if [[ ! "${anchor_dims:-}" ]]; then
-      begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
-        leaf_dims+=( ${trunk_dims[$i]} )
-      end_for
-    else
-      local anchor_dim branch_dim leftovers=" $anchor_dims "
-      
-      begin_for branch_dim in ${branch_dims[*]}; doo
-        remove_word_from_string leftovers $branch_dim
-      end_for
+    if [[ ! "${child_dims:-}" ]]; then
+      child_dims=()
+      local trunk_dim_count=${#trunk_dims[*]}
+      if [[ ! "${anchor_dims:-}" ]]; then
+        begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
+          child_dims+=( ${trunk_dims[$i]} )
+        end_for
+      else
+        local anchor_dim branch_dim leftovers=" $anchor_dims "
+        
+        begin_for branch_dim in ${branch_dims[*]}; doo
+          remove_word_from_string leftovers $branch_dim
+        end_for
 
-      begin_for anchor_dim in $anchor_dims; doo
-        if [[ " ${trunk_dims[*]} " != *" $anchor_dim "* ]]; then
-          log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims[*]}"
-          fail1
-        fi
-      end_for
-      
-      leaf_dims=( $leftovers )
-    fi
+        begin_for anchor_dim in $anchor_dims; doo
+          if [[ " ${trunk_dims[*]} " != *" $anchor_dim "* ]]; then
+            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims[*]}"
+            fail1
+          fi
+        end_for
+        
+        child_dims=( $leftovers )
+      fi
 
-    leaf_dim_count=${#leaf_dims[*]}
+      child_dim_count=${#child_dims[*]}
 
-    if (( leaf_dim_count > 0 )); then
-      cell_is_leaf=f
-    else
-      cell_is_leaf=t
+      if (( child_dim_count > 0 )); then
+        cell_is_leaf=f
+      else
+        cell_is_leaf=t
+      fi
     fi
 
   end_function
@@ -1046,39 +1048,43 @@ build_context_dna() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
 
-    local item_name last_part dna_full_item suffix
+    local item_name last_part dna_full_item suffix context_type=trunk
     local -A append_vars
 
-    local last_type=fun
-    if [[ -e $context_path-trunk ]]; then
+    if [[ -e $context_path-$context_type ]]; then
       log_fatal "Internal error: Trunk context already exists. Should have been deleted before calling this function."
       fail1
     fi
 
     derive_tables=()
-    local context_type=trunk
     if [[ -d $dna_path ]]; then
       local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
       prefix= load_dna_contents $dna_path || fail
+
+      load_context_expand || fail
+      if [[ ! "${default_anchor_dims:-}" ]]; then
+        calculate_default_anchors || fail
+      fi
+      write_to_context var default_anchor_dims || fail
+
+      mv $context_path-$context_type.new $context_path-$context_type.new2 || fail
+      echo "#!/usr/env bash
+  # This file is generated from $dna_path$NL" >$context_path-$context_type.new || fail
+      local v
+      for v in ${!append_vars[*]}; do
+        echo "$v=" >>$context_path-$context_type.new || fail
+      done
+
+      cat $context_path-$context_type.new2 >>$context_path-$context_type.new || fail
+      rm $context_path-$context_type.new2 || fail
+
     elif [[ -f $dna_path ]]; then
-      safe_link $dna_path $context_path-trunk || fail
+      safe_link $dna_path $context_path-$context_type.new || fail
       source $dna_path || fail
     else
       log_vars=dna_path log_fatal "Internal error: dna not found"
       fail1
     fi
-
-    load_context_expand || fail
-    if [[ ! "${default_anchor_dims:-}" ]]; then
-      calculate_default_anchors || fail
-    fi
-
-    echo "#!/usr/env bash
-# This file is generated from $dna_path$NL" >$context_path-trunk || fail
-    local v
-    for v in ${!append_vars[*]}; do
-      echo "$v=" >>$context_path-trunk || fail
-    done
 
   end_function
   handle_return
@@ -1377,26 +1383,6 @@ load_branch_info() {
     fi
     local short_trunk=${trunk_cell#/*/*/}
     short_cell="$short_trunk$dim_string"
-
-    local dim assignment member i members_string= context_type=trunk
-    begin_for ((i = 0; i < branch_dim_count; i++)); doo
-      dim=${branch_dims[$i]}
-      member=${branch_members[$i]}
-      quotes=single shell_quote_var member
-      assignment="d_$dim=$member"
-      members_string+="$member "
-      write_to_context var "$assignment" || fail
-    end_for
-
-    write_to_context var "
-trunk_cell=$trunk_cell
-branch_dims=( ${branch_dims[*]} )
-branch_dim_count=$branch_dim_count
-branch_members=( ${members_string% } )
-branch_hashes=( ${branch_hashes[*]} )
-cell_is_trunk=$cell_is_trunk
-short_cell=$short_cell
-" || fail
 
   end_function
   handle_return
@@ -2165,9 +2151,13 @@ get_required_freshness() {
 build_context_trunk() {
   begin_function
 
-    local context_type=trunk
+    local context_type=trunk last_type=fun
 
     log_debug "Building trunk context for $cell_path" || fail
+
+    if [[ -e $context_path-$context_type.new ]]; then
+      rm $context_path-$context_type.new || fail
+    fi
 
     init_context || fail
     build_context_dna || fail
@@ -2183,13 +2173,7 @@ build_context_trunk() {
     fi
     write_vars_to_context out_path || fail
 
-    if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-      make_cyto_up || fail
-    fi
-
-    if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
-      make_cyto_inner || fail
-    fi
+    mv $context_path-$context_type.new $context_path-$context_type || fail
 
   end_function
   handle_return
@@ -2197,37 +2181,76 @@ build_context_trunk() {
 
 build_context_branch() {
   begin_function
-    local context_type=branch
+
+    local context_type=branch last_type=fun
     log_debug "Building branch context for $cell_path" || fail
-    load_branch_info || fail
+
+    if [[ -e $context_path-$context_type.new ]]; then
+      rm $context_path-$context_type.new || fail
+    fi
+
     find_seed_path $cell_path || fail
     mock_path=$seed_path/.mock
     write_vars_to_context seed_path mock_path || fail
 
-    incomplete # TODO write coordinates to context
+    local dim assignment member i members_string= context_type=trunk
+    begin_for ((i = 0; i < branch_dim_count; i++)); doo
+      dim=${branch_dims[$i]}
+      member=${branch_members[$i]}
+      quotes=single shell_quote_var member
+      assignment="d_$dim=$member"
+      members_string+="$member "
+      write_to_context var "$assignment" || fail
+    end_for
+
+    write_to_context var "
+trunk_cell=$trunk_cell
+branch_dims=( ${branch_dims[*]} )
+branch_dim_count=$branch_dim_count
+branch_members=( ${members_string% } )
+branch_hashes=( ${branch_hashes[*]} )
+cell_is_trunk=$cell_is_trunk
+short_cell=$short_cell
+" || fail
+
+    mv $context_path-$context_type.new $context_path-$context_type || fail
 
   end_function
   handle_return
 }
 
+# only run if the cell is actually a leaf
 build_context_leaf() {
   begin_function
-    local context_type=leaf
+    local context_type=leaf last_type=fun
     log_debug "Building leaf context for $cell_path" || fail
-    incomplete # TODO
 
-    # should not be called leaf dims but child_dims
-    load_leaf_dims || fail
+    if [[ -e $context_path-$context_type.new ]]; then
+      rm $context_path-$context_type.new || fail
+    fi
+
+    load_child_dims || fail
 
     if [[ ! "${parameter_questions:-}" ]]; then
-      setup_dims || fail
+
       coord_type=branch \
       switch_context_calc_coordinates || fail
       if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
         switch_context_handle_missing || fail
       fi
 
+      write_vars_to_context \
+        branch_coordinate_data \
+        branch_coordinate_count \
+        branch_coordinate_rows \
+        branch_coordinate_fields \
+        branch_coordinate_fields_count \
+        branch_coordinate_fields_plural \
+        || fail
+
     fi
+
+    mv $context_path-$context_type.new $context_path-$context_type || fail
 
   end_function
   handle_return
@@ -2235,6 +2258,11 @@ build_context_leaf() {
 
 build_context() {
   begin_function
+
+    local parent_cell=${cell_path%/*}
+    if [[ -e $parent_cell/.cyto/context-trunk && ! -f $context_path-trunk ]]; then
+      safe_link $parent_cell/.cyto/context-trunk $context_path-trunk || fail
+    fi
 
     if [[ -e $dna_path ]]; then
 
@@ -2244,38 +2272,53 @@ build_context() {
         source $context_path-trunk || fail
       fi
 
+      load_child_dims || fail
+      setup_dims || fail
+
+      if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
+        make_cyto_up || fail
+      fi
+
+      if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
+        make_cyto_inner || fail
+      fi
+
       if [[ ! -f $context_path-branch ]]; then
         build_context_branch || fail
       else
         source $context_path-branch || fail
       fi
 
-      if [[ ! -f $context_path-leaf ]]; then
-        build_context_leaf || fail
-      else
-        source $context_path-leaf || fail
+      if [[ $cell_is_leaf == t ]]; then
+        if [[ ! -f $context_path-leaf ]]; then
+          build_context_leaf || fail
+        else
+          source $context_path-leaf || fail
+        fi
       fi
 
     fi
 
-    if [[ -e $context_path ]]; then
-      rm $context_path || fail
+    if [[ -e $context_path.new ]]; then
+      rm $context_path.new || fail
     fi
 
     if [[ -e $context_path-trunk ]]; then
-      cat $context_path-trunk >>$context_path || fail
+      cat $context_path-trunk >>$context_path.new || fail
       context_exists=t
     fi
 
     if [[ -e $context_path-branch ]]; then
-      cat $context_path-branch >>$context_path || fail
+      cat $context_path-branch >>$context_path.new || fail
       context_exists=t
     fi
 
     if [[ -e $context_path-leaf ]]; then
-      cat $context_path-leaf >>$context_path || fail
+      cat $context_path-leaf >>$context_path.new || fail
       context_exists=t
     fi
+
+    mv $context_path.new $context_path || fail
 
   end_function
   handle_return
@@ -2297,11 +2340,20 @@ load_post_context_dynamic_vars() {
     # and so can't be precalculated and stored in the context
     : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
 
-    setup_dims || fail
-    coord_type=leaf \
-    switch_context_calc_coordinates || fail
-    if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
-      switch_context_handle_missing || fail
+    if [[ ! "${branch_coordinate_count:-}" ]]; then
+      coord_type=branch \
+      switch_context_calc_coordinates || fail
+      if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
+        switch_context_handle_missing || fail
+      fi
+    fi
+
+    if [[ ! "${leaf_coordinate_count:-}" ]]; then
+      coord_type=leaf \
+      switch_context_calc_coordinates || fail
+      if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
+        switch_context_handle_missing || fail
+      fi
     fi
 
   end_function
@@ -2353,6 +2405,7 @@ switch_context() {
         build_context || fail
       else
         source $context_path || fail
+        setup_dims || fail
         context_exists=t
       fi
 
@@ -2714,8 +2767,6 @@ execute_command_internal() {
       unset default_anchor_dims
     fi
 
-    can_create_cyto=t
-
     switch_context $cell_path || {
       log_fatal "Context failed to load for $cell_path"
       fail1
@@ -2823,6 +2874,9 @@ execute_command() {
         disable_log=t
       fi
     fi
+
+    eval "local $branch_local_vars"
+    load_branch_info || fail
 
     local should_fork=t 
     if [[ ${top_level_command:=t} == t ]]; then
