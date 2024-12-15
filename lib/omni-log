@@ -53,11 +53,11 @@ omni_log_init() {
         ;;
       d|debug)
         log_level_filter=debug
-        show_debug_id=t
+        : ${show_debug_id:=t}
         ;;
       d2|debug2)
         log_level_filter=debug
-        show_debug_id=a
+        : ${show_debug_id:=a}
         ;;
       file)
         # default behavior
@@ -367,6 +367,13 @@ write_to_log_update_cooked() {
   return 0
 }
 
+log_level_at_most() {
+  local level=$1
+  local level_num=${log_level_num_map[$level]} \
+    log_level_num=${log_level_num_map[$log_level_filter]}
+  (( level_num <= log_level_num ))
+}
+
 write_to_log_console_out() {
   local out_line=
   if [[ $log_to_out == t ]]; then
@@ -374,7 +381,11 @@ write_to_log_console_out() {
     echo "$out_line" >&2
   else
 
-    local hide=f
+    local hide=t
+
+    if log_level_at_most $level; then
+      hide=f
+    fi
 
     if [[ "$log_action_filter" && ! $action =~ $log_action_filter ]]; then
       hide=t
@@ -385,12 +396,6 @@ write_to_log_console_out() {
     fi
 
     if [[ "$log_depth_filter" && $log_depth_current -gt $log_depth_filter ]]; then
-      hide=t
-    fi
-
-    local level_num=${log_level_num_map[$level]} \
-      log_level_num=${log_level_num_map[$log_level_filter]}
-    if (( level_num < log_level_num )); then
       hide=t
     fi
 
@@ -615,6 +620,9 @@ log_fatal() {
     local $snapshot_source_location_locals
     offset=1 snapshot_source_location
     write_to_log fatal "${action:-}" "$*" || fail
+    if log_level_at_most debug; then
+      start_frame=2 stack_trace
+    fi
   end_function
   handle_return
 }
@@ -655,15 +663,15 @@ log_and_run() {
 }
 
 declare -A log_level_num_map=( 
-  [all]=0 
-  [trace]=1 
-  [debug]=2 
-  [verbose]=3 
+  [off]=0
+  [fatal]=1 
+  [error]=2 
+  [warn]=3 
   [info]=4 
-  [warn]=5 
-  [error]=6 
-  [fatal]=7 
-  [off]=9
+  [verbose]=5 
+  [debug]=6 
+  [trace]=7 
+  [all]=8
   )
 
 declare -A log_level_color_map=( 
