@@ -139,7 +139,7 @@ write_vars_to_context() {
     local var val quoted_val
     begin_for var in $vars_to_write; doo
       local -n val=$var
-      local quoted_val=$val
+      local quoted_val=${val:-}
       shell_quote_var quoted_val
       write_to_context var "$var=$quoted_val" || fail
     end_for
@@ -854,11 +854,7 @@ setup_dims() {
     local known_dims=()
     local missing_dims=()
 
-    if [[ $cell_is_leaf == t ]]; then
-      prep_dims sub_dims control_props data_props || fail
-    fi
-
-    prep_dims trunk_dims || fail
+    prep_dims trunk_dims sub_dims control_props data_props || fail
 
     if [[ "${known_dims:-}" ]]; then
       expand_dims || fail
@@ -2194,6 +2190,8 @@ build_context_branch() {
     mock_path=$seed_path/.mock
     write_vars_to_context seed_path mock_path || fail
 
+    load_child_dims || fail
+
     local dim assignment member i members_string=
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
       dim=${branch_dims[$i]}
@@ -2210,7 +2208,10 @@ branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
 branch_hashes=( ${branch_hashes[*]} )
+child_dims=( ${child_dims[*]} )
+child_dim_count=$child_dim_count
 cell_is_trunk=$cell_is_trunk
+cell_is_leaf=$cell_is_leaf
 short_cell=$short_cell
 " || fail
 
@@ -2230,7 +2231,8 @@ build_context_leaf() {
       rm $context_path-$context_type.new || fail
     fi
 
-    load_child_dims || fail
+    # this already happened?
+    #load_child_dims || fail
 
     if [[ ! "${parameter_questions:-}" ]]; then
 
@@ -2273,7 +2275,6 @@ build_context() {
         source $context_path-trunk || fail
       fi
 
-      load_child_dims || fail
       setup_dims || fail
 
       if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
@@ -2815,7 +2816,7 @@ execute_command() {
   local cell_path=$(realpath $1) cell_command=$2 \
     log_show_vars='^cell_path cell_command' \
 
-  begin_function_hi
+  begin_function
 
     case $cell_command in
       dim-*|up-*)
