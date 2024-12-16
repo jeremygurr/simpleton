@@ -443,87 +443,83 @@ debug_set_watch() {
   fi
 }
 
-stack_trace() {
-  local start_frame=${start_frame:-1}
-  local count=${#FUNCNAME[*]}
-  local p n
+low_stack_trace() {
+  local start_frame=${start_frame:-1} count=${#FUNCNAME[*]}
 
   if [ ${tracing_midline:-f} == t ]; then
     tracing_midline=f
     echo >&$fd_original_err
   fi
 
-  echo "Raw call stack:" >&$fd_original_err
-  {
-  for ((n = count - 1; n >= start_frame; n--)) ; do
-    (( p = n - 1 ))
-    echo "  ${FUNCNAME[$n]:-(no func)} ${BASH_SOURCE[$n]:-(no source)} ${BASH_LINENO[$p]:-(no line)}"
-  done
-  } | column -t >&$fd_original_err
+  echo "Low call stack:" >&$fd_original_err
+  stack_level=0 stack_trace_inner | column -t >&$fd_original_err
+
   return 0
 }
 
-warm_stack_trace() {
+medium_stack_trace() {
   if [[ -v stack_debug_id ]]; then
-    echo "Warm call stack:" >&$fd_original_err
-    local count=${#stack_debug_id[*]} n \
-      debug_id raw_stack_id function
-    {
-    for ((n = 0; n < count; n++)); do
-      eval "${stack_debug_id[$n]}"
-      echo "  $function debug_id=$debug_id"
-    done
-    } | column -t >&$fd_original_err
+    local start_frame=${start_frame:-1} count=${#FUNCNAME[*]}
+
+    if [ ${tracing_midline:-f} == t ]; then
+      tracing_midline=f
+      echo >&$fd_original_err
+    fi
+
+    echo "Medium call stack:" >&$fd_original_err
+    stack_level=1 stack_trace_inner | column -t >&$fd_original_err
   else
-    echo "No warm stack." >&$fd_original_err
+    echo "No medium stack available." >&$fd_original_err
   fi
   return 0
 }
 
-cooked_stack_trace() {
-  if [[ -v cooked_stack ]]; then
-    echo "Cooked call stack:" >&$fd_original_err
-    local count=${#cooked_stack[*]} n
-    for ((n = 0; n < count; n++)); do
-      echo " ${cooked_stack[$n]}" >&$fd_original_err
-    done
+high_stack_trace() {
+  if [[ -v stack_debug_id ]]; then
+    local start_frame=${start_frame:-1} count=${#FUNCNAME[*]}
+
+    if [ ${tracing_midline:-f} == t ]; then
+      tracing_midline=f
+      echo >&$fd_original_err
+    fi
+
+    echo "High call stack:" >&$fd_original_err
+    stack_level=2 stack_trace_inner | column -t >&$fd_original_err
   else
-    echo "No cooked stack." >&$fd_original_err
+    echo "No high stack available." >&$fd_original_err
   fi
   return 0
 }
 
-enhanced_stack_trace() {
-  local start_frame=${start_frame:-1} count=${#FUNCNAME[*]}
+stack_trace_inner() {
+  local extra= debug_id= p n r l stack_level=${stack_level:-0}
 
-  if [[ ${tracing_midline:-f} == t ]]; then
-    tracing_midline=f
-    echo >&$fd_original_err
-  fi
-
-  echo "Full call stack:" >&$fd_original_err
-  local extra= debug_id= p n r
-  {
   for ((n = count - 1; n >= start_frame; n--)) ; do
     (( p = n - 1 ))
     (( r = count - n - 1 ))
     debug_id= extra=
 
+    l=0
     if [[ -v stack_debug_id[$r] ]]; then
       debug_id=${stack_debug_id[$r]}
+      l=1
     else
       debug_id=-
     fi
 
     if [[ -v cooked_stack[$r] ]]; then
       extra=${cooked_stack[$r]}
+      l=2
     else
       extra=
     fi
 
-    echo "${FUNCNAME[$n]:-(no func)} $debug_id ${BASH_SOURCE[$n]:-(no source)}:${BASH_LINENO[$p]:-(no line)} $extra"
+    if (( l >= stack_level )); then
+      echo "${FUNCNAME[$n]:-(no func)} $debug_id ${BASH_SOURCE[$n]:-(no source)}:${BASH_LINENO[$p]:-(no line)} $extra"
+    fi
+
   done
-  } | column -t >&$fd_original_err
+
   return 0
 }
 
@@ -977,8 +973,8 @@ debug_command_loop() {
         exit 0
         ;;
       r)
-        echo "# Show raw call stack" >&$fd_original_err
-        start_frame=4 stack_trace
+        echo "# Show low call stack" >&$fd_original_err
+        start_frame=4 low_stack_trace
         no_follow_once=t
         ;;
       R)
@@ -997,13 +993,13 @@ debug_command_loop() {
         debug_save_state
         ;;
       t)
-        echo "# Show warm call stack" >&$fd_original_err
-        warm_stack_trace
+        echo "# Show medium call stack" >&$fd_original_err
+        medium_stack_trace
         no_follow_once=t
         ;;
       T)
         echo "# Show cooked call stack" >&$fd_original_err
-        cooked_stack_trace
+        high_stack_trace
         no_follow_once=t
         ;;
       u)
