@@ -1378,14 +1378,29 @@ check_process() {
 # make sure we clean up after ourselves whether we've launched a background job or allocated resources
 # this needs to be run again whenever forking to a subprocess
 setup_exit_trap() {
+  failure_handler_state_file=$tmp_folder/failure-state-$$
+  failure_handler_already_dumped_stack=f
   trap '
     rc=$?
     if (( rc > 0 )); then
-      extra=
-      if [[ ${show_debug_id:-f} != f ]]; then
-        extra=" ${CYAN}debug_id=$debug_id_current$RESET"
+      if [[ -e $failure_handler_state_file ]]; then
+        source $failure_handler_state_file &>/dev/null
+        if (( BASH_SUBSHELL == 0 )); then
+          rm $failure_handler_state_file &>/dev/null
+        fi
       fi
-      echo "$extra ${RED}Exited with failure code $rc"
+      if [[ $failure_handler_already_dumped_stack == f ]]; then
+        extra=
+        if [[ ${show_debug_id:-f} != f ]]; then
+          extra=" ${CYAN}debug_id=$debug_id_current$RESET"
+        fi
+        echo "$extra ${RED}Exited with failure code $rc"
+        echo "BASH_SUBSHELL=$BASH_SUBSHELL"
+        if log_level_at_least debug; then
+          warm_stack_trace
+        fi
+        echo "failure_handler_already_dumped_stack=t" >>$failure_handler_state_file
+      fi
     fi
     trap - DEBUG ERR EXIT RETURN QUIT &>/dev/null
     set +TeuExv
