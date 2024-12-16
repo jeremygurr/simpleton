@@ -443,6 +443,43 @@ debug_set_watch() {
   fi
 }
 
+stack_trace() {
+  local start_frame=${start_frame:-1}
+  local count=${#FUNCNAME[*]}
+  local p n
+
+  if [ ${tracing_midline:-f} == t ]; then
+    tracing_midline=f
+    echo >&$fd_original_err
+  fi
+
+  echo "Raw call stack:" >&$fd_original_err
+  {
+  for ((n = count - 1; n >= start_frame; n--)) ; do
+    (( p = n - 1 ))
+    echo "  ${FUNCNAME[$n]:-(no func)} ${BASH_SOURCE[$n]:-(no source)} ${BASH_LINENO[$p]:-(no line)}"
+  done
+  } | column -t >&$fd_original_err
+  return 0
+}
+
+warm_stack_trace() {
+  if [[ -v warm_stack ]]; then
+    echo "Warm call stack:" >&$fd_original_err
+    local count=${#warm_stack[*]} n \
+      debug_id raw_stack_id function
+    {
+    for ((n = 0; n < count; n++)); do
+      eval "${warm_stack[$n]}"
+      echo "  $function debug_id=$debug_id"
+    done
+    } | column -t >&$fd_original_err
+  else
+    echo "No warm stack." >&$fd_original_err
+  fi
+  return 0
+}
+
 cooked_stack_trace() {
   if [[ -v cooked_stack ]]; then
     echo "Cooked call stack:" >&$fd_original_err
@@ -1678,39 +1715,6 @@ show_array() {
   for i in "${!array[@]}"; do
     echo "$i: ${array[$i]}" >&$fd_original_err
   done
-}
-
-stack_trace() {
-  local start_frame=${start_frame:-1}
-  local count=${#FUNCNAME[*]}
-  local p n
-
-  if [ ${tracing_midline:-f} == t ]; then
-    tracing_midline=f
-    echo >&$fd_original_err
-  fi
-
-  echo "Raw call stack:" >&$fd_original_err
-  for ((n = count - 1; n >= start_frame; n--)) ; do
-    (( p = n - 1 ))
-    echo "  ${BASH_SOURCE[$n]:-(no source)} ${FUNCNAME[$n]:-(no func)} ${BASH_LINENO[$p]:-(no line)}" >&$fd_original_err
-  done
-  return 0
-}
-
-warm_stack_trace() {
-  if [[ -v warm_stack ]]; then
-    echo "Warm call stack:" >&$fd_original_err
-    local count=${#warm_stack[*]} n \
-      debug_id raw_stack_id function
-    for ((n = 0; n < count; n++)); do
-      eval "${warm_stack[$n]}"
-      echo " debug_id=$debug_id $function" >&$fd_original_err
-    done
-  else
-    echo "No warm stack." >&$fd_original_err
-  fi
-  return 0
 }
 
 debugger_init() {
