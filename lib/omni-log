@@ -200,6 +200,7 @@ snapshot_source_location() {
   log_function=${FUNCNAME[$offset1]}
   log_source_file=${BASH_SOURCE[$offset1]}
   log_source_file2=${BASH_SOURCE[$offset2]}
+  log_stack_index=$(( ${#FUNCNAME[*]} - offset2 ))
 }
 
 auto_shorten() {
@@ -350,17 +351,15 @@ write_to_log_update_cooked() {
   done
   case $action in
     call)
-      local s
-      apad s log_id "debug_id=$debug_id_current " function "$function "
-      s+="$show_vars$trace_vars"
+      local s="$show_vars$trace_vars"
       if [[ "${secret_vars:-}" ]]; then
         hide_secrets s
       fi
-      cooked_stack+=( "$s" )
+      cooked_stack[$log_stack_index]="$s"
     ;;
     return*)
-      if [[ "$cooked_stack" ]]; then
-        unset cooked_stack[-1]
+      if [[ -v cooked_stack[$log_stack_index] ]]; then
+        unset cooked_stack[$log_stack_index]
       fi
     ;;
   esac
@@ -622,7 +621,7 @@ log_fatal() {
     write_to_log fatal "${action:-}" "$*" || fail
     if log_level_at_least debug; then
       #start_frame=2 stack_trace
-      warm_stack_trace
+      enhanced_stack_trace
     fi
   end_function
   handle_return

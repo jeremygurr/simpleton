@@ -341,7 +341,7 @@ debug_get_new_command() {
 }
 
 debug_move_up_stack() {
-  local warm_stack_size=${#warm_stack[*]}
+  local warm_stack_size=${#stack_debug_id[*]}
 
   local old_loc="$raw_debug_path_to_source_file $debug_line_num" new_loc
   while true; do
@@ -354,7 +354,7 @@ debug_move_up_stack() {
 
     (( debug_warm_stack_pos-- ))
     local debug_id raw_stack_id function
-    eval "${warm_stack[$new_pos]}"
+    eval "${stack_debug_id[$new_pos]}"
 
     local raw_stack_size=${#saved_bash_source[*]}
     (( debug_list_stack_pos = raw_stack_size - raw_stack_id )) 
@@ -377,7 +377,7 @@ debug_move_up_stack() {
 }
 
 debug_move_down_stack() {
-  local warm_stack_size=${#warm_stack[*]}
+  local warm_stack_size=${#stack_debug_id[*]}
 
   local new_pos=$((warm_stack_size + debug_warm_stack_pos + 1))
   if (( new_pos > warm_stack_size )); then
@@ -406,11 +406,11 @@ get_effective_debug_id() {
   if (( debug_warm_stack_pos == 0 )); then
     effective_debug_id=$debug_id_current
   else
-    local warm_stack_size=${#warm_stack[*]}
+    local warm_stack_size=${#stack_debug_id[*]}
     local i=$((warm_stack_size + debug_warm_stack_pos + 1)) \
       debug_id raw_stack_id function
-    if [[ -v warm_stack[$i] ]]; then
-      eval "${warm_stack[$i]}"
+    if [[ -v stack_debug_id[$i] ]]; then
+      eval "${stack_debug_id[$i]}"
       effective_debug_id=$debug_id
     else
       effective_debug_id=$debug_id_current
@@ -464,13 +464,13 @@ stack_trace() {
 }
 
 warm_stack_trace() {
-  if [[ -v warm_stack ]]; then
+  if [[ -v stack_debug_id ]]; then
     echo "Warm call stack:" >&$fd_original_err
-    local count=${#warm_stack[*]} n \
+    local count=${#stack_debug_id[*]} n \
       debug_id raw_stack_id function
     {
     for ((n = 0; n < count; n++)); do
-      eval "${warm_stack[$n]}"
+      eval "${stack_debug_id[$n]}"
       echo "  $function debug_id=$debug_id"
     done
     } | column -t >&$fd_original_err
@@ -490,6 +490,40 @@ cooked_stack_trace() {
   else
     echo "No cooked stack." >&$fd_original_err
   fi
+  return 0
+}
+
+enhanced_stack_trace() {
+  local start_frame=${start_frame:-1} count=${#FUNCNAME[*]}
+
+  if [[ ${tracing_midline:-f} == t ]]; then
+    tracing_midline=f
+    echo >&$fd_original_err
+  fi
+
+  echo "Full call stack:" >&$fd_original_err
+  local extra= debug_id= p n r
+  {
+  for ((n = count - 1; n >= start_frame; n--)) ; do
+    (( p = n - 1 ))
+    (( r = count - n - 1 ))
+    debug_id= extra=
+
+    if [[ -v stack_debug_id[$r] ]]; then
+      debug_id=${stack_debug_id[$r]}
+    else
+      debug_id=-
+    fi
+
+    if [[ -v cooked_stack[$r] ]]; then
+      extra=${cooked_stack[$r]}
+    else
+      extra=
+    fi
+
+    echo "${FUNCNAME[$n]:-(no func)} $debug_id ${BASH_SOURCE[$n]:-(no source)}:${BASH_LINENO[$p]:-(no line)} $extra"
+  done
+  } | column -t >&$fd_original_err
   return 0
 }
 
