@@ -128,7 +128,7 @@ debug_source_update() {
 debug_source_update_hl() {
   if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
 
-    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/}
+    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/} || { debug_exit=t; exit 1; }
     local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
     if [ ! -f "$highlighted_source" ]; then
       mkdir -p "${highlighted_source%/*}"
@@ -142,12 +142,36 @@ debug_source_update_hl() {
 
 debug_source_line_update() {
   raw_debug_path_to_source_file=${saved_bash_source[$debug_list_stack_pos]}
+
+  if [[ ! "$raw_debug_path_to_source_file" ]]; then
+    echo "Internal error: missing raw_debug_path_to_source_file" >&$fd_original_err
+    echo "debug_list_stack_pos=$debug_list_stack_pos" >&$fd_original_err
+    echo "Array saved_bash_source:" >&$fd_original_err
+    show_array saved_bash_source
+    debug_exit=t
+    exit 1
+  fi
+
   if (( debug_list_stack_pos > 0 )); then
     debug_line_num=${saved_bash_lineno[$((debug_list_stack_pos-1))]}
   else
     debug_line_num=$saved_lineno
   fi
+
+  if [[ ! "$debug_line_num" ]]; then
+    echo "Internal error: missing debug_line_num" >&$fd_original_err
+    debug_exit=t
+    exit 1
+  fi
+
   debug_current_function=${saved_funcname[$debug_list_stack_pos]:-}
+
+  if [[ ! "$debug_current_function" ]]; then
+    echo "Internal error: missing debug_current_function" >&$fd_original_err
+    debug_exit=t
+    exit 1
+  fi
+
 }
 
 debug_display_source() {
@@ -234,7 +258,6 @@ debug_stepping='$debug_stepping'
 debug_stop_at='$debug_stop_at'
 debug_subshell='$debug_subshell'
 debug_var_regex='$debug_var_regex'
-debug_warm_stack_pos='$debug_warm_stack_pos'
 debug_watch='$debug_watch'
 PS4='$PS4'" >"$debug_state_file" || return 1
   fi
@@ -340,60 +363,67 @@ debug_get_new_command() {
   echo "Starting over command: $new_command" >&$fd_original_err
 }
 
-debug_move_up_stack() {
-  local warm_stack_size=${#stack_debug_id[*]}
+debug_reset_stack_pos() {
+  (( debug_list_offset = -debug_list_window / 2 + 1 ))
+  debug_list_stack_pos=0
+  debug_display_source
+  debug_list_dir=forwards
+  (( debug_list_offset += debug_list_window ))
+}
 
-  local old_loc="$raw_debug_path_to_source_file $debug_line_num" new_loc
-  while true; do
+debug_move_down_stack() {
+  local index=$(( debug_list_stack_pos - 1 ))
 
-    new_pos=$((warm_stack_size + debug_warm_stack_pos - 1))
-    if (( new_pos < 0 )); then
-      echo "# Already at top of stack trace" >&$fd_original_err
-      break
+  if (( index < 0 )); then
+
+    echo "# Already at bottom of stack" >&$fd_original_err
+
+  elif (( index == 0 )); then
+
+    debug_reset_stack_pos
+
+  else
+
+    echo "# Move down the stack" >&$fd_original_err
+
+    (( debug_list_stack_pos = index ))
+    local debug_id=
+    if [[ -v stack_debug_id[$index] ]]; then
+      debug_id=${stack_debug_id[$index]}
     fi
-
-    (( debug_warm_stack_pos-- ))
-    local debug_id raw_stack_id function
-    eval "${stack_debug_id[$new_pos]}"
 
     local raw_stack_size=${#saved_bash_source[*]}
-    (( debug_list_stack_pos = raw_stack_size - raw_stack_id )) 
     (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
     debug_source_line_update
-    new_loc="$raw_debug_path_to_source_file $debug_line_num"
-    if [[ "$old_loc" == "$new_loc" ]]; then
-      continue
-    fi
 
-    echo "# Up stack to function $function" >&$fd_original_err
     debug_display_source
     debug_list_dir=forwards
     (( debug_list_offset += debug_list_window ))
 
-    break
-
-  done
-
+  fi
 }
 
-debug_move_down_stack() {
-  local warm_stack_size=${#stack_debug_id[*]}
+debug_move_up_stack() {
+  local index=$(( debug_list_stack_pos + 1 ))
 
-  local new_pos=$((warm_stack_size + debug_warm_stack_pos + 1))
-  if (( new_pos > warm_stack_size )); then
-    echo "# Already at top of stack trace" >&$fd_original_err
-  elif (( new_pos == warm_stack_size )); then
-    debug_reset_stack_pos
+  if (( index >= stack_size )); then
+
+    echo "# Already at top of stack" >&$fd_original_err
+
   else
 
-    (( debug_warm_stack_pos++ ))
-    local debug_id raw_stack_id function
-    eval "${warm_stack[$new_pos]}"
-    echo "# Down stack to function $function" >&$fd_original_err
+    echo "# Move up the stack" >&$fd_original_err
+
+    (( debug_list_stack_pos = index ))
+    local debug_id=
+    if [[ -v stack_debug_id[$index] ]]; then
+      debug_id=${stack_debug_id[$index]}
+    fi
     
     local raw_stack_size=${#saved_bash_source[*]}
-    (( debug_list_stack_pos = raw_stack_size - raw_stack_id )) 
     (( debug_list_offset = -debug_list_window * 2 / 3 + 1 ))
+    debug_source_line_update
+
     debug_display_source
     debug_list_dir=forwards
     (( debug_list_offset += debug_list_window ))
@@ -403,29 +433,29 @@ debug_move_down_stack() {
 
 get_effective_debug_id() {
 
-  if (( debug_warm_stack_pos == 0 )); then
+  if (( debug_list_stack_pos == 0 )); then
     effective_debug_id=$debug_id_current
   else
-    local warm_stack_size=${#stack_debug_id[*]}
-    local i=$((warm_stack_size + debug_warm_stack_pos + 1)) \
-      debug_id raw_stack_id function
-    if [[ -v stack_debug_id[$i] ]]; then
-      eval "${stack_debug_id[$i]}"
+    local i=$((stack_size - debug_list_stack_pos - 1)) debug_id=
+
+    while [[ ! "$debug_id" ]]; do
+
+      if [[ -v stack_debug_id[$i] ]]; then
+        debug_id=${stack_debug_id[$i]}
+        break
+      fi
+      (( i-- ))
+      if (( i < 0 )); then
+        break
+      fi
+    done
+    if [[ "$debug_id" ]]; then
       effective_debug_id=$debug_id
     else
-      effective_debug_id=$debug_id_current
+      effective_debug_id=1
     fi
   fi
 
-}
-
-debug_reset_stack_pos() {
-  (( debug_list_offset = -debug_list_window / 2 + 1 ))
-  debug_list_stack_pos=0
-  debug_warm_stack_pos=0
-  debug_display_source
-  debug_list_dir=forwards
-  (( debug_list_offset += debug_list_window ))
 }
 
 debug_set_watch() {
@@ -444,22 +474,27 @@ debug_set_watch() {
 }
 
 stack_trace() {
-  local start_frame=${start_frame:-1} count=${#FUNCNAME[*]}
+  local start_frame=${start_frame:-2} stack_level=${stack_level:-0}
 
-  if [ ${tracing_midline:-f} == t ]; then
+  if [[ ${tracing_midline:-f} == t ]]; then
     tracing_midline=f
     echo >&$fd_original_err
   fi
 
   echo "Full call stack:" >&$fd_original_err
-  stack_level=0 stack_trace_inner | column -t >&$fd_original_err
+  stack_trace_inner | column -t >&$fd_original_err
 
   return 0
 }
 
 medium_stack_trace() {
-  if [[ -v stack_debug_id ]]; then
-    local start_frame=${start_frame:-1} count=${#FUNCNAME[*]}
+  if [[ ${tracing_midline:-f} == t ]]; then
+    tracing_midline=f
+    echo >&$fd_original_err
+  fi
+
+  if [[ "${stack_debug_id[*]}" ]]; then
+    local start_frame=${start_frame:-1}
 
     if [ ${tracing_midline:-f} == t ]; then
       tracing_midline=f
@@ -475,8 +510,13 @@ medium_stack_trace() {
 }
 
 high_stack_trace() {
-  if [[ -v stack_debug_id ]]; then
-    local start_frame=${start_frame:-1} count=${#FUNCNAME[*]}
+  if [[ ${tracing_midline:-f} == t ]]; then
+    tracing_midline=f
+    echo >&$fd_original_err
+  fi
+
+  if [[ "${cooked_stack[*]}" ]]; then
+    local start_frame=${start_frame:-1}
 
     if [ ${tracing_midline:-f} == t ]; then
       tracing_midline=f
@@ -492,7 +532,7 @@ high_stack_trace() {
 }
 
 stack_trace_inner() {
-  local extra= debug_id= p n r l stack_level=${stack_level:-0}
+  local extra= debug_id= p n r l stack_level=${stack_level:-0} count=${#FUNCNAME[*]} 
 
   echo "FUNCTION DEBUG_ID SOURCE DETAILS"
   for ((n = count - 1; n >= start_frame; n--)) ; do
@@ -600,10 +640,6 @@ debug_command_loop() {
       if [[ $BASH_SUBSHELL -gt 0 ]]; then
         debug_prefix+="$YELLOW$BASH_SUBSHELL:$BASHPID "
       fi
-      # if [[ "${omni_log_pos:-}" ]]; then
-      #   local log_id=${omni_log_fork_id:-0}:$omni_log_pos
-      #   debug_prefix+="${CYAN}log_id=$log_id "
-      # fi
       if [[ $debug_show_time == t && "$debug_start_ts" ]]; then
         local ts=${EPOCHREALTIME/./}
         local time_diff=$((ts-debug_start_ts))
@@ -618,16 +654,7 @@ debug_command_loop() {
         echo -n "$debug_prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
       fi
       echo -n " $GREEN$debug_current_function $RESET:" >&$fd_original_err
-
-      #if [[ $debug_follow_source == t ]]; then
-        echo -n " $debug_command " >&$fd_original_err
-      #else
-      #  if [[ $debug_highlight == t ]]; then
-      #    echo -n " $display_command " >&$fd_original_err
-      #  else
-      #    echo -n " $raw_display_command " >&$fd_original_err
-      #  fi
-      #fi
+      echo -n " $debug_command " >&$fd_original_err
     fi
 
     debug_long_command=f
@@ -975,7 +1002,7 @@ debug_command_loop() {
         ;;
       r)
         echo "# Show low call stack" >&$fd_original_err
-        start_frame=4 low_stack_trace
+        start_frame=5 stack_trace
         no_follow_once=t
         ;;
       R)
@@ -999,7 +1026,7 @@ debug_command_loop() {
         no_follow_once=t
         ;;
       T)
-        echo "# Show cooked call stack" >&$fd_original_err
+        echo "# Show high call stack" >&$fd_original_err
         high_stack_trace
         no_follow_once=t
         ;;
@@ -1258,12 +1285,12 @@ debug_command_loop() {
         echo "p  print variables in current line" >&$fd_original_err
         echo "P  print conditional test results of current line" >&$fd_original_err
         echo "q  quit: exit the program entirely" >&$fd_original_err
-        echo "r  show raw call stack" >&$fd_original_err
+        echo "r  show full call stack" >&$fd_original_err
         echo "R  rewind: go back to the start of the last looping / try block" >&$fd_original_err
         echo "s  execute next small statement, even if multiple statements are on a line," >&$fd_original_err
         echo "   not stepping into function calls" >&$fd_original_err
-        echo "t  show warm call stack" >&$fd_original_err
-        echo "T  show cooked call stack" >&$fd_original_err
+        echo "t  show medium level call stack" >&$fd_original_err
+        echo "T  show high level call stack" >&$fd_original_err
         echo "u  unignore: remove given function from ignore list" >&$fd_original_err
         echo "U  unignore all functions" >&$fd_original_err
         echo "v  dump vars matching a regex" >&$fd_original_err
@@ -1544,6 +1571,8 @@ debug_inner() {
     saved_bash_lineno=( "${BASH_LINENO[@]:2}" ) \
     saved_funcname=( "${FUNCNAME[@]:2}" ) \
 
+  local stack_size=${#saved_funcname[*]}
+
   if [[ $debug_trace_time == t ]]; then
     timebox_close
     trace_time=f
@@ -1740,7 +1769,6 @@ reserve_tmp_file() {
 
 show_array() {
   local -n array=$1
-  echo "Called show_array"
   local i size=${#array[*]}
   echo "size=$size" >&$fd_original_err
   for i in "${!array[@]}"; do
@@ -1866,7 +1894,6 @@ debug_start() {
     debug_untrap=f \
     debug_var=${debug_var:-} \
     debug_var_regex=${debug_var_regex:-} \
-    debug_warm_stack_pos=0 \
     new_debug_watch=${debug_watch:-${debug_var:-${trace_var:-}}} \
 
     debug_set_watch "$new_debug_watch"
