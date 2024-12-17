@@ -42,18 +42,6 @@ prep_upstream() {
   handle_return
 }
 
-repair_update_upstream_choose_single() {
-  begin_function
-    if [[ ! -e $chosen ]]; then
-      rm $chosen || succeed
-      local up_name=${upstream##*/}
-      link_choices || succeed
-      repair_successful=t
-    fi
-  end_function
-  handle_return
-}
-
 maybe_fix_choice() {
   local choice=$1
   begin_function
@@ -238,11 +226,21 @@ update_upstream_choose_multi() {
   handle_return
 }
 
+repair_update_upstream_choose() {
+  if [[ $problem == no_choices ]]; then
+    rm -rf $up_path || return 1
+    make_cyto_up || return 1
+    problem=
+    repair_successful=t
+  fi
+  return 0
+}
+
 # needs_update is guaranteed to be set after this completes successfully
 # returns: chosen needs_update
 update_upstream_choose() {
 
-  local log_show_vars=^upstream
+  local log_show_vars=^upstream problem=
   begin_function_hi
 
     local choice original_choice= original_cell_path=$cell_path
@@ -250,6 +248,7 @@ update_upstream_choose() {
 
     if [[ ! "${choices:-}" ]]; then
       log_fatal "No choices defined for upstream $upstream"
+      problem=no_choices
       fail1
     fi
 
@@ -316,6 +315,41 @@ update_upstream_get_locks() {
   handle_return
 }
 
+repair_update_upstream() {
+#  debug_start
+  # check for duplicate dims
+  if [[ "${up_cell:-}" && "${chosen_target_link:-}" ]]; then
+    local -A dims_found
+    local cyto_up_link=$(readlink $chosen_target_link 2>/dev/null) || return 1
+    local remaining=$up_cell part dim dup_found=f
+    while [[ $remaining == *:* && $remaining == */* ]]; do
+      part=${remaining##*/}
+      remaining=${remaining%/$part}
+      if [[ "$part" == *:* ]]; then
+        dim=${part%%:*}
+        if [[ "${dims_found[$dim]:-}" ]]; then
+          dup_found=t
+          break
+        fi
+        dims_found[$dim]=1
+      fi
+    done
+    if [[ $dup_found == t ]]; then
+      log_debug "Auto repairing duplicate dim upstream link"
+      if [[ -L $cyto_up_link ]]; then
+        rm $cyto_up_link || return 1
+      fi
+      if [[ -L $chosen_target_link ]]; then
+        rm $chosen_target_link || return 1
+      fi
+      switch_context $original_cell_path || return 1
+      repair_successful=t
+    fi
+  fi
+
+  return 0
+}
+
 # inputs: 
 #   upstream: a folder in .dna/up
 update_upstream() {
@@ -324,6 +358,7 @@ update_upstream() {
     default_freshness= \
     risk_tolerance=$risk_tolerance \
     command_history=${command_history:-} \
+    original_cell_path=${cell_path:-} \
     cell_path=${cell_path:-} \
 
   if [[ -e $upstream/.dna ]]; then
@@ -351,7 +386,6 @@ update_upstream() {
 
       top_level_command=f \
       downstream_cell_name=${short_cell//\//_} \
-      default_anchor_dims= \
       execute_command "$up_cell" update || fail
 
       if [[ $something_changed == t ]]; then
@@ -1275,7 +1309,7 @@ update_inners() {
       top_level_command=f \
       outer_cell_name=${short_cell//\//_} \
       inner_cell_link=$i_path \
-      default_anchor_dims= \
+      anchor_dims= \
       execute_command $i_path update || fail
     end_for
   end_function
