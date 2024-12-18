@@ -254,8 +254,13 @@ update_upstream_choose() {
   local log_show_vars=^upstream problem=
   begin_function_hi
 
-    local choice original_choice= original_cell_path=$cell_path
-    local choices=( $(find1 $upstream/choices -not -name ".*" | sort -g) ) || fail
+    local choice
+    local choices
+    if [[ -d $upstream/choices ]]; then
+      choices=( $(find1 $upstream/choices -not -name ".*" | sort -g) ) || fail
+    else
+      choices=( $upstream )
+    fi
 
     if [[ ! "${choices:-}" ]]; then
       log_fatal "No choices defined for upstream $upstream"
@@ -266,7 +271,6 @@ update_upstream_choose() {
     chosen=
     if [[ -e "$chosen_target_link" ]]; then
       chosen=$(readlink $chosen_target_link) || fail
-      original_choice=$chosen
     fi
 
     needs_update=
@@ -370,7 +374,7 @@ update_upstream() {
     risk_tolerance=$risk_tolerance \
     command_history=${command_history:-} \
     original_cell_path=${cell_path:-} \
-    cell_path=${cell_path:-} \
+    upstream=$1 \
 
   if [[ -e $upstream/.dna ]]; then
     log_fatal "update_upstream upstream field should be a path to a upstream spec, not a cell"
@@ -397,7 +401,7 @@ update_upstream() {
 
       top_level_command=f \
       downstream_cell_name=${short_cell//\//_} \
-      execute_command "$up_cell" update || fail
+      fork execute_command "$up_cell" update || fail
 
       if [[ $something_changed == t ]]; then
         previous_upstream_changed=t
@@ -479,7 +483,6 @@ update_upstreams() {
     if [[ -d "${up_path:-}" ]]; then
 
       local previous_upstream_changed=f upstream upstreams 
-      local original_anchor_dims=$anchor_dims
 
       upstreams=$(find1 $up_path -not -name '.*' | sort -g) || fail
       # This will eventually be done in parallel
@@ -491,7 +494,7 @@ update_upstreams() {
           orig_up_chosen_path=$up_chosen_path \
 
         if [[ $execute_update == t ]]; then
-          update_upstream || fail
+          update_upstream $upstream || fail
           if [[ $update_successful == f ]]; then
             break
           fi
@@ -501,11 +504,6 @@ update_upstreams() {
         load_upstream_vars || fail
 
       end_for
-
-      anchor_dims=$original_anchor_dims
-      if [[ $execute_update == t ]]; then
-        switch_context $cell_path || fail
-      fi
 
     fi
 
