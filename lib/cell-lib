@@ -3250,6 +3250,10 @@ trace_step_execution=${trace_step_execution:-f}
 trace_op=${trace_op:-}
 
 # Usage: execute_op {op name}
+# If {op_name}_op_var variable exists, it will be evaluated as the body of the {op_name}_op function
+#   and then executed
+# Otherwise {op_name}_op function is executed
+#
 # output
 #   missing   set to t if no op found
 execute_op() {
@@ -3259,8 +3263,22 @@ execute_op() {
   begin_function
 
     op_function=${op_name}_op
+    local -n op_var=${op_name}_op_var
 
     missing=f
+    if [[ "${op_var:-}" ]]; then
+      if [[ "${op_var#${op_name}_op()}" != "${op_var}" ]]; then
+        eval "$op_var"
+      else
+        eval "${op_name}_op() {
+begin_function
+$op_var
+end_function
+handle_return
+}"
+      fi
+    fi
+
     if type -t $op_function &>/dev/null; then
 
       if [[ $trace_op == $op_name ]]; then
