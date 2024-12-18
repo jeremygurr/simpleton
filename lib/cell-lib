@@ -1924,7 +1924,10 @@ expand_values_check_default() {
 calc_coordinates_process_member() {
   begin_function
 
-    eval "local $localize_dims" || fail
+    if [[ "$localize_dims" ]]; then
+      eval "local $localize_dims" || fail
+    fi
+
     local -n member=d_$dim \
       members=d_$dims
     member=$current_member
@@ -2270,6 +2273,7 @@ build_context_leaf() {
 }
 
 build_context() {
+  local cell_path=$1
   begin_function
 
     local parent_cell=${cell_path%/*}
@@ -2277,50 +2281,26 @@ build_context() {
       safe_link $parent_cell/.cyto/context-trunk $context_path-trunk || fail
     fi
 
-    if [[ -e $dna_path ]]; then
+    if [[ ! -f $context_path-trunk ]]; then
+      build_context_trunk || fail
+    else
+      source $context_path-trunk || fail
+    fi
 
-      if [[ ! -f $context_path-trunk ]]; then
-        build_context_trunk || fail
+    setup_dims || fail
+
+    if [[ ! -f $context_path-branch ]]; then
+      build_context_branch || fail
+    else
+      source $context_path-branch || fail
+    fi
+
+    if [[ $cell_is_leaf == t ]]; then
+      if [[ ! -f $context_path-leaf ]]; then
+        build_context_leaf || fail
       else
-        source $context_path-trunk || fail
+        source $context_path-leaf || fail
       fi
-
-      setup_dims || fail
-
-      if [[ ! -f $context_path-branch ]]; then
-        build_context_branch || fail
-      else
-        source $context_path-branch || fail
-      fi
-
-      if [[ ! -f $context_path-check ]]; then
-        context_type=check \
-        write_vars_to_context \
-          out_file \
-          out_path \
-          cell_is_leaf \
-          check_op_var \
-          data_props \
-          || fail
-        mv $context_path-check.new $context_path-check || fail
-      fi
-
-      if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-        make_cyto_up || fail
-      fi
-
-      if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
-        make_cyto_inner || fail
-      fi
-
-      if [[ $cell_is_leaf == t ]]; then
-        if [[ ! -f $context_path-leaf ]]; then
-          build_context_leaf || fail
-        else
-          source $context_path-leaf || fail
-        fi
-      fi
-
     fi
 
     if [[ -e $context_path.new ]]; then
@@ -2383,24 +2363,62 @@ load_post_context_dynamic_vars() {
   handle_return
 }
 
-switch_context_check_for_problems() {
+# Runs in forked process
+# Can be called on a cell that already has a cyto folder, in which case it will repair missing
+#   parts
+build_cyto() (
+  local cell_path=$1
+
   begin_function
 
-    local trunk_changed
-    if [[ "${prev_trunk_cell:-}" != "$trunk_cell" ]]; then
-      trunk_changed=t
-      prev_trunk_cell=$trunk_cell
-    else
-      trunk_changed=f
+    log_debug "Building cyto for $cell_path"
+    dna_path=$cell_path/.dna \
+    cyto_path=$cell_path/.cyto \
+
+    if [[ ! -e $dna_path ]]; then
+      log_fatal "Internal error: attempted switch_context on an invalid cell: $cell_path"
+      fail1
     fi
-    
-    if [[ $trunk_changed == t && -e $cyto_path/context ]]; then
-      broken_link_check || fail
+
+    if [[ ! -d $cyto_path ]]; then
+      mkdir $cyto_path || fail
+    fi
+
+    if [[ ! -d $status_path ]]; then
+      mkdir $status_path || fail
+    fi
+
+    init_context || fail
+    load_branch_info || fail
+
+    context_path=$cyto_path/context
+    if [[ ! -f $context_path ]]; then
+      build_context $cell_path || fail
+    fi
+
+    if [[ ! -f $context_path-check ]]; then
+      context_type=check \
+      write_vars_to_context \
+        out_file \
+        out_path \
+        cell_is_leaf \
+        check_op_var \
+        data_props \
+        || fail
+      mv $context_path-check.new $context_path-check || fail
+    fi
+
+    if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
+      make_cyto_up || fail
+    fi
+
+    if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
+      make_cyto_inner || fail
     fi
 
   end_function
   handle_return
-}
+)
 
 # inputs:
 #   $1   cell_path
@@ -2424,35 +2442,30 @@ switch_context() {
       fi
 
       context_path=$cyto_path/context
-
       init_context || fail
-      load_branch_info || fail
-
-      if [[ ! -d $cyto_path ]]; then
-        mkdir $cyto_path || fail
-        mkdir $status_path || fail
-      fi
 
       if [[ ! -f $context_path ]]; then
-        build_context || fail
+        build_cyto $cell_path || fail
       else
+
         source $context_path || fail
         setup_dims || fail
         context_exists=t
-      fi
 
-      local problem_found=f
-      switch_context_check_for_problems || fail
-      if [[ $problem_found == t ]]; then
-        if [[ $rebuild_attempted == f ]]; then
-          log_verbose "Problem found, rebuilding context"
-          rm -rf $cyto_path/up* $context_path* || fail
-          rebuild_attempted=t
-          continue
-        else
-          log_fatal "Context rebuild failed to resolve problem"
-          fail1
+        local problem_found=f
+        broken_link_check || fail
+        if [[ $problem_found == t ]]; then
+          if [[ $rebuild_attempted == f ]]; then
+            log_verbose "Problem found, rebuilding context"
+            rm -rf $cyto_path/up* $context_path* || fail
+            rebuild_attempted=t
+            continue
+          else
+            log_fatal "Context rebuild failed to resolve problem"
+            fail1
+          fi
         fi
+
       fi
 
       if [[ $context_exists == t ]]; then
