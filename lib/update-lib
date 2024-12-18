@@ -204,7 +204,6 @@ update_upstream_choose_multi() {
       if [[ -e "$chosen/.dna" ]]; then
         upstream_cell_link=$chosen
         cell_path=$(realpath $chosen) || fail
-        switch_context $cell_path
         get_needs_update $cell_path || fail
       else
         needs_update=t
@@ -221,7 +220,6 @@ update_upstream_choose_multi() {
         maybe_fix_choice $choice || fail
         needs_update=
         cell_path=$(realpath $choice) || fail
-        switch_context $cell_path
         get_needs_update $cell_path || fail
         if [[ $needs_update == f ]]; then
           chosen=$choice
@@ -254,7 +252,6 @@ update_upstream_choose() {
   local log_show_vars=^upstream problem=
   begin_function_hi
 
-    local choice
     local choices
     if [[ -d $upstream/choices ]]; then
       choices=( $(find1 $upstream/choices -not -name ".*" | sort -g) ) || fail
@@ -286,15 +283,8 @@ update_upstream_choose() {
     fi
     upstream_cell_link=$chosen
     cell_path=$(realpath $chosen) || fail
-    anchor_dims= \
-    switch_context $cell_path
+    anchor_dims=
     get_needs_update $cell_path || fail
-
-    if [[ $needs_update == f ]]; then
-      cell_path=$original_cell_path
-      anchor_dims=$original_anchor_dims
-      switch_context $cell_path || fail
-    fi
 
   end_function
   local log_return_vars=chosen
@@ -304,7 +294,7 @@ update_upstream_choose() {
 
 update_upstream_get_locks() {
   local log_show_vars=^upstream
-  begin_function_hi
+  begin_function
 
     local lock 
     local -r export_path=$upstream/chosen/export
@@ -369,11 +359,7 @@ repair_update_upstream() {
 #   upstream: a folder in .dna/up
 update_upstream() {
 
-  local required_freshness= fresh= \
-    default_freshness= \
-    risk_tolerance=$risk_tolerance \
-    command_history=${command_history:-} \
-    original_cell_path=${cell_path:-} \
+  local original_cell_path=${cell_path:-} \
     upstream=$1 \
 
   if [[ -e $upstream/.dna ]]; then
@@ -384,11 +370,25 @@ update_upstream() {
   local log_show_vars=^upstream 
   begin_function_hi
 
-    log_debug "Updating upstream ${upstream##*/.cyto/up/}"
-
     local needs_update= upstream_cell_link= \
       chosen= anchor_dims= \
       chosen_target_link \
+      required_freshness= fresh= \
+      default_freshness= \
+      risk_tolerance=$risk_tolerance \
+      command_history=${command_history:-} \
+
+    local upstream_name=${upstream##*/.cyto/up/}
+    local cell_path=${upstream%/.cyto/up/$upstream_name}
+    if [[ $cell_path == $upstream ]]; then
+      log_fatal "Invalid upstream: $upstream, it should be within .cyto/up"
+      fail1
+    fi
+
+    local cyto_path=$cell_path/.cyto
+    local up_path=$cyto_path/up up_chosen_path=$cyto_path/up-chosen
+
+    log_debug "Updating upstream $upstream_name"
 
     eval "local $localize_dims" || fail
 
@@ -953,7 +953,7 @@ update_member() {
 
       top_level_command=f \
       downstream_cell_name=${short_cell//\//_} \
-      execute_command $member_path update || fail
+      fork execute_command $member_path update || fail
 
       if [[ $update_successful == f ]]; then
         log_error "Failed to update member cell $member"
@@ -1303,7 +1303,7 @@ update_inners() {
       outer_cell_name=${short_cell//\//_} \
       inner_cell_link=$i_path \
       anchor_dims= \
-      execute_command $i_path update || fail
+      fork execute_command $i_path update || fail
     end_for
   end_function
   handle_return
