@@ -374,6 +374,7 @@ CR=$'\r'
 TAB=$'\t'
 ESC=$'\e'
 DQ='"'
+SQ="'"
 
    LIGHT_RED=$'\033[0;31m'
          RED=$'\033[1;31m'
@@ -1380,7 +1381,8 @@ setup_exit_trap() {
   failure_handler_already_dumped_stack=f
   trap '
     rc=$?
-    if (( rc > 0 )); then
+    #echo "EXIT TRAP $BASHPID, BASH_SUBSHELL=$BASH_SUBSHELL" >&$fd_original_err
+    if (( rc > 0 && rc < 100 )); then
       if [[ -e $failure_handler_state_file ]]; then
         source $failure_handler_state_file &>/dev/null
         if (( BASH_SUBSHELL == 0 )); then
@@ -1402,13 +1404,21 @@ setup_exit_trap() {
     fi
     trap - DEBUG ERR EXIT RETURN QUIT &>/dev/null
     [[ ${debug_on_exit:-} == t ]] && debug_start
+    #echo "Cleaning up: $cleanup_on_exit" >&$fd_original_err
     eval "${cleanup_on_exit:-}" &>/dev/null
     if (( rc > 0 )); then
-      { kill $(jobs -p); } 2>/dev/null || true
+      jobs="$(jobs -p)"
+      if [[ "$jobs" ]]; then
+        { kill $jobs; } 2>/dev/null || true
+      fi
     fi
     set +TeuExv
     if [[ "${debug_restart_command:-}" ]]; then
-      eval "exec $debug_restart_command"
+      if [[ $BASH_SUBSHELL == 0 ]]; then
+        eval "exec $debug_restart_command"
+      else
+        reply_to_caller "debug_restart_command='"$SQ"'$debug_restart_command'"$SQ"'"
+      fi
     fi
     ' EXIT
 
