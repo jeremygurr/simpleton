@@ -2448,26 +2448,25 @@ switch_context() {
 
       if [[ ! -f $context_path ]]; then
         build_cyto $cell_path || fail
-      else
+      fi
 
-        source $context_path || fail
-        setup_dims || fail
-        context_exists=t
+      source $context_path || fail
 
-        local problem_found=f
-        broken_link_check || fail
-        if [[ $problem_found == t ]]; then
-          if [[ $rebuild_attempted == f ]]; then
-            log_verbose "Problem found, rebuilding context"
-            rm -rf $cyto_path/up* $context_path* || fail
-            rebuild_attempted=t
-            continue
-          else
-            log_fatal "Context rebuild failed to resolve problem"
-            fail1
-          fi
+      setup_dims || fail
+      context_exists=t
+
+      local problem_found=f
+      broken_link_check || fail
+      if [[ $problem_found == t ]]; then
+        if [[ $rebuild_attempted == f ]]; then
+          log_verbose "Problem found, rebuilding context"
+          rm -rf $cyto_path/up* $context_path* || fail
+          rebuild_attempted=t
+          continue
+        else
+          log_fatal "Context rebuild failed to resolve problem"
+          fail1
         fi
-
       fi
 
       if [[ $context_exists == t ]]; then
@@ -2991,7 +2990,6 @@ reply_to_caller() {
 
 # this should be run in a subshell
 fork_inside() {
-
   begin_function
 
     local change_log2=$change_log
@@ -3018,51 +3016,48 @@ fork_inside() {
       cell_close_log_file || fail
     fi
 
+    if [[ "${debugging:-}" == t ]]; then
+      reply_to_caller "debug_state_file='${debug_state_file:-}'; debugging=t" || fail
+    fi
+
+    if (( return_code != 0 )); then
+      reply_to_caller "return_code=$return_code" || fail
+      return_value=$return_code
+    fi
+
+    if [[ $change_log2 == t ]]; then
+      reply_to_caller "omni_log_pos=$previous_log_pos" || fail
+    fi
+
+    if [[ "${trace_var:-}" ]]; then
+      reply_to_caller "$(declare -p trace_var_old)" || fail
+    fi
+
+    reply_to_caller "debug_id_current=$debug_id_current"
+
   end_function
-
-  if [[ "${debugging:-}" == t ]]; then
-    reply_to_caller "debug_state_file='${debug_state_file:-}'; debugging=t" || fail
-  fi
-
-  if (( return_code != 0 )); then
-    reply_to_caller "return_code=$return_code" || fail
-    return_value=$return_code
-  fi
-
-  if [[ $change_log2 == t ]]; then
-    reply_to_caller "omni_log_pos=$previous_log_pos" || fail
-  fi
-
-  if [[ "${trace_var:-}" ]]; then
-    reply_to_caller "$(declare -p trace_var_old)" || fail
-  fi
-
-  reply_to_caller "debug_id_current=$debug_id_current"
-
   handle_return
-
 }
 
 # run outside of the subshell afterwards
 after_fork() {
   begin_function
-  if [[ -f "${reply_file:-}" ]]; then
-    #pause "Sourcing $reply_file"
-    source $reply_file || return 1
-    if [[ ${debugging:-f} == t ]]; then
-      local debugging
-      debug_load_state || return 1
-      debug_immediate=f \
-        first_run=f \
-        debug_needs_to_load_state=t \
-        debug_start || return 1
+    if [[ -f "${reply_file:-}" ]]; then
+      #pause "Sourcing $reply_file"
+      source $reply_file || fail
+      if [[ ${debugging:-f} == t ]]; then
+        local debugging
+        debug_load_state || fail
+        debug_immediate=f \
+          first_run=f \
+          debug_needs_to_load_state=t \
+          debug_start
+      fi
+      rm $reply_file
+      reply_file=
     fi
-    rm $reply_file
-    reply_file=
-  fi
   end_function
   handle_return
-  #return 0
 }
 
 get_new_reply_file() {
@@ -3079,32 +3074,34 @@ get_new_reply_file() {
 #  change_log=f (whether to change the log)
 #  to_var       (write output to the given var instead of stdout)
 fork() {
+  local command=$*
+  begin_function
+    local reply_file return_code=0 \
+      background=${background:-f} \
+      change_log=${change_log:-f} \
+      to_var=${to_var:-}
 
-  local reply_file command=$* return_code=0 \
-    background=${background:-f} \
-    change_log=${change_log:-f} \
-    to_var=${to_var:-}
+    if [[ $background == t ]]; then
+      change_log=t
+    fi
 
-  if [[ $background == t ]]; then
-    change_log=t
-  fi
+    : ${omni_log_fork_child:=0}
+    (( omni_log_fork_child++ ))
 
-  : ${omni_log_fork_child:=0}
-  (( omni_log_fork_child++ ))
+    get_new_reply_file || fail
+    defer "rm $reply_file"
 
-  get_new_reply_file || return 1
-  defer "rm $reply_file"
+    if [[ $background == t ]]; then
+      ( fork_inside ) &
+    else
+      ( fork_inside )
+      return_code=$?
+      after_fork || (( return_code++ ))
+    fi
 
-  if [[ $background == t ]]; then
-    ( fork_inside ) &
-  else
-    ( fork_inside )
-  fi
-  return_code=$?
-
-  after_fork || (( return_code++ ))
-
-  return $return_code
+    return_value=$return_code
+  end_function
+  handle_return
 }
 
 fork_fg() {
