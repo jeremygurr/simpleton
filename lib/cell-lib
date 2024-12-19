@@ -1274,6 +1274,63 @@ for_each_member() {
   handle_return
 }
 
+build_context() {
+  local cell_path=$1
+  begin_function
+
+    local parent_cell=${cell_path%/*}
+    if [[ -e $parent_cell/.cyto/context-trunk && ! -f $context_path-trunk ]]; then
+      safe_link $parent_cell/.cyto/context-trunk $context_path-trunk || fail
+    fi
+
+    if [[ ! -f $context_path-trunk ]]; then
+      build_context_trunk || fail
+    else
+      source $context_path-trunk || fail
+    fi
+
+    setup_dims || fail
+    load_child_dims || fail
+
+    if [[ ! -f $context_path-branch ]]; then
+      build_context_branch || fail
+    else
+      source $context_path-branch || fail
+    fi
+
+    if [[ $cell_is_leaf == t ]]; then
+      if [[ ! -f $context_path-leaf ]]; then
+        build_context_leaf || fail
+      else
+        source $context_path-leaf || fail
+      fi
+    fi
+
+    if [[ -e $context_path.new ]]; then
+      rm $context_path.new || fail
+    fi
+
+    if [[ -e $context_path-trunk ]]; then
+      cat $context_path-trunk >>$context_path.new || fail
+      context_exists=t
+    fi
+
+    if [[ -e $context_path-branch ]]; then
+      cat $context_path-branch >>$context_path.new || fail
+      context_exists=t
+    fi
+
+    if [[ -e $context_path-leaf ]]; then
+      cat $context_path-leaf >>$context_path.new || fail
+      context_exists=t
+    fi
+
+    mv $context_path.new $context_path || fail
+
+  end_function
+  handle_return
+}
+
 plant_seed_internal() {
   local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
   begin_function
@@ -1391,6 +1448,7 @@ init_context() {
     cell_expiration= \
     cell_is_external=f \
     cell_is_persistent=f \
+    child_dims=() \
     control_props=() \
     current_pause=250 \
     data_props=() \
@@ -2251,8 +2309,6 @@ build_context_branch() {
     mock_path=$seed_path/.mock
     write_vars_to_context seed_path mock_path || fail
 
-    load_child_dims || fail
-
     local dim assignment member i members_string=
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
       dim=${branch_dims[$i]}
@@ -2269,8 +2325,6 @@ branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
 branch_hashes=( ${branch_hashes[*]} )
-child_dims=( ${child_dims[*]} )
-child_dim_count=$child_dim_count
 cell_is_trunk=$cell_is_trunk
 cell_is_leaf=$cell_is_leaf
 short_cell=$short_cell
@@ -2317,62 +2371,6 @@ build_context_leaf() {
   handle_return
 }
 
-build_context() {
-  local cell_path=$1
-  begin_function
-
-    local parent_cell=${cell_path%/*}
-    if [[ -e $parent_cell/.cyto/context-trunk && ! -f $context_path-trunk ]]; then
-      safe_link $parent_cell/.cyto/context-trunk $context_path-trunk || fail
-    fi
-
-    if [[ ! -f $context_path-trunk ]]; then
-      build_context_trunk || fail
-    else
-      source $context_path-trunk || fail
-    fi
-
-    setup_dims || fail
-
-    if [[ ! -f $context_path-branch ]]; then
-      build_context_branch || fail
-    else
-      source $context_path-branch || fail
-    fi
-
-    if [[ $cell_is_leaf == t ]]; then
-      if [[ ! -f $context_path-leaf ]]; then
-        build_context_leaf || fail
-      else
-        source $context_path-leaf || fail
-      fi
-    fi
-
-    if [[ -e $context_path.new ]]; then
-      rm $context_path.new || fail
-    fi
-
-    if [[ -e $context_path-trunk ]]; then
-      cat $context_path-trunk >>$context_path.new || fail
-      context_exists=t
-    fi
-
-    if [[ -e $context_path-branch ]]; then
-      cat $context_path-branch >>$context_path.new || fail
-      context_exists=t
-    fi
-
-    if [[ -e $context_path-leaf ]]; then
-      cat $context_path-leaf >>$context_path.new || fail
-      context_exists=t
-    fi
-
-    mv $context_path.new $context_path || fail
-
-  end_function
-  handle_return
-}
-
 load_post_context_dynamic_vars() {
   begin_function
 
@@ -2406,12 +2404,6 @@ load_post_context_dynamic_vars() {
 
   end_function
   handle_return
-}
-
-# Can be called on a cell that already has a cyto folder, in which case it will repair missing
-#   parts
-build_cyto() {
-  fork build_cyto_inner "$@"
 }
 
 build_cyto_inner() {
@@ -2469,6 +2461,12 @@ build_cyto_inner() {
   handle_return
 }
 
+# Can be called on a cell that already has a cyto folder, in which case it will repair missing
+#   parts
+build_cyto() {
+  fork build_cyto_inner "$@"
+}
+
 # inputs:
 #   $1   cell_path
 #   anchor_dims (as a space separated string)
@@ -2477,7 +2475,7 @@ switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
 
-    local log_show_vars=^cell_path rebuild_attempted=f context_exists=f
+    local log_show_vars=^cell_path rebuild_attempted=f
     begin_function
 
       log_debug "Loading context for $cell_path"
@@ -2511,12 +2509,12 @@ switch_context() {
 
       if [[ ! -f $context_path ]]; then
         build_cyto $cell_path || fail
+        source $context_path || fail
+      else
+        source $context_path || fail
+        setup_dims || fail
+        load_child_dims || fail
       fi
-
-      source $context_path || fail
-
-      setup_dims || fail
-      context_exists=t
 
       local problem_found=f
       broken_link_check || fail
@@ -2532,12 +2530,7 @@ switch_context() {
         fi
       fi
 
-      if [[ $context_exists == t ]]; then
-        load_post_context_dynamic_vars || fail
-      else
-        short_cell=${cell_path#/*/*/}
-      fi
-
+      load_post_context_dynamic_vars || fail
       last_context_loaded=$cell_path
 
     end_function
@@ -3053,7 +3046,7 @@ reply_to_caller() {
 
 # this should be run in a subshell
 fork_inside() {
-  begin_function
+  begin_function_lo
 
     local change_log2=$change_log
     # Prevents this variable from bleeding through to lower called functions
@@ -3104,7 +3097,7 @@ fork_inside() {
 
 # run outside of the subshell afterwards
 after_fork() {
-  begin_function
+  begin_function_lo
     if [[ -f "${reply_file:-}" ]]; then
       #pause "Sourcing $reply_file"
       source $reply_file || fail
@@ -3138,7 +3131,7 @@ get_new_reply_file() {
 #  to_var       (write output to the given var instead of stdout)
 fork() {
   local command=$*
-  begin_function
+  begin_function_lo
     local reply_file return_code=0 \
       background=${background:-f} \
       change_log=${change_log:-f} \
@@ -3218,11 +3211,6 @@ wait_for_low_load() {
   return 0
 }
 
-# run within the subshell at the beginning
-begin_fork() {
-  return 0
-}
-
 reply_file=
 
 # input: parallel processes
@@ -3271,7 +3259,7 @@ parallel_loop() {
   local loop_over_var= head= body= tail= par= fork=
 
   local log_show_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
-  begin_function
+  begin_function_lo
 
     if [[ ! -v $loop_over_var2 ]]; then
       log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
