@@ -1227,6 +1227,53 @@ build_context_dna() {
   handle_return
 }
 
+# input: 
+#   $1=dim
+#   function=function to execute for each member
+#   fork=whether the process should be forked before executing 
+#     the function. (optional)
+for_each_member() {
+  local dim=$1 \
+    function=$function leave_loop=${leave_loop:-0} \
+    fork=${fork:-t} \
+    par=${par:-t} \
+    cell_path=${cell_path:-}
+
+  member_count=0
+  local log_vars='fork par' \
+    log_show_vars='dim function'
+  begin_function
+
+    coord_type=branch \
+    fetch_values_from_coordinates $dim || fail
+
+    member_count=${#values[*]}
+
+    if (( member_count > 1 )); then
+      # don't refine the upstream link if there would be multiple matches
+      local upstream_cell_link=
+    fi
+
+    if (( member_count == 0 )); then
+      log_fatal "No members found for $dim"
+      fail1
+    fi
+
+    loop_over_var=values \
+      head="local member=\$value dim=$dim command_history=\${command_history:-}
+        eval 'local d_$dim=\"\$member\"'" \
+      body=$function \
+      tail='
+        if [[ $leave_loop -gt 0 ]]; then
+          break
+        fi
+        ' \
+      parallel_loop || fail
+
+  end_function
+  handle_return
+}
+
 plant_seed_internal() {
   local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
   begin_function
@@ -3355,53 +3402,6 @@ fetch_values_from_coordinates() {
     execute_derive_table || fail
     keys_to_array results values
     log_debug "$dim_var fetched from coordinates: ${values[*]}"
-  end_function
-  handle_return
-}
-
-# input: 
-#   $1=dim
-#   function=function to execute for each member
-#   fork=whether the process should be forked before executing 
-#     the function. (optional)
-for_each_member() {
-  local dim=$1 \
-    function=$function leave_loop=${leave_loop:-0} \
-    fork=${fork:-t} \
-    par=${par:-t} \
-    cell_path=${cell_path:-}
-
-  member_count=0
-  local log_vars='fork par' \
-    log_show_vars='dim function'
-  begin_function
-
-    coord_type=branch \
-    fetch_values_from_coordinates $dim || fail
-
-    member_count=${#values[*]}
-
-    if (( member_count > 1 )); then
-      # don't refine the upstream link if there would be multiple matches
-      local upstream_cell_link=
-    fi
-
-    if (( member_count == 0 )); then
-      log_fatal "No members found for $dim"
-      fail1
-    fi
-
-    loop_over_var=values \
-      head="local member=\$value dim=$dim command_history=\${command_history:-}
-        eval 'local d_$dim=\"\$member\"'" \
-      body=$function \
-      tail='
-        if [[ $leave_loop -gt 0 ]]; then
-          break
-        fi
-        ' \
-      parallel_loop || fail
-
   end_function
   handle_return
 }
