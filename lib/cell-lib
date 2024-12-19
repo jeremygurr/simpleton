@@ -476,7 +476,7 @@ get_bottom_cell() {
   return 0
 }
 
-load_context_expand_find_members() {
+build_context_expand_find_members() {
   begin_function
 
     local branch other_found=f
@@ -506,7 +506,7 @@ load_context_expand_find_members() {
   handle_return
 }
 
-load_context_expand_handle_default() {
+build_context_expand_handle_default() {
   begin_function
     if [[ -v ${dim_type}_${dim}_default ]]; then
 
@@ -538,7 +538,7 @@ load_context_expand_handle_default() {
   handle_return
 }
 
-load_context_expand_handle_aliases() {
+build_context_expand_handle_aliases() {
   begin_function
     local a_line first remaining
     begin_for a_line in "${aliases[@]}"; doo
@@ -553,7 +553,7 @@ load_context_expand_handle_aliases() {
   handle_return
 }
 
-load_context_expand_members_unknown() {
+build_context_expand_members_unknown() {
   begin_function
 # This needs to be allowed to support derive tables
 #    all)
@@ -569,7 +569,7 @@ load_context_expand_members_unknown() {
   handle_return
 }
 
-load_context_expand_members_known() {
+build_context_expand_members_known() {
   begin_function
     local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
     begin_for m in "${members[@]}"; doo
@@ -601,7 +601,7 @@ load_context_expand_members_known() {
   handle_return
 }
 
-load_context_expand2() {
+build_context_expand2() {
   begin_function
 
     local members=() aliases=() \
@@ -625,7 +625,7 @@ load_context_expand2() {
 
       has_explicit_member_list=t
     else
-      load_context_expand_find_members
+      build_context_expand_find_members
     fi
 
     if [[ -v ${dim_type}_${dim}_aliases ]]; then
@@ -638,17 +638,17 @@ ${dim_type}_${dim}_expand() {
   case \"\$value\" in"
 
     if [[ $is_optional == f ]]; then
-      load_context_expand_handle_default || fail
+      build_context_expand_handle_default || fail
     fi
 
     if (( ${#aliases[*]} > 0 )); then
-      load_context_expand_handle_aliases || fail
+      build_context_expand_handle_aliases || fail
     fi
 
     if [[ $has_explicit_member_list == f ]]; then
-      load_context_expand_members_unknown || fail
+      build_context_expand_members_unknown || fail
     else
-      load_context_expand_members_known || fail
+      build_context_expand_members_known || fail
     fi
 
     write_to_context fun "$code" || fail
@@ -657,7 +657,7 @@ ${dim_type}_${dim}_expand() {
   handle_return
 }
 
-load_context_expand() {
+build_context_expand() {
   begin_function
 
     if [[ ! -d $seed_path ]]; then
@@ -670,7 +670,7 @@ load_context_expand() {
       local -n dims=$dim_type
       begin_for dim in ${dims[*]:-}; doo
         if ! function_exists ${dim_type}_${dim}_expand; then
-          load_context_expand2 || fail
+          build_context_expand2 || fail
         fi
       end_for
     end_for
@@ -1039,6 +1039,146 @@ calculate_default_anchors() {
   handle_return
 }
 
+# should make sure load_branch_info was run before calling this
+# inputs: $1  work path to target folder, which may be a cell or a folder of a cell
+# outputs: seed_path work_path
+find_seed_path() {
+  local d s=$1 i h dim dim_count
+  begin_function
+    seed_path=
+
+    s=/seed${s#/work}
+
+    while [[ ! -d $s && $s == *:* ]]; do
+      s=${s%/*}
+    done
+
+    if [[ ${ignore_nonexistent:-f} == t ]]; then
+      while [[ ! -d $s && $s == */*/*/* ]]; do
+        s=${s%/*}
+      done
+    fi
+
+    if [[ ! -d $s ]]; then
+      log_fatal "Couldn't find seed for $s"
+      fail1
+    fi
+
+    work_path=/work${s#/seed}
+
+    # go through each seed folder and find matching dim
+    local found_branch=t
+    begin_while [[ $found_branch == t ]]; doo
+      
+      found_branch=f
+      local dim_folder=$(find1 $s -name "*:*" -type d | head -n1) || fail
+      if [[ "$dim_folder" ]]; then
+
+        local seed_dim=${dim_folder##*/}
+        seed_dim=${seed_dim%%:*}
+
+        for (( i = 0; i < branch_dim_count; i++ )); do
+
+          dim=${branch_dims[$i]}
+          if [[ $dim == $seed_dim ]]; then
+            h=${branch_hashes[$i]}
+            if [[ -d $s/$dim:$h ]]; then
+              s+=/$dim:$h
+              found_branch=t
+            elif [[ -d $s/$dim:_other ]]; then
+              s+=/$dim:_other
+              found_branch=t
+            fi
+            break
+          fi
+
+        done
+
+      fi
+
+    end_while
+
+  end_function
+
+  if [[ "$s" && -d $s ]]; then
+    seed_path=$s
+  fi
+
+  local log_return_vars='seed_path work_path'
+  handle_return
+}
+
+# requires dna_roots
+load_dna_contents() {
+  local folder=$1 prefix=${prefix:-} \
+    pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
+    ignore_unknown=${ignore_unknown:-f} \
+    context_type=$context_type \
+
+  begin_function
+
+    local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
+
+    if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
+      load_dna_contents_dna_root || fail
+    fi
+
+    local current_var=${prefix%_} ord item_name item_var= result 
+    if [[ $pass_thru == f ]]; then
+      local array_content=( )
+    fi
+    current_var=${current_var//-/_}
+
+    begin_for item in $items; doo
+
+      item_name=${item##*/}
+
+      local dna_prefix=f
+      if [[ "$item_name" == dna-* ]]; then
+        dna_prefix=t
+        item_name=${item_name#dna-}
+      fi
+
+      extract_simple_name item_name ord item_var
+
+      local new_prefix= 
+      if [[ "$current_var" && $dna_prefix == f ]]; then
+        new_prefix=${current_var}_
+      fi
+
+      local real_path=$(realpath -m $item)
+
+      if [[ ! -e $real_path ]]; then
+        if [[ $real_path == /work/* ]]; then
+          local seed_path
+          ignore_nonexistent=t \
+          find_seed_path $real_path || fail
+          deep=t plant_seed_internal "$seed_path" "$work_path" || fail
+        else
+          log_fatal "Missing file in dna: $item"
+          fail1
+        fi
+      fi
+
+      if [[ -d $item ]]; then
+        if [[ $recursive == t ]]; then
+          load_dna_contents_handle_dir || fail
+        fi
+      else
+        load_dna_contents_handle_file || fail
+      fi
+
+    end_for
+
+    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
+      make_array_assignment $current_var array_content || fail
+      write_to_context var "$array_assignment" || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 build_context_dna() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
@@ -1056,7 +1196,7 @@ build_context_dna() {
       local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
       prefix= load_dna_contents $dna_path || fail
 
-      load_context_expand || fail
+      build_context_expand || fail
       if [[ ! "${default_anchor_dims:-}" ]]; then
         calculate_default_anchors || fail
       fi
@@ -1134,7 +1274,7 @@ plant_seed_internal() {
       end_for
 
       if [[ "$dim_found" && $plant_branches == t ]]; then
-        load_context $to || fail
+        build_context $to || fail
         parent_path=$to \
         seed_path=$from \
         par=f fork=f \
@@ -1144,75 +1284,6 @@ plant_seed_internal() {
 
     fi
   end_function
-  handle_return
-}
-
-# should make sure load_branch_info was run before calling this
-# inputs: $1  work path to target folder, which may be a cell or a folder of a cell
-# outputs: seed_path work_path
-find_seed_path() {
-  local d s=$1 i h dim dim_count
-  begin_function
-    seed_path=
-
-    s=/seed${s#/work}
-
-    while [[ ! -d $s && $s == *:* ]]; do
-      s=${s%/*}
-    done
-
-    if [[ ${ignore_nonexistent:-f} == t ]]; then
-      while [[ ! -d $s && $s == */*/*/* ]]; do
-        s=${s%/*}
-      done
-    fi
-
-    if [[ ! -d $s ]]; then
-      log_fatal "Couldn't find seed for $s"
-      fail1
-    fi
-
-    work_path=/work${s#/seed}
-
-    # go through each seed folder and find matching dim
-    local found_branch=t
-    begin_while [[ $found_branch == t ]]; doo
-      
-      found_branch=f
-      local dim_folder=$(find1 $s -name "*:*" -type d | head -n1) || fail
-      if [[ "$dim_folder" ]]; then
-
-        local seed_dim=${dim_folder##*/}
-        seed_dim=${seed_dim%%:*}
-
-        for (( i = 0; i < branch_dim_count; i++ )); do
-
-          dim=${branch_dims[$i]}
-          if [[ $dim == $seed_dim ]]; then
-            h=${branch_hashes[$i]}
-            if [[ -d $s/$dim:$h ]]; then
-              s+=/$dim:$h
-              found_branch=t
-            elif [[ -d $s/$dim:_other ]]; then
-              s+=/$dim:_other
-              found_branch=t
-            fi
-            break
-          fi
-
-        done
-
-      fi
-
-    end_while
-
-  end_function
-
-  if [[ "$s" && -d $s ]]; then
-    seed_path=$s
-  fi
-
-  local log_return_vars='seed_path work_path'
   handle_return
 }
 
@@ -1488,77 +1559,6 @@ load_dna_contents_handle_file() {
       fi
     fi
     prefix=$new_prefix load_dna_item $item || fail
-  end_function
-  handle_return
-}
-
-# requires dna_roots
-load_dna_contents() {
-  local folder=$1 prefix=${prefix:-} \
-    pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
-    ignore_unknown=${ignore_unknown:-f} \
-    context_type=$context_type \
-
-  begin_function
-
-    local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
-
-    if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
-      load_dna_contents_dna_root || fail
-    fi
-
-    local current_var=${prefix%_} ord item_name item_var= result 
-    if [[ $pass_thru == f ]]; then
-      local array_content=( )
-    fi
-    current_var=${current_var//-/_}
-
-    begin_for item in $items; doo
-
-      item_name=${item##*/}
-
-      local dna_prefix=f
-      if [[ "$item_name" == dna-* ]]; then
-        dna_prefix=t
-        item_name=${item_name#dna-}
-      fi
-
-      extract_simple_name item_name ord item_var
-
-      local new_prefix= 
-      if [[ "$current_var" && $dna_prefix == f ]]; then
-        new_prefix=${current_var}_
-      fi
-
-      local real_path=$(realpath -m $item)
-
-      if [[ ! -e $real_path ]]; then
-        if [[ $real_path == /work/* ]]; then
-          local seed_path
-          ignore_nonexistent=t \
-          find_seed_path $real_path || fail
-          deep=t plant_seed_internal "$seed_path" "$work_path" || fail
-        else
-          log_fatal "Missing file in dna: $item"
-          fail1
-        fi
-      fi
-
-      if [[ -d $item ]]; then
-        if [[ $recursive == t ]]; then
-          load_dna_contents_handle_dir || fail
-        fi
-      else
-        load_dna_contents_handle_file || fail
-      fi
-
-    end_for
-
-    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
-      make_array_assignment $current_var array_content || fail
-      write_to_context var "$array_assignment" || fail
-    fi
-
   end_function
   handle_return
 }
@@ -2199,7 +2199,6 @@ build_context_branch() {
       rm $context_path-$context_type.new || fail
     fi
 
-    find_seed_path $cell_path || fail
     mock_path=$seed_path/.mock
     write_vars_to_context seed_path mock_path || fail
 
@@ -2393,6 +2392,7 @@ build_cyto_inner() {
 
     init_context || fail
     load_branch_info || fail
+    find_seed_path $cell_path || fail
 
     context_path=$cyto_path/context
     if [[ ! -f $context_path ]]; then
