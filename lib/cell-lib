@@ -445,7 +445,13 @@ load_dna_item() {
         fi
       ;;
     esac
-    write_to_context $load_type "$code" || fail
+
+    if [[ "$context_type" ]]; then
+      write_to_context $load_type "$code" || fail
+    else
+      eval "$code" || fail
+    fi
+
   end_function
   handle_return
 }
@@ -1102,12 +1108,59 @@ find_seed_path() {
   handle_return
 }
 
-# requires dna_roots
+load_dna_contents_update_cell() {
+  local file=$1 original_cell_path=$cell_path cell_path work_path
+  begin_function
+
+    local bottom_cell cell_path parent=${file%/*}
+    if [[ ! -d "$parent" ]]; then
+      ignore_nonexistent=t plant_seed $parent || fail
+      cell_path=$work_path
+    else
+      get_bottom_cell $parent
+      if [[ ! "$bottom_cell" ]]; then
+        log_fatal "Could not find cell for $file"
+        fail1
+      fi
+      cell_path=$bottom_cell
+    fi
+    local short_cell
+    get_short_cell
+
+    needs_update= \
+    top_level_command=f \
+    fork execute_command "$cell_path" update || fail
+
+    if [[ ! -f "$file" ]]; then
+      log_fatal "Cell $short_cell did not produce file at $file as required by dna of $original_cell_path"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
+load_dna_contents_handle_file() {
+  begin_function
+    if [[ -L $item && ! -e $item ]]; then
+      if [[ $real_path == /work/* ]]; then
+        load_dna_contents_update_cell $real_path || fail
+      else
+        log_fatal "Broken link found: $item"
+        fail1
+      fi
+    fi
+    prefix=$new_prefix load_dna_item $item || fail
+  end_function
+  handle_return
+}
+
+# if context_type is not set, then no context will be written
 load_dna_contents() {
   local folder=$1 prefix=${prefix:-} \
     pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
     ignore_unknown=${ignore_unknown:-f} \
-    context_type=$context_type \
+    context_type=${context_type:-} \
 
   begin_function
 
@@ -1800,21 +1853,6 @@ load_dna_contents_handle_dir() {
   handle_return
 }
  
-load_dna_contents_handle_file() {
-  begin_function
-    if [[ -L $item && ! -e $item ]]; then
-      if [[ $real_path == /work/* ]]; then
-        load_dna_contents_update_cell $real_path || fail
-      else
-        log_fatal "Broken link found: $item"
-        fail1
-      fi
-    fi
-    prefix=$new_prefix load_dna_item $item || fail
-  end_function
-  handle_return
-}
-
 link_single() {
   begin_function
     extract_simple_name choice_name o choice_var
@@ -3052,45 +3090,6 @@ execute_command() {
 
   end_function
   handle_return
-}
-
-load_dna_contents_update_cell() {
-  local file=$1 original_cell_path=$cell_path cell_path work_path
-  begin_function
-
-    local bottom_cell cell_path parent=${file%/*}
-    if [[ ! -d "$parent" ]]; then
-      ignore_nonexistent=t plant_seed $parent || fail
-      cell_path=$work_path
-    else
-      get_bottom_cell $parent
-      if [[ ! "$bottom_cell" ]]; then
-        log_fatal "Could not find cell for $file"
-        fail1
-      fi
-      cell_path=$bottom_cell
-    fi
-    local short_cell
-    get_short_cell
-
-    needs_update= \
-    top_level_command=f \
-    fork execute_command "$cell_path" update || fail
-
-    if [[ ! -f "$file" ]]; then
-      log_fatal "Cell $short_cell did not produce file at $file as required by dna of $original_cell_path"
-      fail1
-    fi
-
-  end_function
-  handle_return
-}
-
-reply_to_caller() {
-  if [[ "${reply_file:-}" ]]; then
-    echo "$*" >>$reply_file || return 1
-  fi
-  return 0
 }
 
 # this should be run in a subshell
