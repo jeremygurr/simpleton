@@ -140,8 +140,12 @@ write_vars_to_context() {
     local var val quoted_val
     begin_for var in $vars_to_write; doo
       local -n val=$var
-      local quoted_val=${val:-}
-      shell_quote_var quoted_val
+      if is_array val; then
+        array_to_string val quoted_val
+      else
+        local quoted_val=${val:-}
+        shell_quote_var quoted_val
+      fi
       write_to_context var "$var=$quoted_val" || fail
     end_for
   end_function
@@ -748,28 +752,27 @@ prep_dims() {
   local dim_types=$*
   begin_function
 
-    localize_dims=
-    localize_reverse_dims=
     local dim_var dim_type dims_var
     for dim_type in $dim_types; do
       local -n dim_array=$dim_type
       local -n plural_array=${dim_type}_plural
       plural_array=()
-      for dim_var in ${dim_array[*]}; do
+      local index
+      for index in ${!dim_array[*]}; do
 
-        get_plural $dim_var dims_var
-        plural_array+=( $dims_var )
+        dim_var=${dim_array[$index]}
+        dims_var=${plural_array[$index]}
 
         local -n dim=$dim_var dims=$dims_var \
           ddim=d_$dim_var ddims=d_$dims_var \
           sdim=s_$dim_var sdims=s_$dims_var \
           pdim=p_$dim_var pdims=p_$dims_var \
           is_optional=${dim_type}_${dim_var}_is_optional \
-          d_dim_type=${dim_var}_dim_type \
 
         is_optional=${is_optional:-f}
         sdim=${sdim:-${pdim:-${dim:-}}}
         sdims=${sdims:-${pdims:-${dims:-}}}
+
         if [[ ! "${sdims:-}" && ! "${sdim:-}" && ! "${ddim:-}" && ! "${ddims:-}" ]]; then
           if [[ $is_optional == f ]]; then
             missing_dims+=( $dim_var )
@@ -777,16 +780,6 @@ prep_dims() {
         else
           known_dims+=( $dim_var )
         fi
-
-        localize_dims+=" d_$dim_var=\${d_$dim_var:-} d_$dims_var=\${d_$dims_var:-}"
-        localize_reverse_dims+=" $dim_var=\${d_$dim_var:-} $dims_var=\${d_$dims_var:-}"
-
-        local -n is_secret=${dim_type}_${dim_var}_is_secret
-        if [[ -v is_secret && $is_secret == t ]]; then
-          add_word_to_string secret_vars "$dim_var $dims_var d_$dim_var d_$dims_var"
-        fi
-
-        d_dim_type=$dim_type
 
       done
     done
@@ -1274,6 +1267,156 @@ for_each_member() {
   handle_return
 }
 
+build_dim_info() {
+  begin_function
+
+    local dim_var dim_type dims_var
+    localize_dims=
+    localize_reverse_dims=
+    for dim_type in trunk_dims sub_dims control_props data_props; do
+      local -n dim_array=$dim_type
+      local -n plural_array=${dim_type}_plural
+
+      plural_array=()
+      for dim_var in ${dim_array[*]}; do
+        get_plural $dim_var dims_var
+        plural_array+=( $dims_var )
+
+        localize_dims+=" d_$dim_var=\${d_$dim_var:-} d_$dims_var=\${d_$dims_var:-}"
+        localize_reverse_dims+=" $dim_var=\${d_$dim_var:-} $dims_var=\${d_$dims_var:-}"
+
+        local -n is_secret=${dim_type}_${dim_var}_is_secret
+        if [[ -v is_secret && $is_secret == t ]]; then
+          add_word_to_string secret_vars "$dim_var $dims_var d_$dim_var d_$dims_var"
+        fi
+
+        local -n d_dim_type=${dim_var}_dim_type
+        d_dim_type=$dim_type
+        write_vars_to_context ${dim_var}_dim_type || fail
+      done
+
+      write_vars_to_context \
+        ${dim_type}_plural \
+        || fail
+
+    done
+
+    write_vars_to_context \
+      localize_dims localize_reverse_dims \
+      secret_vars \
+      || fail
+
+  end_function
+  handle_return
+}
+
+build_context_trunk() {
+  begin_function
+
+    local context_type=trunk last_type=var
+
+    log_debug "Building trunk context for $cell_path" || fail
+
+    if [[ -e $context_path-$context_type.new ]]; then
+      rm $context_path-$context_type.new || fail
+    fi
+
+    build_context_dna || fail
+
+    if [[ ! -d $status_path ]]; then
+      mkdir -p $status_path || fail
+    fi
+
+    if [[ ! "${out_path:-}" ]]; then
+      out_path=$cell_path
+    elif [[ "$out_path" != /* ]]; then
+      out_path=$cell_path/$out_path
+    fi
+    write_vars_to_context out_path || fail
+
+    build_dim_info || fail
+
+    mv $context_path-$context_type.new $context_path-$context_type || fail
+
+  end_function
+  handle_return
+}
+
+build_context_branch() {
+  begin_function
+
+    local context_type=branch last_type=var
+    log_debug "Building branch context for $cell_path" || fail
+
+    if [[ -e $context_path-$context_type.new ]]; then
+      rm $context_path-$context_type.new || fail
+    fi
+
+    mock_path=$seed_path/.mock
+    write_vars_to_context seed_path mock_path || fail
+
+    local dim assignment member i members_string=
+    begin_for ((i = 0; i < branch_dim_count; i++)); doo
+      dim=${branch_dims[$i]}
+      member=${branch_members[$i]}
+      quotes=single shell_quote_var member
+      assignment="d_$dim=$member"
+      members_string+="$member "
+      write_to_context var "$assignment" || fail
+    end_for
+
+    write_to_context var "
+trunk_cell=$trunk_cell
+branch_dims=( ${branch_dims[*]} )
+branch_dim_count=$branch_dim_count
+branch_members=( ${members_string% } )
+branch_hashes=( ${branch_hashes[*]} )
+cell_is_trunk=$cell_is_trunk
+cell_is_leaf=$cell_is_leaf
+short_cell=$short_cell
+" || fail
+
+    mv $context_path-$context_type.new $context_path-$context_type || fail
+
+  end_function
+  handle_return
+}
+
+# only run if the cell is actually a leaf
+build_context_leaf() {
+  begin_function
+    local context_type=leaf last_type=var
+    log_debug "Building leaf context for $cell_path" || fail
+
+    if [[ -e $context_path-$context_type.new ]]; then
+      rm $context_path-$context_type.new || fail
+    fi
+
+    if [[ ! "${parameter_questions:-}" ]]; then
+
+      coord_type=branch \
+      switch_context_calc_coordinates || fail
+      if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
+        switch_context_handle_missing || fail
+      fi
+
+      write_vars_to_context \
+        branch_coordinate_data \
+        branch_coordinate_count \
+        branch_coordinate_rows \
+        branch_coordinate_fields \
+        branch_coordinate_fields_count \
+        branch_coordinate_fields_plural \
+        || fail
+
+    fi
+
+    mv $context_path-$context_type.new $context_path-$context_type || fail
+
+  end_function
+  handle_return
+}
+
 build_context() {
   local cell_path=$1
   begin_function
@@ -1285,11 +1428,12 @@ build_context() {
 
     if [[ ! -f $context_path-trunk ]]; then
       build_context_trunk || fail
+      setup_dims || fail
     else
       source $context_path-trunk || fail
+      setup_dims || fail
     fi
 
-    setup_dims || fail
     load_child_dims || fail
 
     if [[ ! -f $context_path-branch ]]; then
@@ -2264,111 +2408,6 @@ get_required_freshness() {
   # fresh passed in by user should only apply to top level cell, not to deps or subs
   fresh=
   return 0
-}
-
-build_context_trunk() {
-  begin_function
-
-    local context_type=trunk last_type=var
-
-    log_debug "Building trunk context for $cell_path" || fail
-
-    if [[ -e $context_path-$context_type.new ]]; then
-      rm $context_path-$context_type.new || fail
-    fi
-
-    build_context_dna || fail
-
-    if [[ ! -d $status_path ]]; then
-      mkdir -p $status_path || fail
-    fi
-
-    if [[ ! "${out_path:-}" ]]; then
-      out_path=$cell_path
-    elif [[ "$out_path" != /* ]]; then
-      out_path=$cell_path/$out_path
-    fi
-    write_vars_to_context out_path || fail
-
-    mv $context_path-$context_type.new $context_path-$context_type || fail
-
-  end_function
-  handle_return
-}
-
-build_context_branch() {
-  begin_function
-
-    local context_type=branch last_type=var
-    log_debug "Building branch context for $cell_path" || fail
-
-    if [[ -e $context_path-$context_type.new ]]; then
-      rm $context_path-$context_type.new || fail
-    fi
-
-    mock_path=$seed_path/.mock
-    write_vars_to_context seed_path mock_path || fail
-
-    local dim assignment member i members_string=
-    begin_for ((i = 0; i < branch_dim_count; i++)); doo
-      dim=${branch_dims[$i]}
-      member=${branch_members[$i]}
-      quotes=single shell_quote_var member
-      assignment="d_$dim=$member"
-      members_string+="$member "
-      write_to_context var "$assignment" || fail
-    end_for
-
-    write_to_context var "
-trunk_cell=$trunk_cell
-branch_dims=( ${branch_dims[*]} )
-branch_dim_count=$branch_dim_count
-branch_members=( ${members_string% } )
-branch_hashes=( ${branch_hashes[*]} )
-cell_is_trunk=$cell_is_trunk
-cell_is_leaf=$cell_is_leaf
-short_cell=$short_cell
-" || fail
-
-    mv $context_path-$context_type.new $context_path-$context_type || fail
-
-  end_function
-  handle_return
-}
-
-# only run if the cell is actually a leaf
-build_context_leaf() {
-  begin_function
-    local context_type=leaf last_type=var
-    log_debug "Building leaf context for $cell_path" || fail
-
-    if [[ -e $context_path-$context_type.new ]]; then
-      rm $context_path-$context_type.new || fail
-    fi
-
-    if [[ ! "${parameter_questions:-}" ]]; then
-
-      coord_type=branch \
-      switch_context_calc_coordinates || fail
-      if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
-        switch_context_handle_missing || fail
-      fi
-
-      write_vars_to_context \
-        branch_coordinate_data \
-        branch_coordinate_count \
-        branch_coordinate_rows \
-        branch_coordinate_fields \
-        branch_coordinate_fields_count \
-        branch_coordinate_fields_plural \
-        || fail
-
-    fi
-
-    mv $context_path-$context_type.new $context_path-$context_type || fail
-
-  end_function
-  handle_return
 }
 
 load_post_context_dynamic_vars() {
