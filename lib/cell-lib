@@ -1314,7 +1314,7 @@ build_context_trunk() {
 
     local context_type=trunk last_type=var
 
-    log_debug "Building trunk context for $cell_path" || fail
+    log_debug "Building trunk context for $short_cell" || fail
 
     if [[ -e $context_path-$context_type.new ]]; then
       rm $context_path-$context_type.new || fail
@@ -1345,7 +1345,7 @@ build_context_branch() {
   begin_function
 
     local context_type=branch last_type=var
-    log_debug "Building branch context for $cell_path" || fail
+    log_debug "Building branch context for $short_cell" || fail
 
     if [[ -e $context_path-$context_type.new ]]; then
       rm $context_path-$context_type.new || fail
@@ -1372,7 +1372,6 @@ branch_members=( ${members_string% } )
 branch_hashes=( ${branch_hashes[*]} )
 cell_is_trunk=$cell_is_trunk
 cell_is_leaf=$cell_is_leaf
-short_cell=$short_cell
 " || fail
 
     mv $context_path-$context_type.new $context_path-$context_type || fail
@@ -1716,7 +1715,6 @@ load_branch_info() {
       dim_string=:${dim_string// /\/}
     fi
     local short_trunk=${trunk_cell#/*/*/}
-    short_cell="$short_trunk$dim_string"
 
   end_function
   handle_return
@@ -2449,12 +2447,13 @@ build_cyto_inner() {
 
   begin_function
 
-    log_debug "Building cyto for $cell_path"
+    log_debug "Building cyto for $short_cell"
     dna_path=$cell_path/.dna \
     cyto_path=$cell_path/.cyto \
+    short_cell=${cell_path#/work/*/}
 
     if [[ ! -e $dna_path ]]; then
-      log_fatal "Internal error: attempted switch_context on an invalid cell: $cell_path"
+      log_fatal "Internal error: attempted switch_context on an invalid cell: $short_cell"
       fail1
     fi
 
@@ -2516,13 +2515,14 @@ switch_context() {
     local log_show_vars=^cell_path rebuild_attempted=f
     begin_function
 
-      log_debug "Loading context for $cell_path"
+      log_debug "Loading context for $short_cell"
 
+      short_cell=${cell_path#/work/*/}
       dna_path=$cell_path/.dna \
       cyto_path=$cell_path/.cyto \
 
       if [[ ! -e $dna_path ]]; then
-        log_fatal "Internal error: attempted switch_context on an invalid cell: $cell_path"
+        log_fatal "Internal error: attempted switch_context on an invalid cell: $short_cell"
         fail1
       fi
 
@@ -2531,10 +2531,10 @@ switch_context() {
         begin_for cell_to_clean in $clean_cells; doo
           if [[ /$cell_path/ == */$cell_to_clean/* ]]; then
             if [[ -e $cyto_path ]]; then
-              log_info "Cleaning cell $cell_to_clean => $cell_path..."
+              log_info "Cleaning cell ${cell_to_clean#/work/*/} => $short_cell..."
               rm -rf $cyto_path || fail
             else
-              log_info "Cell already clean: $cell_to_clean => $cell_path"
+              log_info "Cell already clean: $cell_to_clean => $short_cell"
             fi
             remove_word_from_string clean_cells "$cell_to_clean" 
             break
@@ -2575,7 +2575,7 @@ switch_context() {
     handle_return
 
   else
-    log_debug "Context already loaded: $cell_path" || fail
+    log_debug "Context already loaded: $short_cell" || fail
   fi
 
   return 0
@@ -2908,7 +2908,7 @@ execute_command_internal() {
     fi
 
     switch_context $cell_path || {
-      log_fatal "Context failed to load for $cell_path"
+      log_fatal "Context failed to load for $short_cell"
       fail1
     }
 
@@ -2983,8 +2983,9 @@ execute_command() {
       background_log \
       running_job_path \
       recursive_command=${recursive_command:-${recursive:-f}} \
+      short_cell=${cell_path#/work/*/} \
 
-    log_verbose "Executing cell command: ${cell_path#/work/*/} $cell_command" || fail
+    log_verbose "Executing cell command: $short_cell $cell_command" || fail
 
     if [[ ! -e "$cell_path" ]]; then
       plant_seed $cell_path || {
@@ -3063,13 +3064,14 @@ load_dna_contents_update_cell() {
       fi
       cell_path=$bottom_cell
     fi
+    short_cell=${cell_path#/work/*/}
 
     needs_update= \
     top_level_command=f \
     fork execute_command "$cell_path" update || fail
 
     if [[ ! -f "$file" ]]; then
-      log_fatal "Cell $cell_path did not produce file at $file as required by dna of $original_cell_path"
+      log_fatal "Cell $short_cell did not produce file at $file as required by dna of $original_cell_path"
       fail1
     fi
 
