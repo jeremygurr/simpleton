@@ -355,7 +355,7 @@ extract_simple_name() {
   local to_var=$3
   local -n _from=$1 _ord=$2 _to=$to_var
   split_ordinal _from _ord _to
-  _to=${_to//-/_}
+  #_to=${_to//-/_}
   debug_return_vars=$to_var
 }
 
@@ -393,8 +393,8 @@ load_dna_item() {
     fi
 
     local var_name o
-    var_name=$prefix$file_name
-    extract_simple_name var_name o var_name
+    extract_simple_name file_name o var_name
+    var_name=$prefix${var_name//-/_}
 
     local load_type=var
     case "$suffix" in
@@ -1186,7 +1186,8 @@ load_dna_contents() {
         item_name=${item_name#dna-}
       fi
 
-      extract_simple_name item_name ord item_var
+      extract_simple_name item_name ord item_name
+      item_var=${item_name//-/_}
 
       local new_prefix= 
       if [[ "$current_var" && $dna_prefix == f ]]; then
@@ -1828,7 +1829,7 @@ load_dna_contents_dna_root() {
 load_dna_contents_handle_dir() {
   begin_function
     if [[ "$current_var" && $item_var != _* ]]; then
-      array_content+=( "$item_var" )
+      array_content+=( "$item_name" )
       if [[ -L $item || -d $item ]]; then
         result="${current_var}_${item_var}_path=$real_path"
         write_to_context var "$result" || fail
@@ -1854,18 +1855,34 @@ load_dna_contents_handle_dir() {
 }
  
 link_single() {
+  local only_one=${only_one:-f}
   begin_function
-    extract_simple_name choice_name o choice_var
-    local -n choice_path=up_${up_var}_choices_${choice_var}_path
+
+    extract_simple_name choice_name o choice_name
+    local choice_var=${choice_name//-/_}
+
+    if [[ $only_one == t ]]; then
+      local -n choice_path=up_${up_var}_path
+    else
+      local -n choice_path=up_${up_var}_choices_${choice_var}_path
+    fi
+
     if [[ ! -v choice_path ]]; then
       log_fatal "Missing choice path var"
       fail1
     fi
+
     if [[ ! -d $choice_path ]]; then
       log_fatal "Missing choice path"
       fail1
     fi
-    safe_link $choice_path $dep_path/choices/$choice_name || fail
+
+    if [[ $only_one == t ]]; then
+      safe_link $choice_path $dep_path || fail
+    else
+      safe_link $choice_path $dep_path/choices/$choice_name || fail
+    fi
+
   end_function
   handle_return
 }
@@ -1874,11 +1891,8 @@ link_single() {
 link_choices() {
   begin_function
     local choice_var choice_name o
-    if [[ ! -d $dep_path/choices ]]; then
-      mkdir -p $dep_path/choices || fail
-    fi
     begin_for choice_name in ${choices[*]}; doo
-      link_single $choice_name || fail
+      link_single || fail
     end_for
   end_function
   handle_return
@@ -1911,15 +1925,17 @@ make_cyto_up_single() {
   begin_function
     local dep_path=$up_path/$up_name \
       up_var
-    extract_simple_name up_name o up_var
+    local up_var=${up_name//-/_}
     local -n choices=up_${up_var}_choices
-    mkdir $dep_path || fail
     if [[ -v choices ]]; then
+      mkdir -p $dep_path/choices || fail
       link_choices || fail
     else
-      local -n choice_path=up_${up_var}_path
       local choice_name=$up_name
-      link_single $choice_name || fail
+      if [[ -d $dep_path ]]; then
+        rm -rf $dep_path || fail
+      fi
+      only_one=t link_single || fail
     fi
   end_function
   handle_return
