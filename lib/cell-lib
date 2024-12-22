@@ -1155,175 +1155,6 @@ load_dna_contents_handle_file() {
   handle_return
 }
 
-# if context_type is not set, then no context will be written
-load_dna_contents() {
-  local folder=$1 prefix=${prefix:-} \
-    pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
-    ignore_unknown=${ignore_unknown:-f} \
-    context_type=${context_type:-} \
-
-  begin_function
-
-    local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
-
-    if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
-      load_dna_contents_dna_root || fail
-    fi
-
-    local current_var=${prefix%_} ord item_name item_var= result 
-    if [[ $pass_thru == f ]]; then
-      local array_content=( )
-    fi
-    current_var=${current_var//-/_}
-
-    begin_for item in $items; doo
-
-      item_name=${item##*/}
-
-      local dna_prefix=f
-      if [[ "$item_name" == dna-* ]]; then
-        dna_prefix=t
-        item_name=${item_name#dna-}
-      fi
-
-      extract_simple_name item_name ord item_name
-      item_var=${item_name//-/_}
-
-      local new_prefix= 
-      if [[ "$current_var" && $dna_prefix == f ]]; then
-        new_prefix=${current_var}_
-      fi
-
-      local real_path=$(realpath -m $item)
-
-      if [[ ! -e $real_path ]]; then
-        if [[ $real_path == /work/* ]]; then
-          local seed_path
-          ignore_nonexistent=t \
-          find_seed_path $real_path || fail
-          deep=t plant_seed_internal "$seed_path" "$work_path" || fail
-        else
-          log_fatal "Missing file in dna: $item"
-          fail1
-        fi
-      fi
-
-      if [[ -d $item ]]; then
-        if [[ $recursive == t ]]; then
-          load_dna_contents_handle_dir || fail
-        fi
-      else
-        load_dna_contents_handle_file || fail
-      fi
-
-    end_for
-
-    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
-      make_array_assignment $current_var array_content || fail
-      write_to_context var "$array_assignment" || fail
-    fi
-
-  end_function
-  handle_return
-}
-
-get_short_cell() {
-  short_cell=${cell_path#/work/*/}
-}
-
-build_context_dna() {
-  local log_vars=cell_path log_show_vars=short_cell
-  begin_function
-
-    local item_name last_part dna_full_item suffix context_type=trunk
-    local -A append_vars
-
-    if [[ -e $context_path-$context_type ]]; then
-      log_fatal "Internal error: Trunk context already exists. Should have been deleted before calling this function."
-      fail1
-    fi
-
-    derive_tables=()
-    if [[ -d $dna_path ]]; then
-      local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
-      prefix= load_dna_contents $dna_path || fail
-
-      build_context_expand || fail
-      if [[ ! "${default_anchor_dims:-}" ]]; then
-        calculate_default_anchors || fail
-      fi
-      write_vars_to_context default_anchor_dims || fail
-
-      mv $context_path-$context_type.new $context_path-$context_type.new2 || fail
-      echo "#!/usr/env bash
-# This file is generated from $dna_path$NL" >$context_path-$context_type.new || fail
-      local v
-      for v in ${!append_vars[*]}; do
-        echo "$v=" >>$context_path-$context_type.new || fail
-      done
-
-      cat $context_path-$context_type.new2 >>$context_path-$context_type.new || fail
-      rm $context_path-$context_type.new2 || fail
-
-    elif [[ -f $dna_path ]]; then
-      safe_link $dna_path $context_path-$context_type.new || fail
-      source $dna_path || fail
-    else
-      log_vars=dna_path log_fatal "Internal error: dna not found"
-      fail1
-    fi
-
-  end_function
-  handle_return
-}
-
-# input: 
-#   $1=dim
-#   function=function to execute for each member
-#   fork=whether the process should be forked before executing 
-#     the function. (optional)
-for_each_member() {
-  local dim=$1 \
-    function=$function leave_loop=${leave_loop:-0} \
-    fork=${fork:-t} \
-    par=${par:-t} \
-    cell_path=${cell_path:-}
-
-  member_count=0
-  local log_vars='fork par' \
-    log_show_vars='dim function'
-  begin_function
-
-    coord_type=branch \
-    fetch_values_from_coordinates $dim || fail
-
-    member_count=${#values[*]}
-
-    if (( member_count > 1 )); then
-      # don't refine the upstream link if there would be multiple matches
-      local upstream_cell_link=
-    fi
-
-    if (( member_count == 0 )); then
-      log_fatal "No members found for $dim"
-      fail1
-    fi
-
-    loop_over_var=values \
-      head="local member=\$value dim=$dim command_history=\${command_history:-}
-        eval 'local d_$dim=\"\$member\"'" \
-      body=$function \
-      tail='
-        if [[ $leave_loop -gt 0 ]]; then
-          break
-        fi
-        ' \
-      parallel_loop || fail
-
-  end_function
-  handle_return
-}
-
 build_dim_info() {
   begin_function
 
@@ -1524,6 +1355,53 @@ build_context() {
   handle_return
 }
 
+# input: 
+#   $1=dim
+#   function=function to execute for each member
+#   fork=whether the process should be forked before executing 
+#     the function. (optional)
+for_each_member() {
+  local dim=$1 \
+    function=$function leave_loop=${leave_loop:-0} \
+    fork=${fork:-t} \
+    par=${par:-t} \
+    cell_path=${cell_path:-}
+
+  member_count=0
+  local log_vars='fork par' \
+    log_show_vars='dim function'
+  begin_function
+
+    coord_type=branch \
+    fetch_values_from_coordinates $dim || fail
+
+    member_count=${#values[*]}
+
+    if (( member_count > 1 )); then
+      # don't refine the upstream link if there would be multiple matches
+      local upstream_cell_link=
+    fi
+
+    if (( member_count == 0 )); then
+      log_fatal "No members found for $dim"
+      fail1
+    fi
+
+    loop_over_var=values \
+      head="local member=\$value dim=$dim command_history=\${command_history:-}
+        eval 'local d_$dim=\"\$member\"'" \
+      body=$function \
+      tail='
+        if [[ $leave_loop -gt 0 ]]; then
+          break
+        fi
+        ' \
+      parallel_loop || fail
+
+  end_function
+  handle_return
+}
+
 plant_seed_internal() {
   local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
   begin_function
@@ -1574,11 +1452,14 @@ plant_seed_internal() {
 
       if [[ "$dim_found" && $plant_branches == t ]]; then
         build_context $to || fail
+
+        # recursive
         parent_path=$to \
         seed_path=$from \
         par=f fork=f \
         function=plant_member \
         for_each_member $dim_found || fail
+
       fi
 
     fi
@@ -1586,21 +1467,161 @@ plant_seed_internal() {
   handle_return
 }
 
+# if context_type is not set, then no context will be written
+load_dna_contents() {
+  local folder=$1 prefix=${prefix:-} \
+    pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
+    ignore_unknown=${ignore_unknown:-f} \
+    context_type=${context_type:-} \
+
+  begin_function
+
+    local items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
+
+    if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
+      load_dna_contents_dna_root || fail
+    fi
+
+    local current_var=${prefix%_} ord item_name item_var= result 
+    if [[ $pass_thru == f ]]; then
+      local array_content=( )
+    fi
+    current_var=${current_var//-/_}
+
+    begin_for item in $items; doo
+
+      item_name=${item##*/}
+
+      local dna_prefix=f
+      if [[ "$item_name" == dna-* ]]; then
+        dna_prefix=t
+        item_name=${item_name#dna-}
+      fi
+
+      extract_simple_name item_name ord item_name
+      item_var=${item_name//-/_}
+
+      local new_prefix= 
+      if [[ "$current_var" && $dna_prefix == f ]]; then
+        new_prefix=${current_var}_
+      fi
+
+      local real_path=$(realpath -m $item)
+
+      if [[ ! -e $real_path ]]; then
+        if [[ $real_path == /work/* ]]; then
+          local seed_path
+          ignore_nonexistent=t \
+          find_seed_path $real_path || fail
+          deep=t plant_seed_internal "$seed_path" "$work_path" || fail
+        else
+          log_fatal "Missing file in dna: $item"
+          fail1
+        fi
+      fi
+
+      if [[ -d $item ]]; then
+        if [[ $recursive == t ]]; then
+          load_dna_contents_handle_dir || fail
+        fi
+      else
+        load_dna_contents_handle_file || fail
+      fi
+
+    end_for
+
+    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
+      make_array_assignment $current_var array_content || fail
+      write_to_context var "$array_assignment" || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+get_short_cell() {
+  short_cell=${cell_path#/work/*/}
+}
+
+build_context_dna() {
+  local log_vars=cell_path log_show_vars=short_cell
+  begin_function
+
+    local item_name last_part dna_full_item suffix context_type=trunk
+    local -A append_vars
+
+    if [[ -e $context_path-$context_type ]]; then
+      log_fatal "Internal error: Trunk context already exists. Should have been deleted before calling this function."
+      fail1
+    fi
+
+    derive_tables=()
+    if [[ -d $dna_path ]]; then
+      local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
+      prefix= load_dna_contents $dna_path || fail
+
+      build_context_expand || fail
+      if [[ ! "${default_anchor_dims:-}" ]]; then
+        calculate_default_anchors || fail
+      fi
+      write_vars_to_context default_anchor_dims || fail
+
+      mv $context_path-$context_type.new $context_path-$context_type.new2 || fail
+      echo "#!/usr/env bash
+# This file is generated from $dna_path$NL" >$context_path-$context_type.new || fail
+      local v
+      for v in ${!append_vars[*]}; do
+        echo "$v=" >>$context_path-$context_type.new || fail
+      done
+
+      cat $context_path-$context_type.new2 >>$context_path-$context_type.new || fail
+      rm $context_path-$context_type.new2 || fail
+
+    elif [[ -f $dna_path ]]; then
+      safe_link $dna_path $context_path-$context_type.new || fail
+      source $dna_path || fail
+    else
+      log_vars=dna_path log_fatal "Internal error: dna not found"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
 # inputs: $1  work path to the cell
 plant_seed() {
-  local seed_path to=$1 \
+  local seed_path from=$1 to=${2:-$1} \
     deep=${deep:-t} plant_branches=${plant_branches:-f} \
     ignore_nonexistent=${ignore_nonexistent:-f}
 
   begin_function
 
-    find_seed_path $to || fail
+    if [[ ! -d "$to" ]]; then
+      log_fatal "plant_seed called on a non-existant work path: $to"
+      fail1
+    fi
+
+    find_seed_path $from || fail
     if [[ ! "$seed_path" ]]; then
       log_fatal "No seed is associated with this path: $to"
       fail1
     fi
 
-    plant_seed_internal $seed_path $work_path || fail
+    local dna_path=$seed_path
+    while [[ ! -d $dna_path/.dna ]]; do
+      dna_path=${dna_path%/*}
+      if [[ $dna_path != /*/* ]]; then
+        log_fatal "Could not find dna in seed: $seed_path"
+        fail1
+      fi
+    done
+
+    if [[ $dna_path != $seed_path ]]; then
+      safe_link $dna_path/.dna $to/ || fail
+    fi
+
+    plant_seed_internal $seed_path $to || fail
 
   end_function
   handle_return
@@ -3488,21 +3509,7 @@ plant_member() {
         echo "$member" >$new_path/.member || fail
       fi
 
-      local seed_path=
-
-      find_seed_path $member_path || fail
-
-      if [[ ! "$seed_path" ]]; then
-        log_fatal "No seed is associated with this path: $member_path"
-        fail1
-      fi
-
-      if [[ ! -e "$seed_path/.dna" ]]; then
-        log_fatal "Seed is missing dna folder. Maybe it needs to be linked to it's parent? seed_path=$seed_path"
-        fail1
-      fi
-
-      plant_seed_internal $seed_path $new_path || fail
+      plant_seed $member_path $new_path || fail
 
       if [[ -e $parent_path/.mock ]]; then
         if [[ ! -d $new_path/.cyto ]]; then
