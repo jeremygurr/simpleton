@@ -1610,16 +1610,19 @@ plant_seed() {
     fi
 
     local dna_path=$seed_path
-    while [[ ! -d $dna_path/.dna ]]; do
-      dna_path=${dna_path%/*}
-      if [[ $dna_path != /*/* ]]; then
-        log_fatal "Could not find dna in seed: $seed_path"
-        fail1
-      fi
-    done
+    if [[ $command_requires_cell == t ]]; then
+      while [[ ! -d $dna_path/.dna ]]; do
+        dna_path=${dna_path%/*}
+        if [[ $dna_path != /*/* ]]; then
+          log_fatal "Could not find dna in seed: $seed_path"
+          fail1
+        fi
+      done
 
-    if [[ $dna_path != $seed_path ]]; then
-      safe_link $dna_path/.dna $to/ || fail
+      if [[ $dna_path != $seed_path ]]; then
+        safe_link $dna_path/.dna $to/ || fail
+      fi
+
     fi
 
     plant_seed_internal $seed_path $to || fail
@@ -2608,7 +2611,7 @@ switch_context() {
       dna_path=$cell_path/.dna \
       cyto_path=$cell_path/.cyto \
 
-      if [[ ! -e $dna_path ]]; then
+      if [[ $command_requires_cell == t && ! -e $dna_path ]]; then
         log_fatal "Internal error: attempted switch_context on an invalid cell: $short_cell"
         fail1
       fi
@@ -2997,10 +3000,12 @@ execute_command_internal() {
       unset default_anchor_dims
     fi
 
-    switch_context $cell_path || {
-      log_fatal "Context failed to load for $short_cell"
-      fail1
-    }
+    if [[ $command_requires_cell == t ]]; then
+      switch_context $cell_path || {
+        log_fatal "Context failed to load for $short_cell"
+        fail1
+      }
+    fi
 
     if [[ $disable_log == t ]]; then
       log_debug "Logging disabled." || fail
@@ -3089,6 +3094,7 @@ execute_command() {
     command_path=$path_to_commands/$cell_command \
     command_requires_resolved_dims=f \
     command_allows_logs=f \
+    command_requires_cell=t \
 
     if [[ -e $path_to_commands/all.info ]]; then
       source $path_to_commands/all.info || fail
@@ -3112,17 +3118,17 @@ execute_command() {
 
     load_branch_info || fail
 
-    local should_fork=t 
-    if [[ ${top_level_command:=t} == t ]]; then
-      should_fork=f
+    local should_fork=f
+#    if [[ ${top_level_command:=t} == t ]]; then
+#      should_fork=f
 #    elif [[ "${prev_trunk_cell:-}" == "$trunk_cell" ]]; then
 #      should_fork=f
-    fi
+#    fi
     
     # forking should be handled outside of execute_command, to improve performance
-#    if [[ $should_fork == t ]]; then
-#      fork execute_command_internal || fail_later
-#    else
+    if [[ $should_fork == t ]]; then
+      fork execute_command_internal || fail_later
+    else
       if [[ $disable_log == f ]]; then
         : ${omni_log_fork_child:=0}
         (( omni_log_fork_child++ ))
@@ -3134,7 +3140,7 @@ execute_command() {
       if [[ $disable_log == f ]]; then
         cell_close_log_file || fail
       fi
-#    fi
+    fi
 
   end_function
   handle_return
