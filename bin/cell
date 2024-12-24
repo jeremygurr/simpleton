@@ -133,12 +133,9 @@ get_cells() {
           :
         ;;
         *)
-          if [[ $parameter == -* ]]; then
-            handle_flag $parameter || { fail_later; break 2; }
-          elif [[ ! -d $parameter ]]; then
+          if [[ ! -d $parameter ]]; then
             # is a command
-            (( current_parameter_index-- ))
-            break
+            succeed
           else
             cells+=( $parameter )
           fi
@@ -164,13 +161,14 @@ get_commands() {
             leftover_command=${leftover_command// /-}-$parameter
           fi
 
-          if [[ $parameter == -* ]]; then
-            handle_flag $parameter || { fail_later; break 2; }
-          elif [[ -f "$path_to_commands/$parameter.info" ]]; then
+          if [[ -f "$path_to_commands/$parameter.info" ]]; then
             commands+=( $parameter )
           elif [[ -f "$path_to_commands/$leftover_command.info" ]]; then
             commands+=( $leftover_command )
             leftovers=()
+          elif [[ -d $parameter ]]; then
+            # it's a cell
+            succeed
           else
             leftovers+=( $parameter )
           fi
@@ -421,7 +419,7 @@ handle_cell() {
         log_verbose "Skipping $cell_path because it is not a cell"
       fi
     else
-      if [[ $first_cell == t ]]; then
+      if [[ $multi_cell == f ]]; then
         execute_commands $cell_path ${commands[*]} || fail
       else
         fork execute_commands $cell_path ${commands[*]} || fail
@@ -462,7 +460,7 @@ top_level() {
 
     command="$original_cmd" omni_log_init || fail
 
-    local current_parameter_index=0 leftovers=() leftover_command
+    local current_parameter_index=0 leftovers=() leftover_command handled=0
     begin_while true; doo
 
       cells=() \
@@ -486,17 +484,20 @@ top_level() {
 
       if [[ ! "${cells:-}" ]]; then
         if [[ ! "${commands:-}" && ! "${parameter_questions:-}" || $help_depth -gt 0 ]]; then
-          show_usage
-          succeed
+          if (( handled == 0 )); then
+            show_usage
+            fail1
+          else
+            # nothing else to do
+            succeed
+          fi
         fi
-      fi
-
-      if [[ ! "${cells:-}" ]]; then
         cells=( . )
       fi
 
       begin_for cell_path in ${cells[*]}; doo
         handle_cell $cell_path || fail
+        (( handled++ ))
       end_for
 
     end_while
