@@ -1205,6 +1205,52 @@ build_dim_info() {
   handle_return
 }
 
+build_context_dna() {
+  local log_vars=cell_path log_show_vars=short_cell
+  begin_function
+
+    local item_name last_part dna_full_item suffix context_type=trunk
+    local -A append_vars
+
+    if [[ -e $context_path-$context_type ]]; then
+      log_fatal "Internal error: Trunk context already exists. Should have been deleted before calling this function."
+      fail1
+    fi
+
+    derive_tables=()
+    if [[ -d $dna_path ]]; then
+      local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
+      prefix= load_dna_contents $dna_path || fail
+
+      build_context_expand || fail
+      if [[ ! "${default_anchor_dims:-}" ]]; then
+        calculate_default_anchors || fail
+      fi
+      write_vars_to_context default_anchor_dims || fail
+
+      mv $context_path-$context_type.new $context_path-$context_type.new2 || fail
+      echo "#!/usr/env bash
+# This file is generated from $dna_path$NL" >$context_path-$context_type.new || fail
+      local v
+      for v in ${!append_vars[*]}; do
+        echo "$v=" >>$context_path-$context_type.new || fail
+      done
+
+      cat $context_path-$context_type.new2 >>$context_path-$context_type.new || fail
+      rm $context_path-$context_type.new2 || fail
+
+    elif [[ -f $dna_path ]]; then
+      safe_link $dna_path $context_path-$context_type.new || fail
+      source $dna_path || fail
+    else
+      log_vars=dna_path log_fatal "Internal error: dna not found"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
 build_context_trunk() {
   begin_function
 
@@ -1593,52 +1639,6 @@ load_dna_contents() {
     if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
       make_array_assignment $current_var array_content || fail
       write_to_context var "$array_assignment" || fail
-    fi
-
-  end_function
-  handle_return
-}
-
-build_context_dna() {
-  local log_vars=cell_path log_show_vars=short_cell
-  begin_function
-
-    local item_name last_part dna_full_item suffix context_type=trunk
-    local -A append_vars
-
-    if [[ -e $context_path-$context_type ]]; then
-      log_fatal "Internal error: Trunk context already exists. Should have been deleted before calling this function."
-      fail1
-    fi
-
-    derive_tables=()
-    if [[ -d $dna_path ]]; then
-      local dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
-      prefix= load_dna_contents $dna_path || fail
-
-      build_context_expand || fail
-      if [[ ! "${default_anchor_dims:-}" ]]; then
-        calculate_default_anchors || fail
-      fi
-      write_vars_to_context default_anchor_dims || fail
-
-      mv $context_path-$context_type.new $context_path-$context_type.new2 || fail
-      echo "#!/usr/env bash
-# This file is generated from $dna_path$NL" >$context_path-$context_type.new || fail
-      local v
-      for v in ${!append_vars[*]}; do
-        echo "$v=" >>$context_path-$context_type.new || fail
-      done
-
-      cat $context_path-$context_type.new2 >>$context_path-$context_type.new || fail
-      rm $context_path-$context_type.new2 || fail
-
-    elif [[ -f $dna_path ]]; then
-      safe_link $dna_path $context_path-$context_type.new || fail
-      source $dna_path || fail
-    else
-      log_vars=dna_path log_fatal "Internal error: dna not found"
-      fail1
     fi
 
   end_function
