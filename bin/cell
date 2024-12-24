@@ -20,41 +20,43 @@ bash_lifted_init || exit 1
 cell_lib_init || exit 1
 
 handle_flag() {
-  local flags=${1#-} flag
+  begin_function
+    local flags=${1#-} flag
 
-  while [[ "$flags" ]]; do
-    flag=${flags:0:1}
-    flags=${flags#?}
-    case $flag in
-      a)
-        trace_var_always=t
-        ;;
-      d)
-        log=debug
-        ;;
-      i)
-        show_debug_id=a
-        ;;
-      r)
-        recursive_command=t
-        ;;
-      v)
-        log=verbose
-        ;;
-      *)
-        log_fatal "Unknown flag: $flag"
-        out "Flags are shortcuts for longer settings, and only the following are defined:"
-        out "  Flag   Equivalent setting"
-        out "  ------ -----------------------------"
-        out "  -a     trace_var_always=t"
-        out "  -d     log=debug"
-        out "  -i     log=id2"
-        out "  -r     recursive_command=t"
-        out "  -v     log=verbose"
-        fail_later; break
-        ;;
-    esac
-  done
+    begin_while [[ "$flags" ]]; doo
+      flag=${flags:0:1}
+      flags=${flags#?}
+      case $flag in
+        a)
+          trace_var_always=t
+          ;;
+        d)
+          log=debug
+          ;;
+        i)
+          show_debug_id=a
+          ;;
+        r)
+          recursive_command=t
+          ;;
+        v)
+          log=verbose
+          ;;
+        *)
+          log_fatal "Unknown flag: $flag"
+          out "Flags are shortcuts for longer settings, and only the following are defined:"
+          out "  Flag   Equivalent setting"
+          out "  ------ -----------------------------"
+          out "  -a     trace_var_always=t"
+          out "  -d     log=debug"
+          out "  -i     log=id2"
+          out "  -r     recursive_command=t"
+          out "  -v     log=verbose"
+          fail1
+          ;;
+      esac
+    end_while
+  end_function
   handle_return
 }
 
@@ -91,23 +93,26 @@ show_usage() {
   handle_return
 }
 
-get_help_depth() {
+get_help_depth_and_flags() {
   begin_function
     if [[ "${parameter_questions:-}" ]]; then
       : ${help_depth:=2}
     else
       : ${help_depth:=0}
     fi
-    for parameter in ${parameters[*]}; do
+    begin_for parameter in ${parameters[*]}; doo
       case $parameter in
         help|--help|-h|\?)
           (( help_depth++ )) 
+        ;;
+        -*)
+          handle_flag $parameter || fail
         ;;
         \?\?)
           (( help_depth += 2 )) 
         ;;
       esac
-    done
+    end_for
   end_function
   debug_return_vars=help_depth
   handle_return
@@ -118,7 +123,7 @@ get_cells() {
     for (( ; current_parameter_index < ${#parameters[*]}; current_parameter_index++ )); do
       local parameter=${parameters[$current_parameter_index]}
       case $parameter in
-        help|--help|-h|\?|\?\?)
+        help|-*|\?|\?\?)
           :
         ;;
         *)
@@ -143,7 +148,7 @@ get_commands() {
     for (( ; current_parameter_index < ${#parameters[*]}; current_parameter_index++ )); do
       local parameter=${parameters[$current_parameter_index]}
       case $parameter in
-        help|--help|-h|\?|\?\?)
+        help|-*|\?|\?\?)
           :
         ;;
         *)
@@ -196,14 +201,8 @@ handle_leftovers() {
 
 get_commands_and_cells() {
   begin_function
-    local leftovers=() leftover_command
 
-    get_cells || fail
-    get_commands || fail
-    handle_leftovers || fail
-    if (( help_depth > 0 )); then
-      commands=( help )
-    fi
+    get_flags || fail
 
   end_function
   local log_return_vars='cells commands'
@@ -448,25 +447,27 @@ top_level() {
       multi_commands=f \
       clean_cells=${clean_cells:-${clean_cell:-}} \
 
-    command="$original_cmd" omni_log_init || fail
-
     if [[ "$clean_cells" ]]; then
       clean_cells=" ${clean_cells} "
     fi
 
-    get_help_depth || fail
+    reset_flags
+    get_help_depth_and_flags || fail
 
-    local current_parameter_index=0
+    command="$original_cmd" omni_log_init || fail
+
+    local current_parameter_index=0 leftovers=() leftover_command
     begin_while true; doo
 
       cells=() \
       commands=() \
+      leftovers=() \
 
-      reset_flags
-
-      get_commands_and_cells || fail
-      if [[ ! "$commands" ]]; then
-        break
+      get_cells || fail
+      get_commands || fail
+      handle_leftovers || fail
+      if (( help_depth > 0 )); then
+        commands=( help )
       fi
 
       if (( ${#commands[*]} > 1 )); then

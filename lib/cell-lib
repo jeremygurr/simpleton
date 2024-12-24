@@ -700,8 +700,7 @@ build_context_expand() {
 switch_context_calc_coordinates() {
   begin_function
 
-    local coord_type=${coord_type}
-    local dim_var
+    local coord_type=${coord_type} dim_var
 
     local -n coordinate_data=${coord_type}_coordinate_data \
       coordinate_count=${coord_type}_coordinate_count \
@@ -713,6 +712,7 @@ switch_context_calc_coordinates() {
     coordinate_data=() \
     coordinate_count=0 \
     coordinate_rows=0 \
+    missing_dims=() \
 
     case $coord_type in
       branch)
@@ -740,7 +740,6 @@ switch_context_calc_coordinates() {
 
     if [[ "${coordinate_fields:-}" ]]; then
       log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-      missing_dims=()
       calc_coordinates_next_known_dim 0 || fail
 
       if [[ ! "${missing_dims:-}" ]]; then
@@ -1112,6 +1111,11 @@ find_seed_path() {
   handle_return
 }
 
+get_short_cell() {
+  short_cell=${cell_path#/work/*/}
+  debug_return_vars=short_cell
+}
+
 load_dna_contents_update_cell() {
   local file=$1 original_cell_path=$cell_path cell_path work_path
   begin_function
@@ -1262,6 +1266,60 @@ cell_is_leaf=$cell_is_leaf
   handle_return
 }
 
+# input: dim_var value
+# output: values 
+expand_dim() {
+  local -n dim_type=${dim_var}_dim_type
+  begin_function
+
+    values=
+    if [[ "${value:-}" ]]; then
+
+      if ! function_exists ${dim_type}_${dim_var}_expand; then
+        log_fatal "Internal error: Missing ${dim_type}_${dim_var}_expand function, which should have been created by make_context method"
+        fail1
+      fi
+
+      local problem
+      ${dim_type}_${dim_var}_expand || fail
+      if [[ "${problem:-}" ]]; then
+        log_fatal "$problem"
+        fail1
+      fi
+
+    fi
+
+  end_function
+  handle_return
+}
+
+handle_missing_dims() {
+  local can_ask=${can_ask:-t}
+  begin_function
+    local dim_var dims_var
+    begin_for dim_var in ${all_missing_dims[*]}; doo
+
+      get_plural $dim_var dims_var
+      local -n value=d_$dim_var ddims=d_$dims_var
+
+      if [[ $can_ask == t ]]; then
+        choose "Enter required value: $dim_var=" d_$dim_var || fail
+        expand_dim || fail
+      fi
+
+      if [[ ! "${values:-}" ]]; then
+        log_fatal "Missing required parameter: $dim_var. Use 'cell . ?' command to get help about how to use this cell."
+        fail1
+      fi
+
+      ddims=( "${values[@]}" )
+
+    end_for
+    missing_dims=()
+  end_function
+  handle_return
+}
+
 # only run if the cell is actually a leaf
 build_context_leaf() {
   begin_function
@@ -1276,8 +1334,10 @@ build_context_leaf() {
 
       coord_type=branch \
       switch_context_calc_coordinates || fail
-      if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
-        switch_context_handle_missing || fail
+      if [[ "$missing_dims" ]]; then
+        # TODO will need to find a better way to do this
+        log_fatal "Could not resolve all branch dims in build_context_leaf"
+        fail1
       fi
 
       write_vars_to_context \
@@ -1537,11 +1597,6 @@ load_dna_contents() {
 
   end_function
   handle_return
-}
-
-get_short_cell() {
-  short_cell=${cell_path#/work/*/}
-  debug_return_vars=short_cell
 }
 
 build_context_dna() {
@@ -1988,33 +2043,6 @@ get_plural() {
   return 0
 }
 
-# input: dim_var value
-# output: values 
-expand_dim() {
-  local -n dim_type=${dim_var}_dim_type
-  begin_function
-
-    values=
-    if [[ "${value:-}" ]]; then
-
-      if ! function_exists ${dim_type}_${dim_var}_expand; then
-        log_fatal "Internal error: Missing ${dim_type}_${dim_var}_expand function, which should have been created by make_context method"
-        fail1
-      fi
-
-      local problem
-      ${dim_type}_${dim_var}_expand || fail
-      if [[ "${problem:-}" ]]; then
-        log_fatal "$problem"
-        fail1
-      fi
-
-    fi
-
-  end_function
-  handle_return
-}
-
 # inputs:
 #   $*           members to expand
 # outputs:
@@ -2445,33 +2473,6 @@ calc_coordinates_next_known_dim() {
   handle_return
 }
 
-switch_context_handle_missing() {
-  local can_ask=${can_ask:-t}
-  begin_function
-    local dim_var dims_var
-    begin_for dim_var in ${missing_dims[*]}; doo
-
-      get_plural $dim_var dims_var
-      local -n value=d_$dim_var ddims=d_$dims_var
-
-      if [[ $can_ask == t ]]; then
-        choose "Enter required value: $dim_var=" d_$dim_var || fail
-        expand_dim || fail
-      fi
-
-      if [[ ! "${values:-}" ]]; then
-        log_fatal "Missing required parameter: $dim_var. Use 'cell . ?' command to get help about how to use this cell."
-        fail1
-      fi
-
-      ddims=( "${values[@]}" )
-
-    end_for
-    missing_dims=
-  end_function
-  handle_return
-}
-
 get_required_freshness() {
   required_freshness=${fresh:-${default_freshness:-}}
 
@@ -2514,17 +2515,13 @@ load_post_context_dynamic_vars() {
     if [[ ! "${branch_coordinate_count:-}" && $command_requires_resolved_dims == t ]]; then
       coord_type=branch \
       switch_context_calc_coordinates || fail
-      if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
-        switch_context_handle_missing || fail
-      fi
+      all_missing_dims+=( ${missing_dims[*]} )
     fi
 
     if [[ ! "${leaf_coordinate_count:-}" && $command_requires_resolved_dims == t ]]; then
       coord_type=leaf \
       switch_context_calc_coordinates || fail
-      if [[ "${missing_dims:-}" && $command_requires_resolved_dims == t ]]; then
-        switch_context_handle_missing || fail
-      fi
+      all_missing_dims+=( ${missing_dims[*]} )
     fi
 
   end_function
@@ -2540,12 +2537,12 @@ build_cyto_inner() {
     dna_path=$cell_path/.dna \
     cyto_path=$cell_path/.cyto \
 
-    get_short_cell
+    #get_short_cell
 
-    if [[ ! -e $dna_path ]]; then
-      log_fatal "Internal error: attempted switch_context on an invalid cell: $short_cell"
-      fail1
-    fi
+    #if [[ ! -e $dna_path ]]; then
+    #  log_fatal "Internal error: attempted switch_context on an invalid cell: $short_cell"
+    #  fail1
+    #fi
 
     if [[ ! -d $cyto_path ]]; then
       mkdir $cyto_path || fail
@@ -2611,12 +2608,12 @@ switch_context() {
       dna_path=$cell_path/.dna \
       cyto_path=$cell_path/.cyto \
 
-      if [[ $command_requires_cell == t && ! -e $dna_path ]]; then
-        log_fatal "Internal error: attempted switch_context on an invalid cell: $short_cell"
-        fail1
+      local dna_exists=f
+      if [[ -e $dna_path ]]; then
+        dna_exists=t
       fi
 
-      if [[ $command_requires_cell == t ]]; then
+      if [[ $dna_exists == t ]]; then
         if [[ "$clean_cells" ]]; then
           local cell_to_clean
           begin_for cell_to_clean in $clean_cells; doo
@@ -2638,17 +2635,13 @@ switch_context() {
       init_context || fail
 
       seed_path=
-      if [[ $command_requires_cell == t ]]; then
+      if [[ $dna_exists == t ]]; then
         if [[ ! -f $context_path ]]; then
           build_cyto $cell_path || fail
         fi
         source $context_path || fail
-      fi
 
-      if [[ $command_requires_cell == t ]]; then
-        if [[ $command_requires_resolved_dims == t ]]; then
-          setup_dims || fail
-        fi
+        setup_dims || fail
         load_child_dims || fail
 
         local problem_found=f
@@ -3054,6 +3047,8 @@ execute_commands() {
       unset default_anchor_dims
     fi
 
+    local all_missing_dims=()
+
     switch_context $cell_path || {
       log_fatal "Context failed to load for $short_cell"
       fail1
@@ -3064,6 +3059,10 @@ execute_commands() {
     fi
 
     begin_for command in $commands; doo
+      if [[ $command_requires_resolved_dims == t && "$all_missing_dims" ]]; then
+        handle_missing_dims || fail
+        all_missing_dims=()
+      fi
       execute_command $cell_path $command || fail
       if [[ $needs_context_reload == t ]]; then
         switch_context $cell_path || {
