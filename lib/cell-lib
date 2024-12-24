@@ -2491,6 +2491,26 @@ get_required_freshness() {
   return 0
 }
 
+# needs to be explicity called in commands which need coords
+calc_coords() {
+  begin_function
+
+    if [[ ! "${branch_coordinate_count:-}" ]]; then
+      coord_type=branch \
+      switch_context_calc_coordinates || fail
+      all_missing_dims+=( ${missing_dims[*]} )
+    fi
+
+    if [[ ! "${leaf_coordinate_count:-}" ]]; then
+      coord_type=leaf \
+      switch_context_calc_coordinates || fail
+      all_missing_dims+=( ${missing_dims[*]} )
+    fi
+
+  end_function
+  handle_return
+}
+
 load_post_context_dynamic_vars() {
   begin_function
 
@@ -2527,18 +2547,6 @@ load_post_context_dynamic_vars() {
     # all anchors and non-branch dim calculations are dynamic per command execution
     # and so can't be precalculated and stored in the context
     : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
-
-    if [[ ! "${branch_coordinate_count:-}" ]]; then
-      coord_type=branch \
-      switch_context_calc_coordinates || fail
-      all_missing_dims+=( ${missing_dims[*]} )
-    fi
-
-    if [[ ! "${leaf_coordinate_count:-}" ]]; then
-      coord_type=leaf \
-      switch_context_calc_coordinates || fail
-      all_missing_dims+=( ${missing_dims[*]} )
-    fi
 
   end_function
   handle_return
@@ -3030,7 +3038,7 @@ execute_command() {
 #   $2... commands
 execute_commands() {
   local cell_path=$1; shift
-  local commands=$* command
+  local commands=( $* ) command
   begin_function
 
     local anchor_dims=${anchor_dims:-} \
@@ -3076,7 +3084,7 @@ execute_commands() {
     fi
 
     command_requires_resolved_dims=f
-    begin_for command in $commands; doo
+    begin_for command in ${commands[*]}; doo
       execute_command $cell_path $command || fail
       if [[ $command_requires_resolved_dims == t && "${#all_missing_dims[*]}" -gt 0 ]]; then
         handle_missing_dims || fail
