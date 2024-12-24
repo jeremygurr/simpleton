@@ -1043,12 +1043,15 @@ calculate_default_anchors() {
 }
 
 # should make sure load_branch_info was run before calling this
-# inputs: $1  work path to target folder, which may be a cell or a folder of a cell
+# inputs: 
+#   $1  work path to target folder, which may be a cell or a folder of a cell
+#   $2  target var to save seed path to, defaults to seed_path
 # outputs: seed_path work_path
 find_seed_path() {
   local d s=$1 i h dim dim_count
+  local -n target=${2:-seed_path} 
   begin_function
-    seed_path=
+    target=
 
     s=/seed${s#/work}
 
@@ -1104,10 +1107,10 @@ find_seed_path() {
   end_function
 
   if [[ "$s" && -d $s ]]; then
-    seed_path=$s
+    target=$s
   fi
 
-  local log_return_vars='seed_path work_path'
+  local log_return_vars='target work_path'
   handle_return
 }
 
@@ -2498,8 +2501,18 @@ load_post_context_dynamic_vars() {
 
     if [[ -f $cell_path/.mock ]]; then
       current_mock=$(<$cell_path/.mock)
+    elif [[ -f $trunk_cell/.mock ]]; then
+      current_mock=$(<$trunk_cell/.mock)
+      local trunk_seed
+      find_seed_path $trunk_cell trunk_seed || fail
+      mock_path=$trunk_seed/.mock
     else
       current_mock=f
+    fi
+
+    if [[ $current_mock != f && ! -d $mock_path/$current_mock ]]; then
+      log_fatal "Invalid mock in $short_cell: $current_mock doesn't exist in $mock_path"
+      fail1
     fi
 
     if [[ ! "${out_path:-}" ]]; then
@@ -3062,7 +3075,7 @@ execute_commands() {
     command_requires_resolved_dims=f
     begin_for command in $commands; doo
       execute_command $cell_path $command || fail
-      if [[ $command_requires_resolved_dims == t && "$all_missing_dims" ]]; then
+      if [[ $command_requires_resolved_dims == t && "${#all_missing_dims[*]}" -gt 0 ]]; then
         handle_missing_dims || fail
         all_missing_dims=()
       fi
@@ -3465,12 +3478,12 @@ plant_member() {
 
       plant_seed $member_path $new_path || fail
 
-      if [[ -e $parent_path/.mock ]]; then
-        if [[ ! -d $new_path/.cyto ]]; then
-          mkdir $new_path/.cyto || fail
-        fi
-        cp $parent_path/.mock $new_path/.mock || fail
-      fi
+      #if [[ -e $parent_path/.mock ]]; then
+      #  if [[ ! -d $new_path/.cyto ]]; then
+      #    mkdir $new_path/.cyto || fail
+      #  fi
+      #  cp $parent_path/.mock $new_path/.mock || fail
+      #fi
 
       if [[ -e $member_path ]]; then
         rm -rf $member_path || fail
