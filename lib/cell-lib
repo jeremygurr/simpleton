@@ -1132,7 +1132,6 @@ load_dna_contents_update_cell() {
     get_short_cell
 
     needs_update= \
-    top_level_command=f \
     fork execute_command "$cell_path" update || fail
 
     if [[ ! -f "$file" ]]; then
@@ -1542,6 +1541,7 @@ load_dna_contents() {
 
 get_short_cell() {
   short_cell=${cell_path#/work/*/}
+  debug_return_vars=short_cell
 }
 
 build_context_dna() {
@@ -1727,7 +1727,7 @@ init_context() {
   handle_return
 }
 
-branch_local_vars='branch_dims branch_members branch_hashes branch_dim_count trunk_cell short_cell'
+branch_local_vars='branch_dims branch_members branch_hashes branch_dim_count trunk_cell short_cell prev_branch_info_cell'
 load_branch_info() {
   local cell_path=${1:-$cell_path}
 
@@ -2616,48 +2616,53 @@ switch_context() {
         fail1
       fi
 
-      if [[ "$clean_cells" ]]; then
-        local cell_to_clean
-        begin_for cell_to_clean in $clean_cells; doo
-          if [[ /$cell_path/ == */$cell_to_clean/* ]]; then
-            if [[ -e $cyto_path ]]; then
-              log_info "Cleaning cell ${cell_to_clean#/work/*/} => $short_cell..."
-              rm -rf $cyto_path || fail
-            else
-              log_info "Cell already clean: $cell_to_clean => $short_cell"
+      if [[ $command_requires_cell == t ]]; then
+        if [[ "$clean_cells" ]]; then
+          local cell_to_clean
+          begin_for cell_to_clean in $clean_cells; doo
+            if [[ /$cell_path/ == */$cell_to_clean/* ]]; then
+              if [[ -e $cyto_path ]]; then
+                log_info "Cleaning cell ${cell_to_clean#/work/*/} => $short_cell..."
+                rm -rf $cyto_path || fail
+              else
+                log_info "Cell already clean: $cell_to_clean => $short_cell"
+              fi
+              remove_word_from_string clean_cells "$cell_to_clean" 
+              break
             fi
-            remove_word_from_string clean_cells "$cell_to_clean" 
-            break
-          fi
-        end_for
+          end_for
+        fi
       fi
 
       context_path=$cyto_path/context
       init_context || fail
 
       seed_path=
-      if [[ ! -f $context_path ]]; then
-        build_cyto $cell_path || fail
+      if [[ $command_requires_cell == t ]]; then
+        if [[ ! -f $context_path ]]; then
+          build_cyto $cell_path || fail
+        fi
+        source $context_path || fail
       fi
 
-      source $context_path || fail
+      if [[ $command_requires_cell == t ]]; then
+        if [[ $command_requires_resolved_dims == t ]]; then
+          setup_dims || fail
+        fi
+        load_child_dims || fail
 
-      if [[ $command_requires_resolved_dims == t ]]; then
-        setup_dims || fail
-      fi
-      load_child_dims || fail
-
-      local problem_found=f
-      broken_link_check || fail
-      if [[ $problem_found == t ]]; then
-        if [[ $rebuild_attempted == f ]]; then
-          log_verbose "Problem found, rebuilding context"
-          rm -rf $cyto_path/up* $context_path* || fail
-          rebuild_attempted=t
-          continue
-        else
-          log_fatal "Context rebuild failed to resolve problem"
-          fail1
+        local problem_found=f
+        broken_link_check || fail
+        if [[ $problem_found == t ]]; then
+          if [[ $rebuild_attempted == f ]]; then
+            log_verbose "Problem found, rebuilding context"
+            rm -rf $cyto_path/up* $context_path* || fail
+            rebuild_attempted=t
+            continue
+          else
+            log_fatal "Context rebuild failed to resolve problem"
+            fail1
+          fi
         fi
       fi
 
@@ -2672,26 +2677,6 @@ switch_context() {
   fi
 
   return 0
-}
-
-execute_command_internal_setup_params() {
-  begin_function
-    if [[ "${parameter_questions:-}" ]]; then
-      if [[ "$multi_commands" == t ]]; then
-        log_fatal "To use help, only choose one command"
-        fail1
-      fi
-      local p i pi 
-      begin_for pi in ${!parameter_questions[*]}; doo
-        p=${parameter_questions[$pi]}
-        if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
-          continue
-        fi
-        show_parameter_help $p || fail
-      end_for
-    fi
-  end_function
-  handle_return
 }
 
 cell_open_log_file() {
@@ -2922,134 +2907,14 @@ show_dimensions() {
   handle_return
 }
 
-show_parameter_help() {
-  local name=$1 indent=${indent:-0}
-  begin_function
-
-    local found=f choices=()
-
-    # TODO this should go away and get replaced with props
-    begin_for i in ${!parameter_names[*]}; doo
-      if [[ "${parameter_names[$i]}" == $name ]]; then
-        out_wrap "Parameter: $name"
-        (( indent += 2 ))
-
-        if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
-          out "${parameter_descriptions[$i]}"
-        fi
-
-        if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
-          out_wrap "default: ${parameter_defaults[$i]}"
-        fi
-
-        local choices=
-        if [[ -v parameter_choices[$i] && "${parameter_choices[$i]}" ]]; then
-          eval "choices=( ${parameter_choices[$i]} )"
-        elif [[ -v ${name}_choices ]]; then
-          eval "choices=${name}_choices"
-        elif function_exists ${name}_get_choices; then
-          ${name}_get_choices || fail
-        fi
-        if [[ "$choices" ]]; then
-          out_wrap "choices: ${choices[*]}"
-        fi
-        found=t
-        break
-      fi
-    end_for
-
-    if [[ $found == f ]]; then
-      local dim_type dim
-      begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
-        local -n dims=$dim_type
-        begin_for dim in ${dims[*]}; doo
-          if [[ $dim == $name ]]; then
-            show_dimension $dim || fail
-            found=t
-            break
-          fi
-        end_for
-      end_for
-    fi
-
-    if [[ $found != t ]]; then
-      log_warn "No description found for parameter $name" || fail
-    fi
-
-  end_function
-  handle_return
-}
-
-execute_command_internal() {
-
-  local log_vars='cell_path' \
-    log_show_vars='short_cell cell_command' 
-  begin_function_hi
-
-    local omni_log_fork_parent=${omni_log_fork_parent:-}-${omni_log_fork_child:-1} \
-      omni_log_fork_child=0
-    omni_log_fork_parent=${omni_log_fork_parent#-}
-
-    if [[ "${localize_dims:-}" ]]; then
-      eval "local $localize_dims" || fail
-    fi
-
-    if [[ $top_level_command == f ]]; then
-      unset anchor_dims
-    else
-      unset default_anchor_dims
-    fi
-
-    if [[ $command_requires_cell == t ]]; then
-      switch_context $cell_path || {
-        log_fatal "Context failed to load for $short_cell"
-        fail1
-      }
-    fi
-
-    if [[ $disable_log == t ]]; then
-      log_debug "Logging disabled." || fail
-    else
-      execute_command_log_prep || fail
-    fi
-
-    execute_command_internal_setup_params || fail
-
-    # This is in this function twice, because it changes after switch_context
-    if [[ "${localize_dims:-}" ]]; then
-      eval "local $localize_dims" || fail
-    fi
-
-    if [[ " ${command_history:-}" == *" $cell_command $short_cell "* ]]; then
-      log_fatal "Circular dependency found: arrived at $cell_command $short_cell a second time."
-      fail1
-    fi
-
-    command_history+="$cell_command $short_cell "
-
-    #if [[ ${cell_is_leaf:-t} == t || $show_branches == t ]]; then
-    #  log_info "Executing cell command: $short_cell $cell_command" || fail
-    #else
-    #  log_verbose "Executing cell command: $short_cell $cell_command" || fail
-    #fi
-
-    local command_function=${cell_command//-/_}_command
-    if function_exists $command_function; then
-      $command_function || fail
-    else
-      log_fatal "Missing command function $command_function which should be in $command_path"
-      fail1
-    fi
-
-  end_function
-  handle_return
-}
-
+# Inputs:
+#   $1    cell_path   should be real path
+#   $2    command
 execute_command() {
-  local cell_path=$(realpath $1) cell_command=$2 \
-    log_show_vars='^cell_path cell_command' \
+  local cell_path=$1 cell_command=$2 \
+    log_show_vars='short_cell cell_command' \
 
-  begin_function
+  begin_function_hi
 
     case $cell_command in
       dim-*|up-*)
@@ -3065,23 +2930,6 @@ execute_command() {
       ;;
     esac
 
-    local anchor_dims=${anchor_dims:-} \
-      disable_log=${disable_log:-} \
-      logging_to_file=${logging_to_file:-} \
-      omni_log_job_id=${omni_log_job_id:-} \
-      omni_log_fork_id=${omni_log_fork_id:-} \
-      previous_fork_id=${previous_fork_id:-} \
-      job_path=${job_path:-} \
-      log_path=${log_path:-} \
-      current_job_path=${current_job_path:-} \
-      job_start_time \
-      background_log \
-      running_job_path \
-      recursive_command=${recursive_command:-${recursive:-f}} \
-      short_cell
-
-    get_short_cell
-
     log_verbose "Executing cell command: $short_cell $cell_command" || fail
 
     if [[ ! -e "$cell_path" ]]; then
@@ -3091,10 +2939,11 @@ execute_command() {
       }
     fi
 
-    command_path=$path_to_commands/$cell_command \
-    command_requires_resolved_dims=f \
-    command_allows_logs=f \
-    command_requires_cell=t \
+    local \
+      command_path=$path_to_commands/$cell_command \
+      command_requires_resolved_dims=f \
+      command_allows_logs=f \
+      command_requires_cell=t \
 
     if [[ -e $path_to_commands/all.info ]]; then
       source $path_to_commands/all.info || fail
@@ -3108,6 +2957,15 @@ execute_command() {
 
     source $command_path || fail
 
+    if [[ $command_requires_cell == f ]]; then
+      command_requires_resolved_dims=f
+    fi
+
+    if [[ ! -e $cell_path/.dna && $command_requires_cell == t ]]; then
+      log_fatal "Invalid cell: $cell_path"
+      fail1
+    fi
+
     if [[ ! "${disable_log:-}" ]]; then
       if [[ $command_allows_logs == t ]]; then
         disable_log=f
@@ -3116,31 +2974,105 @@ execute_command() {
       fi
     fi
 
+    if [[ $disable_log == t ]]; then
+      log_debug "Logging disabled." || fail
+    else
+      execute_command_log_prep || fail
+    fi
+
+    if [[ $disable_log == f ]]; then
+      : ${omni_log_fork_child:=0}
+      (( omni_log_fork_child++ ))
+      previous_log_pos=$omni_log_pos
+      cell_open_log_file || fail
+      (( previous_log_pos++ ))
+    fi
+
+    local omni_log_fork_parent=${omni_log_fork_parent:-}-${omni_log_fork_child:-1} \
+      omni_log_fork_child=0
+    omni_log_fork_parent=${omni_log_fork_parent#-}
+
+    if [[ " ${command_history:-}" == *" $cell_command $short_cell "* ]]; then
+      log_fatal "Circular dependency found: arrived at $cell_command $short_cell a second time."
+      fail1
+    fi
+
+    command_history+="$cell_command $short_cell "
+
+    local command_function=${cell_command//-/_}_command
+    if function_exists $command_function; then
+      $command_function || fail
+    else
+      log_fatal "Missing command function $command_function which should be in $command_path"
+      fail1
+    fi
+
+    if [[ $disable_log == f ]]; then
+      cell_close_log_file || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1    cell_path   should be real path
+#   $2... commands
+execute_commands() {
+  local cell_path=$1; shift
+  local commands=$* command
+  begin_function
+
+    local anchor_dims=${anchor_dims:-} \
+      disable_log=${disable_log:-} \
+      logging_to_file=${logging_to_file:-} \
+      omni_log_job_id=${omni_log_job_id:-} \
+      omni_log_fork_id=${omni_log_fork_id:-} \
+      previous_fork_id=${previous_fork_id:-} \
+      job_path=${job_path:-} \
+      log_path=${log_path:-} \
+      current_job_path=${current_job_path:-} \
+      job_start_time \
+      background_log \
+      running_job_path \
+      recursive_command=${recursive_command:-${recursive:-f}} \
+      short_cell \
+      needs_context_reload=f \
+      top_level_command=${top_level_command_next:-t} \
+
+    # so top_level_command is set to t throughout this function, yet if it's called again, it will
+    #   be set to f
+    top_level_command_next=f
+
+    get_short_cell
+    eval "local $branch_local_vars" || fail
     load_branch_info || fail
 
-    local should_fork=f
-#    if [[ ${top_level_command:=t} == t ]]; then
-#      should_fork=f
-#    elif [[ "${prev_trunk_cell:-}" == "$trunk_cell" ]]; then
-#      should_fork=f
-#    fi
-    
-    # forking should be handled outside of execute_command, to improve performance
-    if [[ $should_fork == t ]]; then
-      fork execute_command_internal || fail_later
+    if [[ $top_level_command == f ]]; then
+      unset anchor_dims
     else
-      if [[ $disable_log == f ]]; then
-        : ${omni_log_fork_child:=0}
-        (( omni_log_fork_child++ ))
-        previous_log_pos=$omni_log_pos
-        cell_open_log_file || fail
-        (( previous_log_pos++ ))
-      fi
-      execute_command_internal || fail_later
-      if [[ $disable_log == f ]]; then
-        cell_close_log_file || fail
-      fi
+      unset default_anchor_dims
     fi
+
+    switch_context $cell_path || {
+      log_fatal "Context failed to load for $short_cell"
+      fail1
+    }
+
+    if [[ "${localize_dims:-}" ]]; then
+      eval "local $localize_dims" || fail
+    fi
+
+    begin_for command in $commands; doo
+      execute_command $cell_path $command || fail
+      if [[ $needs_context_reload == t ]]; then
+        switch_context $cell_path || {
+          log_fatal "Context failed to load for $short_cell"
+          fail1
+        }
+        needs_context_reload=f
+      fi
+    end_for
 
   end_function
   handle_return

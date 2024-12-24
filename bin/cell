@@ -91,9 +91,13 @@ show_usage() {
   handle_return
 }
 
-scan_commands() {
+get_help_depth() {
   begin_function
-    local parameter leftovers=() leftover_command
+    if [[ "${parameter_questions:-}" ]]; then
+      : ${help_depth:=2}
+    else
+      : ${help_depth:=0}
+    fi
     for parameter in ${parameters[*]}; do
       case $parameter in
         help|--help|-h|\?)
@@ -102,6 +106,46 @@ scan_commands() {
         \?\?)
           (( help_depth += 2 )) 
         ;;
+      esac
+    done
+  end_function
+  debug_return_vars=help_depth
+  handle_return
+}
+
+get_cells() {
+  begin_function
+    for (( ; current_parameter_index < ${#parameters[*]}; current_parameter_index++ )); do
+      local parameter=${parameters[$current_parameter_index]}
+      case $parameter in
+        help|--help|-h|\?|\?\?)
+          :
+        ;;
+        *)
+          if [[ $parameter == -* ]]; then
+            handle_flag $parameter || { fail_later; break 2; }
+          elif [[ ! -d $parameter ]]; then
+            # is a command
+            (( current_parameter_index-- ))
+            break
+          else
+            cells+=( $parameter )
+          fi
+        ;;
+      esac
+    done
+  end_function
+  handle_return
+}
+
+get_commands() {
+  begin_function
+    for (( ; current_parameter_index < ${#parameters[*]}; current_parameter_index++ )); do
+      local parameter=${parameters[$current_parameter_index]}
+      case $parameter in
+        help|--help|-h|\?|\?\?)
+          :
+        ;;
         *)
           leftover_command=
           if [[ "${leftovers:-}" ]]; then
@@ -109,21 +153,25 @@ scan_commands() {
             leftover_command=${leftover_command// /-}-$parameter
           fi
 
-          if [[ $parameter != */* && -f "$path_to_commands/$parameter.info" ]]; then
+          if [[ $parameter == -* ]]; then
+            handle_flag $parameter || { fail_later; break 2; }
+          elif [[ -f "$path_to_commands/$parameter.info" ]]; then
             commands+=( $parameter )
-          elif [[ $parameter != */* && -f "$path_to_commands/$leftover_command.info" ]]; then
+          elif [[ -f "$path_to_commands/$leftover_command.info" ]]; then
             commands+=( $leftover_command )
             leftovers=()
-          elif [[ -e $parameter/.dna ]]; then
-            cells+=( $parameter )
-          elif [[ $parameter == -* ]]; then
-            handle_flag $parameter || { fail_later; break 2; }
           else
             leftovers+=( $parameter )
           fi
         ;;
       esac
     done
+  end_function
+  handle_return
+}
+
+handle_leftovers() {
+  begin_function
     local leftover
     for leftover in "${leftovers[@]}"; do
       if (( help_depth > 0 )); then
@@ -139,53 +187,26 @@ scan_commands() {
           continue
         fi
       fi
-      if [[ -d "$leftover" ]]; then
-        local bottom_cell=
-        leftover=$(unrealpath $leftover)
-        get_bottom_cell $leftover
-        if [[ "$bottom_cell" ]]; then
-          cells+=( $bottom_cell )
-          continue
-        else
-          log_fatal "Not a valid cell: $leftover"
-        fi
-      else
-        log_fatal "Unidentified command: $leftover"
-      fi
       show_usage 
       fail_later1; break 2
     done
   end_function
-  local log_return_vars='cells commands'
   handle_return
 }
 
-show_help_for_command() {
-  local command=$1
+get_commands_and_cells() {
   begin_function
-    [[ $first_command == f ]] && out ''
-    out "Command: ${command//-/ }"
-    if [[ -f $path_to_commands/$command.info ]]; then
-      source $path_to_commands/$command.info || fail
-      indent=2 out_wrap "$command_description"
-      local name description default default_string choices_string i choices
-      if [[ "${parameter_names:-}" ]]; then
-        out "Parameters:"
-        begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
-          parameter="${parameter_names[$i]}"
-          description="${parameter_descriptions[$i]}"
-          choices="${parameter_choices[$i]}"
-          trim_ws description
-          default="${parameter_defaults[$i]}"
-          default_string=
-          choices_string=
-          [[ "$choices" ]] && choices_string="$NL    choices: $choices"
-          [[ "$default" ]] && default_string="$NL    default: $default"
-          out "  $parameter: $description$choices_string$default_string"
-        end_for
-      fi
+    local leftovers=() leftover_command
+
+    get_cells || fail
+    get_commands || fail
+    handle_leftovers || fail
+    if (( help_depth > 0 )); then
+      commands=( help )
     fi
+
   end_function
+  local log_return_vars='cells commands'
   handle_return
 }
 
@@ -373,97 +394,6 @@ handle_command() {
 
 }
 
-show_cell_help() {
-  local cell_path=$1
-  begin_function
-
-    command_requires_cell=t \
-    command_requires_resolved_dims=f \
-    trunk_changed=f \
-    command_allows_logs=f \
-      switch_context $cell_path || fail
-    indent=0
-
-    if [[ $multi_cell == t ]]; then
-      out "$hbar_equals"
-    fi
-
-    out_wrap "Cell: $short_cell"
-    (( indent += 2 ))
-    if [[ "${cell_description:-}" ]]; then
-      out_wrap "$cell_description"
-    else
-      out_wrap "No description for this cell. Set cell_description variable in context file."
-    fi
-
-    local required=()
-
-    if [[ "${trunk_dims:-}" ]]; then
-      out_wrap "${NL}Dimensions: (add {dim}=? to command to see details, or cell . ?? to show all details)"
-      dim_type=trunk_dims \
-      show_dimensions ${trunk_dims[*]} || fail
-    fi
-
-    if [[ "${sub_dims:-}" || "${data_props:-}" || "${control_props:-}" ]]; then
-      out_wrap "${NL}Other parameters:"
-      if [[ "${sub_dims:-}" ]]; then
-        dim_type=sub_dims \
-        show_dimensions ${sub_dims[*]} || fail
-      fi
-      if [[ "${control_props:-}" ]]; then
-        dim_type=control_props \
-        show_dimensions ${control_props[*]} || fail
-      fi
-      if [[ "${data_props:-}" ]]; then
-        dim_type=data_props \
-        show_dimensions ${data_props[*]} || fail
-      fi
-    fi
-
-    if [[ "${required:-}" ]]; then
-      out_wrap "${NL}Required parameters: ${required[*]}"
-    fi
-
-    if [[ "${trunk_dims:-}" ]]; then
-      out_wrap "${NL}Branch dimensions:"
-      local i pretty_form= member dim
-      #begin_for (( i = 0; i < ${#branch_dims[*]}; i++ )); doo
-      #  dim=${branch_dims[$i]}
-      #  eval "member=\${branch_members[$i]}"
-      #  local pretty_function_name=trunk_dims_${dim}_pretty
-      #  if function_exists $pretty_function_name; then
-      #    eval "$pretty_function_name member" || fail
-      #    pretty_form=" ($member)"
-      #  else
-      #    pretty_form=
-      #  fi
-      #  out "  $dim=${branch_members[$i]}$pretty_form"
-      #end_for
-      (( indent += 2 ))
-      begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
-        dim_var=${trunk_dims[$i]}
-        local -n dim=d_$dim_var
-        local pretty_function_name=trunk_dims_${dim_var}_pretty
-        if function_exists $pretty_function_name; then
-          eval "$pretty_function_name $dim_var" || fail
-          pretty_form=" ($value)"
-        else
-          pretty_form=
-        fi
-        local value=${dim:-}
-        if [[ "${value:-}" ]]; then
-          if [[ "$value" == $empty_member ]]; then
-            value='(empty)'
-          fi
-          out_wrap "$dim_var=$value$pretty_form"
-        fi
-      end_for
-    fi
-
-  end_function
-  handle_return
-}
-
 handle_cell() {
   local cell_path=$1
 
@@ -472,47 +402,37 @@ handle_cell() {
     local omni_log_job_id job_id_log=${home_job_path:-$HOME/.simpleton/job-log}
 
     cell_path=$(unrealpath $cell_path) || {
-      log_fatal "Failed to resolve path for $cell_path"
+      log_fatal "Invalid cell path: $cell_path"
       fail1
       }
 
-    local next cell_command
-    if [[ "${parameter_questions:-}" ]]; then
-
-      command_requires_resolved_dims=f \
-      trunk_changed=f \
-      command_allows_logs=f \
-        switch_context $cell_path || fail
-
-      if [[ -e $path_to_commands/all.info ]]; then
-        source $path_to_commands/all.info || fail
+    if [[ ! -d $cell_path/.dna ]]; then
+      if [[ $recursive_command == t ]]; then
+        local folder folders=$(find1 $cell_path -type d -not -name '.*') || fail
+        begin_for folder in $folders; doo
+          handle_cell $folder || fail
+        end_for
+      else
+        log_verbose "Skipping $cell_path because it is not a cell"
       fi
-      for cell_command in ${commands[*]}; do
-        command_path=$path_to_commands/$cell_command
-        if [[ -e $command_path.info ]]; then
-          source $command_path.info || fail
-        fi
-      done
-
-      local p
-      for p in ${parameter_questions[*]}; do
-        show_parameter_help $p  || fail
-      done
-    elif (( ${#commands[*]} == 0 )); then
-      show_cell_help $cell_path || fail
     else
-      begin_for cell_command in ${commands[*]}; doo
-        if (( help_depth > 0 )); then
-          show_help_for_command $cell_command || fail
-        else
-          handle_command $cell_command || fail
-        fi
-        first_command=f
-      end_for
+      if [[ $first_cell == t ]]; then
+        execute_commands $cell_path ${commands[*]} || fail
+      else
+        fork execute_commands $cell_path ${commands[*]} || fail
+      fi
+      first_cell=f
     fi
 
   end_function
   handle_return
+}
+
+reset_flags() {
+  trace_var_always=f
+  log=info
+  show_debug_id=n
+  recursive_command=f
 }
 
 top_level() {
@@ -523,51 +443,56 @@ top_level() {
     local cell_path \
       path_to_commands=$SIMPLETON_REPO/command \
       first_command=t \
+      first_cell=t \
       multi_cell=f \
       multi_commands=f \
-      commands=() \
       clean_cells=${clean_cells:-${clean_cell:-}} \
+
+    command="$original_cmd" omni_log_init || fail
 
     if [[ "$clean_cells" ]]; then
       clean_cells=" ${clean_cells} "
     fi
 
-    if [[ "${parameter_questions:-}" ]]; then
-      : ${help_depth:=2}
-    else
-      : ${help_depth:=0}
-    fi
+    get_help_depth || fail
 
-    if [[ "${cells:-}" ]]; then
-      cells=( $cells )
-    elif [[ "${cell:-}" ]]; then
-      cells=( $cell )
-    fi
+    local current_parameter_index=0
+    begin_while true; doo
 
-    command="$original_cmd" omni_log_init || fail
+      cells=() \
+      commands=() \
 
-    scan_commands || fail
+      reset_flags
 
-    if (( ${#commands[*]} > 1 )); then
-      multi_commands=t
-    fi
+      get_commands_and_cells || fail
+      if [[ ! "$commands" ]]; then
+        break
+      fi
 
-    if [[ ! "${cells:-}" && ! "${commands:-}" && ! "${parameter_questions:-}" ]]; then
-      show_usage
-      succeed
-    fi
+      if (( ${#commands[*]} > 1 )); then
+        multi_commands=t
+      fi
 
-    if [[ ! "${cells:-}" ]]; then
-      cells=( . )
-    fi
+      if (( ${#cells[*]} > 1 )); then
+        multi_cell=t
+      fi
 
-    if (( ${#cells[*]} > 1 )); then
-      multi_cell=t
-    fi
+      if [[ ! "${cells:-}" ]]; then
+        if [[ ! "${commands:-}" && ! "${parameter_questions:-}" || $help_depth -gt 0 ]]; then
+          show_usage
+          succeed
+        fi
+      fi
 
-    begin_for cell_path in ${cells[*]}; doo
-      handle_cell $cell_path || fail
-    end_for
+      if [[ ! "${cells:-}" ]]; then
+        cells=( . )
+      fi
+
+      begin_for cell_path in ${cells[*]}; doo
+        handle_cell $cell_path || fail
+      end_for
+
+    end_while
 
   end_function
 

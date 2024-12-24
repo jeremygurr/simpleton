@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+
+help_command() {
+  begin_function
+
+    local next cell_command
+    if [[ "${parameter_questions:-}" ]]; then
+
+      command_requires_resolved_dims=f \
+      trunk_changed=f \
+      command_allows_logs=f \
+        switch_context $cell_path || fail
+
+      if [[ -e $path_to_commands/all.info ]]; then
+        source $path_to_commands/all.info || fail
+      fi
+      for cell_command in ${commands[*]}; do
+        command_path=$path_to_commands/$cell_command
+        if [[ -e $command_path.info ]]; then
+          source $command_path.info || fail
+        fi
+      done
+
+      local p
+      for p in ${parameter_questions[*]}; do
+        show_parameter_help $p  || fail
+      done
+    elif (( ${#commands[*]} == 0 )); then
+      show_cell_help $cell_path || fail
+    else
+      begin_for cell_command in ${commands[*]}; doo
+        if (( help_depth > 0 )); then
+          show_help_for_command $cell_command || fail
+        else
+          handle_command $cell_command || fail
+        fi
+        first_command=f
+      end_for
+    fi
+    if [[ "${parameter_questions:-}" ]]; then
+      if [[ "$multi_commands" == t ]]; then
+        log_fatal "To use help, only choose one command"
+        fail1
+      fi
+      local p i pi 
+      begin_for pi in ${!parameter_questions[*]}; doo
+        p=${parameter_questions[$pi]}
+        if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
+          continue
+        fi
+        show_parameter_help $p || fail
+      end_for
+    fi
+
+  end_function
+  handle_return
+}
+
+show_help_for_command() {
+  local command=$1
+  begin_function
+    [[ $first_command == f ]] && out ''
+    out "Command: ${command//-/ }"
+    if [[ -f $path_to_commands/$command.info ]]; then
+      source $path_to_commands/$command.info || fail
+      indent=2 out_wrap "$command_description"
+      local name description default default_string choices_string i choices
+      if [[ "${parameter_names:-}" ]]; then
+        out "Parameters:"
+        begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
+          parameter="${parameter_names[$i]}"
+          description="${parameter_descriptions[$i]}"
+          choices="${parameter_choices[$i]}"
+          trim_ws description
+          default="${parameter_defaults[$i]}"
+          default_string=
+          choices_string=
+          [[ "$choices" ]] && choices_string="$NL    choices: $choices"
+          [[ "$default" ]] && default_string="$NL    default: $default"
+          out "  $parameter: $description$choices_string$default_string"
+        end_for
+      fi
+    fi
+  end_function
+  handle_return
+}
+
+show_cell_help() {
+  local cell_path=$1
+  begin_function
+
+    command_requires_cell=t \
+    command_requires_resolved_dims=f \
+    trunk_changed=f \
+    command_allows_logs=f \
+      switch_context $cell_path || fail
+    indent=0
+
+    if [[ $multi_cell == t ]]; then
+      out "$hbar_equals"
+    fi
+
+    out_wrap "Cell: $short_cell"
+    (( indent += 2 ))
+    if [[ "${cell_description:-}" ]]; then
+      out_wrap "$cell_description"
+    else
+      out_wrap "No description for this cell. Set cell_description variable in context file."
+    fi
+
+    local required=()
+
+    if [[ "${trunk_dims:-}" ]]; then
+      out_wrap "${NL}Dimensions: (add {dim}=? to command to see details, or cell . ?? to show all details)"
+      dim_type=trunk_dims \
+      show_dimensions ${trunk_dims[*]} || fail
+    fi
+
+    if [[ "${sub_dims:-}" || "${data_props:-}" || "${control_props:-}" ]]; then
+      out_wrap "${NL}Other parameters:"
+      if [[ "${sub_dims:-}" ]]; then
+        dim_type=sub_dims \
+        show_dimensions ${sub_dims[*]} || fail
+      fi
+      if [[ "${control_props:-}" ]]; then
+        dim_type=control_props \
+        show_dimensions ${control_props[*]} || fail
+      fi
+      if [[ "${data_props:-}" ]]; then
+        dim_type=data_props \
+        show_dimensions ${data_props[*]} || fail
+      fi
+    fi
+
+    if [[ "${required:-}" ]]; then
+      out_wrap "${NL}Required parameters: ${required[*]}"
+    fi
+
+    if [[ "${trunk_dims:-}" ]]; then
+      out_wrap "${NL}Branch dimensions:"
+      local i pretty_form= member dim
+      #begin_for (( i = 0; i < ${#branch_dims[*]}; i++ )); doo
+      #  dim=${branch_dims[$i]}
+      #  eval "member=\${branch_members[$i]}"
+      #  local pretty_function_name=trunk_dims_${dim}_pretty
+      #  if function_exists $pretty_function_name; then
+      #    eval "$pretty_function_name member" || fail
+      #    pretty_form=" ($member)"
+      #  else
+      #    pretty_form=
+      #  fi
+      #  out "  $dim=${branch_members[$i]}$pretty_form"
+      #end_for
+      (( indent += 2 ))
+      begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
+        dim_var=${trunk_dims[$i]}
+        local -n dim=d_$dim_var
+        local pretty_function_name=trunk_dims_${dim_var}_pretty
+        if function_exists $pretty_function_name; then
+          eval "$pretty_function_name $dim_var" || fail
+          pretty_form=" ($value)"
+        else
+          pretty_form=
+        fi
+        local value=${dim:-}
+        if [[ "${value:-}" ]]; then
+          if [[ "$value" == $empty_member ]]; then
+            value='(empty)'
+          fi
+          out_wrap "$dim_var=$value$pretty_form"
+        fi
+      end_for
+    fi
+
+  end_function
+  handle_return
+}
+
+show_parameter_help() {
+  local name=$1 indent=${indent:-0}
+  begin_function
+
+    local found=f choices=()
+
+    # TODO this should go away and get replaced with props
+    begin_for i in ${!parameter_names[*]}; doo
+      if [[ "${parameter_names[$i]}" == $name ]]; then
+        out_wrap "Parameter: $name"
+        (( indent += 2 ))
+
+        if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
+          out "${parameter_descriptions[$i]}"
+        fi
+
+        if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
+          out_wrap "default: ${parameter_defaults[$i]}"
+        fi
+
+        local choices=
+        if [[ -v parameter_choices[$i] && "${parameter_choices[$i]}" ]]; then
+          eval "choices=( ${parameter_choices[$i]} )"
+        elif [[ -v ${name}_choices ]]; then
+          eval "choices=${name}_choices"
+        elif function_exists ${name}_get_choices; then
+          ${name}_get_choices || fail
+        fi
+        if [[ "$choices" ]]; then
+          out_wrap "choices: ${choices[*]}"
+        fi
+        found=t
+        break
+      fi
+    end_for
+
+    if [[ $found == f ]]; then
+      local dim_type dim
+      begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
+        local -n dims=$dim_type
+        begin_for dim in ${dims[*]}; doo
+          if [[ $dim == $name ]]; then
+            show_dimension $dim || fail
+            found=t
+            break
+          fi
+        end_for
+      end_for
+    fi
+
+    if [[ $found != t ]]; then
+      log_warn "No description found for parameter $name" || fail
+    fi
+
+  end_function
+  handle_return
+}
+
