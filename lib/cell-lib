@@ -47,55 +47,58 @@ cell_lib_init() {
   # used to detect upstream circular dependencies
   downstream_cell_stack=( ) 
   disable_log=${disable_log:-}
-  export debug_ignore+="
-    apad
-    cell_close_log_file
-    cell_open_log_file
-    change_log_file
-    debug_id_inc
-    debug_start
-    defer
-    fd_unlock
-    fd_write_lock
-    find1
-    fork
-    fork_bg
-    fork_fg
-    fork_inside
-    function_exists
-    get_bottom_cell
-    get_new_reply_file
-    load_log_vars
-    load_log_vars_and_write_to_log
-    log_debug
-    log_error
-    log_fatal
-    log_info
-    log_trace
-    log_verbose
-    log_warn
-    out
-    parallel_loop
-    pause_tee
-    safe_link
-    save_log_vars
-    setup_exit_trap
-    shell_quote_var
-    snapshot_source_location
-    tee_output_to_log
-    unpause_tee
-    unrealpath
-    untee_output
-    write_to_log
-    write_to_log_and_save
-    write_to_log_console_out
-    write_to_log_log_var
-    write_to_log_process_vars
-    write_to_log_update_cooked
-  "
+  #export debug_ignore+="
+  #  apad
+  #  cell_close_log_file
+  #  cell_open_log_file
+  #  change_log_file
+  #  debug_id_inc
+  #  debug_start
+  #  defer
+  #  fd_unlock
+  #  fd_write_lock
+  #  find1
+  #  fork
+  #  fork_bg
+  #  fork_fg
+  #  fork_inside
+  #  function_exists
+  #  get_bottom_cell
+  #  get_new_reply_file
+  #  load_log_vars
+  #  load_log_vars_and_write_to_log
+  #  log_debug
+  #  log_error
+  #  log_fatal
+  #  log_info
+  #  log_trace
+  #  log_verbose
+  #  log_warn
+  #  out
+  #  parallel_loop
+  #  pause_tee
+  #  safe_link
+  #  save_log_vars
+  #  setup_exit_trap
+  #  shell_quote_var
+  #  snapshot_source_location
+  #  tee_output_to_log
+  #  unpause_tee
+  #  unrealpath
+  #  untee_output
+  #  write_to_log
+  #  write_to_log_and_save
+  #  write_to_log_console_out
+  #  write_to_log_log_var
+  #  write_to_log_process_vars
+  #  write_to_log_update_cooked
+  #"
 
-  debug_ignore=( $debug_ignore )
-  debug_ignore=" ${debug_ignore[*]} "
+  #debug_ignore=( $debug_ignore )
+  #debug_ignore=" ${debug_ignore[*]} "
+
+  command_aliases=()
+  command_alias_command=()
 }
 
 # allocates a unique file optionally based on a given name in the cell tmp_path
@@ -3041,6 +3044,49 @@ execute_command() {
   handle_return
 }
 
+execute_commands_prep() {
+  begin_function
+    get_short_cell
+    load_branch_info || fail
+
+    if [[ $top_level_command == f ]]; then
+      unset anchor_dims
+    else
+      unset default_anchor_dims
+    fi
+
+    switch_context $cell_path || {
+      log_fatal "Context failed to load for $short_cell"
+      fail1
+    }
+
+    if [[ "${localize_dims:-}" ]]; then
+      eval "local $localize_dims" || fail
+    fi
+
+    if [[ -e $path_to_commands/all.info ]]; then
+      source $path_to_commands/all.info || fail
+    fi
+  end_function
+  handle_return
+}
+
+substitute_command_alias() {
+  begin_function
+    local alias_command parameters
+    for (( i = 0; i < ${#command_aliases[*]}; i++ )); do
+      if [[ "${command_aliases[$i]}" == "$command" ]]; then
+        alias_command=${command_alias_command[$i]}
+        command=${alias_command%% *}
+        parameters=${alias_command#$command }
+        update_original_cmd=f parameters_to_env $parameters
+        succeed
+      fi
+    done
+  end_function
+  handle_return
+}
+
 # inputs:
 #   $1    cell_path   should be real path
 #   $2... commands
@@ -3072,38 +3118,27 @@ execute_commands() {
     #   be set to f
     top_level_command_next=f
 
-    get_short_cell
     eval "local $branch_local_vars" || fail
-    load_branch_info || fail
+    execute_commands_prep || fail
 
-    if [[ $top_level_command == f ]]; then
-      unset anchor_dims
-    else
-      unset default_anchor_dims
-    fi
-
-    switch_context $cell_path || {
-      log_fatal "Context failed to load for $short_cell"
-      fail1
-    }
-
-    if [[ "${localize_dims:-}" ]]; then
-      eval "local $localize_dims" || fail
-    fi
-
-    if [[ -e $path_to_commands/all.info ]]; then
-      source $path_to_commands/all.info || fail
-    fi
     begin_for command in ${commands[*]}; doo
 
+      substitute_command_alias || fail
+
       local command_path=$path_to_commands/$command
+
       if [[ -e $command_path.info ]]; then
         source $command_path.info || fail
       else
         log_warn "Missing file $command_path.info" || fail
       fi
 
-      source $command_path || fail
+      if [[ -e $command_path ]]; then
+        source $command_path || fail
+      else
+        log_fatal "Internal error: Missing $command command in $command_path"
+        fail1
+      fi
 
       if [[ "${parameter_questions:-}" ]]; then
         show_parameters_help || fail
@@ -3975,6 +4010,12 @@ add_parameter() {
   parameter_descriptions+=( "$description" ) 
   parameter_defaults+=( "$default" ) 
   parameter_choices+=( "$choices" )
+}
+
+add_command_alias() {
+  local name=$name command=$command
+  command_aliases+=( "$name" )
+  command_alias_command+=( "$command" )
 }
 
 tee_output_to_log() {
