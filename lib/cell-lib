@@ -1202,7 +1202,81 @@ build_dim_info() {
     write_vars_to_context \
       localize_dims localize_reverse_dims \
       secret_vars \
+      derive_tables \
       || fail
+
+  end_function
+  handle_return
+}
+
+# if context_type is not set, then no context will be written
+load_dna_contents() {
+  local folder=$1 prefix=${prefix:-} \
+    pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
+    ignore_unknown=${ignore_unknown:-f} \
+    context_type=${context_type:-} \
+
+  begin_function
+
+    local items
+    items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
+
+    if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
+      load_dna_contents_dna_root || fail
+    fi
+
+    local current_var=${prefix%_} ord item_name item_var= result 
+    if [[ $pass_thru == f ]]; then
+      local array_content=( )
+    fi
+    current_var=${current_var//-/_}
+
+    begin_for item in $items; doo
+
+      item_name=${item##*/}
+
+      local dna_prefix=f
+      if [[ "$item_name" == dna-* ]]; then
+        dna_prefix=t
+        item_name=${item_name#dna-}
+      fi
+
+      extract_simple_name item_name ord item_name
+      item_var=${item_name//-/_}
+
+      local new_prefix= 
+      if [[ "$current_var" && $dna_prefix == f ]]; then
+        new_prefix=${current_var}_
+      fi
+
+      local real_path=$(realpath -m $item)
+
+      if [[ ! -e $real_path ]]; then
+        if [[ $real_path == /work/* ]]; then
+          local seed_path
+          ignore_nonexistent=t \
+          find_seed_path $real_path || fail
+          deep=t plant_seed_internal "$seed_path" "$work_path" || fail
+        else
+          log_fatal "Missing file in dna: $item"
+          fail1
+        fi
+      fi
+
+      if [[ -d $item ]]; then
+        if [[ $recursive == t ]]; then
+          load_dna_contents_handle_dir || fail
+        fi
+      else
+        load_dna_contents_handle_file || fail
+      fi
+
+    end_for
+
+    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
+      make_array_assignment $current_var array_content || fail
+      write_to_context var "$array_assignment" || fail
+    fi
 
   end_function
   handle_return
@@ -1571,79 +1645,6 @@ plant_seed_internal() {
       fi
 
     fi
-  end_function
-  handle_return
-}
-
-# if context_type is not set, then no context will be written
-load_dna_contents() {
-  local folder=$1 prefix=${prefix:-} \
-    pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
-    ignore_unknown=${ignore_unknown:-f} \
-    context_type=${context_type:-} \
-
-  begin_function
-
-    local items
-    items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
-
-    if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
-      load_dna_contents_dna_root || fail
-    fi
-
-    local current_var=${prefix%_} ord item_name item_var= result 
-    if [[ $pass_thru == f ]]; then
-      local array_content=( )
-    fi
-    current_var=${current_var//-/_}
-
-    begin_for item in $items; doo
-
-      item_name=${item##*/}
-
-      local dna_prefix=f
-      if [[ "$item_name" == dna-* ]]; then
-        dna_prefix=t
-        item_name=${item_name#dna-}
-      fi
-
-      extract_simple_name item_name ord item_name
-      item_var=${item_name//-/_}
-
-      local new_prefix= 
-      if [[ "$current_var" && $dna_prefix == f ]]; then
-        new_prefix=${current_var}_
-      fi
-
-      local real_path=$(realpath -m $item)
-
-      if [[ ! -e $real_path ]]; then
-        if [[ $real_path == /work/* ]]; then
-          local seed_path
-          ignore_nonexistent=t \
-          find_seed_path $real_path || fail
-          deep=t plant_seed_internal "$seed_path" "$work_path" || fail
-        else
-          log_fatal "Missing file in dna: $item"
-          fail1
-        fi
-      fi
-
-      if [[ -d $item ]]; then
-        if [[ $recursive == t ]]; then
-          load_dna_contents_handle_dir || fail
-        fi
-      else
-        load_dna_contents_handle_file || fail
-      fi
-
-    end_for
-
-    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
-      make_array_assignment $current_var array_content || fail
-      write_to_context var "$array_assignment" || fail
-    fi
-
   end_function
   handle_return
 }
