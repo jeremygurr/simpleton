@@ -1,65 +1,13 @@
 #!/usr/bin/env bash
 
-help_command() {
-  begin_function
-
-    local next cell_command
-    if [[ "${parameter_questions:-}" ]]; then
-
-      command_requires_resolved_dims=f \
-      trunk_changed=f \
-      command_allows_logs=f \
-        switch_context $cell_path || fail
-
-      if [[ -e $path_to_commands/all.info ]]; then
-        source $path_to_commands/all.info || fail
-      fi
-      for cell_command in ${commands[*]}; do
-        command_path=$path_to_commands/$cell_command
-        if [[ -e $command_path.info ]]; then
-          source $command_path.info || fail
-        fi
-      done
-
-      local p
-      for p in ${parameter_questions[*]}; do
-        show_parameter_help $p  || fail
-      done
-    elif (( ${#commands[*]} == 0 )); then
-      show_cell_help $cell_path || fail
-    else
-      begin_for cell_command in ${commands[*]}; doo
-        if (( help_depth > 0 )); then
-          show_help_for_command $cell_command || fail
-        else
-          handle_command $cell_command || fail
-        fi
-        first_command=f
-      end_for
-    fi
-    if [[ "${parameter_questions:-}" ]]; then
-      if [[ "$multi_commands" == t ]]; then
-        log_fatal "To use help, only choose one command"
-        fail1
-      fi
-      local p i pi 
-      begin_for pi in ${!parameter_questions[*]}; doo
-        p=${parameter_questions[$pi]}
-        if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
-          continue
-        fi
-        show_parameter_help $p || fail
-      end_for
-    fi
-
-  end_function
-  handle_return
-}
-
 show_help_for_command() {
   local command=$1
   begin_function
     [[ $first_command == f ]] && out ''
+    if [[ $multi_commands == t ]]; then
+      out "$hbar_equals"
+    fi
+
     out "Command: ${command//-/ }"
     if [[ -f $path_to_commands/$command.info ]]; then
       source $path_to_commands/$command.info || fail
@@ -213,6 +161,11 @@ show_parameter_help() {
     end_for
 
     if [[ $found == f ]]; then
+      switch_context $cell_path || {
+        log_fatal "Context failed to load for $short_cell"
+        fail1
+      }
+
       local dim_type dim
       begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
         local -n dims=$dim_type
@@ -230,6 +183,19 @@ show_parameter_help() {
       log_warn "No description found for parameter $name" || fail
     fi
 
+  end_function
+  handle_return
+}
+
+show_parameters_help() {
+  begin_function
+    local p
+    begin_for p in ${parameter_questions[*]}; doo
+      if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
+        continue
+      fi
+      show_parameter_help $p  || fail
+    end_for
   end_function
   handle_return
 }

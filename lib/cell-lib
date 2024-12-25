@@ -777,17 +777,17 @@ prep_dims() {
           pdim=p_$dim_var pdims=p_$dims_var \
           is_optional=${dim_type}_${dim_var}_is_optional \
 
-        is_optional=${is_optional:-f}
+        #is_optional=${is_optional:-f}
         sdim=${sdim:-${pdim:-${dim:-}}}
         sdims=${sdims:-${pdims:-${dims:-}}}
 
-        if [[ ! "${sdims:-}" && ! "${sdim:-}" && ! "${ddim:-}" && ! "${ddims:-}" ]]; then
-          if [[ $is_optional == f ]]; then
-            missing_dims+=( $dim_var )
-          fi
-        else
-          known_dims+=( $dim_var )
-        fi
+        #if [[ ! "${sdims:-}" && ! "${sdim:-}" && ! "${ddim:-}" && ! "${ddims:-}" ]]; then
+        #  if [[ $is_optional == f ]]; then
+        #    missing_dims+=( $dim_var )
+        #  fi
+        #else
+        #  known_dims+=( $dim_var )
+        #fi
 
       done
     done
@@ -849,22 +849,6 @@ expand_dims() {
   handle_return
 }
 
-setup_dims() {
-  begin_function
-
-    local known_dims=()
-    local missing_dims=()
-
-    prep_dims trunk_dims sub_dims control_props data_props || fail
-
-    if [[ "${known_dims:-}" ]]; then
-      expand_dims || fail
-    fi
-
-  end_function
-  handle_return
-}
-
 load_child_dims() {
   begin_function
     local i
@@ -901,6 +885,21 @@ load_child_dims() {
         cell_is_leaf=t
       fi
     fi
+
+  end_function
+  handle_return
+}
+
+setup_dims() {
+  begin_function
+
+    prep_dims trunk_dims sub_dims control_props data_props || fail
+
+    if [[ "${known_dims:-}" ]]; then
+      expand_dims || fail
+    fi
+
+    load_child_dims || fail
 
   end_function
   handle_return
@@ -1423,8 +1422,6 @@ build_context() {
       source $context_path-trunk || fail
       setup_dims || fail
     fi
-
-    load_child_dims || fail
 
     if [[ ! -f $context_path-branch ]]; then
       build_context_branch || fail
@@ -2618,6 +2615,8 @@ build_cyto() {
 # inputs:
 #   $1   cell_path
 #   anchor_dims (as a space separated string)
+# setup_dims should usually be executed after this
+# followed by calc_coords
 switch_context() {
   cell_path=$1
 
@@ -2665,8 +2664,7 @@ switch_context() {
         fi
         source $context_path || fail
 
-        setup_dims || fail
-        load_child_dims || fail
+        # setup_dims || fail
 
         local problem_found=f
         broken_link_check || fail
@@ -2961,24 +2959,6 @@ execute_command() {
       command_allows_logs=f \
       command_requires_cell=t \
 
-    command_requires_resolved_dims=f
-
-    if [[ -e $path_to_commands/all.info ]]; then
-      source $path_to_commands/all.info || fail
-    fi
-
-    if [[ -e $command_path.info ]]; then
-      source $command_path.info || fail
-    else
-      log_warn "Missing file $command_path.info" || fail
-    fi
-
-    source $command_path || fail
-
-    if [[ $command_requires_cell == f ]]; then
-      command_requires_resolved_dims=f
-    fi
-
     if [[ ! -e $cell_path/.dna && $command_requires_cell == t ]]; then
       log_fatal "Invalid cell: $cell_path"
       fail1
@@ -3081,16 +3061,34 @@ execute_commands() {
       eval "local $localize_dims" || fail
     fi
 
-    command_requires_resolved_dims=f
+    if [[ -e $path_to_commands/all.info ]]; then
+      source $path_to_commands/all.info || fail
+    fi
     begin_for command in ${commands[*]}; doo
-      execute_command $cell_path $command || fail
-      if [[ $needs_context_reload == t ]]; then
-        switch_context $cell_path || {
-          log_fatal "Context failed to load for $short_cell"
-          fail1
-        }
-        needs_context_reload=f
+
+      if [[ -e $command_path.info ]]; then
+        source $command_path.info || fail
+      else
+        log_warn "Missing file $command_path.info" || fail
       fi
+
+      source $command_path || fail
+
+      if [[ "${parameter_questions:-}" ]]; then
+        show_parameters_help || fail
+      else
+
+        execute_command $cell_path $command || fail
+        if [[ $needs_context_reload == t ]]; then
+          switch_context $cell_path || {
+            log_fatal "Context failed to load for $short_cell"
+            fail1
+          }
+          needs_context_reload=f
+        fi
+
+      fi
+
     end_for
 
   end_function
