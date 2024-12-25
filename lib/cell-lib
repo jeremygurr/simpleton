@@ -1481,6 +1481,26 @@ build_context_leaf() {
   handle_return
 }
 
+calc_anchor_dims() {
+  begin_function
+    # all anchors and non-branch dim calculations are dynamic per command execution
+    # and so can't be precalculated and stored in the context
+    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
+    if [[ "$branch_dims" && "$branch_dims" != "$anchor_dims" ]]; then
+      local branch_dim
+      for branch_dim in ${branch_dims[*]}; do
+        remove_word_from_string anchor_dims $branch_dim
+      done
+      if [[ "$anchor_dims" ]]; then
+        anchor_dims="${branch_dim[*]} $anchor_dims"
+      else
+        anchor_dims="${branch_dim[*]}"
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 build_context() {
   local cell_path=$1
   begin_function
@@ -1492,12 +1512,12 @@ build_context() {
 
     if [[ ! -f $context_path-trunk ]]; then
       build_context_trunk || fail
-      setup_dims || fail
     else
       source $context_path-trunk || fail
-      setup_dims || fail
     fi
 
+    calc_anchor_dims || fail
+    setup_dims || fail
     if [[ ! -f $context_path-branch ]]; then
       build_context_branch || fail
     else
@@ -2543,10 +2563,6 @@ load_post_context_dynamic_vars() {
       out_path=$cell_path/$out_path
     fi
 
-    # all anchors and non-branch dim calculations are dynamic per command execution
-    # and so can't be precalculated and stored in the context
-    : ${anchor_dims:=${anchor_dims:-${default_anchor_dims:-}}}
-
   end_function
   handle_return
 }
@@ -2559,13 +2575,6 @@ build_cyto_inner() {
     log_debug "Building cyto for $short_cell"
     dna_path=$cell_path/.dna \
     cyto_path=$cell_path/.cyto \
-
-    #get_short_cell
-
-    #if [[ ! -e $dna_path ]]; then
-    #  log_fatal "Internal error: attempted switch_context on an invalid cell: $short_cell"
-    #  fail1
-    #fi
 
     if [[ ! -d $cyto_path ]]; then
       mkdir $cyto_path || fail
@@ -2663,10 +2672,10 @@ switch_context() {
       if [[ $dna_exists == t ]]; then
         if [[ ! -f $context_path ]]; then
           build_cyto $cell_path || fail
+        else
+          calc_anchor_dims || fail
         fi
         source $context_path || fail
-
-        # setup_dims || fail
 
         local problem_found=f
         broken_link_check || fail
