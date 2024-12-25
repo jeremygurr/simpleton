@@ -1558,6 +1558,24 @@ build_context() {
   handle_return
 }
 
+fetch_values_from_coordinates() {
+  local dim_var=$1 coord_type=$coord_type
+  begin_function
+    local -A results # must not be set to empty string here
+    out_field=$dim_var \
+    out_set=results \
+    derive_table=${coord_type}_coordinate \
+    execute_derive_table || fail
+    keys_to_array results values
+    if [[ "${values[*]:-}" ]]; then
+      log_debug "$dim_var fetched from coordinates: ${values[*]}"
+    else
+      log_debug "Failed to fetch $dim_var from coordinates"
+    fi
+  end_function
+  handle_return
+}
+
 # input: 
 #   $1=dim
 #   function=function to execute for each member
@@ -2134,11 +2152,13 @@ execute_derive_table() {
 
           if [[ "${dim:-}" ]]; then
             if [[ "$dim" != "$value" && "$value" != any && "$dim" != any ]]; then
+              #log_debug "Row doesn't match because dim $field = $dim but table shows $value"
               everything_matches=f
               break
             fi
           else # dim not set
             if [[ $strict_matching == t && "$value" && "$value" != any ]]; then
+              #log_debug "Row doesn't match because $field is not set"
               everything_matches=f
               break
             fi
@@ -2303,9 +2323,9 @@ expand_values_check_default() {
 calc_coordinates_process_member() {
   begin_function
 
-    if [[ "$localize_dims" ]]; then
-      eval "local $localize_dims" || fail
-    fi
+    #if [[ "$localize_dims" ]]; then
+    #  eval "local $localize_dims" || fail
+    #fi
 
     local -n member=d_$dim \
       members=d_$dims
@@ -2347,7 +2367,7 @@ calc_coordinates_loop_members() {
   begin_function
     (( current_dim_index++ ))
     local current_member
-    begin_for current_member in ${members[*]}; doo
+    begin_for current_member in "${members[@]}"; doo
       calc_coordinates_process_member || fail
       if [[ "${missing_dims:-}" ]]; then
         break
@@ -3453,20 +3473,6 @@ handle_return
 
     fi
 
-  end_function
-  handle_return
-}
-
-fetch_values_from_coordinates() {
-  local dim_var=$1 coord_type=$coord_type
-  begin_function
-    local -A results # must not be set to empty string here
-    out_field=$dim_var \
-    out_set=results \
-    derive_table=${coord_type}_coordinate \
-    execute_derive_table || fail
-    keys_to_array results values
-    log_debug "$dim_var fetched from coordinates: ${values[*]}"
   end_function
   handle_return
 }
