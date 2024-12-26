@@ -1789,6 +1789,7 @@ init_context() {
     cell_expiration= \
     cell_is_external=f \
     cell_is_persistent=f \
+    check_op_var=f \
     child_dims=() \
     control_props=() \
     current_pause=250 \
@@ -3474,41 +3475,48 @@ execute_op() {
     local -n op_var=${op_name}_op_var
 
     missing=f
-    if [[ "${op_var:-}" ]]; then
-      if [[ "${op_var#${op_name}_op()}" != "${op_var}" ]]; then
-        eval "$op_var"
-      else
-        eval "${op_name}_op() {
+    if [[ "${op_var:-}" == f ]]; then
+      missing=t
+    else
+
+      if [[ "${op_var:-}" ]]; then
+        if [[ "${op_var#${op_name}_op()}" != "${op_var}" ]]; then
+          eval "$op_var"
+        else
+          eval "${op_name}_op() {
 begin_function
 $op_var
 end_function
 handle_return
 }"
+        fi
       fi
+
+      if type -t $op_function &>/dev/null; then
+
+        if [[ $trace_op == $op_name ]]; then
+          trace_step_execution=t
+        fi
+
+        $op_function || fail
+
+        if [[ $trace_op == $op_name ]]; then
+          trace_step_execution=f
+        fi
+
+      else
+        missing=t
+      fi
+
     fi
 
-    if type -t $op_function &>/dev/null; then
-
-      if [[ $trace_op == $op_name ]]; then
-        trace_step_execution=t
-      fi
-
-      $op_function || fail
-
-      if [[ $trace_op == $op_name ]]; then
-        trace_step_execution=f
-      fi
-
-    else
-
-      missing=t
+    if [[ $missing == t ]]; then
       if [[ $ignore_missing == t ]]; then
         log_debug "No ${op_name}_op function found, ignoring" || fail
       else
         log_fatal "No ${op_name}_op function found"
         fail1
       fi
-
     fi
 
   end_function

@@ -80,6 +80,8 @@ get_needs_update() {
   local log_show_vars=^target_cell target_cell=$1
   begin_function
 
+    log_debug "Does ${target_cell#/*/*/} need updating?"
+
     # do we need to delete branches of this cell
     needs_pruning=f
 
@@ -124,10 +126,10 @@ get_needs_update() {
       succeed
     fi
 
-    local out_file= out_path= cell_is_leaf=f check_op_var= data_props=()
+    local out_file= out_path= cell_is_leaf=f check_op_var=f data_props=()
     source $check_context || fail
 
-    if [[ "$out_file" && ! -e "$out_path/$out_file" ]]; then
+    if [[ "$out_file" && ! -e "$target_cell/$out_path/$out_file" ]]; then
       needs_update=t
       log_message="Needs update because output file doesn't exist"
     elif [[ $cell_is_leaf == f ]]
@@ -151,9 +153,9 @@ get_needs_update() {
     then
       needs_update=t
       log_message="Needs update because cell is stale"
-    elif local data_valid=f
+    elif local data_valid=f missing
       ignore_missing=t execute_op check || fail
-      [[ $data_valid == f ]]
+      [[ $data_valid == f && $missing == f ]]
     then
       needs_update=t
       log_message="Needs update because validity check failed"
@@ -179,9 +181,9 @@ get_needs_update() {
     if [[ ${needs_update:-f} == f && $top_level_command == f ]]; then
       level=log_verbose
     fi
-    action=update_check $level "$log_message ($short_cell)"
+    action=update_check $level "$log_message (${target_cell#/*/*/})"
   else
-    action=update_check log_fatal "Failed to check update need"
+    action=update_check log_fatal "Failed to check update need of ${target_cell#/*/*/}"
   fi
 
   if [[ $needs_pruning == t ]]; then
