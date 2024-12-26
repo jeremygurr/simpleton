@@ -217,84 +217,73 @@ auto_shorten() {
 }
 
 write_to_log_process_vars() {
-  local var var_name value added=
-  for var in $trace_var $show_vars2 $log_vars $log_return_vars; do
+  begin_function
 
-    if [[ $var == *=* ]]; then
-      var_name=${var%%=*}
-      var=${var#*=}
-    else
-      var_name=$var
-    fi
+    local var var_name value added=
+    for var in $trace_var $show_vars2 $log_vars $log_return_vars; do
 
-    if [[ "$var" == ^* ]]; then
-      var=${var#^}
-      var_name=${var_name#^}
-    fi
-
-    if [[ -v $var ]]; then
-      local count=0
-      set +u
-      eval "count=\${#$var[*]}" || return 1
-      set -u
-
-      if is_array $var; then
-        eval "value=\"( \${$var[*]:0:10} )\""
-      elif [[ -v $var ]]; then
-        value=${!var}
-      fi
-
-    else
-      value=
-    fi
-
-    local quoted_value=$value
-    shell_quote_var quoted_value
-
-    if [[ "$added" != *"$var"* ]]; then
-      if [[ "$trace_var" == *"$var"* ]]; then
-
-        #if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
-        #  trace_vars+="$CYAN"
-        #fi
-
-        trace_vars+=" $var_name=$quoted_value"
-
-        if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
-          #trace_vars+="$RESET"
-          trace_var_value[$var]=$value
-        fi
-
-      else
-        if [[ "$value" ]]; then
-          new_vars+=" $var_name=$quoted_value"
-        fi
-      fi
-      added+=" $var "
-    fi
-
-  done
-  trace_vars=${trace_vars% }
-
-  if [[ "$show_vars2" ]]; then
-    local new_show_vars=
-    for var in $show_vars2; do
       if [[ $var == *=* ]]; then
         var_name=${var%%=*}
+        var=${var#*=}
       else
         var_name=$var
       fi
-      new_show_vars+=" $var_name"
+
+      if [[ "$var" == ^* ]]; then
+        var=${var#^}
+        var_name=${var_name#^}
+      fi
+
+      get_var_value $var
+
+      local quoted_value=$value
+      shell_quote_var quoted_value
+
+      if [[ "$added" != *"$var"* ]]; then
+        if [[ "$trace_var" == *"$var"* ]]; then
+
+          #if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
+          #  trace_vars+="$CYAN"
+          #fi
+
+          trace_vars+=" $var_name=$quoted_value"
+
+          if [[ "$value" != "${trace_var_value[$var]:-}" ]]; then
+            #trace_vars+="$RESET"
+            trace_var_value[$var]=$value
+          fi
+
+        else
+          if [[ "$value" ]]; then
+            new_vars+=" $var_name=$quoted_value"
+          fi
+        fi
+        added+=" $var "
+      fi
+
     done
-    show_vars2=${new_show_vars# }
-  fi
+    trace_vars=${trace_vars% }
 
-  if [[ "${secret_vars:-}" ]]; then
-    hide_secrets new_vars
-    hide_secrets trace_vars
-  fi
+    if [[ "$show_vars2" ]]; then
+      local new_show_vars=
+      for var in $show_vars2; do
+        if [[ $var == *=* ]]; then
+          var_name=${var%%=*}
+        else
+          var_name=$var
+        fi
+        new_show_vars+=" $var_name"
+      done
+      show_vars2=${new_show_vars# }
+    fi
 
-  return 0
+    if [[ "${secret_vars:-}" ]]; then
+      hide_secrets new_vars
+      hide_secrets trace_vars
+    fi
+
+  end_function
+  handle_return
 }
 
 write_to_log_log_var() {
@@ -336,17 +325,21 @@ write_to_log_log_var() {
 }
 
 write_to_log_update_cooked() {
-  local show_vars= var val
+  local show_vars= var v value
   for var in $show_vars2; do
-    val=
+    value=
     local real_var=${var#^}
-    if [[ -v $real_var ]]; then
-      val=${!real_var}
-      if [[ "$var" == ^* ]]; then
-        auto_shorten val
-      fi
-    fi
-    show_vars+="$var=$val "
+    get_var_value $real_var
+    shell_quote_var value
+    #if [[ -v $real_var ]]; then
+    #  v=${!real_var}
+    #  if [[ "$var" == ^* ]]; then
+    #    auto_shorten v
+    #  fi
+    #  get_var_value v
+    #  shell_quote_var value
+    #fi
+    show_vars+="$var=$value "
   done
   case $action in
     call)
@@ -427,7 +420,7 @@ write_to_log_console_out() {
 # Can be called safely whether or not a log file has been set up
 write_to_log() {
   pause_tee
-  begin_function_lo
+  begin_function
 
     local level=$1 action=${2:-${1:-}} message=${3:-} \
       new_vars= trace_vars= show_vars2=${log_show_vars:-} \
