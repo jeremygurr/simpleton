@@ -676,17 +676,17 @@ parse_git_branch() {
 }
 
 RED="\[\033[0;31m\]"
-LIGHT_RED="\[\033[1;31m\]"
+DIM_RED="\[\033[1;31m\]"
 RESET="\[\033[0m\]"
 BLUE="\[\033[0;34m\]"
-LIGHT_BLUE="\[\033[1;34m\]"
+DIM_BLUE="\[\033[1;34m\]"
 PURPLE="\[\033[0;35m\]"
-LIGHT_PURPLE="\[\033[1;35m\]"
+DIM_PURPLE="\[\033[1;35m\]"
 CYAN="\[\033[0;36m\]"
 GREEN="\[\033[0;32m\]"
-LIGHT_GREEN="\[\033[1;32m\]"
+DIM_GREEN="\[\033[1;32m\]"
 YELLOW="\[\033[0;33m\]"
-LIGHT_YELLOW="\[\033[1;33m\]"
+DIM_YELLOW="\[\033[1;33m\]"
 
 TAB=$'\t'
 NL=$'\n'
@@ -824,18 +824,18 @@ big_prompt() {
   fi
 
   export PS1="
-| $LIGHT_GREEN\$prompt_name $LIGHT_BLUE\d \A $RED\$(prompt_error_string)$YELLOW\$(pid_path)$CYAN\$(custom_prompt_status 2>/dev/null)$RESET
-| $LIGHT_YELLOW\$(short_path) $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+| $DIM_GREEN\$prompt_name $DIM_BLUE\d \A $RED\$(prompt_error_string)$YELLOW\$(pid_path)$CYAN\$(custom_prompt_status 2>/dev/null)$RESET
+| $DIM_YELLOW\$(short_path) $DIM_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
   export PS2='> '
   export PS4='+ '
 }
 
 medium_prompt() {
-  export PS1="$LIGHT_GREEN\$prompt_name $YELLOW\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+  export PS1="$DIM_GREEN\$prompt_name $YELLOW\W $DIM_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
 }
 
 small_prompt() {
-  export PS1="$YELLOW\W $LIGHT_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+  export PS1="$YELLOW\W $DIM_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
 }
 
 big_prompt
