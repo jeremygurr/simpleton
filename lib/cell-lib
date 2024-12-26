@@ -1341,9 +1341,6 @@ build_context_trunk() {
   begin_function
 
     local context_type=trunk last_type=var \
-      branch_context_path=$context_path \
-
-    local context_path=$trunk_cell/.cyto/context
 
     log_debug "Building trunk context for $short_cell" || fail
 
@@ -1360,10 +1357,6 @@ build_context_trunk() {
     build_dim_info || fail
 
     mv $context_path-$context_type.new $context_path-$context_type || fail
-
-    if [[ $context_path != $branch_context_path ]]; then
-      safe_link $context_path-trunk $branch_context_path-trunk || fail
-    fi
 
   end_function
   handle_return
@@ -1394,7 +1387,6 @@ branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
 branch_hashes=( ${branch_hashes[*]} )
-cell_is_trunk=$cell_is_trunk
 cell_is_leaf=$cell_is_leaf
 " || fail
 
@@ -1534,7 +1526,14 @@ build_context() {
   begin_function
 
     if [[ ! -f $context_path-trunk ]]; then
-      build_context_trunk || fail
+      local trunk_context_path=$trunk_cell/.cyto/context
+      if [[ $cell_is_trunk == t || ! -f $trunk_context_path-trunk ]]; then
+        context_path=$trunk_cell/.cyto/context \
+        build_context_trunk || fail
+      fi
+      if [[ $cell_is_trunk == f ]]; then
+        safe_link $trunk_context_path-trunk $context_path-trunk || fail
+      fi
     else
       source $context_path-trunk || fail
     fi
