@@ -1340,7 +1340,10 @@ build_context_dna() {
 build_context_trunk() {
   begin_function
 
-    local context_type=trunk last_type=var
+    local context_type=trunk last_type=var \
+      branch_context_path=$context_path \
+
+    local context_path=$trunk_cell/.cyto/context
 
     log_debug "Building trunk context for $short_cell" || fail
 
@@ -1357,6 +1360,10 @@ build_context_trunk() {
     build_dim_info || fail
 
     mv $context_path-$context_type.new $context_path-$context_type || fail
+
+    if [[ $context_path != $branch_context_path ]]; then
+      safe_link $context_path-trunk $branch_context_path-trunk || fail
+    fi
 
   end_function
   handle_return
@@ -1383,7 +1390,6 @@ build_context_branch() {
     end_for
 
     write_to_context var "
-trunk_cell=$trunk_cell
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
@@ -1526,14 +1532,6 @@ get_highest_trunk_context_cell() {
 build_context() {
   local cell_path=$1
   begin_function
-
-    if [[ ! -f $context_path-trunk ]]; then
-      local highest_trunk_context_cell=
-      get_highest_trunk_context_cell || fail
-      if [[ "$highest_trunk_context_cell" ]]; then
-        safe_link $highest_trunk_context_cell/.cyto/context-trunk $context_path-trunk || fail
-      fi
-    fi
 
     if [[ ! -f $context_path-trunk ]]; then
       build_context_trunk || fail
