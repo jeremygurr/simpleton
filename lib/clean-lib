@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+
+type -t clean_lib_loaded >/dev/null && return 0
+clean_lib_loaded=t
+
+clean_cell() {
+  local cell_path=$1
+  local clean_depth=${clean_depth:-1}
+
+  begin_function
+
+    (( clean_depth-- ))
+    if (( clean_depth > 0 )) && [[ -d $cell_path/.cyto/up ]]; then
+      local upstreams=$(find1 $cell_path/.cyto/up -type d | sort -g)
+      local up
+      begin_for up in $upstreams; doo
+        local up_cell=$up/chosen
+        if [[ -d $up_cell ]]; then
+          up_cell=$(readlink $up_cell)
+          clean_cell $up_cell || fail
+        else
+          local choices=$(find1 $up/choices -type d | sort -g)
+          local choice
+          begin_for choice in $choices; doo
+            clean_cell $choice || fail
+          end_for
+        fi
+      end_for
+    fi
+
+    load_branch_info $cell_path || fail
+    get_short_cell
+    log_verbose "Cleaning $short_cell..." 
+
+    local clean_file=$cell_path/.dna/clean_op.fun
+    if [[ -f $clean_file ]]; then
+      local make_or_load=load
+      make_or_load_dna_item $clean_file || fail
+      clean_op || fail
+    fi
+
+    local x
+    case $kind in
+      all)
+        begin_for x in $cell_path/!(.*) $cell_path/.cyto; doo
+          log_verbose "Removing ${x#$cell_path/}"
+          rm -rf $x &>/dev/null
+        end_for
+      ;;
+      context)
+        if [[ -d $cell_path/.cyto ]]; then
+          local context_files
+          context_files=$(find1 $cell_path/.cyto -name "context*") || fail
+          if [[ "$context_files" ]]; then
+            rm $cell_path/.cyto/context* || fail
+          fi
+        fi
+      ;;
+      cyto)
+        if [[ -e $cell_path/.cyto ]]; then
+          rm -rf $cell_path/.cyto || fail
+        fi
+      ;;
+      data)
+        begin_for x in $(find1 $cell_path -not -name '.*' -not -name '*:*'); doo
+          log_verbose "Removing ${x#$cell_path/}"
+          rm -rf $x &>/dev/null
+        end_for
+        if [[ -f $cell_path/.cyto/status/up-to-date ]]; then
+          rm $cell_path/.cyto/status/up-to-date
+        fi
+      ;;
+      branches)
+        begin_for x in $(find1 $cell_path -type d -not -name '.*' -name '*:*'); doo
+          if [[ "$x" != *:* ]]; then
+            continue
+          fi
+          log_verbose "Removing ${x#$cell_path/}"
+          rm -rf $x &>/dev/null
+        end_for
+        if [[ -f $cell_path/.cyto/status/up-to-date ]]; then
+          rm $cell_path/.cyto/status/up-to-date
+        fi
+      ;;
+      *)
+        log_fatal "Invalid clean kind ($kind). Must be one of: cyto, data, all"
+        fail1
+      ;;
+    esac
+
+    local inner_path=$cell_path/.cyto/inner
+    if [[ $execute_inner != n && -d $inner_path ]]; then
+      local inner inners
+      inners=$(find1 $inner_path -type d -not -name '.*') || fail
+      begin_for inner in $inners; doo
+        clean_cell $(realpath $inner) || fail
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
+clean_folder() {
+  local folder=$1
+  begin_function
+    if [[ -e "$folder/.dna" ]]; then
+      clean_cell $folder || fail
+      begin_for folder in $(find1 $folder -type d -not -name '.*' -name '*:*'); doo
+        clean_folder $folder || fail
+      end_for
+    else
+      local folders
+      folders=$(find1 $folder -type d -not -name '.*') || fail
+      begin_for folder in $folders; doo
+        clean_folder $folder || fail
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
