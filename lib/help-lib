@@ -1,58 +1,178 @@
 #!/usr/bin/env bash
 
+# inputs:
+#   i     index of parameter to show
+show_parameter_help_inner() {
+  begin_function
+
+    local indent=${indent:-0} \
+      parameter="${parameter_names[$i]}" \
+      description="${parameter_descriptions[$i]}" \
+      aliases="${parameter_aliases[$i]}" \
+      dq=${parameter_delay_questions[$i]} \
+
+    if [[ $dq == t ]]; then
+      local best_alias=$parameter
+      if [[ "$aliases" ]]; then
+        best_alias=${aliases%% *}
+      fi
+      description+="Use $best_alias=? to see a list of valid values. "
+    fi
+    trim_ws description
+
+    choices=
+    if [[ -v parameter_choices[$i] && "${parameter_choices[$i]:-}" ]]; then
+      choices=${parameter_choices[$i]}
+    elif function_exists ${name}_get_choices; then
+      ${name}_get_choices || fail
+    fi
+
+    default="${parameter_defaults[$i]}"
+
+    out_wrap "$parameter: $description"
+    (( indent += 2 ))
+    [[ "$choices" ]] && out_wrap "choices: $choices"
+    [[ "$default" ]] && out_wrap "default: $default"
+    [[ "$aliases" ]] && out_wrap "aliases: $aliases"
+  end_function
+  handle_return
+}
+
 show_help_for_command() {
   local command=$1
   begin_function
     [[ $first_command == f ]] && out ''
     if [[ $multi_commands == t ]]; then
-      out "$hbar_equals"
+      out_wrap "$hbar_equals"
     fi
 
-    out "${WHITE}Command: ${command//-/ }$RESET"
+    out_wrap "${WHITE}Command: ${command//-/ }$RESET"
     if [[ -f $path_to_commands/$command.info ]]; then
       source $path_to_commands/$command.info || fail
       indent=2 out_wrap "$command_description"
-      local name description default default_string choices_string i choices aliases dq
+      local name description default i choices aliases dq
       local types=command
       if (( help_depth > 1 )); then
         types='command global'
       fi
       begin_for type in $types; doo
 
-        local -n parameter_names=parameter_names_$type
-        local -n parameter_descriptions=parameter_descriptions_$type
-        local -n parameter_choices=parameter_choices_$type
-        local -n parameter_defaults=parameter_defaults_$type
-        local -n parameter_aliases=parameter_aliases_$type
-        local -n parameter_delay_questions=parameter_delay_questions_$type
+        local -n parameter_names=parameter_names_$type \
+          parameter_descriptions=parameter_descriptions_$type \
+          parameter_choices=parameter_choices_$type \
+          parameter_defaults=parameter_defaults_$type \
+          parameter_aliases=parameter_aliases_$type \
+          parameter_delay_questions=parameter_delay_questions_$type \
 
         if [[ "${parameter_names:-}" ]]; then
-          out "$NL$WHITE${type^} Parameters:$RESET"
+          out_wrap "$NL$WHITE${type^} Parameters:$RESET"
         fi
         begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
-          parameter="${parameter_names[$i]}"
-          description="${parameter_descriptions[$i]}"
-          aliases="${parameter_aliases[$i]}"
-          dq=${parameter_delay_questions[$i]}
-          if [[ $dq == t ]]; then
-            local best_alias=$parameter
-            if [[ "$aliases" ]]; then
-              best_alias=${aliases%% *}
-            fi
-            description+="  Use $best_alias=? to see a list of valid values."
-          fi
-          choices="${parameter_choices[$i]}"
-          trim_ws description
-          default="${parameter_defaults[$i]}"
-          default_string=
-          choices_string=
-          [[ "$choices" ]] && choices_string="$NL    choices: $choices"
-          [[ "$default" ]] && default_string="$NL    default: $default"
-          [[ "$aliases" ]] && default_string="$NL    aliases: $aliases"
-          out "  $parameter: $description$choices_string$default_string"
+          show_parameter_help_inner || fail
         end_for
       end_for
     fi
+  end_function
+  handle_return
+}
+
+show_dimension_details() {
+  local dim=$1
+  begin_function
+    if function_exists ${dim_type}_${dim}_expand; then
+      values=
+
+      local problem= 
+
+      eval "value=all ${dim_type}_${dim}_expand" &>/dev/null
+      if [[ ! "$problem" && $values != all ]]; then
+        out_wrap "choices: ${values[*]}"
+      fi
+
+      eval "value= ${dim_type}_${dim}_expand" &>/dev/null || is_required=t
+      if [[ "$problem" ]]; then
+        required+=( $dim )
+      else
+        if [[ "${values:-}" ]]; then
+          if [[ "$values" == $empty_member ]]; then
+            out_wrap "default: (empty)"
+          else
+            out_wrap "default: ${values[*]}"
+          fi
+        else
+          out_wrap "optional"
+        fi
+      fi
+    fi
+
+    if [[ -v ${dim_type}_${dim}_examples ]]; then
+      eval "local examples=( \"\${${dim_type}_${dim}_examples[@]}\" )"
+      local example_count=${#examples[*]} i index_string=
+      begin_for ((i=0; i<example_count; i++)); doo
+        if [[ example_count -gt 1 ]]; then
+          index_string=" #$((i+1))"
+        fi
+        out_wrap "example$index_string: ${examples[$i]}"
+      end_for
+    fi
+
+    if [[ -v ${dim_type}_${dim}_aliases ]]; then
+      eval "local aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )"
+      local full_alias
+      begin_for full_alias in "${aliases[@]}"; doo
+        out_wrap "alias: ${full_alias/ / -> }"
+      end_for
+    fi
+
+    if [[ -v ${dim_type}_${dim}_derived_from ]]; then
+      local -n df_var=${dim_type}_${dim}_derived_from
+      local derived_string
+      for derived_string in "${df_var[@]}"; do
+        local derived_array=( $derived_string )
+        out_wrap "derived from: ${derived_array[*]}"
+      done
+    elif [[ -v ${dim_type}_${dim}_derive_fields ]]; then
+      local -n df_var=${dim_type}_${dim}_derive_fields
+      local f derived_from=
+      for f in ${df_var[*]}; do
+        if [[ "$f" != "$dim" ]]; then
+          derived_from+="$f "
+        fi
+      done
+      derived_from=${derived_from% }
+      out_wrap "derived from: $derived_from"
+    fi
+
+  end_function
+  handle_return
+}
+
+show_dimension() {
+  local dim=$1 help_depth=${help_depth:-2} indent=${indent:-0}
+  begin_function
+    (( indent += 2 ))
+    if [[ -v ${dim_type}_${dim}_description ]]; then
+      eval "description=\$${dim_type}_${dim}_description" || fail
+    else
+      description='No description'
+    fi
+    out_wrap "$dim: $description"
+    if (( help_depth > 1 )); then
+      indent=$((indent+2)) show_dimension_details $dim || fail
+    fi
+  end_function
+  handle_return
+}
+
+show_dimensions() {
+  local dims=( $* ) dim dim_type=$dim_type description values 
+  begin_function
+    begin_for dim in ${dims[*]}; doo
+      if [[ " ${branch_dims[*]:-} " == *" $dim "* ]]; then
+        continue
+      fi
+      show_dimension $dim || fail
+    end_for
   end_function
   handle_return
 }
@@ -65,11 +185,12 @@ show_cell_help() {
     command_requires_resolved_dims=f \
     trunk_changed=f \
     command_allows_logs=f \
-      switch_context $cell_path || fail
+    switch_context $cell_path || fail
+
     indent=0
 
     if [[ $multi_cell == t ]]; then
-      out "$hbar_equals"
+      out_wrap "$hbar_equals"
     fi
 
     out_wrap "Cell: $short_cell"
@@ -121,7 +242,7 @@ show_cell_help() {
       #  else
       #    pretty_form=
       #  fi
-      #  out "  $dim=${branch_members[$i]}$pretty_form"
+      #  out_wrap "  $dim=${branch_members[$i]}$pretty_form"
       #end_for
       (( indent += 2 ))
       begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
@@ -148,65 +269,56 @@ show_cell_help() {
   handle_return
 }
 
-show_parameter_help() {
+show_parameter_help_single() {
   local name=$1 indent=${indent:-0}
   begin_function
 
-    local found=f choices=()
+    begin_for type in command global; doo
 
-    # TODO this should go away and get replaced with props
-    begin_for i in ${!parameter_names[*]}; doo
-      if [[ "${parameter_names[$i]}" == $name ]]; then
-        out_wrap "Parameter: $name"
-        (( indent += 2 ))
+      local -n parameter_names=parameter_names_$type \
+        parameter_descriptions=parameter_descriptions_$type \
+        parameter_choices=parameter_choices_$type \
+        parameter_defaults=parameter_defaults_$type \
+        parameter_aliases=parameter_aliases_$type \
+        parameter_delay_questions=parameter_delay_questions_$type \
 
-        if [[ -v parameter_descriptions[$i] && "${parameter_descriptions[$i]}" ]]; then
-          out "${parameter_descriptions[$i]}"
+      begin_for i in ${!parameter_names[*]}; doo
+        if [[ " $names " == *" ${parameter_names[$i]} "* ]]; then
+          show_parameter_help_inner || fail
+          found=t
+          succeed
         fi
-
-        if [[ -v parameter_defaults[$i] && "${parameter_defaults[$i]}" ]]; then
-          out_wrap "default: ${parameter_defaults[$i]}"
-        fi
-
-        local choices=
-        if [[ -v parameter_choices[$i] && "${parameter_choices[$i]}" ]]; then
-          eval "choices=( ${parameter_choices[$i]} )"
-        elif [[ -v ${name}_choices ]]; then
-          eval "choices=${name}_choices"
-        elif function_exists ${name}_get_choices; then
-          ${name}_get_choices || fail
-        fi
-        if [[ "$choices" ]]; then
-          out_wrap "choices: ${choices[*]}"
-        fi
-        found=t
-        break
-      fi
+      end_for
     end_for
 
-    if [[ $found == f ]]; then
-      switch_context $cell_path || {
-        log_fatal "Context failed to load for $short_cell"
-        fail1
-      }
-
-      local dim_type dim
-      begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
-        local -n dims=$dim_type
-        begin_for dim in ${dims[*]}; doo
-          if [[ $dim == $name ]]; then
-            show_dimension $dim || fail
-            found=t
-            break
-          fi
-        end_for
+    local dim_type dim
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
+      local -n dims=$dim_type
+      begin_for dim in ${dims[*]}; doo
+        if [[ " $names " == *" $dim "* ]]; then
+          show_dimension $dim || fail
+          found=t
+          succeed
+        fi
       end_for
-    fi
+    end_for
 
-    if [[ $found != t ]]; then
-      log_warn "No description found for parameter $name" || fail
-    fi
+  end_function
+  handle_return
+}
 
+show_parameter_help() {
+  local names=$* indent=${indent:-0}
+  begin_function
+    local found
+    out_wrap "Parameters:"
+    begin_for name in $names; doo
+      found=f
+      indent=$((indent+2)) show_parameter_help_single $name || fail
+      if [[ $found == f ]]; then
+        log_warn "No description found for parameter $name" || fail
+      fi
+    end_for
   end_function
   handle_return
 }
@@ -218,7 +330,8 @@ show_parameters_help() {
       if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
         continue
       fi
-      show_parameter_help $p  || fail
+      show_parameter_help $p || fail
+      showed_parameter_help=t
     end_for
   end_function
   handle_return

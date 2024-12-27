@@ -2887,107 +2887,6 @@ execute_command_log_prep() {
   handle_return
 }
 
-show_dimension_details() {
-  local dim=$1
-  begin_function
-    if function_exists ${dim_type}_${dim}_expand; then
-      values=
-
-      local problem= 
-
-      eval "value=all ${dim_type}_${dim}_expand" &>/dev/null
-      if [[ ! "$problem" && $values != all ]]; then
-        out_wrap "choices: ${values[*]}"
-      fi
-
-      eval "value= ${dim_type}_${dim}_expand" &>/dev/null || is_required=t
-      if [[ "$problem" ]]; then
-        required+=( $dim )
-      else
-        if [[ "${values:-}" ]]; then
-          if [[ "$values" == $empty_member ]]; then
-            out_wrap "default: (empty)"
-          else
-            out_wrap "default: ${values[*]}"
-          fi
-        else
-          out_wrap "optional"
-        fi
-      fi
-    fi
-
-    if [[ -v ${dim_type}_${dim}_examples ]]; then
-      eval "local examples=( \"\${${dim_type}_${dim}_examples[@]}\" )"
-      local example_count=${#examples[*]} i index_string=
-      begin_for ((i=0; i<example_count; i++)); doo
-        if [[ example_count -gt 1 ]]; then
-          index_string=" #$((i+1))"
-        fi
-        out_wrap "example$index_string: ${examples[$i]}"
-      end_for
-    fi
-
-    if [[ -v ${dim_type}_${dim}_aliases ]]; then
-      eval "local aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )"
-      local full_alias
-      begin_for full_alias in "${aliases[@]}"; doo
-        out_wrap "alias: ${full_alias/ / -> }"
-      end_for
-    fi
-
-    if [[ -v ${dim_type}_${dim}_derived_from ]]; then
-      local -n df_var=${dim_type}_${dim}_derived_from
-      local derived_string
-      for derived_string in "${df_var[@]}"; do
-        local derived_array=( $derived_string )
-        out_wrap "derived from: ${derived_array[*]}"
-      done
-    elif [[ -v ${dim_type}_${dim}_derive_fields ]]; then
-      local -n df_var=${dim_type}_${dim}_derive_fields
-      local f derived_from=
-      for f in ${df_var[*]}; do
-        if [[ "$f" != "$dim" ]]; then
-          derived_from+="$f "
-        fi
-      done
-      derived_from=${derived_from% }
-      out_wrap "derived from: $derived_from"
-    fi
-
-  end_function
-  handle_return
-}
-
-show_dimension() {
-  local dim=$1 help_depth=${help_depth:-2} indent=${indent:-0}
-  begin_function
-    (( indent += 2 ))
-    if [[ -v ${dim_type}_${dim}_description ]]; then
-      eval "description=\$${dim_type}_${dim}_description" || fail
-    else
-      description='No description'
-    fi
-    out_wrap "$dim: $description"
-    if (( help_depth > 1 )); then
-      indent=$((indent+2)) show_dimension_details $dim || fail
-    fi
-  end_function
-  handle_return
-}
-
-show_dimensions() {
-  local dims=( $* ) dim dim_type=$dim_type description values 
-  begin_function
-    begin_for dim in ${dims[*]}; doo
-      if [[ " ${branch_dims[*]:-} " == *" $dim "* ]]; then
-        continue
-      fi
-      show_dimension $dim || fail
-    end_for
-  end_function
-  handle_return
-}
-
 # Inputs:
 #   $1    cell_path   should be real path
 #   $2    command
@@ -3166,12 +3065,13 @@ execute_commands() {
         fail1
       fi
 
+      local showed_parameter_help=f
       if [[ "${parameter_questions:-}" ]]; then
         show_parameters_help || fail
-      else
+      fi
 
+      if [[ $showed_parameter_help == f ]]; then
         execute_command $cell_path $cell_command || fail
-
       fi
 
     end_for
