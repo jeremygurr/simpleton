@@ -3,6 +3,7 @@
 ##########################################################
 # BASH-LIFTED
 # A bash library of functions to increase debugability of bash scripts.
+# depends on: omni-log bash-debugger bash-lib 
 ##########################################################
 
 type -t bash_lifted_init >/dev/null && return 0
@@ -25,13 +26,78 @@ bash_lifted_init() {
   pause_at_functions=${pause_at_functions:-${pause_at_function:-${pause:-}}}
   pause_at_cells=${pause_at_cells:-${pause_at_cell:-${pause:-}}}
   pause_at_vars=${pause_at_vars:-${pause_at_var:-${pause:-}}}
+  DEBUG_COLOR=$DIM_CYAN
 }
 
-reply_to_caller() {
-  if [[ "${reply_file:-}" ]]; then
-    echo "$*" >>$reply_file || return 1
+show_trace_vars() {
+  if [[ ${show_debug_id:-f} == a ]]; then
+    out -n " $DEBUG_COLOR$fork_debug_id$RESET"
   fi
-  return 0
+
+  if [[ ${trace_structure:-f} == t ]]; then
+    out " ${DEBUG_COLOR}debug_id=$fork_debug_id$RESET ${struct_type:-}"
+  fi
+
+  if [[ "${trace_fun:-}" ]]; then
+    local fun
+    for fun in $trace_fun; do
+      if [[ "${struct_type:-}" == *" $fun" ]]; then
+        out " ${DEBUG_COLOR}debug_id=$fork_debug_id ${struct_type:-}$RESET"
+      fi
+    done
+  fi
+
+  if [[ "${trace_var:-}" ]]; then
+    local var value
+    for var in $trace_var; do
+      get_var_value $var
+      if [[ -v trace_var_sub[$var] ]]; then
+        if [[ "${trace_var_sub[$var]}" != "$value" ]]; then
+          local show_val=$value
+          if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $var "* ]]; then
+            show_val='****'
+          fi
+          echo " ${DEBUG_COLOR}debug_id=$fork_debug_id ${YELLOW}$var=$show_val$RESET" >&$fd_original_err
+          if [[ " ${pause_at_vars} " == *" $var "* ]]; then
+            pause_qd "Var changed: $var."
+          fi
+        fi
+        unset trace_var_sub[$var]
+        trace_var_old[$var]=$value
+      elif [[ "${trace_var_old[$var]:-}" != "$value" || ${trace_var_always:-f} == t ]]; then
+        local show_val=$value
+        if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $var "* ]]; then
+          show_val='****'
+        fi
+        echo " ${DEBUG_COLOR}debug_id=$fork_debug_id $var=$show_val$RESET" >&$fd_original_err
+        unset trace_var_sub[$var]
+        trace_var_old[$var]=$value
+        if [[ " ${pause_at_vars} " == *" $var "* ]]; then
+          pause_qd "Var changed: $var."
+        fi
+      fi
+    done
+  fi
+  if [[ "${trace_condition:-}" ]]; then
+    local result
+    set +u
+    eval "if $trace_condition; then result=t; else result=f; fi"
+    set -u
+    if [[ "${trace_var_old:-}" != "$result" ]]; then
+      echo "${DEBUG_COLOR}debug_id=$fork_debug_id $trace_condition=$result$RESET" >&$fd_original_err
+      trace_var_old=$result
+    fi
+  fi
+  if [[ "${trace_expression:-}" ]]; then
+    local result
+    set +u
+    eval "result=$trace_expression"
+    set -u
+    if [[ "${trace_var_old:-}" != "$result" ]]; then
+      echo "${DEBUG_COLOR}debug_id=$fork_debug_id expression=$result$RESET" >&$fd_original_err
+      trace_var_old=$result
+    fi
+  fi
 }
 
 reached_debug_id() {
@@ -60,5 +126,296 @@ reached_debug_id() {
       fi
     fi
   done
+}
+
+debug_id_inc() {
+  (( no_trace_depth++ ))
+  (( debug_id_current++ ))
+
+  fork_debug_id=$debug_id_current
+  if [[ "$fork_id_current" ]]; then
+    fork_debug_id=$fork_id_current.$fork_debug_id
+  fi
+
+  show_trace_vars
+
+  if [[ "${pause_at_functions:-}" && " $pause_at_functions " == *" ${FUNCNAME[1]} "* ]]; then
+    local pause_response=
+    pause_qd "Reached ${struct_type:-}."
+  fi
+
+  if [[ "${debug_id:-}" && $debug_id != t ]] && reached_debug_id $debug_id; then
+    if [[ "${debug_debug:-}" == t ]]; then
+      log_debug_debug "debug_id matched: $debug_id" >&$fd_original_err
+    fi
+    #debug_ignore_remove ${FUNCNAME[*]:1:4}
+    if [[ "${debug_bisect_min:-}" ]]; then
+      local response new_bisect
+      if [[ "${bisect_test:-}" ]]; then
+        eval "$bisect_test"
+      fi
+      prompt_ynq "Debug bisect: Did the problem happen?" response
+      case $response in
+        y)
+          new_bisect=${debug_bisect_min}..${debug_id}
+        ;;
+        n)
+          new_bisect=$(( debug_id + 1 ))..${debug_bisect_max}
+        ;;
+        q)
+          exit 1
+        ;;
+      esac
+      debug_get_new_bisect
+      debug_restart_command=$new_command debug_exit=t debugging=
+      exit 100
+    else
+      debug_id=t
+      debug_start o
+    fi
+  elif [[ "${debug_quick_function:-}" && $debug_quick_function == ${FUNCNAME[1]} ]]; then
+    if [[ "${debug_debug:-}" == t ]]; then
+      log_debug_debug "debug_quick_function matched: $debug_quick_function" >&$fd_original_err
+      show_array FUNCNAME
+    fi
+    #debug_ignore_remove ${FUNCNAME[*]:1:4}
+    debug_function_old=$debug_quick_function
+    debug_quick_function=
+    debug_immediate=t
+    debug_start o
+  fi
+  (( no_trace_depth-- ))
+}
+
+trace_time_summarize() {
+  eval "exec $trace_time_fd>&-"
+  trace_time_fd=
+
+  if [[ ! "$trace_time_log" ]]; then
+    echo "Internal error: Missing trace_time_log" >&$fd_original_err
+    return 1
+  fi
+
+  echo "$NL$hbar_equals" >&$fd_original_err
+  echo "trace_time summary by function instance in chronological order:$NL" >&$fd_original_err
+  { echo "duration(µs) function id_start id_end"; sort -n -k3 $trace_time_log; } \
+    | field=0 format_number_stream | field=4 format_number_stream \
+    | column -t >&$fd_original_err
+
+#  echo "$NL$hbar_equals"
+#  echo "trace_time summary by function instance sorted by name:$NL"
+#  { echo "duration(µs) function id_start id_end"; sort -k2 $trace_time_log } \
+#    | field=0 format_number_stream | field=4 format_number_stream | column -t 
+#
+#  echo "$NL$hbar_equals"
+#  echo "trace_time summary by function instance sorted by time:$NL"
+#  { echo "duration(µs) function id_start id_end"; sort -n $trace_time_log } \
+#    | field=0 format_number_stream | field=4 format_number_stream | column -t 
+
+  echo "$NL$hbar_equals" >&$fd_original_err
+  echo "trace_time summary by function sorted by time:$NL" >&$fd_original_err
+  { echo "duration(µs) function executions"; sort -k2 $trace_time_log \
+    | awk '
+  BEGIN {
+    prev=""
+  }
+  prev != $2 {
+    if ( prev != "" && total > 0 ) print total " " prev " x" count
+    prev=$2
+    total=0
+    count=0
+  }
+  {
+    total+=$1
+    count+=1
+  }
+  END {
+    if ( prev != "" && total > 0 ) print total " " prev " x" count
+  }
+  ' | sort -n | field=0 format_number_stream | field=3 format_number_stream; } \
+  | column -t >&$fd_original_err
+
+}
+
+: ${trace_time:=f}
+
+alias timebox_open='
+  (( no_trace_depth++ ))
+  timebox_stack+=( $timebox )
+  trace_time_open
+  (( no_trace_depth-- ))
+'
+
+alias timebox_close='
+  (( no_trace_depth++ ))
+  trace_time_close
+  unset timebox_stack[-1]
+  timebox=${timebox_stack[-1]}
+  (( no_trace_depth-- ))
+'
+
+alias trace_time_open='
+  if [[ $trace_time == t ]]; then
+    if [[ ! ${trace_time_fd:-} ]]; then
+      : ${trace_time_log:=/tmp/trace_time.log}
+      [[ -e $trace_time_log ]] && rm $trace_time_log
+      exec {trace_time_fd}<>$trace_time_log
+    fi
+    trace_time_start=${EPOCHREALTIME/./}
+    trace_time_start_debug_id=$fork_debug_id
+  fi
+'
+
+alias trace_time_close='
+  if [[ $trace_time == t && "${trace_time_fd:-}" ]]; then
+    trace_time_stop=${EPOCHREALTIME/./}
+    (( time_dur = trace_time_stop - trace_time_start ))
+    echo "$time_dur $timebox $trace_time_start_debug_id $fork_debug_id" >&$trace_time_fd
+  fi
+'
+
+# The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
+alias begin_function_hi='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=2 repair_attempted=f current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
+  write_to_log_and_save 
+  (( log_depth_current++ ))
+  log_vars= log_show_vars=
+  trace_time_open
+  struct_type="start of $current_function" debug_id_inc
+  stack_debug_id[$stack_pos]=$fork_debug_id
+  while true; do
+  if [[ ${debug_step_to_hi_function:-f} == t ]]; then
+    debug_id=t
+    debug_start o
+  fi
+  (( no_trace_depth-- ))
+'
+
+# The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
+alias begin_function='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=1 repair_attempted=f current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
+  trace_time_open
+  struct_type="start of $current_function" debug_id_inc
+  stack_debug_id[$stack_pos]=$fork_debug_id
+  while true; do
+  if [[ ${debug_step_to_mid_function:-f} == t ]]; then
+    debug_id=t
+    debug_start o
+  fi
+  (( no_trace_depth-- ))
+'
+  
+# The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
+alias begin_function_lo='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=0 repair_attempted=f function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur
+  while true; do
+'
+
+alias end_function='
+  (( no_trace_depth++ ))
+  break
+  done
+  local log_return_vars=
+  if (( function_level > 0 )); then
+    stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
+    unset stack_debug_id[$stack_pos]
+    struct_type="end of $current_function" debug_id_inc
+  fi
+  (( no_trace_depth-- ))
+'
+
+alias handle_return='
+  (( no_trace_depth++ ))
+  case ${function_level:-0} in
+    2)
+      timebox=$FUNCNAME
+      trace_time_close
+      load_log_vars_and_write_to_log
+      (( log_depth_current-- ))
+    ;;
+    1)
+      timebox=$FUNCNAME
+      trace_time_close
+    ;;
+    0)
+      if (( no_trace_depth-- <= 1 )); then 
+        no_trace_depth=1
+      fi
+    ;;
+  esac
+  debug_return_vars=${log_return_vars:-}
+  (( no_trace_depth-- ))
+  return ${return_value:-0}
+'
+
+alias begin_while='break_out=f; while'
+alias   begin_for='break_out=f; for'
+alias  begin_loop='break_out=f; while true'
+alias   end_while='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
+alias     end_for='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
+alias    end_loop='done; struct_type=loop_end debug_id_inc; [[ $break_out == t ]] && break'
+
+# end_while or end_for or end_loop should usually be used instead of this.
+# This is helpful though if the done part needs to be separated from the break part
+alias maybe_break='debug_id_inc; [[ $break_out == t ]] && break'
+
+alias handle_exit='exit $return_value'
+
+# to avoid bash syntax parsing problems, and provide a hook for loop beginning
+alias         doo='do struct_type="loop iteration" debug_id_inc;'
+
+# This performs the same debug_id advancement that begin_function and others do,
+#   except unlike begin_function this may be placed anywhere within a function,
+#   providing a stopping point for debugging of larger blocks of code that otherwise
+#   can't be split up.
+alias fence='(( no_trace_depth++ )); debug_id_inc; (( no_trace_depth-- ))'
+
+# used after a direct command which may fail: cd /somewhere || fail
+alias fail='{ return_value=$?; attempt_autorepair $FUNCNAME && { repair_attempted=t; continue; }; break_out=t; break; }'
+alias fail_later='{ return_value=$?; break_out=t; }'
+alias fail_later1='{ return_value=1; break_out=t; }'
+# used as a standalone command triggering the failed state and exiting the block
+alias fail1='{ return_value=1; attempt_autorepair $FUNCNAME && { repair_attempted=t; continue; }; break_out=t; break; }'
+alias fail2='{ return_value=2; attempt_autorepair $FUNCNAME && { repair_attempted=t; continue; }; break_out=t; break; }'
+
+# used to check if something failed: failed && break
+alias failed='[[ $return_value -gt 0 ]]'
+alias succeed='{ return_value=0; break_out=t; break; }'
+alias succeeded='[[ $return_value -eq 0 ]]'
+alias handle_break='[[ $break_out == t ]] && break'
+
+reply_to_caller() {
+  if [[ "${reply_file:-}" ]]; then
+    echo "$*" >>$reply_file || return 1
+  fi
+  return 0
+}
+
+attempt_autorepair() {
+  local repair_successful=f func_name=$1
+
+  if [[ "${debug_quick_function:-}" == fail ]]; then
+    debug_start
+  fi
+
+  if [[ $autorepair_level > 0 && ${repair_attempted:-f} == f ]] \
+    && declare -pf repair_$func_name &>/dev/null
+    then
+    log_debug "Attempting auto-repair of $func_name"
+    repair_$func_name
+
+    if [[ $repair_successful == t ]]; then
+      log_debug "Autorepair of $func_name successful."
+      return_value=0 break_out=f
+    else
+      log_debug "Autorepair of $func_name failed."
+    fi
+
+  fi
+
+  [[ $repair_successful == t ]]
 }
 
