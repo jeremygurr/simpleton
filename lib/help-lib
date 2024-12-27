@@ -12,7 +12,7 @@ show_help_for_command() {
     if [[ -f $path_to_commands/$command.info ]]; then
       source $path_to_commands/$command.info || fail
       indent=2 out_wrap "$command_description"
-      local name description default default_string choices_string i choices
+      local name description default default_string choices_string i choices aliases dq
       local types=command
       if (( help_depth > 1 )); then
         types='command global'
@@ -23,6 +23,8 @@ show_help_for_command() {
         local -n parameter_descriptions=parameter_descriptions_$type
         local -n parameter_choices=parameter_choices_$type
         local -n parameter_defaults=parameter_defaults_$type
+        local -n parameter_aliases=parameter_aliases_$type
+        local -n parameter_delay_questions=parameter_delay_questions_$type
 
         if [[ "${parameter_names:-}" ]]; then
           out "$NL$WHITE${type^} Parameters:$RESET"
@@ -30,6 +32,15 @@ show_help_for_command() {
         begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
           parameter="${parameter_names[$i]}"
           description="${parameter_descriptions[$i]}"
+          aliases="${parameter_aliases[$i]}"
+          dq=${parameter_delay_questions[$i]}
+          if [[ $dq == t ]]; then
+            local best_alias=$parameter
+            if [[ "$aliases" ]]; then
+              best_alias=${aliases%% *}
+            fi
+            description+="  Use $best_alias=? to see a list of valid values."
+          fi
           choices="${parameter_choices[$i]}"
           trim_ws description
           default="${parameter_defaults[$i]}"
@@ -37,6 +48,7 @@ show_help_for_command() {
           choices_string=
           [[ "$choices" ]] && choices_string="$NL    choices: $choices"
           [[ "$default" ]] && default_string="$NL    default: $default"
+          [[ "$aliases" ]] && default_string="$NL    aliases: $aliases"
           out "  $parameter: $description$choices_string$default_string"
         end_for
       end_for
