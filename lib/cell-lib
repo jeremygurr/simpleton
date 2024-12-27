@@ -3057,11 +3057,11 @@ execute_command() {
 
     command_history+="$cell_command $short_cell "
 
-    local command_function=${cell_command//-/_}_command
-    if function_exists $command_function; then
-      $command_function || fail
+    local cell_command_function=${cell_command//-/_}_command
+    if function_exists $cell_command_function; then
+      $cell_command_function || fail
     else
-      log_fatal "Missing command function $command_function which should be in $command_path"
+      log_fatal "Missing command function $cell_command_function which should be in $cell_command_path"
       fail1
     fi
 
@@ -3092,10 +3092,10 @@ substitute_command_alias() {
   begin_function
     local alias_command parameters
     for (( i = 0; i < ${#command_aliases[*]}; i++ )); do
-      if [[ "${command_aliases[$i]}" == "$command" ]]; then
+      if [[ "${command_aliases[$i]}" == "$cell_command" ]]; then
         alias_command=${command_alias_command[$i]}
-        command=${alias_command%% *}
-        parameters=${alias_command#$command }
+        cell_command=${alias_command%% *}
+        parameters=${alias_command#$cell_command }
         update_original_cmd=f parameters_to_env $parameters
         succeed
       fi
@@ -3109,8 +3109,8 @@ substitute_command_alias() {
 #   $2... commands
 execute_commands() {
   local cell_path=$1; shift
-  local commands=( $* ) command
-  local log_show_vars=commands
+  local cell_commands=( $* ) cell_command
+  local log_show_vars=cell_commands
   begin_function_hi
 
     if [[ "$pause_at_cells" ]]; then
@@ -3147,22 +3147,22 @@ execute_commands() {
     eval "local $branch_local_vars" || fail
     execute_commands_prep || fail
 
-    begin_for command in ${commands[*]}; doo
+    begin_for cell_command in ${cell_commands[*]}; doo
 
       substitute_command_alias || fail
 
-      local command_path=$path_to_commands/$command
+      local cell_command_path=$path_to_commands/$cell_command
 
-      if [[ -e $command_path.info ]]; then
-        source $command_path.info || fail
+      if [[ -e $cell_command_path.info ]]; then
+        source $cell_command_path.info || fail
       else
-        log_warn "Missing file $command_path.info" || fail
+        log_warn "Missing file $cell_command_path.info" || fail
       fi
 
-      if [[ -e $command_path ]]; then
-        source $command_path || fail
+      if [[ -e $cell_command_path ]]; then
+        source $cell_command_path || fail
       else
-        log_fatal "Internal error: Missing $command command in $command_path"
+        log_fatal "Internal error: Missing $cell_command command in $cell_command_path"
         fail1
       fi
 
@@ -3170,7 +3170,7 @@ execute_commands() {
         show_parameters_help || fail
       else
 
-        execute_command $cell_path $command || fail
+        execute_command $cell_path $cell_command || fail
 
       fi
 
@@ -3206,10 +3206,10 @@ fork_inside() {
     setup_exit_trap
 
     if [[ "$to_var" ]]; then
-      eval "$to_var=\$($command)"; return_code=$?
+      eval "$to_var=\$($fork_command)"; return_code=$?
       reply_to_caller "$to_var='${!to_var}'" || fail
     else
-      eval "$command"; return_code=$?
+      eval "$fork_command"; return_code=$?
     fi
 
     if [[ $change_log2 == t ]]; then
@@ -3280,7 +3280,7 @@ get_new_reply_file() {
 #  change_log=f (whether to change the log)
 #  to_var       (write output to the given var instead of stdout)
 fork() {
-  local command=$*
+  local fork_command=$*
   begin_function
     local reply_file return_code=0 \
       background=${background:-f} \
