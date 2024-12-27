@@ -72,8 +72,10 @@ handle_flag() {
 
 show_usage() {
   begin_function
+    local indent=${indent:-0}
     out "Usage: ${0##*/} ({cells..} {commands..}).."
 
+    (( indent += 2 ))
     local d=
     d+="Parameters are cells followed by commands to be run on those cells. "
     d+="Any number of cell/command combinations can be given, which will be executed sequentially. "
@@ -89,34 +91,40 @@ show_usage() {
     d+="-? can be used to get documentation for flags which are shortcuts of normal key parameters. "
     d+="$NL$NL"
     d+="Use \`cell . help\` to see help specific to the current cell (you can replace . with any cell name also)."
-    echo "$d" | fold -s -w $((COLUMNS-2)) | indent
+    echo "$d" | fold -s -w $((COLUMNS-2)) | indent $indent
 
+    (( indent -= 2 ))
     out "${NL}Possible Commands:"
+    (( indent += 2 ))
     local command_info command_name infos
     infos=$(find1 $path_to_commands -name '*.info' -not -name 'all.info' | sort -g) || fail
-    begin_for command_info in $infos; doo
-      command_name=${command_info%.info}
-      command_name=${command_name##*/}
-      source $command_info || fail
-      if [[ "$command_description" ]]; then
-        local short_desc=$command_description
-        trim_ws short_desc
-        short_desc=${short_desc%%$NL*}
-        out "  $command_name $COL20$short_desc"
-      else
-        out "  $command_name ${COL20}Please add a description to this command in $cell_command"
-      fi
-    end_for
+    {
+      begin_for command_info in $infos; doo
+        command_name=${command_info%.info}
+        command_name=${command_name##*/}
+        source $command_info || fail
+        if [[ "$command_description" ]]; then
+          local short_desc=$command_description
+          trim_ws short_desc
+          short_desc=${short_desc%%$NL*}
+          echo "$command_name $short_desc"
+        else
+          echo "$command_name Please add a description to this command in $cell_command"
+        fi
+      end_for
+    } | column -l 2 -t | indent $indent
 
     if [[ "${command_aliases:-}" ]]; then
       local i
+      (( indent -= 2 ))
       out "${NL}Command aliases (may be used as shortcuts of the given commands):"
+      (( indent += 2 ))
       {
-        out "ALIAS SUBSTITUTED-FOR"
+        echo "ALIAS SUBSTITUTED-FOR"
         begin_for (( i = 0; i < ${#command_aliases[*]}; i++ )); doo
-          out "${command_aliases[$i]} ${command_alias_command[$i]}"
+          echo "${command_aliases[$i]} ${command_alias_command[$i]}"
         end_for
-      } | column -l 2 -t | indent
+      } | column -l 2 -t | indent $indent
     fi
 
   end_function
