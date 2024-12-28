@@ -248,30 +248,18 @@ handle_cell() {
       fail1
       }
 
-    if [[ ! -d $cell_path/.dna ]]; then
-      if [[ $recursive_command == t ]]; then
-        local folder folders
-        folders=$(find1 $cell_path -type d -not -name '.*') || fail
-        begin_for folder in $folders; doo
-          handle_cell $folder || fail
-        end_for
+    if (( ${#commands[*]} > 0 )); then
+      if [[ $multi_cell == f ]]; then
+        execute_commands $cell_path ${commands[*]} || fail
       else
-        log_verbose "Skipping $cell_path because it is not a cell"
+        fork execute_commands $cell_path ${commands[*]} || fail
       fi
-    else # a valid cell
-      if (( ${#commands[*]} > 0 )); then
-        if [[ $multi_cell == f ]]; then
-          execute_commands $cell_path ${commands[*]} || fail
-        else
-          fork execute_commands $cell_path ${commands[*]} || fail
-        fi
-      elif [[ ! "${parameter_questions:-}" ]]; then
-        show_cell_help $cell_path || fail
-      else # parameter_questions
-        show_parameters_help || fail
-      fi
-      first_cell=f
+    elif [[ ! "${parameter_questions:-}" ]]; then
+      show_cell_help $cell_path || fail
+    else # parameter_questions
+      show_parameters_help || fail
     fi
+    first_cell=f
 
   end_function
   handle_return
@@ -296,10 +284,7 @@ top_level() {
       multi_cell=f \
       multi_commands=f \
       clean_cells=${clean_cells:-${clean_cell:-${clean:-}}} \
-
-    #if [[ "$clean_cells" ]]; then
-    #  clean_cells=" ${clean_cells} "
-    #fi
+      recursive_command=${recursive_command:-${recursive:-f}} \
 
     reset_flags
     get_help_depth_and_flags || fail

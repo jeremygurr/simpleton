@@ -3026,23 +3026,7 @@ execute_commands() {
       done
     fi
 
-    local anchor_dims=${anchor_dims:-} \
-      disable_log=${disable_log:-} \
-      logging_to_file=${logging_to_file:-} \
-      omni_log_job_id=${omni_log_job_id:-} \
-      omni_log_fork_id=${omni_log_fork_id:-} \
-      previous_fork_id=${previous_fork_id:-} \
-      job_path=${job_path:-} \
-      log_path=${log_path:-} \
-      current_job_path=${current_job_path:-} \
-      job_start_time \
-      background_log \
-      running_job_path \
-      recursive_command=${recursive_command:-${recursive:-f}} \
-      short_cell \
-      top_level_command=${top_level_command_next:-t} \
-      command_allows_logs=f \
-      command_requires_cell=t \
+    local top_level_command=${top_level_command_next:-t}
 
     # so top_level_command is set to t throughout this function, yet if it's called again, it will
     #   be set to f
@@ -3055,7 +3039,9 @@ execute_commands() {
 
       substitute_command_alias || fail
 
-      local cell_command_path=$path_to_commands/$cell_command
+      local cell_command_path=$path_to_commands/$cell_command \
+        command_allows_logs=f \
+        command_requires_cell=f \
 
       if [[ -e $cell_command_path.info ]]; then
         source $cell_command_path.info || fail
@@ -3063,20 +3049,40 @@ execute_commands() {
         log_warn "Missing file $cell_command_path.info" || fail
       fi
 
-      if [[ -e $cell_command_path ]]; then
-        source $cell_command_path || fail
+      if [[ ! -d $cell_path/.dna && $command_requires_cell == t ]]; then
+
+        if [[ $recursive_command == t ]]; then
+          local folder folders
+          folders=$(find1 $cell_path -type d -not -name '.*') || fail
+          begin_for folder in $folders; doo
+            execute_commands $folder ${cell_commands[*]} || fail
+          end_for
+        else
+          if [[ $top_level_command == t ]]; then
+            log_warn "Skipping $cell_path because it is not a cell"
+          else
+            log_verbose "Skipping $cell_path because it is not a cell"
+          fi
+        fi
+
       else
-        log_fatal "Internal error: Missing $cell_command command in $cell_command_path"
-        fail1
-      fi
 
-      local showed_parameter_help=f
-      if [[ "${parameter_questions:-}" ]]; then
-        show_parameters_help || fail
-      fi
+        if [[ -e $cell_command_path ]]; then
+          source $cell_command_path || fail
+        else
+          log_fatal "Internal error: Missing $cell_command command in $cell_command_path"
+          fail1
+        fi
 
-      if [[ $showed_parameter_help == f ]]; then
-        execute_command $cell_path $cell_command || fail
+        local showed_parameter_help=f
+        if [[ "${parameter_questions:-}" ]]; then
+          show_parameters_help || fail
+        fi
+
+        if [[ $showed_parameter_help == f ]]; then
+          execute_command $cell_path $cell_command || fail
+        fi
+
       fi
 
     end_for
