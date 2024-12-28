@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+output_status() {
+  begin_function
+    local indent=${indent:-0} show_header=t
+
+    out "Cell: $short_cell"
+    (( indent += 2 ))
+    begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
+      local dim_var=${trunk_dims[$i]}
+      local -n dim=d_$dim_var
+      local pretty_function_name=trunk_dims_${dim_var}_pretty
+      if function_exists $pretty_function_name; then
+        eval "$pretty_function_name $dim_var" || fail
+        pretty_form=" ($value)"
+      else
+        pretty_form=
+      fi
+      local value=${dim:-}
+      if [[ "${value:-}" ]]; then
+        if [[ $show_header == t ]]; then
+          indent=$((indent-2)) out "${NL}Branch dimensions:"
+          show_header=f
+        fi
+        if [[ "$value" == $empty_member ]]; then
+          value='(empty)'
+        fi
+        out "$dim_var=$value$pretty_form"
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+status_command() {
+  begin_function
+
+    local cell_path=${cell_path:-}
+
+    switch_context $cell_path || {
+      log_fatal "Context failed to load for $short_cell"
+      fail1
+    }
+    setup_dims || fail
+    calc_coords || fail
+
+    if function_exists get_status; then
+      execute_op status || fail
+    else
+      output_status || fail
+    fi
+
+    command_successful=t
+
+  end_function
+  handle_return
+}
+
