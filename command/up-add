@@ -5,7 +5,9 @@ up_add_command() {
 
     local choices=${choices:-${choice:-}} name=${name:-}
 
-    setup_cell_path_vars $cell_path || fail
+    load_branch_info || fail
+    find_seed_path $cell_path || fail
+    local dna_path=$cell_path/.dna
 
     if [[ ! "$choices" ]]; then
       log_fatal "You must specify which cells to provide as choices with the choices var"
@@ -19,9 +21,13 @@ up_add_command() {
         fail1
       fi
       choices=${choices%/}
-      before=${choices%/*/*/*}
-      name=${choices#$before/}
+      name=${choices#/*/*/}
       name=${name//\//-}
+    fi
+
+    local multiple_choices=f
+    if [[ "$choices" == *\ * ]]; then
+      multiple_choices=t
     fi
 
     local upstream=$dna_path/up/$name
@@ -31,19 +37,31 @@ up_add_command() {
       fail1
     fi
 
-    mkdir -p $upstream/choices || fail
+    if [[ $multiple_choices == t ]]; then
 
-    begin_for choice in $choices; doo
-      choice=$(realpath $choice)
+      mkdir -p $upstream/choices || fail
+
+      begin_for choice in $choices; doo
+        choice=$(realpath $choice)
+        if [[ ! -d $choice/.dna ]]; then
+          log_fatal "$choice doesn't exist or is not a cell"
+          fail1
+        fi
+        before=${choice%/*/*/*}
+        local target=${choice#$before/}
+        target=${target//\//-}
+        safe_link $choice $upstream/choices/$target || fail
+      end_for
+
+    else
+      mkdir -p ${upstream%/*} || fail
+      choice=$(realpath $choices)
       if [[ ! -d $choice/.dna ]]; then
         log_fatal "$choice doesn't exist or is not a cell"
         fail1
       fi
-      before=${choice%/*/*/*}
-      local target=${choice#$before/}
-      target=${target//\//-}
-      safe_link $choice $upstream/choices/$target || fail
-    end_for
+      safe_link $choice $upstream || fail
+    fi
 
     command_successful=t
 
