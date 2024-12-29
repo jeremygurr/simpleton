@@ -186,6 +186,80 @@ show_dimensions() {
   handle_return
 }
 
+show_upstream_single() {
+  local up_name=$1 choice_path=$2
+  begin_function
+    out "$up_name: $choice_path"
+    if (( help_depth > 1 )); then
+      # recursive
+      fork show_upstream_recursive $choice_path || fail
+    fi
+  end_function
+  handle_return
+}
+
+show_upstream_multi() {
+  begin_function
+    out "$up_name: "
+    (( indent+=2 ))
+    for choice_name in ${choices[*]}; do
+      extract_simple_name choice_name o choice_name
+      local choice_var=${choice_name//-/_}
+      local -n choice_path=up_${up_var}_choices_${choice_var}_path
+      out "Choice $choice_name: $choice_path"
+      if (( help_depth > 1 )); then
+        # recursive
+        fork show_upstream_recursive $choice_path || fail
+      fi
+    done
+    (( indent-=2 ))
+  end_function
+  handle_return
+}
+
+show_upstreams() {
+  begin_function
+    local up_name
+    begin_for up_name in ${up[*]}; doo
+      local up_var=${up_name//-/_}
+      local -n choices=up_${up_var}_choices
+      if [[ -v choices ]]; then
+        local choice_name
+        if (( ${#choices[*]} == 1 )); then
+          choice_name=${choices[0]}
+          local choice_var=${choice_name//-/_}
+          local -n choice_path=up_${up_var}_choices_${choice_var}_path
+          show_upstream_single $up_name $choice_path || fail
+        else
+          show_upstream_multi || fail
+        fi
+      else
+        local choice_name=$up_name
+        local -n choice_path=up_${up_var}_path
+        show_upstream_single $up_name $choice_path || fail
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+show_upstream_recursive() {
+  local cell_path=$1
+  begin_function
+    load_branch_info || fail
+
+    command_requires_cell=t \
+    trunk_changed=f \
+    command_allows_logs=f \
+    switch_context $cell_path || fail
+
+    (( indent+=2 ))
+    show_upstreams || fail
+    (( indent-=2 ))
+  end_function
+  handle_return
+}
+
 show_cell_help() {
   local cell_path=$1
   begin_function
@@ -237,6 +311,11 @@ show_cell_help() {
 
     if [[ "${required:-}" ]]; then
       indent=$((indent-2)) out "${NL}Required parameters: ${required[*]}"
+    fi
+
+    if [[ "${up:-}" ]]; then
+      indent=$((indent-2)) out "${NL}Upstream cell dependencies:"
+      show_upstreams || fail
     fi
 
 #    if [[ "${trunk_dims:-}" ]]; then
