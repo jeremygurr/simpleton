@@ -348,6 +348,32 @@ get_command_output() {
   handle_return
 }
 
+get_command_load_data_member() {
+  begin_function
+
+    local prefix_dim=${prefix_dim:-} \
+      prefix_member=${prefix_member:-} \
+
+    prefix_dim+="$dim "
+    local q=$member
+    quotes=single shell_quote_var q || fail
+    prefix_member+="$q "
+    local sane_value
+    get_sane_value "$member" || fail
+    local cell_path=$parent_cell/$dim:$sane_value
+    if [[ ! -d "$cell_path" ]]; then
+      succeed
+    fi
+
+    load_branch_info || fail
+    switch_context $cell_path || fail
+
+    get_command_load_data || fail
+
+  end_function
+  handle_return
+}
+
 get_command_load_data() {
   begin_function
 
@@ -355,22 +381,6 @@ get_command_load_data() {
       prefix_member=${prefix_member:-} \
       original_anchor_dims=$anchor_dims \
       original_cell_path=$cell_path \
-
-    if [[ "${member:-}" ]]; then
-      prefix_dim+="$dim "
-      local q=$member
-      quotes=single shell_quote_var q || fail
-      prefix_member+="$q "
-      local sane_value
-      get_sane_value "$member" || fail
-      local cell_path=$parent_cell/$dim:$sane_value
-      if [[ ! -d "$cell_path" ]]; then
-        succeed
-      fi
-      load_branch_info || fail
-      anchor_dims=
-      switch_context $cell_path || fail
-    fi
 
     if [[ $cell_is_leaf == t ]]; then
 
@@ -405,18 +415,21 @@ get_command_load_data() {
       fi
 
     else
+
       par=f fork=f \
-      function=get_command_load_data \
+      function=get_command_load_data_member \
       parent_cell=$cell_path \
       anchor_dims= \
       get_members_from=existing_branches \
       for_each_member $child_dims || fail
-    fi
 
-    cell_path=$original_cell_path
-    load_branch_info || fail
-    anchor_dims=$original_anchor_dims
-    switch_context $cell_path || fail
+      # Is this really needed?
+      cell_path=$original_cell_path
+      #load_branch_info || fail
+      #anchor_dims=$original_anchor_dims
+      #switch_context $cell_path || fail
+
+    fi
 
   end_function
   handle_return
