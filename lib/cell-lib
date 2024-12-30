@@ -48,12 +48,9 @@ cell_lib_init() {
   downstream_cell_stack=( ) 
   disable_log=${disable_log:-}
   #export debug_ignore+="
-  #  apad
   #  cell_close_log_file
   #  cell_open_log_file
   #  change_log_file
-  #  debug_id_inc
-  #  debug_start
   #  defer
   #  fd_unlock
   #  fd_write_lock
@@ -1622,6 +1619,99 @@ fetch_values_from_coordinates() {
   handle_return
 }
 
+# inputs:
+#   $1   cell path to search for branches
+#   dim  dimension to gather members of
+get_members_from_branches() {
+  local cell_path=$cell_path dim=$dim
+  begin_function
+    local branch_folders folder value
+    branch_folders=$(find1 $cell_path -name "$dim:*" -type d) || fail
+    values=()
+    for folder in ${branch_folders}; do
+      local member_var_path=$folder/.member
+      if [[ -f $member_var_path ]]; then
+        value=$(<$member_var_path) || fail
+      else
+        value=${folder#*:}
+      fi
+      values+=( "$value" )
+    done
+  end_function
+  handle_return
+}
+
+# 'value' is the loop var
+parallel_loop() {
+  local loop_over_var2=$loop_over_var head2=${head:-} \
+    body2=$body tail2=${tail:-} \
+    par2=$par fork2=$fork \
+    array 
+
+  local log_show_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
+  begin_function_lo
+
+    # Make sure these variables don't get passed into inner loops
+    local loop_over_var= head= body= tail= par= fork=
+    local -n array=$loop_over_var2
+
+    if [[ ! -v array ]]; then
+      log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
+      fail1
+    fi
+
+    local parallel=f
+    if [[ ${#array[*]} -gt 1 && $parallel_execution == t && $par2 == t ]]; then
+      parallel=t
+      wait_for_low_load || fail
+    fi
+
+    local processes= value
+    leave_loop=0
+
+    local extra
+    if [[ $parallel == t ]]; then
+      extra=" in parallel"
+    else
+      extra=" sequentially"
+    fi
+
+    local size=${#array[*]}
+    if (( size > 1 )); then
+      log_debug "Looping over $size values$extra. body: $body2" || fail
+    fi
+
+    begin_for value in "${array[@]}"; doo
+
+      log_debug "Current iteration value=$value" || fail
+
+      if [[ "$head2" ]]; then
+        eval "$head2" || fail
+      fi
+
+      if [[ $parallel == t ]]; then
+        fork_bg "$body2" 
+        processes+=" $!"
+      else
+        if [[ $fork2 == t ]]; then
+          fork_fg "$body2" || fail
+        else
+          eval "$body2" || fail
+        fi
+      fi
+
+      if [[ "$tail2" ]]; then
+        eval "$tail2" || fail
+      fi
+
+    end_for
+
+    wait_for_sub_processes || fail
+
+  end_function
+  handle_return
+}
+
 # input: 
 #   $1=dim
 #   function=function to execute for each member
@@ -1632,15 +1722,27 @@ for_each_member() {
     function=$function leave_loop=${leave_loop:-0} \
     fork=${fork:-t} \
     par=${par:-t} \
-    cell_path=${cell_path:-}
+    get_members_from=${get_members_from:-coords} \
+    cell_path=${cell_path:-} \
 
   member_count=0
   local log_vars='fork par' \
     log_show_vars='dim function'
   begin_function
 
-    coord_type=branch \
-    fetch_values_from_coordinates $dim || fail
+    case $get_members_from in
+      coords)
+        coord_type=branch \
+        fetch_values_from_coordinates $dim || fail
+      ;;
+      existing_branches)
+        get_members_from_branches || fail
+      ;;
+      *)
+        log_fatal "Internal error: invalid get_members_from value: $get_members_from"
+        fail1
+      ;; 
+    esac
 
     member_count=${#values[*]}
 
@@ -2585,13 +2687,17 @@ calc_coords() {
     if [[ ! "${branch_coordinate_count:-}" ]]; then
       coord_type=branch \
       calc_coordinates || fail
-      handle_missing_dims || fail
+      if [[ $command_requires_resolved_dims == t ]]; then
+        handle_missing_dims || fail
+      fi
     fi
 
     if [[ $cell_is_leaf == t && ! "${leaf_coordinate_count:-}" ]]; then
       coord_type=leaf \
       calc_coordinates || fail
-      handle_missing_dims || fail
+      if [[ $command_requires_resolved_dims == t ]]; then
+        handle_missing_dims || fail
+      fi
     fi
 
   end_function
@@ -3069,6 +3175,7 @@ execute_commands() {
       local cell_command_path=$path_to_commands/$cell_command \
         command_allows_logs=f \
         command_requires_cell=f \
+        command_requires_resolved_dims=f \
 
       if [[ -e $cell_command_path.info ]]; then
         source $cell_command_path.info || fail
@@ -3332,77 +3439,6 @@ wait_for_sub_processes() {
       fi
       processes=
     fi
-  end_function
-  handle_return
-}
-
-# 'value' is the loop var
-parallel_loop() {
-  local loop_over_var2=$loop_over_var head2=${head:-} \
-    body2=$body tail2=${tail:-} \
-    par2=$par fork2=$fork \
-    array 
-
-  # Make sure these variables don't get passed into inner loops
-  local loop_over_var= head= body= tail= par= fork=
-
-  local log_show_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
-  begin_function_lo
-
-    if [[ ! -v $loop_over_var2 ]]; then
-      log_fatal "Internal error: Variable doesn't exist: $loop_over_var2"
-      fail1
-    fi
-
-    eval "array=( \"\${$loop_over_var2[@]}\" )"
-    local parallel=f
-    if [[ ${#array[*]} -gt 1 && $parallel_execution == t && $par2 == t ]]; then
-      parallel=t
-      wait_for_low_load || fail
-    fi
-
-    local processes= value
-    leave_loop=0
-
-    local extra
-    if [[ $parallel == t ]]; then
-      extra=" in parallel"
-    else
-      extra=" sequentially"
-    fi
-
-    local size=${#array[*]}
-    if (( size > 1 )); then
-      log_debug "Looping over $size values$extra. body: $body2" || fail
-    fi
-
-    begin_for value in "${array[@]}"; doo
-
-      log_debug "Current iteration value=$value" || fail
-
-      if [[ "$head2" ]]; then
-        eval "$head2" || fail
-      fi
-
-      if [[ $parallel == t ]]; then
-        fork_bg "$body2" 
-        processes+=" $!"
-      else
-        if [[ $fork2 == t ]]; then
-          fork_fg "$body2" || fail
-        else
-          eval "$body2" || fail
-        fi
-      fi
-
-      if [[ "$tail2" ]]; then
-        eval "$tail2" || fail
-      fi
-
-    end_for
-
-    wait_for_sub_processes || fail
-
   end_function
   handle_return
 }
