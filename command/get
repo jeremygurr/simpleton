@@ -386,7 +386,8 @@ get_command_output() {
 }
 
 get_command_load_data_member() {
-  begin_function
+  local log_show_vars='dim member'
+  begin_function_hi
 
     local prefix_dim=${prefix_dim:-} \
       prefix_member=${prefix_member:-} \
@@ -524,6 +525,35 @@ fields_get_choices() {
   choices=( ${output_fields[*]} )
 }
 
+get_command_handle_questions() {
+  begin_function
+    local -n parameter_names=parameter_names_command \
+      parameter_defaults=parameter_defaults_command \
+
+    local pq
+    begin_for pq in $parameter_questions; doo
+      case $pq in
+        out_fields|fields|field)
+          out_fields_choices=${table_fields[*]}
+
+          local i
+          begin_for i in ${!parameter_names[*]}; doo
+            if [[ out_fields == "${parameter_names[$i]}" ]]; then
+              parameter_defaults[$i]=$out_fields
+            fi
+          end_for
+
+          show_parameter_help_single out_fields || fail
+        ;;
+        *)
+          show_parameter_help_single $pq || fail
+        ;;
+      esac
+    end_for
+  end_function
+  handle_return
+}
+
 default_out_fields=
 get_command() {
   begin_function
@@ -558,29 +588,7 @@ get_command() {
       get_command_load_data || fail
 
       if [[ "${parameter_questions:-}" ]]; then
-        local -n parameter_names=parameter_names_command \
-          parameter_defaults=parameter_defaults_command \
-
-        local pq
-        begin_for pq in $parameter_questions; doo
-          case $pq in
-            out_fields|fields|field)
-              out_fields_choices=${table_fields[*]}
-
-              local i
-              begin_for i in ${!parameter_names[*]}; doo
-                if [[ out_fields == "${parameter_names[$i]}" ]]; then
-                  parameter_defaults[$i]=$out_fields
-                fi
-              end_for
-
-              show_parameter_help_single out_fields || fail
-            ;;
-            *)
-              show_parameter_help_single $pq || fail
-            ;;
-          esac
-        end_for
+        get_command_handle_questions || fail
         command_successful=t
         succeed
       fi
