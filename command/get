@@ -354,11 +354,13 @@ get_command_load_data_member() {
     local prefix_dim=${prefix_dim:-} \
       prefix_member=${prefix_member:-} \
       child_dims=${child_dims:-} \
+    local child_dims=${child_dims:-}
 
     prefix_dim+="$dim "
     local q=$member
     quotes=single shell_quote_var q || fail
     prefix_member+="$q "
+
     local sane_value
     get_sane_value "$member" || fail
     local cell_path=$parent_cell/$dim:$sane_value
@@ -407,10 +409,10 @@ get_command_load_data_leaf() {
       local d i
 
       if (( ${#table_fields[*]} == 0 )); then
-        table_fields=( $prefix_dim "${output_fields[@]}" )
+        table_fields=( ${trunk_dims[*]} ${output_fields[*]} )
       else
         i=0
-        begin_for d in $prefix_dim "${output_fields[@]}" ; doo
+        begin_for d in ${trunk_dims[*]} ${output_fields[@]}; doo
           if [[ -v table_fields[$i] && "${table_fields[$i]}" != "$d" ]]; then
             log_fatal "Different data columns across cells not supported yet"
             fail1
@@ -419,12 +421,20 @@ get_command_load_data_leaf() {
         end_for
       fi
 
-      local row \
+      convert_coords_to_dims || fail
+      local row dim \
         field_count=${#output_fields[*]} data_count=${#output_data[*]}
       local row_count=$((data_count/field_count)) start
       for (( row = 0; row < row_count; row++ )); do
         if [[ "$prefix_member" ]]; then
-          table_data+=( "${prefix_member% }" )
+          for dim in ${trunk_dims[*]}; do
+            local -n trunk_member=d_$dim
+            if [[ -v trunk_member ]]; then
+              table_data+=( "${trunk_member}" )
+            else
+              table_data+=( "(unset)" )
+            fi
+          done
         fi
         (( start = row * field_count ))
         table_data+=( "${output_data[@]:$start:$field_count}" )
