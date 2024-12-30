@@ -846,6 +846,21 @@ prep_dims() {
   handle_return
 }
 
+get_plural() {
+  local dim=$1
+  local target_var=${2:-plural}
+  local -n target=$target_var
+  if [[ $dim == *s ]]; then
+    target=${dim}es
+  elif [[ $dim == *y ]]; then
+    target=${dim%y}ies
+  else
+    target=${dim}s
+  fi
+  debug_return_vars=$target_var
+  return 0
+}
+
 # expands aliases for the known dims array
 # collapses singular and plural dims into plural dims
 expand_dims() {
@@ -2245,21 +2260,6 @@ make_cyto_up() {
   handle_return
 }
 
-get_plural() {
-  local dim=$1
-  local target_var=${2:-plural}
-  local -n target=$target_var
-  if [[ $dim == *s ]]; then
-    target=${dim}es
-  elif [[ $dim == *y ]]; then
-    target=${dim%y}ies
-  else
-    target=${dim}s
-  fi
-  debug_return_vars=$target_var
-  return 0
-}
-
 # inputs:
 #   $*           members to expand
 # outputs:
@@ -2555,6 +2555,11 @@ calc_coordinates_add_row() {
     local i new_coords=()
     for (( i = 0; i < coordinate_fields_count; i++ )); do
       local -n dim_value=d_${coordinate_fields[$i]}
+      if [[ "${dim_value:-}" == \$* ]]; then
+        # lets keep an eye on this for now
+        log_fatal "Internal error: bad dim_value"
+        debug_start
+      fi
       coordinate_data+=( "$dim_value" )
       new_coords+=( "$dim_value" )
     done
@@ -4206,18 +4211,18 @@ execute_auto_load_check_row() {
         continue # try next field, since this one matches
       fi
 
-      local -n dim=d_$field
-      local -n var=$field
-      local actual_value=
-      if [[ -v dim && "$dim" ]]; then
-        actual_value=$dim
-      #  we want to force only d_dims to be matched, all conversion to d_dims should have already happened
-      #elif [[ -v var && "$var" ]]; then
-      #  actual_value=$var
-      fi
+      local fields
+      get_plural $field fields
 
-      if [[ "$actual_value" && "$actual_value" != all \
-         && "$actual_value" != "$expected_value" ]]; then
+      local -n dim=d_$field \
+               dims=d_$fields \
+
+      if [[ "${dim:-}" && "$dim" != all \
+         && "$dim" != "$expected_value" ]]; then
+        row_is_valid=f
+        break
+      elif [[ "${dims:-}" && "$dims" != all \
+           && " $dims " != *" $expected_value "* ]]; then
         row_is_valid=f
         break
       fi
