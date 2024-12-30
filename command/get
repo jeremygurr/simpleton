@@ -375,6 +375,75 @@ get_command_load_data_member() {
   handle_return
 }
 
+get_command_load_data_branch() {
+  begin_function
+    par=f fork=f \
+    function=get_command_load_data_member \
+    parent_cell=$cell_path \
+    anchor_dims= \
+    get_members_from=existing_branches \
+    for_each_member $child_dims || fail
+
+    if [[ $used_default_fields == t ]]; then
+      out_fields="$child_dims $out_fields"
+    fi
+
+    # Is this really needed?
+    cell_path=$original_cell_path
+    #load_branch_info || fail
+    #anchor_dims=$original_anchor_dims
+    #switch_context $cell_path || fail
+  end_function
+  handle_return
+}
+
+get_command_load_data_leaf() {
+  begin_function
+
+    if [[ -f $out_path/output.tab ]]; then
+
+      local context_type= output_table output_fields
+      load_dna_item $out_path/output.tab || fail
+      local d i
+
+      if (( ${#table_fields[*]} == 0 )); then
+        table_fields=( $prefix_dim "${output_fields[@]}" )
+      else
+        i=0
+        begin_for d in $prefix_dim "${output_fields[@]}" ; doo
+          if [[ -v table_fields[$i] && "${table_fields[$i]}" != "$d" ]]; then
+            log_fatal "Different data columns across cells not supported yet"
+            fail1
+          fi
+          (( i++ ))
+        end_for
+      fi
+
+      local row \
+        field_count=${#output_fields[*]} data_count=${#output_data[*]}
+      local row_count=$((data_count/field_count)) start
+      for (( row = 0; row < row_count; row++ )); do
+        if [[ "$prefix_member" ]]; then
+          table_data+=( "${prefix_member% }" )
+        fi
+        (( start = row * field_count ))
+        table_data+=( "${output_data[@]:$start:$field_count}" )
+      done
+
+    fi
+
+    if [[ $execute_inner != n && "${inner:-}" ]]; then
+      local i_path inners
+      inners=$(find1 $inner_path -type d -not -name '.*') || fail
+      begin_for i_path in $inners; doo
+        parent_cell=$cell_path cell_path=$i_path get_command_load_data || fail
+      end_for
+    fi
+
+  end_function
+  handle_return
+}
+
 get_command_load_data() {
   begin_function
 
@@ -385,66 +454,9 @@ get_command_load_data() {
       extra_fields=${extra_fields:-} \
 
     if [[ $cell_is_leaf == t ]]; then
-
-      if [[ -f $out_path/output.tab ]]; then
-
-        local context_type= output_table output_fields
-        load_dna_item $out_path/output.tab || fail
-        local d i
-
-        if (( ${#table_fields[*]} == 0 )); then
-          table_fields=( $prefix_dim "${output_fields[@]}" )
-        else
-          i=0
-          begin_for d in $prefix_dim "${output_fields[@]}" ; doo
-            if [[ -v table_fields[$i] && "${table_fields[$i]}" != "$d" ]]; then
-              log_fatal "Different data columns across cells not supported yet"
-              fail1
-            fi
-            (( i++ ))
-          end_for
-        fi
-
-        local row \
-          field_count=${#output_fields[*]} data_count=${#output_data[*]}
-        local row_count=$((data_count/field_count)) start
-        for (( row = 0; row < row_count; row++ )); do
-          if [[ "$prefix_member" ]]; then
-            table_data+=( "${prefix_member% }" )
-          fi
-          (( start = row * field_count ))
-          table_data+=( "${output_data[@]:$start:$field_count}" )
-        done
-
-      fi
-
-      if [[ $execute_inner != n && "${inner:-}" ]]; then
-        local i_path inners
-        inners=$(find1 $inner_path -type d -not -name '.*') || fail
-        begin_for i_path in $inners; doo
-          parent_cell=$cell_path cell_path=$i_path get_command_load_data || fail
-        end_for
-      fi
-
+      get_command_load_data_leaf || fail
     else
-
-      par=f fork=f \
-      function=get_command_load_data_member \
-      parent_cell=$cell_path \
-      anchor_dims= \
-      get_members_from=existing_branches \
-      for_each_member $child_dims || fail
-
-      if [[ $used_default_fields == t ]]; then
-        out_fields="$child_dims $out_fields"
-      fi
-
-      # Is this really needed?
-      cell_path=$original_cell_path
-      #load_branch_info || fail
-      #anchor_dims=$original_anchor_dims
-      #switch_context $cell_path || fail
-
+      get_command_load_data_branch || fail
     fi
 
   end_function
