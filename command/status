@@ -1,33 +1,71 @@
 #!/usr/bin/env bash
 
+output_branch_dimensions() {
+  begin_function
+    if [[ "${trunk_dims:-}" ]]; then
+      out "${NL}${WHITE}Branch dimensions:${RESET}"
+      (( indent += 2 ))
+      {
+      begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
+        local dim_var=${trunk_dims[$i]}
+        local -n dim=d_$dim_var
+        local pretty_function_name=trunk_dims_${dim_var}_pretty
+        if function_exists $pretty_function_name; then
+          eval "$pretty_function_name $dim_var" || fail
+          pretty_form=" ($value)"
+        else
+          pretty_form=
+        fi
+        local value=${dim:-}
+        if [[ "${value:-}" ]]; then
+          if [[ "$value" == $empty_member ]]; then
+            value='(empty)'
+          fi
+          out "$dim_var $value$pretty_form"
+        fi
+      end_for
+      } | column -t | sort | indent
+    fi
+  end_function
+  handle_return
+}
+
+output_branch_folders() {
+  begin_function
+    local branch_folders branch_folder indent=${indent:-0}
+    branch_folders=$(find1 $cell_path -name "*:*" -type d) || fail
+    if [[ "$branch_folders" ]]; then
+      (( indent -= 2 ))
+      out "${NL}${WHITE}Sub branch cells:${RESET}"
+      (( indent += 2 ))
+      local last_part dim member
+      {
+      for branch_folder in $branch_folders; do
+        last_part=${branch_folder##*/}
+        dim=${last_part%%:*}
+        member=${last_part#*:}
+        if [[ -f $branch_folder/.member ]]; then
+          member=$(<$branch_folder/.member)
+        fi
+        echo "$dim $member $branch_folder"
+      done
+      } | column -t | sort | indent
+    fi
+  end_function
+  handle_return
+}
+
 output_status() {
   begin_function
     local indent=${indent:-0}
 
     extract_resolvable_dims || fail
     out "${WHITE}Cell: $short_cell${RESET}"
-    out "${NL}${WHITE}Branch dimensions:${RESET}"
-    (( indent += 2 ))
-    {
-    begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
-      local dim_var=${trunk_dims[$i]}
-      local -n dim=d_$dim_var
-      local pretty_function_name=trunk_dims_${dim_var}_pretty
-      if function_exists $pretty_function_name; then
-        eval "$pretty_function_name $dim_var" || fail
-        pretty_form=" ($value)"
-      else
-        pretty_form=
-      fi
-      local value=${dim:-}
-      if [[ "${value:-}" ]]; then
-        if [[ "$value" == $empty_member ]]; then
-          value='(empty)'
-        fi
-        out "$dim_var $value$pretty_form"
-      fi
-    end_for
-    } | column -t | sort | indent
+
+    output_branch_dimensions || fail
+
+    output_branch_folders $cell_path || fail
+    
   end_function
   handle_return
 }
