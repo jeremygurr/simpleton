@@ -1,5 +1,126 @@
 #!/usr/bin/env bash
 
+type -t help_lib_loaded >/dev/null && return 0
+help_lib_loaded=t
+
+short_path() {
+  local p=$1 o
+  if [[ "$p" == /*/*/*/* ]]; then
+    o=${p%/*/*/*}
+    p=${p#$o/}
+  fi
+  echo -n "$p"
+}
+
+walk_split_choice() {
+  local remainder
+  key=${choice%% *}
+  code=${choice#$key }
+  code=${code%% *}
+  remainder=${choice##$key $code }
+  if [[ "$remainder" != "$choice" ]]; then
+    message=$remainder
+  else
+    message=$code
+  fi
+}
+
+walk_menu() {
+  local choice key code message prompt=${prompt:-Choose:} too_many=f
+  filter_mode=${filter_mode:-f}
+
+  for choice in "${choices[@]}"; do
+    walk_split_choice
+    if [[ "$key" != ? ]]; then
+      too_many=t
+      break
+    fi
+  done
+
+  for choice in "${choices[@]}"; do
+    walk_split_choice
+    if [[ $too_many == t ]]; then
+      key=/
+    fi
+    echo "$key  $message"
+  done
+
+  if [[ $too_many == t ]]; then
+    echo "Too many options found, switching to filter mode (type characters to filter results)"
+    filter_mode=t
+  fi
+
+  local input
+
+  result=
+  if [[ $filter_mode == t ]]; then
+    read -sp "Filtering results (press enter or space to accept filter): " -n1 input || return 1
+    if [[ "$input" == $'\x7f' ]]; then
+      walk_filter=${walk_filter%?}
+      echo "$walk_filter"
+    elif [[ "$input" ]]; then
+      walk_filter+=$input
+      echo "$walk_filter"
+    else
+      result=accept
+      echo "Accept filter"
+    fi
+  else
+    read -sp "$prompt" -n1 input || return 1
+    for choice in "${choices[@]}" "${hidden_choices[@]}"; do
+      walk_split_choice
+      if [[ $key == $input || $key == enter && $input == '' ]]; then
+        result=$code
+        break
+      fi
+    done
+    if [[ "$result" ]]; then
+      echo "${message%% *}"
+    else
+      echo
+    fi
+  fi
+
+}
+ 
+walk_add_choice() {
+  local hidden=${hidden:-f} key=$1 
+  shift 1
+  local remaining=$*
+  local code=${remaining%% *}
+  if [[ ! "${code_set[$code]:-}" ]]; then
+    if [[ $hidden == f ]]; then
+      choices+=( "$key $remaining" )
+    else
+      hidden_choices+=( "$key $remaining" )
+    fi
+    code_set[$code]=1
+  fi
+}
+
+walk_add_dirs() {
+  local dirs d extra current_folder=$1
+  dirs=$(find -L $current_folder -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
+  if [[ "$dirs" ]]; then
+    for d in $dirs; do
+      if [[ "${walk_filter:-}" ]]; then
+        if [[ "$d" != *"$walk_filter"* ]]; then
+         continue
+        fi
+      fi
+      (( i++ ))
+      extra=
+      if [[ -f $d/.member ]]; then
+        extra=" $(<$d/.member)"
+        if (( ${#extra} > 60 )); then
+          extra="${extra:0:60}..."
+        fi
+      fi
+      walk_add_choice "$i" "${d#./}" "${d##*/}$extra"
+    done
+  fi
+}
+
 # inputs:
 #   i     index of parameter to show
 show_parameter_help_inner() {

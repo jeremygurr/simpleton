@@ -1,5 +1,88 @@
 #!/usr/bin/env bash
 
+select_upstream() {
+  begin_function
+    upstream=
+    local current_folder=$1 \
+      hidden_choices choices \
+      choice path i real_stack=() \
+      filter_mode=f walk_filter= \
+
+    local -A code_set
+    echo "Choose upstream to add. Press enter or space to accept selection, ? for more help, or q to quit"
+    begin_while true; doo
+
+      local extra=
+      if [[ -f $current_folder/.member ]]; then
+        extra=" $(<$current_folder/.member)"
+        if (( ${#extra} > 60 )); then
+          extra=" ${extra:0:60}..."
+        fi
+      fi
+
+      local highlight=$'\033[1;33m' \
+        reset=$'\033[0m'
+      echo "$highlight$hbar_equals$NL$(short_path $current_folder)$reset$extra"
+
+      code_set=()
+      hidden_choices=(
+        "enter accept"
+        "q quit"
+        "? help"
+        "/ filter"
+        )
+      choices=()
+      i=0
+
+      if [[ -d .. ]]; then
+        hidden=f walk_add_choice "." ".."
+      fi
+
+      if [[ $current_folder == *:* ]]; then
+        path=${current_folder%%:*}
+        path=${path%/*}
+        walk_add_choice "t" "$path" "trunk"
+      fi
+
+      walk_add_dirs $current_folder || fail
+
+      local prompt="Choose an upstream cell (press enter to accept current choice): "
+      walk_menu || break
+      if [[ $filter_mode == f ]]; then
+        if [[ "$result" == help ]]; then
+          echo "Press one of the characters in the menu to go to the corrosponding folders, enter or space to accept the upstream choice, or q to quit/abort this command."
+          echo "You can also use / to enter filter mode and narrow down results."
+          echo "Using / again after a filter is applied will remove the filter."
+          # later
+        elif [[ "$result" == quit ]]; then
+          exit 0
+        elif [[ "$result" == accept ]]; then
+          upstream=$current_folder
+          break
+        elif [[ "$result" == filter ]]; then
+          if [[ "$walk_filter" ]]; then
+            echo "Removed filter."
+            walk_filter=
+          else
+            filter_mode=t
+          fi
+        elif [[ -d "$result" ]]; then
+          current_folder="$(unrealpath $result)"
+        else
+          echo "Invalid selection, try again."
+          continue
+        fi
+      else # filter_mode == t
+        if [[ "$result" == accept ]]; then
+          filter_mode=f
+        fi
+      fi
+
+    end_while
+  end_function
+  handle_return
+}
+
 up_add_command() {
   begin_function
 
@@ -8,6 +91,13 @@ up_add_command() {
     load_branch_info || fail
     find_seed_path $cell_path || fail
     local dna_path=$cell_path/.dna
+
+    if [[ ! "$choices" ]]; then
+      local upstream=${cell_path#/*/*/}
+      upstream=${cell_path%/$upstream}
+      select_upstream $upstream || fail
+      choices=$upstream
+    fi
 
     if [[ ! "$choices" ]]; then
       log_fatal "You must specify which cells to provide as choices with the choices var"
