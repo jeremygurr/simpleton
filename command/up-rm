@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 
 select_upstream() {
+  local starting_folder=$1
   begin_function
-    upstream=
-    local current_folder=$1 \
-      hidden_choices choices \
-      choice path i real_stack=() \
-      filter_mode=f walk_filter= \
 
-    local -A code_set
-    echo "Choose upstream to add. Press enter or space to accept selection, ? for more help, or q to quit"
-    begin_while true; doo
+    echo "Choose upstream to remove."
 
+    walk_init || fail
+
+    show_selection() {
       local extra=
-      if [[ -f $current_folder/.member ]]; then
-        extra=" $(<$current_folder/.member)"
+      if [[ -f $current_selection/.member ]]; then
+        extra=" $(<$current_selection/.member)"
         if (( ${#extra} > 60 )); then
           extra=" ${extra:0:60}..."
         fi
@@ -22,63 +19,30 @@ select_upstream() {
 
       local highlight=$'\033[1;33m' \
         reset=$'\033[0m'
-      echo "$highlight$hbar_equals$NL$(short_path $current_folder)$reset$extra"
+      echo "$highlight$hbar_equals$NL$(short_path $current_selection)$reset$extra"
+    }
 
-      code_set=()
-      hidden_choices=(
-        "enter accept"
-        "q quit"
-        "? help"
-        "/ filter"
-        )
-      choices=()
-      i=0
+    adjust_choices() {
+      walk_add_dirs $current_selection || return 1
+      return 0
+    }
 
-      if [[ -d .. ]]; then
-        hidden=f walk_add_choice "." ".."
+    handle_walk_responses() {
+      if [[ -d "$response" ]]; then
+        current_selection="$response"
       fi
+    }
 
-      if [[ $current_folder == *:* ]]; then
-        path=${current_folder%%:*}
-        path=${path%/*}
-        walk_add_choice "t" "$path" "trunk"
-      fi
+    local result= \
+      prompt="Choose an upstream cell (press enter to accept current choice): " \
 
-      walk_add_dirs $current_folder || fail
+    walk $starting_folder || fail
+    if [[ "$result" ]]; then
+      upstream=$result
+    else 
+      fail1
+    fi
 
-      local prompt="Choose an upstream cell (press enter to accept current choice): "
-      walk_menu || break
-      if [[ $filter_mode == f ]]; then
-        if [[ "$result" == help ]]; then
-          echo "Press one of the characters in the menu to go to the corrosponding folders, enter or space to accept the upstream choice, or q to quit/abort this command."
-          echo "You can also use / to enter filter mode and narrow down results."
-          echo "Using / again after a filter is applied will remove the filter."
-          # later
-        elif [[ "$result" == quit ]]; then
-          exit 0
-        elif [[ "$result" == accept ]]; then
-          upstream=$current_folder
-          break
-        elif [[ "$result" == filter ]]; then
-          if [[ "$walk_filter" ]]; then
-            echo "Removed filter."
-            walk_filter=
-          else
-            filter_mode=t
-          fi
-        elif [[ -d "$result" ]]; then
-          current_folder="$(unrealpath $result)"
-        else
-          echo "Invalid selection, try again."
-          continue
-        fi
-      else # filter_mode == t
-        if [[ "$result" == accept ]]; then
-          filter_mode=f
-        fi
-      fi
-
-    end_while
   end_function
   handle_return
 }
@@ -86,71 +50,23 @@ select_upstream() {
 up_rm_command() {
   begin_function
 
-    local choices=${choices:-${choice:-}} name=${name:-}
+    local upstream_to_remove=${upstream_to_remove:-${upstream:-${p_up:-}}} upstream
 
-    load_branch_info || fail
-    find_seed_path $cell_path || fail
-    local dna_path=$cell_path/.dna
-
-    if [[ ! "$choices" ]]; then
-      local upstream=${cell_path#/*/*/}
-      upstream=${cell_path%/$upstream}
-      select_upstream $upstream || fail
-      choices=$upstream
+    if [[ ! "$upstream_to_remove" ]]; then
+      select_upstream $cell_path/.dna/up || fail
+      upstream_to_remove=$upstream
     fi
 
-    if [[ ! "$choices" ]]; then
-      log_fatal "You must specify which cells to provide as choices with the choices var"
+    if [[ ! "$upstream_to_remove" ]]; then
+      log_fatal "You must specify which upstream to remove"
       fail1
     fi
 
-    local before
-    if [[ ! "$name" ]]; then
-      if [[ "$choices" == *\ * ]]; then
-        log_fatal "You must specify the name of the upstream to add with the name var if you include more than one choice"
-        fail1
-      fi
-      choices=${choices%/}
-      name=${choices#/*/*/}
-      name=${name//\//-}
-    fi
-
-    local multiple_choices=f
-    if [[ "$choices" == *\ * ]]; then
-      multiple_choices=t
-    fi
-
-    local upstream=$dna_path/up/$name
-
-    if [[ -e $upstream ]]; then
-      log_fatal "An upstream already exists with this name: $name"
-      fail1
-    fi
-
-    if [[ $multiple_choices == t ]]; then
-
-      mkdir -p $upstream/choices || fail
-
-      begin_for choice in $choices; doo
-        choice=$(realpath $choice)
-        if [[ ! -d $choice/.dna ]]; then
-          log_fatal "$choice doesn't exist or is not a cell"
-          fail1
-        fi
-        before=${choice%/*/*/*}
-        local target=${choice#$before/}
-        target=${target//\//-}
-        safe_link $choice $upstream/choices/$target || fail
-      end_for
-
+    if [[ -d "$upstream_to_remove" ]]; then
+      rm -r "$upstream_to_remove" || fail
+      remove_empty_parents "${upstream_to_remove%/*}" || fail
     else
-      mkdir -p ${upstream%/*} || fail
-      choice=$(realpath $choices)
-      if [[ ! -d $choice/.dna ]]; then
-        log_fatal "$choice doesn't exist or is not a cell"
-        fail1
-      fi
-      safe_link $choice $upstream || fail
+      log_warn "Upstream has already been removed."
     fi
 
     command_successful=t
