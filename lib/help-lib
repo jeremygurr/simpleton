@@ -52,7 +52,10 @@ walk_menu() {
 
   local input
 
-  result=
+  response=
+  if [[ "$walk_filter" ]]; then
+    echo "${CYAN}Current filter:${RESET} $walk_filter"
+  fi
   if [[ $filter_mode == t ]]; then
     read -sp "Filtering results (press enter or space to accept filter): " -n1 input || return 1
     if [[ "$input" == $'\x7f' ]]; then
@@ -62,7 +65,7 @@ walk_menu() {
       walk_filter+=$input
       echo "$walk_filter"
     else
-      result=accept
+      response=accept
       echo "Accept filter"
     fi
   else
@@ -70,11 +73,11 @@ walk_menu() {
     for choice in "${choices[@]}" "${hidden_choices[@]}"; do
       walk_split_choice
       if [[ $key == $input || $key == enter && $input == '' ]]; then
-        result=$code
+        response=$code
         break
       fi
     done
-    if [[ "$result" ]]; then
+    if [[ "$response" ]]; then
       echo "${message%% *}"
     else
       echo
@@ -99,8 +102,8 @@ walk_add_choice() {
 }
 
 walk_add_dirs() {
-  local dirs d extra current_folder=$1
-  dirs=$(find -L $current_folder -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
+  local dirs d extra current_selection=$1
+  dirs=$(find -L $current_selection -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
   if [[ "$dirs" ]]; then
     for d in $dirs; do
       if [[ "${walk_filter:-}" ]]; then
@@ -119,6 +122,76 @@ walk_add_dirs() {
       walk_add_choice "$i" "${d#./}" "${d##*/}$extra"
     done
   fi
+}
+
+walk_init() {
+  show_selection() { :; }
+  adjust_choices() { :; }
+  handle_walk_responses() { :; }
+}
+
+walk() {
+  begin_function
+    echo "Choose upstream to add."
+
+    upstream=
+    local current_selection=$1 \
+      hidden_choices choices \
+      choice path i real_stack=() \
+      filter_mode=f walk_filter= \
+      prompt=${prompt:-Choose: } \
+
+    local -A code_set
+    begin_while true; doo
+
+      show_selection || fail
+
+      code_set=()
+      hidden_choices=(
+        "enter accept"
+        "q quit"
+        "? help"
+        "/ filter"
+        )
+      choices=()
+      i=0
+      adjust_choices || fail
+
+      walk_menu || break
+      if [[ $filter_mode == f ]]; then
+        if [[ "$response" == help ]]; then
+          echo "Press one of the characters in the menu to select one of the choices, enter or space to accept the choice, or q to quit/abort this command."
+          echo "You can also use / to enter filter mode and narrow down results."
+          echo "Using / again after a filter is applied will remove the filter."
+        elif [[ "$response" == quit ]]; then
+          exit 0
+        elif [[ "$response" == accept ]]; then
+          result=$current_selection
+          break
+        elif [[ "$response" == filter ]]; then
+          if [[ "$walk_filter" ]]; then
+            echo "Removed filter."
+            walk_filter=
+          else
+            filter_mode=t
+          fi
+        else
+          local invalid_response=f
+          handle_walk_responses || fail
+          if [[ $invalid_response == t ]]; then
+            echo "Invalid selection, try again."
+            continue
+          fi
+        fi
+      else # filter_mode == t
+        if [[ "$response" == accept ]]; then
+          filter_mode=f
+        fi
+      fi
+
+    end_while
+  end_function
+  handle_return
 }
 
 # inputs:
