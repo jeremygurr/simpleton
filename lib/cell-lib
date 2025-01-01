@@ -788,9 +788,13 @@ prep_dims() {
           pdim=p_$dim_var pdims=p_$dims_var \
           is_optional=${dim_type}_${dim_var}_is_optional \
 
-        is_optional=${is_optional:-f}
-        sdim=${sdim:-${pdim:-${dim:-}}}
-        sdims=${sdims:-${pdims:-${dims:-}}}
+        is_optional=${is_optional:-f} \
+        sdim=${sdim:-${pdim:-${dim:-}}} \
+        sdims=${sdims:-${pdims:-${dims:-}}} \
+
+        # from here on out only sdims and ddims should be used
+        # sdims may contain shortcuts, ddims are always expanded (never shortcuts)
+        unset $dim_var $dims_var p_$dim_var p_$dims_var
 
         [[ "${sdim:-}" == $empty_member ]] && sdim=
         [[ "${sdims:-}" == $empty_member ]] && sdims=
@@ -827,8 +831,58 @@ get_plural() {
   return 0
 }
 
+# input: dim_var value
+# output: values 
+expand_dim() {
+  local -n dim_type=${dim_var}_dim_type
+  begin_function
+
+    values=
+    if [[ "${value:-}" && "$value" != \? ]]; then
+
+      if ! function_exists ${dim_type}_${dim_var}_expand; then
+        log_fatal "Internal error: Missing ${dim_type}_${dim_var}_expand function, which should have been created by make_context method"
+        fail1
+      fi
+
+      local problem
+      ${dim_type}_${dim_var}_expand || fail
+      if [[ "${problem:-}" ]]; then
+        log_fatal "$problem"
+        fail1
+      fi
+
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $*           members to expand
+# outputs:
+#   new_values   array of expanded members
+expand_dim_members() {
+  begin_function
+    local value values
+    new_values=()
+    begin_for value in "$@"; doo
+      expand_dim || fail
+      if [[ "$values" ]]; then
+        new_values+=( "${values[@]}" )
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
 # expands aliases for the known dims array
 # collapses singular and plural dims into plural dims
+# should only be used after prep_dims, which means 
+#   all dims should be stored in sdim/sdims or ddim/ddims
+# ddim is expanded form of sdim, and takes priority over sdim
+# this function will generate ddim/ddims where they are not already set based on sdim/sdims
+# this function guaranteeds ddims will be set for all known dims
 expand_dims() {
   begin_function
 
@@ -838,13 +892,10 @@ expand_dims() {
       local dims_var
       get_plural $dim_var dims_var
       local -n \
-        dim=$dim_var dims=$dims_var \
+        sdim=s_$dim_var sdims=s_$dims_var \
         ddim=d_$dim_var ddims=d_$dims_var \
 
       if [[ ! "${ddim:-}" && ! "${ddims:-}" ]]; then
-
-        local -n sdim=s_$dim_var sdims=s_$dims_var \
-          d_dim_type=${dim_var}_dim_type \
 
         local members single=t
         if [[ "${sdims:-}" ]]; then
@@ -854,8 +905,6 @@ expand_dims() {
           members=$sdim
         fi
 
-        dim=
-        dims=
         ddim=
         ddims=
 
@@ -1423,33 +1472,6 @@ cell_is_leaf=$cell_is_leaf
   handle_return
 }
 
-# input: dim_var value
-# output: values 
-expand_dim() {
-  local -n dim_type=${dim_var}_dim_type
-  begin_function
-
-    values=
-    if [[ "${value:-}" && "$value" != \? ]]; then
-
-      if ! function_exists ${dim_type}_${dim_var}_expand; then
-        log_fatal "Internal error: Missing ${dim_type}_${dim_var}_expand function, which should have been created by make_context method"
-        fail1
-      fi
-
-      local problem
-      ${dim_type}_${dim_var}_expand || fail
-      if [[ "${problem:-}" ]]; then
-        log_fatal "$problem"
-        fail1
-      fi
-
-    fi
-
-  end_function
-  handle_return
-}
-
 handle_missing_dims() {
   local can_ask=${can_ask:-t}
   begin_function
@@ -1457,10 +1479,10 @@ handle_missing_dims() {
     begin_for dim_var in ${missing_dims[*]}; doo
 
       get_plural $dim_var dims_var
-      local -n value=d_$dim_var ddims=d_$dims_var
+      local -n value=s_$dim_var ddims=s_$dims_var
 
       if [[ $can_ask == t ]]; then
-        choose "Enter required value: $dim_var=" d_$dim_var || fail
+        choose "Enter required value: $dim_var=" s_$dim_var || fail
         expand_dim || fail
       fi
 
@@ -2499,24 +2521,6 @@ make_cyto_up() {
     local up_name o
     begin_for up_name in ${up[*]}; doo
       make_cyto_up_single $up_name || fail
-    end_for
-  end_function
-  handle_return
-}
-
-# inputs:
-#   $*           members to expand
-# outputs:
-#   new_values   array of expanded members
-expand_dim_members() {
-  begin_function
-    local value values
-    new_values=()
-    begin_for value in "$@"; doo
-      expand_dim || fail
-      if [[ "$values" ]]; then
-        new_values+=( "${values[@]}" )
-      fi
     end_for
   end_function
   handle_return
