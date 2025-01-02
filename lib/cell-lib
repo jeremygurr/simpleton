@@ -717,14 +717,14 @@ build_context_expand() {
     local dim dim_type o
 
     # sub_dims are always optional
-    begin_for dim_type in sub_dims; doo
-      local -n dims=$dim_type
-      begin_for dim in ${dims[*]:-}; doo
-        local -n is_optional=${dim_type}_${dim}_is_optional
-        is_optional=t
-        write_vars_to_context ${dim_type}_${dim}_is_optional || fail
-      end_for
-    end_for
+    #begin_for dim_type in sub_dims; doo
+    #  local -n dims=$dim_type
+    #  begin_for dim in ${dims[*]:-}; doo
+    #    local -n is_optional=${dim_type}_${dim}_is_optional
+    #    is_optional=t
+    #    write_vars_to_context ${dim_type}_${dim}_is_optional || fail
+    #  end_for
+    #end_for
 
     begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
       local -n dims=$dim_type
@@ -2015,7 +2015,7 @@ calc_coordinates_next_unknown_dim() {
 
       if [[ ! "${member:-}" ]]; then
 
-        #log_debug "Finding values for $dim in phase $phase"
+        log_debug "Finding values for $dim in phase $phase"
         local values= prev_phase=$phase
         if [[ $phase == derive ]]; then
           calc_coords_check_derive || fail
@@ -2085,6 +2085,22 @@ calc_coordinates_next_unknown_dim() {
               current_dim_index=0
               missing_dims=()
             else
+              case $handle_missing in
+                error)
+                  log_fatal "Could not resolve dims: ${missing_dims[*]}"
+                  fail1
+                ;;
+                blank)
+                  for d in ${missing_dims[*]}; do
+                    local -n m=d_$d
+                    m=$missing_member
+                  done
+                ;;
+                *)
+                  log_fatal "Internal error: invalid handle_missing value: $handle_missing"
+                  fail1
+                ;;
+              esac
               break
             fi
           fi
@@ -2174,7 +2190,7 @@ setup_coord_fields() {
 #   all ddims of that type OR existing coords
 # assumes ddims are in array form (not space separated)
 calc_coordinates() {
-  local source=${source:-dim}
+  local source=${source:-dim} handle_missing=${handle_missing:-error}
   begin_function
 
     local coord_type=${coord_type} dim_var \
@@ -2204,18 +2220,21 @@ calc_coordinates() {
     local row_index=-1
     if [[ "${coordinate_fields:-}" ]]; then
       if [[ $source == dim ]]; then
-        log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-        calc_coordinates_next_known_dim 0 || fail
+        if [[ ! "${coordinate_data:-}" ]]; then
 
-        if [[ ! "${missing_dims:-}" ]]; then
-          if [[ ! "${coordinate_data:-}" ]]; then
-            calc_coordinates_add_row || fail
+          log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+          calc_coordinates_next_known_dim 0 || fail
+
+          if [[ "${missing_dims:-}" ]]; then
+            log_debug "Missing dims left blank: ${missing_dims[*]}"
           fi
 
+          calc_coordinates_add_row || fail
           coordinate_count=${#coordinate_data[*]}
           coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
           log_verbose "$coordinate_rows $coord_type coordinates found" 
         fi
+
       elif [[ $source == coords ]]; then
         log_verbose "Refining existing $coord_type cell coordinates"
         begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
