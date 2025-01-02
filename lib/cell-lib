@@ -1527,6 +1527,119 @@ cell_is_leaf=$cell_is_leaf
   handle_return
 }
 
+seed_coordinates_prep() {
+  begin_function
+    if (( coordinate_count > 0 )); then
+      log_fatal "Coordinates already have data, can't seed them."
+      fail1
+    fi
+
+    if [[ $seed_table == auto ]]; then
+      local derive_table biggest_table= biggest_size=0
+      for derive_table in ${derive_tables[*]}; do
+        local -n derive_fields=${derive_table}_fields \
+                 derive_data=${derive_table}_data \
+
+        local size=${#derive_data[*]}
+        if (( size > biggest_size )); then
+          biggest_size=$size
+          biggest_table=$derive_table
+        fi
+      done
+
+      seed_table=$biggest_table
+
+    fi
+
+    if [[ ! "$seed_table" ]]; then
+      log_fatal "Missing seed_table"
+      fail1
+    fi
+  end_function
+  handle_return
+}
+
+calc_coordinates_add_row() {
+  local ignore_missing=${ignore_missing:-f}
+  begin_function
+
+    local i new_coords=()
+    for (( i = 0; i < coordinate_fields_count; i++ )); do
+      local -n dim_value=d_${coordinate_fields[$i]}
+      if [[ ! "${dim_value:-}" ]]; then
+        if [[ $ignore_missing == f ]]; then
+          log_fatal "Missing dim: ${coordinate_fields[$i]}"
+          fail1
+        fi
+        new_coords+=( "" )
+        coordinate_data+=( "" )
+      else
+        new_coords+=( "$dim_value" )
+        coordinate_data+=( "$dim_value" )
+      fi
+    done
+
+    log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
+
+  end_function
+  handle_return
+}
+
+# initialized coordinatas with a table to speed up coordinate calculation
+#   of all possibilities
+# won't work if coordinates already has data
+# inputs:
+#   coord_type: which coordinates to load
+#   seed_table: defaults to auto, which will just choose the largest available table
+seed_coordinates() {
+  local seed_table=${seed_table:-auto} coord_type=${coord_type}
+  begin_function
+    local -n coordinate_data=${coord_type}_coordinate_data \
+      coordinate_count=${coord_type}_coordinate_count \
+      coordinate_rows=${coord_type}_coordinate_rows \
+      coordinate_fields=${coord_type}_coordinate_fields \
+      coordinate_fields_count=${coord_type}_coordinate_fields_count \
+      coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
+
+    seed_coordinates_prep || fail
+
+    local -n seed_fields=${seed_table}_fields \
+             seed_data=${seed_table}_data \
+
+    if [[ ! -v seed_fields ]]; then
+      log_fatal "Invalid seed table: $seed_table"
+      fail1
+    fi
+
+    local seed_field_count=${#seed_fields[*]} \
+          seed_data_count=${#seed_data[*]} \
+
+    local seed_table_rows=$(( seed_data_count / seed_field_count ))
+
+    if [[ "$localize_dims" ]]; then
+      eval "local $localize_dims" || fail
+    fi
+
+    setup_coord_fields || fail
+
+    local field_index seed_field seed_data_index new_coord_row
+    begin_for (( row = 0; row < seed_table_rows; row++ )); doo
+      new_coord_row=()
+
+      for field_index in ${!seed_fields[*]}; do
+        seed_field=${seed_fields[$field_index]}
+        local -n dim=d_$seed_field
+        (( seed_data_index = row * seed_field_count + field_index ))
+        dim=${seed_data[$seed_data_index]}
+      done
+
+      ignore_missing=t calc_coordinates_add_row || fail
+    end_for
+
+  end_function
+  handle_return
+}
+
 handle_missing_dims() {
   local can_ask=${can_ask:-t}
   begin_function
@@ -1554,30 +1667,8 @@ handle_missing_dims() {
   handle_return
 }
 
-calc_coordinates_add_row() {
-  begin_function
-
-    local i new_coords=() post_validate_row=${post_validate_row:-f}
-    for (( i = 0; i < coordinate_fields_count; i++ )); do
-      local -n dim_value=d_${coordinate_fields[$i]}
-      new_coords+=( "$dim_value" )
-    done
-
-    if coord_row_is_valid coordinate_fields new_coords; then
-      coordinate_data+=( "${new_coords[@]}" )
-      log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
-    fi
-
-  end_function
-  handle_return
-}
-
 calc_coordinates_process_member() {
   begin_function
-
-    #if [[ "$localize_dims" ]]; then
-    #  eval "local $localize_dims" || fail
-    #fi
 
     local -n member=d_$dim \
       members=d_$dims
@@ -1624,7 +1715,7 @@ calc_coordinates_loop_members() {
     (( current_dim_index++ ))
     local current_member
     begin_for current_member in "${members[@]}"; doo
-      log_debug "processing $dim=$current_member"
+      #log_debug "processing $dim=$current_member"
       calc_coordinates_process_member || fail
       if [[ "${missing_dims:-}" ]]; then
         break
@@ -1755,7 +1846,8 @@ coord_row_is_valid() {
       local values=()
       if function_exists ${dim_type}_${dim}_derive; then
         ${dim_type}_${dim}_derive || fail
-        if [[ ! "$values" ]]; then
+        if [[ ! "${values:-}" ]]; then
+          debug_start
           fail1
         fi
       fi
@@ -2041,14 +2133,43 @@ calc_coordinates_next_known_dim() {
   handle_return
 }
 
+setup_coord_fields() {
+  begin_function
+    case $coord_type in
+      branch)
+        coordinate_fields=( ${trunk_dims[*]:-} )
+        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
+      ;;
+      leaf)
+        coordinate_fields=( ${sub_dims[*]:-} )
+        coordinate_fields_plural=( ${sub_dims_plural[*]:-} )
+      ;;
+      tree)
+        coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
+        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} )
+      ;;
+      *)
+        log_fatal "Internal error: invalid coord_type=$coord_type"
+        fail1
+      ;;
+    esac
+
+    coordinate_fields_count=${#coordinate_fields[*]}
+  end_function
+  handle_return
+}
+
 # inputs:
 #   coord_type
-#   all ddims of that type
+#   source       set to dims to load coordinates from existing dims
+#                set to coords to using existing coordinates and attempt to fill in blanks
+#   all ddims of that type OR existing coords
 # assumes ddims are in array form (not space separated)
 calc_coordinates() {
+  local source=${source:-dim}
   begin_function
 
-    local coord_type=${coord_type} dim_var
+    local coord_type=${coord_type} dim_var \
 
     local -n coordinate_data=${coord_type}_coordinate_data \
       coordinate_count=${coord_type}_coordinate_count \
@@ -2062,26 +2183,7 @@ calc_coordinates() {
     coordinate_rows=0 \
     missing_dims=() \
 
-    case $coord_type in
-      branch)
-        coordinate_fields=( ${trunk_dims[*]:-} )
-        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
-      ;;
-      leaf)
-        coordinate_fields=( ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} )
-        coordinate_fields_plural=( ${sub_dims_plural[*]:-} ${control_props_plural[*]:-} ${data_props_plural[*]:-} )
-      ;;
-      tree)
-        coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
-        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} )
-      ;;
-      *)
-        log_fatal "Internal error: invalid coord_type=$coord_type"
-        fail1
-      ;;
-    esac
-
-    coordinate_fields_count=${#coordinate_fields[*]}
+    setup_coord_fields || fail
 
     declare -Ag coordinate_dim_index
     local d i=0
