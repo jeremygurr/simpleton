@@ -740,7 +740,7 @@ build_context_expand() {
 }
 
 convert_coords_to_dims() {
-  local coord_type=${coord_type} row_index=${row_index:-0}
+  local coord_type=${coord_type} row_index=${row_index:-0} dim_type=${dim_type:-sdim}
   begin_function
 
     local field field_index values=() count field_count data_offset
@@ -751,7 +751,20 @@ convert_coords_to_dims() {
 
     begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
       field=${c_fields[$field_index]}
-      local -n dim=d_$field
+
+      case $dim_type in 
+        sdim)
+          local -n dim=s_$field
+        ;;
+        ddim)
+          local -n dim=d_$field
+        ;;
+        *)
+          log_fatal "Invalid dim_type: $dim_type"
+          fail1
+        ;;
+      esac
+
       (( data_offset = c_fields_count * row_index + field_index ))
       dim=${c_data[$data_offset]}
     end_for
@@ -1572,10 +1585,10 @@ calc_coordinates_add_row() {
           fail1
         fi
         new_coords+=( "" )
-        coordinate_data+=( "" )
+        new_coordinate_data+=( "" )
       else
         new_coords+=( "$dim_value" )
-        coordinate_data+=( "$dim_value" )
+        new_coordinate_data+=( "$dim_value" )
       fi
     done
 
@@ -1681,7 +1694,7 @@ calc_coordinates_process_member() {
 
       if [[ $phase == known ]]; then
         # recursive
-        calc_coordinates_next_known_dim $current_dim_index || fail
+        calc_coordinates_next_unexpanded_dim $current_dim_index || fail
       else
         # recursive
         calc_coordinates_next_unknown_dim $current_dim_index || fail
@@ -1718,7 +1731,7 @@ calc_coordinates_loop_members() {
     (( current_dim_index++ ))
     local current_member
     begin_for current_member in "${members[@]}"; doo
-      #log_debug "processing $dim=$current_member"
+      #log_debug "Processing $dim=$current_member"
       calc_coordinates_process_member || fail
       if [[ "${missing_dims:-}" ]]; then
         break
@@ -2016,7 +2029,7 @@ calc_coordinates_next_unknown_dim() {
       if [[ ! "${member:-}" ]]; then
 
         log_debug "Finding values for $dim in phase $phase"
-        local values= prev_phase=$phase
+        local values=
         if [[ $phase == derive ]]; then
           calc_coords_check_derive || fail
         else
@@ -2025,18 +2038,14 @@ calc_coordinates_next_unknown_dim() {
 
         if [[ "${values:-}" ]]; then
 
+          log_debug "Resolved $dim with $phase: ${values[*]:0:30}"
+
           changed=t
           if [[ "$phase" == default ]]; then
             # go back to derive phase since calculating a new default could
             # open up new derive possibilities
             phase=derive
           fi
-
-          log_debug "Resolved $dim with $prev_phase: ${values[*]:0:30}"
-
-          # don't support aliases here (yet?)
-          # local new_values
-          # expand_dim_members "${values[@]}" || fail
 
           members=( "${values[@]}" )
 
@@ -2048,6 +2057,7 @@ calc_coordinates_next_unknown_dim() {
           fi
 
           if (( ${#members[*]} > 1 )); then
+            # TODO need to support expansion if this is done during expansion phase
             if [[ $row_index != -1 ]]; then
               log_fatal "$dim is trying to split to multiple values which is not supported in coords source yet."
               fail1
@@ -2065,7 +2075,7 @@ calc_coordinates_next_unknown_dim() {
           fi
 
         else
-          #log_debug "Failed to resolve $dim in phase $prev_phase"
+          #log_debug "Failed to resolve $dim in phase $phase"
           missing_dims+=( $dim )
         fi
 
@@ -2120,7 +2130,7 @@ calc_coordinates_next_unknown_dim() {
 #   coordinate_fields        array of dims to process
 #   coordinate_fields_plural array of dim plurals to process
 #   $1   index of dim to process
-calc_coordinates_next_known_dim() {
+calc_coordinates_next_unexpanded_dim() {
   local current_dim_index=$1
   begin_function
     local dim dims
@@ -2189,26 +2199,37 @@ setup_coord_fields() {
 #                set to coords to using existing coordinates and attempt to fill in blanks
 #   all ddims of that type OR existing coords
 # assumes ddims are in array form (not space separated)
+# assumes all checks were done previously to determine if this is needed
 calc_coordinates() {
-  local source=${source:-dim} handle_missing=${handle_missing:-error}
+  local source=${source:-dim} coord_type=$coord_type handle_missing=${handle_missing:-error}
   begin_function
 
-    local coord_type=${coord_type} dim_var \
+    local -n coordinate_fields=${coord_type}_coordinate_fields
+    if [[ ! "${coordinate_fields:-}" ]]; then
+      succeed
+    fi
+
+    local dim_var \
+      new_coordinate_data=() \
 
     local -n coordinate_data=${coord_type}_coordinate_data \
       coordinate_count=${coord_type}_coordinate_count \
       coordinate_rows=${coord_type}_coordinate_rows \
-      coordinate_fields=${coord_type}_coordinate_fields \
       coordinate_fields_count=${coord_type}_coordinate_fields_count \
       coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
+
 
     if [[ $source == dims ]]; then
       coordinate_data=() \
       coordinate_count=0 \
       coordinate_rows=0 \
       missing_dims=() \
+
       setup_coord_fields || fail
     fi
+
+    local row_index=-1 \
+      unexpanded_dims="${coordinate_fields[*]}" \
 
     declare -Ag coordinate_dim_index
     local d i=0
@@ -2217,36 +2238,50 @@ calc_coordinates() {
       (( i++ ))
     done
 
-    local row_index=-1
-    if [[ "${coordinate_fields:-}" ]]; then
-      if [[ $source == dim ]]; then
-        if [[ ! "${coordinate_data:-}" ]]; then
+    if [[ $source == dim ]]; then
 
-          log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-          calc_coordinates_next_known_dim 0 || fail
+      # it is assumed that dims are already expanded before this point, and so ddims will be used
+      log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+      calc_coordinates_next_unexpanded_dim 0 || fail
 
-          if [[ "${missing_dims:-}" ]]; then
-            log_debug "Missing dims left blank: ${missing_dims[*]}"
-          fi
-
-          calc_coordinates_add_row || fail
-          coordinate_count=${#coordinate_data[*]}
-          coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-          log_verbose "$coordinate_rows $coord_type coordinates found" 
-        fi
-
-      elif [[ $source == coords ]]; then
-        log_verbose "Refining existing $coord_type cell coordinates"
-        begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
-          convert_coords_to_dims || fail
-          calc_coordinates_next_unknown_dim 0 || fail
-        end_for
-      else
-        log_fatal "Invalid source: $source"
-        fail1
+      if [[ "${missing_dims:-}" ]]; then
+        log_debug "Missing dims left blank: ${missing_dims[*]}"
       fi
+
+      calc_coordinates_add_row || fail
+      coordinate_count=${#coordinate_data[*]}
+      coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
+      log_verbose "$coordinate_rows $coord_type coordinates found" 
+
+    elif [[ $source == coords ]]; then
+
+      log_verbose "Refining existing $coord_type cell coordinates"
+      begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
+        convert_coords_to_dims || fail
+        expand_dims || fail
+        calc_coordinates_next_unexpanded_dim 0 || fail
+      end_for
+
+    else
+      log_fatal "Invalid source: $source"
+      fail1
     fi
 
+  # TODO move new coordinate data to old
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   coord_type
+#   source       set to dims to load coordinates from existing dims
+#                set to coords to using existing coordinates and attempt to fill in blanks
+#   all ddims of that type OR existing coords
+# assumes ddims are in array form (not space separated)
+calc_coordinates() {
+  local source=${source:-dim} coord_type=$coord_type handle_missing=${handle_missing:-error}
+  begin_function
   end_function
   handle_return
 }
