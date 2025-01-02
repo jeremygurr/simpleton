@@ -739,21 +739,21 @@ build_context_expand() {
   handle_return
 }
 
-# only works on leaves
 convert_coords_to_dims() {
+  local coord_type=${coord_type} row_index=${row_index:-0}
   begin_function
 
-    local field field_index coord_type=branch values=() count field_count
+    local field field_index values=() count field_count data_offset
 
     local -n c_fields=${coord_type}_coordinate_fields \
              c_data=${coord_type}_coordinate_data \
+             c_fields_count=${coord_type}_coordinate_fields_count \
 
-    field_count=${#c_fields[*]}
-
-    begin_for (( field_index = 0; field_index < field_count; field_index++ )); doo
+    begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
       field=${c_fields[$field_index]}
       local -n dim=d_$field
-      dim=${c_data[$field_index]}
+      (( data_offset = c_fields_count * row_index + field_index ))
+      dim=${c_data[$data_offset]}
     end_for
 
   end_function
@@ -1636,6 +1636,9 @@ seed_coordinates() {
       ignore_missing=t calc_coordinates_add_row || fail
     end_for
 
+    (( coordinate_count = ${#coordinate_data[*]} ))
+    (( coordinate_rows = coordinate_count / coordinate_fields_count ))
+
   end_function
   handle_return
 }
@@ -1922,46 +1925,35 @@ calc_coords_check_derive() {
       ${dim_type}_${dim}_derive || fail
     fi
 
-    if [[ ! "${values:-}" ]]; then
+    if [[ ! "${values:-}" && "${derived_from:-}" ]]; then
       local -A old_values new_values intersected
       if [[ "$old_values_string" ]]; then
         string_to_set old_values_string old_values
       fi
       local derive_table
+      local -n derive_tables=${dim}_derive_tables
       begin_for derive_table in ${derive_tables[*]}; doo
 
+        local found=f
         local -n fields=${derive_table}_fields
-        if [[ ! -v fields ]]; then
-          log_fatal "Internal error: derive_tables contains $derive_table, but there is no ${derive_table}_fields"
-          fail1
-        fi
 
-        if [[ " ${fields[*]} " != *" $dim "* ]]; then
-          # we don't need to check this table since it doesn't contain the dim
-          continue
-        fi
-
-        if [[ "${derived_from:-}" ]]; then
-          local found=f
-
-          local resolved_row resolved_dim
-          for resolved_row in "${resolved_dependencies[@]}"; do
-            found=t
-            for resolved_dim in $resolved_row; do
-              if [[ " ${fields[*]} " != *" $resolved_dim "* ]]; then
-                found=f
-                break
-              fi
-            done
-            if [[ $found == t ]]; then
+        local resolved_row resolved_dim
+        for resolved_row in "${resolved_dependencies[@]}"; do
+          found=t
+          for resolved_dim in $resolved_row; do
+            if [[ " ${fields[*]} " != *" $resolved_dim "* ]]; then
+              found=f
               break
             fi
           done
-
-          if [[ $found == f ]]; then
-            # we don't need to check this table since it doesn't use enough set dependent dims
-            continue
+          if [[ $found == t ]]; then
+            break
           fi
+        done
+
+        if [[ $found == f ]]; then
+          # we don't need to check this table since it doesn't use enough set dependent dims
+          continue
         fi
 
         out_field=$dim \
@@ -2021,9 +2013,9 @@ calc_coordinates_next_unknown_dim() {
       local -n member=d_$dim \
         members=d_$dims
 
-      if [[ ! "${members:-}" ]]; then
+      if [[ ! "${member:-}" ]]; then
 
-        log_debug "Finding values for $dim in phase $phase"
+        #log_debug "Finding values for $dim in phase $phase"
         local values= prev_phase=$phase
         if [[ $phase == derive ]]; then
           calc_coords_check_derive || fail
@@ -2049,15 +2041,31 @@ calc_coordinates_next_unknown_dim() {
           members=( "${values[@]}" )
 
           if (( ${#members[*]} > 1 )); then
+            local -n is_shortcut=${dim_type}_${dim}_is_shortcut
+            if [[ "${is_shortcut:-f}" == t ]]; then
+              members=( "${values[0]}" )
+            fi
+          fi
+
+          if (( ${#members[*]} > 1 )); then
+            if [[ $row_index != -1 ]]; then
+              log_fatal "$dim is trying to split to multiple values which is not supported in coords source yet."
+              fail1
+            fi
             phase=unknown \
             calc_coordinates_loop_members || fail
             break
           else
             member=$members
+            if [[ $row_index != -1 ]]; then
+              local data_index
+              (( data_index = row_index * coordinate_fields_count + current_dim_index))
+              coordinate_data[$data_index]=$member
+            fi
           fi
 
         else
-          log_debug "Failed to resolve $dim in phase $prev_phase"
+          #log_debug "Failed to resolve $dim in phase $prev_phase"
           missing_dims+=( $dim )
         fi
 
@@ -2178,12 +2186,13 @@ calc_coordinates() {
       coordinate_fields_count=${coord_type}_coordinate_fields_count \
       coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
 
-    coordinate_data=() \
-    coordinate_count=0 \
-    coordinate_rows=0 \
-    missing_dims=() \
-
-    setup_coord_fields || fail
+    if [[ $source == dims ]]; then
+      coordinate_data=() \
+      coordinate_count=0 \
+      coordinate_rows=0 \
+      missing_dims=() \
+      setup_coord_fields || fail
+    fi
 
     declare -Ag coordinate_dim_index
     local d i=0
@@ -2192,18 +2201,30 @@ calc_coordinates() {
       (( i++ ))
     done
 
+    local row_index=-1
     if [[ "${coordinate_fields:-}" ]]; then
-      log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-      calc_coordinates_next_known_dim 0 || fail
+      if [[ $source == dim ]]; then
+        log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+        calc_coordinates_next_known_dim 0 || fail
 
-      if [[ ! "${missing_dims:-}" ]]; then
-        if [[ ! "${coordinate_data:-}" ]]; then
-          calc_coordinates_add_row || fail
+        if [[ ! "${missing_dims:-}" ]]; then
+          if [[ ! "${coordinate_data:-}" ]]; then
+            calc_coordinates_add_row || fail
+          fi
+
+          coordinate_count=${#coordinate_data[*]}
+          coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
+          log_verbose "$coordinate_rows $coord_type coordinates found" 
         fi
-
-        coordinate_count=${#coordinate_data[*]}
-        coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-        log_verbose "$coordinate_rows $coord_type coordinates found" 
+      elif [[ $source == coords ]]; then
+        log_verbose "Refining existing $coord_type cell coordinates"
+        begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
+          convert_coords_to_dims || fail
+          calc_coordinates_next_unknown_dim 0 || fail
+        end_for
+      else
+        log_fatal "Invalid source: $source"
+        fail1
       fi
     fi
 
