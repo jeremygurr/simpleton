@@ -1600,6 +1600,32 @@ calc_coordinates_add_row() {
   handle_return
 }
 
+setup_coord_fields() {
+  begin_function
+    case $coord_type in
+      branch)
+        coordinate_fields=( ${trunk_dims[*]:-} )
+        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
+      ;;
+      leaf)
+        coordinate_fields=( ${sub_dims[*]:-} )
+        coordinate_fields_plural=( ${sub_dims_plural[*]:-} )
+      ;;
+      tree)
+        coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
+        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} )
+      ;;
+      *)
+        log_fatal "Internal error: invalid coord_type=$coord_type"
+        fail1
+      ;;
+    esac
+
+    coordinate_fields_count=${#coordinate_fields[*]}
+  end_function
+  handle_return
+}
+
 # initialized coordinatas with a table to speed up coordinate calculation
 #   of all possibilities
 # won't work if coordinates already has data
@@ -1637,20 +1663,20 @@ seed_coordinates() {
 
     setup_coord_fields || fail
 
-    local field_index seed_field seed_data_index new_coord_row
-    begin_for (( row = 0; row < seed_table_rows; row++ )); doo
-      new_coord_row=()
+    local field_index seed_field seed_data_index \
+      new_coordinate_data=() \
 
+    begin_for (( row = 0; row < seed_table_rows; row++ )); doo
       for field_index in ${!seed_fields[*]}; do
         seed_field=${seed_fields[$field_index]}
         local -n dim=d_$seed_field
         (( seed_data_index = row * seed_field_count + field_index ))
         dim=${seed_data[$seed_data_index]}
       done
-
       ignore_missing=t calc_coordinates_add_row || fail
     end_for
 
+    coordinate_data=( "${new_coordinate_data[@]}" )
     (( coordinate_count = ${#coordinate_data[*]} ))
     (( coordinate_rows = coordinate_count / coordinate_fields_count ))
 
@@ -2142,32 +2168,6 @@ calc_coordinates_next_known_dim() {
   handle_return
 }
 
-setup_coord_fields() {
-  begin_function
-    case $coord_type in
-      branch)
-        coordinate_fields=( ${trunk_dims[*]:-} )
-        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
-      ;;
-      leaf)
-        coordinate_fields=( ${sub_dims[*]:-} )
-        coordinate_fields_plural=( ${sub_dims_plural[*]:-} )
-      ;;
-      tree)
-        coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
-        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} )
-      ;;
-      *)
-        log_fatal "Internal error: invalid coord_type=$coord_type"
-        fail1
-      ;;
-    esac
-
-    coordinate_fields_count=${#coordinate_fields[*]}
-  end_function
-  handle_return
-}
-
 # inputs:
 #   coord_type
 #   source       set to dims to load coordinates from existing dims
@@ -2244,21 +2244,8 @@ calc_coordinates() {
       fail1
     fi
 
-  # TODO move new coordinate data to old
+    coordinate_data=( "${new_coordinate_data[@]}" )
 
-  end_function
-  handle_return
-}
-
-# inputs:
-#   coord_type
-#   source       set to dims to load coordinates from existing dims
-#                set to coords to using existing coordinates and attempt to fill in blanks
-#   all ddims of that type OR existing coords
-# assumes ddims are in array form (not space separated)
-calc_coordinates() {
-  local source=${source:-dim} coord_type=$coord_type handle_missing=${handle_missing:-error}
-  begin_function
   end_function
   handle_return
 }
