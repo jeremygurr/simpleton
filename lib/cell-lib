@@ -835,7 +835,7 @@ prep_dims() {
 
         if [[ ! "${sdims:-}" && ! "${sdim:-}" && ! "${ddim:-}" && ! "${ddims:-}" ]]; then
           if [[ $is_optional == f ]]; then
-            missing_dims+=( $dim_var )
+            unknown_dims+=( $dim_var )
           fi
         else
           known_dims+=( $dim_var )
@@ -892,6 +892,7 @@ expand_dim() {
 
 # inputs:
 #   $*           members to expand
+#   dim_var      dim being expanded
 # outputs:
 #   new_values   array of expanded members
 expand_dim_members() {
@@ -908,6 +909,8 @@ expand_dim_members() {
   handle_return
 }
 
+# inputs:
+#   known_dims    space separated list of dims to expand
 # expands aliases for the known dims array
 # collapses singular and plural dims into plural dims
 # should only be used after prep_dims, which means 
@@ -917,7 +920,6 @@ expand_dim_members() {
 # this function guaranteeds ddims will be set for all known dims
 # ddims will be an array after this function
 expand_dims() {
-  local known_dims=$known_dims
   begin_function
 
     local dim_var plural dim_type
@@ -968,9 +970,6 @@ expand_dims() {
       fi
 
     end_for
-
-    # These need to be discarded, because expansion could have set new dims
-    unset known_dims missing_dims
 
   end_function
   handle_return
@@ -1044,7 +1043,7 @@ init_dims() {
 setup_dims() {
   begin_function
 
-    local known_dims=() missing_dims=()
+    local known_dims=() unknown_dims=()
     prep_dims trunk_dims sub_dims control_props data_props || fail
 
     if [[ "${known_dims:-}" ]]; then
@@ -1688,11 +1687,11 @@ seed_coordinates() {
   handle_return
 }
 
-handle_missing_dims() {
+handle_unknown_dims() {
   local can_ask=${can_ask:-t}
   begin_function
     local dim_var dims_var
-    begin_for dim_var in ${missing_dims[*]}; doo
+    begin_for dim_var in ${unknown_dims[*]}; doo
 
       get_plural $dim_var dims_var
       local -n value=s_$dim_var ddims=s_$dims_var
@@ -1710,7 +1709,7 @@ handle_missing_dims() {
       ddims=( "${values[@]}" )
 
     end_for
-    missing_dims=()
+    unknown_dims=()
   end_function
   handle_return
 }
@@ -2002,6 +2001,7 @@ calc_coordinates_next_unknown_dim() {
   begin_function
     local dim dims \
       phase unknown_dims=${unknown_dims:-} \
+      resolved_dims=${resolved_dims:-} \
       coord_index \
       row_ended=f \
 
@@ -2081,11 +2081,11 @@ calc_coordinates_row_end() {
     if [[ "$unknown_dims" ]]; then
       case $handle_missing in
         error)
-          log_fatal "Could not resolve dims: ${missing_dims[*]}"
+          log_fatal "Could not resolve dims: $unknown_dims"
           fail1
         ;;
         blank)
-          for d in ${missing_dims[*]}; do
+          for d in ${unknown_dims[*]}; do
             local -n m=d_$d
             m=$missing_member
           done
@@ -2107,7 +2107,7 @@ calc_coords_validate_member() {
   local dim=$1 member=$2
   begin_function
     is_valid=t
-    local values= conflicting_dims=f
+    local values= can_derive
     attempt_derive $dim || fail
     if [[ $can_derive == t ]]; then
       if ! array_contains values "$member"; then
@@ -2124,7 +2124,7 @@ calc_coords_validate_member() {
       fi
       from_dim=$dim attempt_derive $rd || fail
       if [[ $can_derive == t ]]; then
-        if [[ ! "$values" ]]; then
+        if [[ ! "${values:-}" ]]; then
           is_valid=f
         fi
         succeed
@@ -2145,6 +2145,7 @@ calc_coordinates_next_known_dim() {
       coord_index \
       unknown_dims=${unknown_dims:-} \
       known_dims=${known_dims:-} \
+      resolved_dims=${resolved_dims:-} \
       row_ended=f \
 
     dim=${known_dims%% *}
@@ -2152,7 +2153,6 @@ calc_coordinates_next_known_dim() {
 
     if [[ "$dim" ]]; then
 
-      resolved_dims+=" $dim"
       coord_index=${coordinate_dim_index[$dim]}
       dims=${coordinate_fields_plural[$coord_index]}
 
@@ -2163,34 +2163,26 @@ calc_coordinates_next_known_dim() {
       if [[ "${members:-}" ]]; then
 
         local is_valid=t
-        if (( ${#members[*]} > 1 )); then
           local m
           # can't loop over named vars (local -n vars)
           # so we need to use a simple var and assign to the named one
           begin_for m in "${members[@]}"; doo
-            #log_debug "Processing $dim=$current_member"
             member=$m
+            #log_debug "Processing $dim=$member"
             # recursive
             calc_coords_validate_member $dim "$member" || fail
             if [[ $is_valid == t ]]; then
+              resolved_dims+=" $dim"
               calc_coordinates_next_known_dim || fail
               has_valid_member=t
             fi
           end_for
           row_ended=t
-        else
-          calc_coords_validate_member $dim "$member" || fail
-          member=$members
-          if [[ $is_valid == t ]]; then
-            calc_coordinates_next_known_dim || fail
-            has_valid_member=t
-            row_ended=t
-          fi
-        fi
 
       fi
 
       if [[ $has_valid_member == f ]]; then
+        log_debug "Adding $dim to unknown list"
         unknown_dims+=" $dim"
       fi
 
@@ -2307,10 +2299,10 @@ build_context_leaf() {
 
     #if [[ ! "${parameter_questions:-}" ]]; then
 
-      local missing_dims=()
+      local unknown_dims=()
       coord_type=branch \
       calc_coordinates || fail
-      if [[ "${missing_dims:-}" ]]; then
+      if [[ "${unknown_dims:-}" ]]; then
         # TODO will need to find a better way to do this
         log_fatal "Could not resolve all branch dims in build_context_leaf"
         fail1
@@ -3072,7 +3064,7 @@ calc_coords() {
       coord_type=branch \
       calc_coordinates || fail
       if [[ $command_requires_resolved_dims == t ]]; then
-        handle_missing_dims || fail
+        handle_unknown_dims || fail
       fi
     fi
 
@@ -3080,7 +3072,7 @@ calc_coords() {
       coord_type=leaf \
       calc_coordinates || fail
       if [[ $command_requires_resolved_dims == t ]]; then
-        handle_missing_dims || fail
+        handle_unknown_dims || fail
       fi
     fi
 
