@@ -929,7 +929,8 @@ expand_dims() {
         sdim=s_$dim_var sdims=s_$dims_var \
         ddim=d_$dim_var ddims=d_$dims_var \
 
-      if [[ ! "${ddim:-}" && ! "${ddims:-}" ]]; then
+      if [[ ! "${ddim:-}" && ! "${ddims:-}" && \
+            ( "${sdim:-}" || "${sdims:-}" ) ]]; then
 
         log_debug "Expanding dim $dim_var"
 
@@ -1863,15 +1864,18 @@ coord_row_is_valid() {
 }
 
 # inputs:
-#   dim     dimension to derive
+#   dim          dimension to derive
+#   from_dim     optional, will only look for ways to derive 'dim' from 'from_dim'
 # output:
-#   values  array of members
+#   values       array of members
+#   can_derive   whether a derive function or derive table exists for the given dim
 attempt_derive() {
   local dim=$1 from_dim=${from_dim:-} old_values_string=${old_values_string:-}
   begin_function
     local -n dim_type=${dim}_dim_type
     local -n derived_from=${dim_type}_${dim}_derived_from
     values=
+    can_derive=f
 
     local derived_from_row derived_from_dim \
       complete_row derived_from_incomplete=f \
@@ -1908,6 +1912,7 @@ attempt_derive() {
     if function_exists ${dim_type}_${dim}_derive; then
       #log_debug "Trying derive function ${dim_type}_${dim}_derive"
       ${dim_type}_${dim}_derive || fail
+      can_derive=t
     fi
 
     if [[ ! "${values:-}" && "${derived_from:-}" ]]; then
@@ -1940,6 +1945,8 @@ attempt_derive() {
           # we don't need to check this table since it doesn't use enough set dependent dims
           continue
         fi
+
+        can_derive=t
 
         out_field=$dim \
         out_set=new_values \
@@ -2098,7 +2105,7 @@ calc_coords_validate_member() {
     is_valid=f
     local values= conflicting_dims=f
     attempt_derive $dim || fail
-    if [[ $has_derive_path == t ]]; then
+    if [[ $can_derive == t ]]; then
       if array_contains values "$member"; then
         is_valid=t
       fi
@@ -2108,9 +2115,12 @@ calc_coords_validate_member() {
     eval "local d_$dim=\$member"
     local rd
     begin_for rd in $resolved_dims; doo
+      if [[ $rd == $dim ]]; then
+        continue
+      fi
       from_dim=$dim attempt_derive $rd || fail
-      if [[ $has_derive_path == t ]]; then
-        if array_contains values "$member"; then
+      if [[ $can_derive == t ]]; then
+        if [[ "$values" ]]; then
           is_valid=t
         fi
         succeed
@@ -2150,9 +2160,12 @@ calc_coordinates_next_known_dim() {
 
         local is_valid=t
         if (( ${#members[*]} > 1 )); then
-          local member
-          begin_for member in "${members[@]}"; doo
+          local m
+          # can't loop over named vars (local -n vars)
+          # so we need to use a simple var and assign to the named one
+          begin_for m in "${members[@]}"; doo
             #log_debug "Processing $dim=$current_member"
+            member=$m
             # recursive
             calc_coords_validate_member $dim "$member" || fail
             if [[ $is_valid == t ]]; then
@@ -2202,6 +2215,10 @@ calc_coordinates_next_known_dim() {
 calc_coordinates() {
   local source=${source:-dim} coord_type=$coord_type handle_missing=${handle_missing:-error}
   begin_function
+
+    if [[ "${localize_dims:-}" ]]; then
+      eval "local $localize_dims"
+    fi
 
     local -n coordinate_fields=${coord_type}_coordinate_fields
     if [[ ! "${coordinate_fields:-}" ]]; then
