@@ -1869,7 +1869,10 @@ coord_row_is_valid() {
 #   values       array of members
 #   can_derive   whether a derive function or derive table exists for the given dim
 attempt_derive() {
-  local dim=$1 from_dim=${from_dim:-} old_values_string=${old_values_string:-}
+  local dim=$1 from_dim=${from_dim:-} \
+    old_values_string=${old_values_string:-} \
+    stop_after_first_match=${stop_after_first_match:-f} \
+
   begin_function
     local -n dim_type=${dim}_dim_type
     local -n derived_from=${dim_type}_${dim}_derived_from
@@ -1950,6 +1953,7 @@ attempt_derive() {
         out_field=$dim \
         out_set=new_values \
         execute_derive_table || fail
+
         if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
           intersect old_values new_values intersected
           copy_set intersected old_values
@@ -2122,7 +2126,10 @@ calc_coords_validate_member() {
       if [[ $rd == $dim ]]; then
         continue
       fi
+
+      stop_after_first_match=t \
       from_dim=$dim attempt_derive $rd || fail
+
       if [[ $can_derive == t ]]; then
         if [[ ! "${values:-}" ]]; then
           is_valid=f
@@ -2153,6 +2160,7 @@ calc_coordinates_next_known_dim() {
 
     if [[ "$dim" ]]; then
 
+      log_debug "Checking known dim $dim"
       coord_index=${coordinate_dim_index[$dim]}
       dims=${coordinate_fields_plural[$coord_index]}
 
@@ -2175,6 +2183,9 @@ calc_coordinates_next_known_dim() {
               resolved_dims+=" $dim"
               calc_coordinates_next_known_dim || fail
               has_valid_member=t
+            else
+              log_debug "Dim member is not valid: $dim = $member"
+              debug_start
             fi
           end_for
           row_ended=t
