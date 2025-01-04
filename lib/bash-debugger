@@ -1161,12 +1161,22 @@ debug_command_loop() {
         no_follow_once=t
         ;;
       =)
-        echo "# Running until this line is reached again" >&$fd_original_err
+        echo "# Running until this line in the same depth is reached again" >&$fd_original_err
         debug_stop_at="$raw_debug_path_to_source_file $debug_line_num"
         debug_r=0
         debug_long_command=t
         debug_subshell=t
         debug_max_depth=$debug_current_depth
+        debug_step_to_next_line=f
+        debug_save_state
+        ;;
+      +)
+        echo "# Running until this line in any depth is reached again" >&$fd_original_err
+        debug_stop_at="$raw_debug_path_to_source_file $debug_line_num"
+        debug_r=0
+        debug_long_command=t
+        debug_subshell=t
+        debug_max_depth=99999
         debug_step_to_next_line=f
         debug_save_state
         ;;
@@ -1346,6 +1356,7 @@ debug_command_loop() {
         echo "-  move up stack one position and show source" >&$fd_original_err
         echo "_  move down stack one position and show source" >&$fd_original_err
         echo "=  continue until the current line is reached again at the same stack depth" >&$fd_original_err
+        echo "+  continue until the current line is reached again at ANY stack depth" >&$fd_original_err
         echo "]  continue until we reach a different mid function" >&$fd_original_err
         echo "}  continue until we reach a different high level function (begin_function_hi)" >&$fd_original_err
         echo "\  continue until we reach a different function" >&$fd_original_err
@@ -1377,7 +1388,7 @@ debug_command_loop() {
 }
 
 debug_update_expansion() {
-  if [[ $debug_recording_trace == f && debug_expansion -gt 0 ]]; then
+  if [[ $debug_recording_trace == f && debug_expansion -gt 0 && $debug_long_command == f ]]; then
     debug_recording_trace=t
     [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Starting debug output expansion${RESET}" >&$fd_original_err
     if [[ ! "${fd_bash_trace:-}" ]]; then
@@ -1514,7 +1525,8 @@ maybe_enable_debug_tracing() {
   if (( debug_expansion > 0 
         && ${no_trace_depth:-0} <= 0 \
      )); then
-    if [[ $debug_expansion == 1 \
+    if [[ $debug_long_command == f \
+          && $debug_expansion == 1 \
           && $debug_current_depth -le $debug_max_depth \
           || $debug_expansion -ge 2 ]]; then
       debug_tracing=t
@@ -1770,6 +1782,7 @@ debug_trap() {
 
   if [[ $ok_to_debug == t ]]; then
     no_trace_depth=0
+    tracing_depth=0
     debug_inner
   else
     [[ $debug_debug == t ]] && echo "${CYAN}Not stopping.${RESET}" >&$fd_original_err
