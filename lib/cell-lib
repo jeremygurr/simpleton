@@ -211,6 +211,7 @@ load_var_to_code() {
   handle_return
 }
 
+# will skip empty / whitespace lines
 load_arr_to_code() {
   begin_function
 
@@ -233,10 +234,12 @@ load_arr_to_code() {
 
     while IFS= read -r line || [[ "$line" ]]; do
       trim_ws line
-      if [[ "$line" != [\"\']* ]]; then
-        quotes=single shell_quote_var line
+      if [[ "$line" ]]; then
+        if [[ "$line" != [\"\']* ]]; then
+          quotes=single shell_quote_var line
+        fi
+        code+=" $line" || fail
       fi
-      code+=" $line" || fail
     done < <(echo -n "$content")
 
     code+=" )"
@@ -1863,10 +1866,9 @@ coord_row_is_valid() {
 #   dim     dimension to derive
 # output:
 #   values  array of members
-calc_coords_check_derive() {
-  local old_values_string=${1:-}
+attempt_derive() {
+  local dim=$1 from_dim=${from_dim:-} old_values_string=${old_values_string:-}
   begin_function
-
     local -n dim_type=${dim}_dim_type
     local -n derived_from=${dim_type}_${dim}_derived_from
     values=
@@ -1878,7 +1880,7 @@ calc_coords_check_derive() {
     if [[ "${derived_from:-}" ]]; then
       local one_row_complete=f
       begin_for derived_from_row in "${derived_from[@]}"; doo
-        if [[ "$derived_from_row" ]]; then
+        if [[ " $derived_from_row " == *" $from_dim "* ]]; then
           complete_row=t
           for derived_from_dim in $derived_from_row; do
             local -n derive_from_dim_value=d_$derived_from_dim
@@ -1953,12 +1955,12 @@ calc_coords_check_derive() {
       keys_to_array old_values values
 
     fi
-
   end_function
   handle_return
 }
 
-calc_coords_check_default() {
+attempt_default() {
+  local dim=$1
   begin_function
 
     local problem
@@ -2010,13 +2012,14 @@ calc_coordinates_next_unknown_dim() {
           log_debug "Finding values for $dim in phase $phase"
           local values=
           if [[ $phase == derive ]]; then
-            calc_coords_check_derive || fail
+            attempt_derive $dim || fail
           else
-            calc_coords_check_default || fail
+            attempt_default $dim || fail
           fi
 
           if [[ "${values:-}" ]]; then
 
+            resolved_dims+=" $dim"
             local -n sdims=s_$dims
             sdims=( "${values[@]}" )
             expand_dims || fail
@@ -2090,8 +2093,29 @@ calc_coordinates_row_end() {
 }
 
 calc_coords_validate_member() {
+  local dim=$1 member=$2
   begin_function
-    ....
+    is_valid=f
+    local values= conflicting_dims=f
+    attempt_derive $dim || fail
+    if [[ $has_derive_path == t ]]; then
+      if array_contains values "$member"; then
+        is_valid=t
+      fi
+      succeed
+    fi
+
+    eval "local d_$dim=\$member"
+    local rd
+    begin_for rd in $resolved_dims; doo
+      from_dim=$dim attempt_derive $rd || fail
+      if [[ $has_derive_path == t ]]; then
+        if array_contains values "$member"; then
+          is_valid=t
+        fi
+        succeed
+      fi
+    end_for
   end_function
   handle_return
 }
@@ -2105,7 +2129,6 @@ calc_coordinates_next_known_dim() {
   begin_function
     local dim dims \
       coord_index \
-      phase=known \
       unknown_dims= \
       known_dims=${known_dims:-} \
       row_ended=f \
@@ -2115,6 +2138,7 @@ calc_coordinates_next_known_dim() {
 
     if [[ "$dim" ]]; then
 
+      resolved_dims+=" $dim"
       coord_index=${coordinate_dim_index[$dim]}
       dims=${coordinate_fields_plural[$coord_index]}
 
@@ -2198,6 +2222,7 @@ calc_coordinates() {
       coordinate_count=0 \
       coordinate_rows=0 \
       unknown_dims= \
+      resolved_dims= \
 
       setup_coord_fields || fail
     fi
