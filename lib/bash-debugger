@@ -948,7 +948,6 @@ debug_command_loop() {
         ;;
       n)
         echo "# Stepping over" >&$fd_original_err
-        no_trace_depth=0
         debug_r=0
         debug_max_depth=$debug_current_depth
         debug_step_to_next_line=t
@@ -1199,7 +1198,7 @@ debug_command_loop() {
         ;;
       \])
         echo "# Running until a mid level function is reached" >&$fd_original_err
-        (( debug_max_depth++ ))
+        (( debug_max_depth += 10 ))
         debug_long_command=t
         debug_step_to_mid_function=t
         debug_subshell=t
@@ -1209,10 +1208,11 @@ debug_command_loop() {
         ;;
       \})
         echo "# Running until a high level function is reached" >&$fd_original_err
-        (( debug_max_depth++ ))
+        (( debug_max_depth += 10 ))
         debug_r=0
         debug_long_command=t
         debug_step_to_hi_function=t
+        debug_subshell=t
         debug_save_state
         debug_untrap=t
         ;;
@@ -1519,7 +1519,6 @@ maybe_enable_debug_tracing() {
           || $debug_expansion -ge 2 ]]; then
       debug_tracing=t
       [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
-      no_trace_depth=0
     fi
   fi
 }
@@ -1662,7 +1661,8 @@ debug_inner() {
 
   if [[ $debug_untrap == t ]]; then
     debug_tracing=f
-    debug_expansion=0
+    #debug_expansion=0
+    debug_output_stop
     debugging=f
   fi
 
@@ -1693,7 +1693,6 @@ debug_trap() {
     debug_var_old=$v
   fi
 
-  tracing_depth=0
   local debug_r=0
 
   if [[ ${trace_debugger:-f} == t ]]; then 
@@ -1717,7 +1716,6 @@ debug_trap() {
     debug_source_file \
 
   debug_tracing=f
-  #no_trace_depth=0
   [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
   local prev_debug_out_path=$debug_out_path
   debug_out_path=$tmp_folder/debug-out.$BASHPID
@@ -1771,6 +1769,7 @@ debug_trap() {
   debug_output_expansion
 
   if [[ $ok_to_debug == t ]]; then
+    no_trace_depth=0
     debug_inner
   else
     [[ $debug_debug == t ]] && echo "${CYAN}Not stopping.${RESET}" >&$fd_original_err
@@ -1902,7 +1901,7 @@ log_debug_debug() {
 
 debug_start() {
   debug_buffered_commands=$*
-  #no_trace_depth=0
+  no_trace_depth=0
   parallel_execution=${p_par:-f}
   if [[ ! -v debugging ]]; then
     debugger_init || return 1
