@@ -823,9 +823,7 @@ prep_dims() {
           ddim=d_$dim_var ddims=d_$dims_var \
           sdim=s_$dim_var sdims=s_$dims_var \
           pdim=p_$dim_var pdims=p_$dims_var \
-          is_optional=${dim_type}_${dim_var}_is_optional \
 
-        is_optional=${is_optional:-f} \
         sdim=${sdim:-${pdim:-${dim:-}}} \
         sdims=${sdims:-${pdims:-${dims:-}}} \
 
@@ -838,13 +836,7 @@ prep_dims() {
         [[ "${ddim:-}" == $empty_member ]] && ddim=
         [[ "${ddims:-}" == $empty_member ]] && ddims=
 
-        if [[ ! "${sdims:-}" && ! "${sdim:-}" && ! "${ddim:-}" && ! "${ddims:-}" ]]; then
-          if [[ $is_optional == f ]]; then
-            unknown_dims+=( $dim_var )
-          fi
-        else
-          known_dims+=( $dim_var )
-        fi
+        all_dims+=( $dim_var )
 
       done
     done
@@ -915,7 +907,7 @@ expand_dim_members() {
 }
 
 # inputs:
-#   known_dims    space separated list of dims to expand
+#   $*      list of dims to expand
 # expands aliases for the known dims array
 # collapses singular and plural dims into plural dims
 # should only be used after prep_dims, which means 
@@ -925,10 +917,11 @@ expand_dim_members() {
 # this function guaranteeds ddims will be set for all known dims
 # ddims will be an array after this function
 expand_dims() {
+  local to_expand=$*
   begin_function
 
     local dim_var plural dim_type
-    begin_for dim_var in ${known_dims[*]}; doo
+    begin_for dim_var in $to_expand; doo
 
       local dims_var
       get_plural $dim_var dims_var
@@ -1047,11 +1040,11 @@ init_dims() {
 setup_dims() {
   begin_function
 
-    local known_dims=() unknown_dims=()
+    local all_dims=()
     prep_dims trunk_dims sub_dims control_props data_props || fail
 
-    if [[ "${known_dims:-}" ]]; then
-      expand_dims || fail
+    if [[ "${all_dims:-}" ]]; then
+      expand_dims ${all_dims[*]} || fail
     fi
 
     load_child_dims || fail
@@ -2051,9 +2044,9 @@ calc_coordinates_next_unknown_dim() {
 
             resolved_dims+=" $dim"
             local -n sdims=s_$dims
+            eval "local s_$dim s_$dims d_$dim=\${d_$dim:-} d_${dim}s=\${d_${dim}s:-}"
             sdims=( "${values[@]}" )
-            expand_dims || fail
-            eval "local d_$dim=\${d_$dim:-} d_${dim}s=\${d_${dim}s:-}"
+            expand_dims $dim || fail
             members=( "${values[@]}" )
 
             if (( ${#members[*]} > 1 )); then
@@ -2307,7 +2300,7 @@ calc_coordinates() {
       log_verbose "Refining existing $coord_type cell coordinates"
       begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
         dim_type=sdim convert_coords_to_dims || fail
-        expand_dims || fail
+        expand_dims $known_dims || fail
         handle_missing=skip \
         calc_coordinates_next_known_dim || fail
       end_for
