@@ -2169,7 +2169,6 @@ calc_coordinates_next_known_dim() {
       unknown_dims=${unknown_dims:-} \
       known_dims=${known_dims:-} \
       resolved_dims=${resolved_dims:-} \
-      row_ended=f \
 
     dim=${known_dims%% *}
     known_dims=${known_dims##$dim*( )}
@@ -2183,43 +2182,37 @@ calc_coordinates_next_known_dim() {
       local -n member=d_$dim \
         members=d_$dims
 
-      local has_valid_member=f
       if [[ "${members:-}" ]]; then
 
         local is_valid=t
-          local m
-          # can't loop over named vars (local -n vars)
-          # so we need to use a simple var and assign to the named one
-          begin_for m in "${members[@]}"; doo
-            member=$m
-            log_debug "Processing $dim=$member"
-            # recursive
-            calc_coords_validate_member $dim "$member" || fail
-            if [[ $is_valid == t ]]; then
-              resolved_dims+=" $dim"
-              calc_coordinates_next_known_dim || fail
-              has_valid_member=t
-            else
-              log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
-            fi
-          end_for
-          row_ended=t
+        resolved_dims+=" $dim"
 
-      fi
+        local m
+        # can't loop over named vars (local -n vars)
+        # so we need to use a simple var and assign to the named one
+        begin_for m in "${members[@]}"; doo
+          member=$m
+          log_debug "Processing $dim=$member"
+          # recursive
+          calc_coords_validate_member $dim "$member" || fail
+          if [[ $is_valid == t ]]; then
+            calc_coordinates_next_known_dim || fail
+          else
+            log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
+          fi
+        end_for
 
-      if [[ $has_valid_member == f ]]; then
+        # if none of the members are valid, we just skip the row
+        # if any are valid, they will have added their own rows already
+        succeed
+
+      else # no members
         log_debug "Adding $dim to unknown list"
         unknown_dims+=" $dim"
-      fi
-
-      if [[ $row_ended == f ]]; then
         calc_coordinates_next_known_dim || fail
-        row_ended=t
       fi
 
-    fi
-
-    if [[ $row_ended == f ]]; then
+    else # known_dims is empty, need to proceed to unknowns
       calc_coordinates_next_unknown_dim || fail
     fi
 
