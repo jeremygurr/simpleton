@@ -746,21 +746,27 @@ convert_coords_to_dims() {
   local coord_type=${coord_type} row_index=${row_index:-0} dim_type=$dim_type
   begin_function
 
-    local field field_index values=() count field_count data_offset
+    local field fields field_index values=() count field_count data_offset
 
     local -n c_fields_plural=${coord_type}_coordinate_fields_plural \
              c_data=${coord_type}_coordinate_data \
              c_fields_count=${coord_type}_coordinate_fields_count \
 
     begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
-      field=${c_fields_plural[$field_index]}
+      field=${c_fields[$field_index]}
+      fields=${c_fields_plural[$field_index]}
 
+      local -n sdim=s_$field sdims=s_$fields ddim=d_$field  ddims=d_$fields
+
+      (( data_offset = c_fields_count * row_index + field_index ))
       case $dim_type in 
         sdim)
-          local -n dim=s_$field
+          sdims=${c_data[$data_offset]}
+          unset sdim ddim ddims
         ;;
         ddim)
-          local -n dim=d_$field
+          ddims=${c_data[$data_offset]}
+          unset sdim sdims ddim
         ;;
         *)
           log_fatal "Invalid dim_type: $dim_type"
@@ -768,8 +774,6 @@ convert_coords_to_dims() {
         ;;
       esac
 
-      (( data_offset = c_fields_count * row_index + field_index ))
-      dim=${c_data[$data_offset]}
     end_for
 
   end_function
@@ -946,9 +950,6 @@ expand_dims() {
           members=( "$sdim" )
         fi
 
-        ddim=
-        ddims=
-
         local value new_values
         expand_dim_members "${members[@]}" || fail
 
@@ -960,12 +961,14 @@ expand_dims() {
         fi
 
         ddims=( "${new_values[@]}" )
+        unset ddim sdim sdims
 
       elif [[ ! "${ddims:-}" ]]; then
         if [[ "${ddim:-}" ]]; then
           ddims=( "$ddim" )
+          unset ddim sdim sdims
         else
-          ddims=()
+          unset ddims ddim sdim sdims
         fi
       fi
 
@@ -1017,7 +1020,7 @@ load_child_dims() {
 }
 
 init_dims() {
-  local types=${*:-trunk_dims sub_dims control_props data_props} \
+  local types=${*:-trunk_dims sub_dims} \
     new_value=${new_value:-} vars=${vars:-ddim}
   begin_function
     begin_for dim_type in $types; doo
@@ -2062,8 +2065,9 @@ calc_coordinates_next_unknown_dim() {
             log_debug "Resolved $dim with $phase: ${values[*]:0:30}"
             remove_word_from_string unknown_dims $dim
 
-            local m
-            begin_for m in "${members[@]}"; doo
+            local m ms=( "${members[@]}" )
+            unset members
+            begin_for m in "${ms[@]}"; doo
 
               member=$m
               #log_debug "Processing $dim=$member"
@@ -2194,13 +2198,14 @@ calc_coordinates_next_known_dim() {
 
       if [[ "${members:-}" ]]; then
 
-        local is_valid=t m
+        local is_valid=t m ms=( "${members[@]}" )
         resolved_dims+=" $dim"
+        unset members
 
         eval "local d_$dim=\${d_$dim:-} d_${dim}s=\${d_${dim}s:-}"
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
-        begin_for m in "${members[@]}"; doo
+        begin_for m in "${ms[@]}"; doo
           member=$m
           log_debug "Processing $dim=$member"
           # recursive
