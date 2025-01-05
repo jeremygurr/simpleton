@@ -1597,6 +1597,15 @@ calc_coordinates_add_row() {
       fi
     done
 
+    # infinite loop detectino
+    if [[ "${prev_coords[0]:-}" ]]; then
+      if [[ "${prev_coords[*]}" == "${new_coords[*]}" ]]; then
+        log_fatal "Added same coordinate row twice: ${coord_type}_coordinate_data+=( ${new_coords[*]} )"
+        fail1
+      fi
+    fi
+    prev_coords=( "${new_coords[@]}" )
+
     log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
 
   end_function
@@ -1775,13 +1784,13 @@ execute_derive_table() {
           local -n dim=d_$field
 
           if [[ "${dim:-}" ]]; then
-            if [[ "$dim" != "$value" && "$value" != any && "$dim" != any ]]; then
+            if [[ "$dim" != "$value" && "$value" != all && "$dim" != all ]]; then
               #log_debug "Row doesn't match because dim $field = $dim but table shows $value"
               everything_matches=f
               break
             fi
           else # dim not set
-            if [[ $strict_matching == t && "$value" && "$value" != any ]]; then
+            if [[ $strict_matching == t && "$value" && "$value" != all ]]; then
               #log_debug "Row doesn't match because $field is not set"
               everything_matches=f
               break
@@ -2083,6 +2092,7 @@ calc_coordinates_row_end() {
   begin_function
 
     if [[ "$unknown_dims" ]]; then
+
       case $handle_missing in
         error)
           log_fatal "Could not resolve dims: $unknown_dims"
@@ -2093,15 +2103,20 @@ calc_coordinates_row_end() {
             local -n m=d_$d
             m=$missing_member
           done
+          calc_coordinates_add_row || fail
+        ;;
+        skip)
+          log_debug "Skipped row because of unresolvable dims: $unknown_dims"
         ;;
         *)
           log_fatal "Internal error: invalid handle_missing value: $handle_missing"
           fail1
         ;;
       esac
-    fi
 
-    calc_coordinates_add_row || fail
+    else
+      calc_coordinates_add_row || fail
+    fi
 
   end_function
   handle_return
@@ -2176,7 +2191,7 @@ calc_coordinates_next_known_dim() {
           # so we need to use a simple var and assign to the named one
           begin_for m in "${members[@]}"; doo
             member=$m
-            #log_debug "Processing $dim=$member"
+            log_debug "Processing $dim=$member"
             # recursive
             calc_coords_validate_member $dim "$member" || fail
             if [[ $is_valid == t ]]; then
@@ -2184,8 +2199,7 @@ calc_coordinates_next_known_dim() {
               calc_coordinates_next_known_dim || fail
               has_valid_member=t
             else
-              log_debug "Dim member is not valid: $dim = $member"
-              debug_start
+              log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
             fi
           end_for
           row_ended=t
@@ -2284,6 +2298,7 @@ calc_coordinates() {
       begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
         dim_type=sdim convert_coords_to_dims || fail
         expand_dims || fail
+        handle_missing=skip \
         calc_coordinates_next_known_dim || fail
       end_for
 
