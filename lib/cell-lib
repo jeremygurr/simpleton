@@ -797,13 +797,21 @@ convert_coords_to_dims() {
 
       (( data_offset = c_fields_count * row_index + field_index ))
       case $dim_type in 
-        sdim)
+        sdims)
           sdims=${c_data[$data_offset]}
           unset sdim ddim ddims
         ;;
-        ddim)
+        ddims)
           ddims=${c_data[$data_offset]}
           unset sdim sdims ddim
+        ;;
+        sdim)
+          sdim=${c_data[$data_offset]}
+          unset sdims ddim ddims
+        ;;
+        ddim)
+          ddim=${c_data[$data_offset]}
+          unset sdim sdims ddims
         ;;
         *)
           log_fatal "Invalid dim_type: $dim_type"
@@ -1655,6 +1663,10 @@ setup_coord_fields() {
         coordinate_fields_plural=( ${trunk_dims_plural[*]:-} )
       ;;
       leaf)
+        coordinate_fields=( ${control_props[*]:-} ${data_props[*]:-} )
+        coordinate_fields_plural=( ${control_props_plural[*]:-} ${data_props_plural[*]:-} )
+      ;;
+      sub)
         coordinate_fields=( ${sub_dims[*]:-} )
         coordinate_fields_plural=( ${sub_dims_plural[*]:-} )
       ;;
@@ -1759,20 +1771,6 @@ handle_unknown_dims() {
   handle_return
 }
 
-load_coord_row_into_dims() {
-  local -n fields=$1 row=$2
-  begin_function
-    local i dim member
-    begin_for i in ${!fields[*]}; doo
-      dim=${fields[$i]}
-      member=${row[$i]}
-      local ddim=d_$dim
-      ddim=$member
-    end_for
-  end_function
-  handle_return
-}
-
 # inputs:
 #   derive_table   name of var of derive table
 #   out_field      which field to read from the table
@@ -1850,58 +1848,6 @@ execute_derive_table() {
     end_while
 
     log_return_vars=out_var
-  end_function
-  handle_return
-}
-
-coord_row_is_valid() {
-  local fields_var=$1 row_var=$2
-  begin_function
-    local i dim member
-    local -n fields=$fields_var row=$row_var
-
-    if [[ "$localize_dims" ]]; then
-      eval "local $localize_dims" || fail
-    else
-      log_fatal "localize_dims should be set by now"
-      fail1
-    fi
-
-    init_dims || fail
-    load_coord_row_into_dims $fields_var $row_var || fail
-
-    begin_for i in ${!fields[*]}; doo
-
-      dim=${fields[$i]}
-      member=${row[$i]}
-      local -n dim_type=${dim}_dim_type
-
-      local values=()
-      if function_exists ${dim_type}_${dim}_derive; then
-        ${dim_type}_${dim}_derive || fail
-        if [[ ! "${values:-}" ]]; then
-          debug_start
-          fail1
-        fi
-      fi
-
-      local -n derive_tables=${dim}_derive_tables
-      if [[ "${derive_tables:-}" ]]; then
-        local derive_table
-        local -A found_in_table
-        begin_for derive_table in $derive_tables; doo
-          out_field=$dim \
-          out_set=found_in_table \
-          stop_after_first_match=t \
-          execute_derive_table || fail
-          if [[ ! "${found_in_table[*]}" ]]; then
-            fail1
-          fi
-        end_for
-      fi
-
-    end_for
-
   end_function
   handle_return
 }
@@ -2357,7 +2303,7 @@ calc_coordinates() {
       log_verbose "Refining existing $coord_type cell coordinates"
       begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
         progress_bar $row_index $coordinate_rows
-        dim_type=sdim convert_coords_to_dims || fail
+        dim_type=sdims convert_coords_to_dims || fail
         expand_dims $known_dims || fail
         handle_missing=skip \
         calc_coordinates_next_known_dim || fail
@@ -2387,14 +2333,15 @@ build_context_leaf() {
 
     #if [[ ! "${parameter_questions:-}" ]]; then
 
-      local unknown_dims=()
-      coord_type=branch \
+      local unknown_dims=() \
+        coord_type=branch
       calc_coordinates || fail
       if [[ "${unknown_dims:-}" ]]; then
         # TODO will need to find a better way to do this
         log_fatal "Could not resolve all branch dims in build_context_leaf"
         fail1
       fi
+      dim_type=ddim convert_coords_to_dims || fail
 
       write_vars_to_context \
         branch_coordinate_data \
@@ -2782,6 +2729,25 @@ plant_seed() {
   handle_return
 }
 
+init_coord() {
+  local coord_type=$1
+  local -n \
+    coordinate_count=${coord_type}_coordinate_count \
+    coordinate_data=${coord_type}_coordinate_data \
+    coordinate_fields=${coord_type}_coordinate_fields \
+    coordinate_fields_count=${coord_type}_coordinate_fields_count \
+    coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
+    coordinate_rows=${coord_type}_coordinate_rows \
+
+  coordinate_count= \
+  coordinate_data=() \
+  coordinate_fields=() \
+  coordinate_fields_count= \
+  coordinate_fields_plural=() \
+  coordinate_rows= \
+
+}
+
 init_context() {
   begin_function
 
@@ -2810,14 +2776,12 @@ init_context() {
     done
 
     if [[ $trunk_changed == t ]]; then
-      branch_coordinate_count= \
-      branch_coordinate_data=() \
-      branch_coordinate_fields=() \
-      branch_coordinate_fields_count= \
-      branch_coordinate_fields_plural=() \
-      branch_coordinate_rows= \
-
+      init_coord branch
     fi
+
+    init_coord leaf
+    init_coord sub
+    init_coord tree
 
     cell_expiration= \
     cell_is_external=f \
@@ -2830,12 +2794,6 @@ init_context() {
     default_anchor_dims= \
     default_freshness= \
     default_strategies=crl \
-    leaf_coordinate_count= \
-    leaf_coordinate_data=() \
-    leaf_coordinate_fields=() \
-    leaf_coordinate_fields_count= \
-    leaf_coordinate_fields_plural=() \
-    leaf_coordinate_rows= \
     localize_dims= \
     localize_reverse_dims= \
     lock_timeout=2 \
@@ -2855,12 +2813,6 @@ init_context() {
     reuse_existing_out=t \
     shuffle_chance=100 \
     sub_dims=() \
-    tree_coordinate_count= \
-    tree_coordinate_data=() \
-    tree_coordinate_fields=() \
-    tree_coordinate_fields_count= \
-    tree_coordinate_fields_plural=() \
-    tree_coordinate_rows= \
     trunk_dims=() \
     up=() \
     update_cost=1 \
@@ -3154,19 +3106,21 @@ calc_coords() {
   begin_function
 
     if [[ ! "${branch_coordinate_count:-}" ]]; then
-      coord_type=branch \
+      local coord_type=branch
       calc_coordinates || fail
       if [[ $command_requires_resolved_dims == t ]]; then
         handle_unknown_dims || fail
       fi
+      dim_type=ddim convert_coords_to_dims || fail
     fi
 
     if [[ $cell_is_leaf == t && ! "${leaf_coordinate_count:-}" ]]; then
-      coord_type=leaf \
+      local coord_type=leaf
       calc_coordinates || fail
       if [[ $command_requires_resolved_dims == t ]]; then
         handle_unknown_dims || fail
       fi
+      dim_type=ddim convert_coords_to_dims || fail
     fi
 
   end_function
