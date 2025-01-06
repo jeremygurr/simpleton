@@ -121,28 +121,56 @@ get_var_value() {
   fi
 }
 
-progress_bar() {
-  local current=$1 max=$2 percentage
+micros_to_minute() {
+  local -n _t=$1
+  (( _t = _t / 1000000 / 60 ))
+}
+
+progress_bar_start() {
   if ! log_level_at_least verbose; then
-    showing_progress_bar=${showing_progress_bar:-f}
-    if [[ $showing_progress_bar == t ]]; then
-      echo -n "$CLEAR_LINE" >&$fd_original_err
-    fi
-    showing_progress_bar=t
-    (( percentage = 100 * current / max ))
-    echo -n "...$percentage% complete" >&$fd_original_err
+    echo -n "...0% complete" >&$fd_original_err
+    progress_bar_showing=t
+    progress_bar_start_time=${EPOCHREALTIME/./}
   fi
 }
 
-progress_bar_complete() {
-  if [[ ${showing_progress_bar:-f} == t ]]; then
+progress_bar_update() {
+  local current=$1 max=$2 front_load=${front_load:-2} percentage
+  if [[ ${progress_bar_showing:-f} == t ]]; then
     echo -n "$CLEAR_LINE" >&$fd_original_err
-    showing_progress_bar=f
+    (( percentage = 100 * current / max ))
+    local time_taken_micro total_micro remaining_micro extra= remaining_min current_time=${EPOCHREALTIME/./}
+    (( time_taken_micro = current_time - progress_bar_start_time ))
+    (( total_micro = time_taken_micro * max / current ))
+    (( remaining_micro = total_micro - time_taken_micro ))
+
+    remaining_min=$remaining_micro
+    (( percentage < 25 )) && (( remaining_min *= front_load ))
+    micros_to_minute remaining_min
+    if (( remaining_min > 0 )); then
+      extra=" ($remaining_min minute(s) left)"
+    fi
+
+    echo -n "...$percentage% complete$extra" >&$fd_original_err
+  fi
+}
+
+progress_bar_stop() {
+  if [[ ${progress_bar_showing:-f} == t ]]; then
+    local time_taken current_time=${EPOCHREALTIME/./}
+    (( time_taken = current_time - progress_bar_start_time ))
+    micros_to_minute time_taken
+    if (( time_taken > 0 )); then
+      echo "...Completed in $time_taken minutes." >&$fd_original_err
+    else
+      echo -n "${CLEAR_LINE}" >&$fd_original_err
+    fi
+    progress_bar_showing=f
   fi
 }
 
 progress_bar_nudge() {
-  if [[ ${showing_progress_bar:-f} == t ]]; then
+  if [[ ${progress_bar_showing:-f} == t ]]; then
     echo -n "." >&$fd_original_err
   fi
 }

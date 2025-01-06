@@ -1786,20 +1786,30 @@ handle_unknown_dims() {
 # inputs:
 #   derive_table   name of var of derive table
 #   out_field      which field to read from the table
-#   out_set        which var to write set of valid members to
+#   out_set        which var to write set of valid members to (optional)
+#   out_arr        which var to write array of valid members to
 # outputs:
 #   out_set        the var out_set points to will contain a set of all matches
+#   out_arr        the var out_set points to will contain a set of all matches
 execute_derive_table() {
   local stop_after_first_match=${stop_after_first_match:-f}
   begin_function        
       
-    local out_var=$out_set
+    local -A internal_set
+    local out_var=${out_set:-$out_arr}
+          out_set=${out_set:-internal_set} \
+          out_arr=${out_arr:-} \
+
     local -n derive_fields=${derive_table}_fields \
              derive_data=${derive_table}_data \
-             out_set=$out_set \
+             dim_set=${out_set} \
 
-    if  ! is_set out_set; then
-      log_fatal "Internal error: execute_derive_table was called with out_set pointing to a variable that isn't an associative array."
+    if [[ "$out_arr" ]]; then
+      local -n dim_arr=${out_arr}
+    fi
+
+    if  ! is_set dim_set; then
+      log_fatal "Internal error: execute_derive_table was called with dim_set pointing to a variable that isn't an associative array."
       fail1
     fi
 
@@ -1847,7 +1857,12 @@ execute_derive_table() {
 
       if [[ $everything_matches == t ]]; then
         #log_debug "Matching row found"
-        out_set["$row_result"]=1
+        if [[ ! -v dim_set["$row_result"] ]]; then
+          dim_set["$row_result"]=1
+          if [[ "$out_arr" ]]; then
+            dim_arr+=( "$row_result" )
+          fi
+        fi
         if [[ $stop_after_first_match == t ]]; then
           break
         fi
@@ -1859,7 +1874,7 @@ execute_derive_table() {
       (( data_index += field_count ))
     end_while
 
-    log_return_vars=out_var
+    log_return_vars=$out_var
   end_function
   handle_return
 }
@@ -2317,21 +2332,22 @@ calc_coordinates() {
     elif [[ $source == coords ]]; then
 
       log_verbose "Refining existing $coord_type cell coordinates"
+      front_load=4 progress_bar_start
       begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
-        progress_bar $row_index $coordinate_rows
         dim_type=sdims convert_coords_to_dims || fail
         expand_dims $known_dims || fail
         handle_missing=skip \
         calc_coordinates_next_known_dim || fail
+        progress_bar_update $((row_index+1)) $coordinate_rows
       end_for
-      progress_bar_complete
+      progress_bar_stop
 
     fi
 
     coordinate_data=( "${new_coordinate_data[@]}" )
     coordinate_count=${#coordinate_data[*]}
     coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-    log_verbose "$coordinate_rows $coord_type coordinate row found" 
+    log_verbose "$coordinate_rows $coord_type coordinate rows found" 
 
   end_function
   handle_return
@@ -2471,15 +2487,19 @@ build_context() {
   handle_return
 }
 
+# inputs:
+#   $1          name of dim to fetch
+#   coord_type
+# outputs:
+#   values      array of dim members
 fetch_values_from_coordinates() {
   local dim_var=$1 coord_type=$coord_type
   begin_function
-    local -A results # must not be set to empty string here
+    values=() # must not be set to empty string here
     out_field=$dim_var \
-    out_set=results \
+    out_arr=values \
     derive_table=${coord_type}_coordinate \
     execute_derive_table || fail
-    keys_to_array results values
     if [[ "${values[*]:-}" ]]; then
       log_debug "$dim_var fetched from coordinates: ${values[*]}"
     else
