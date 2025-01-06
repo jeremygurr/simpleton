@@ -2293,7 +2293,7 @@ calc_coordinates_next_known_dim() {
 # assumes ddims are in array form (not space separated)
 # assumes all checks were done previously to determine if this is needed
 calc_coordinates() {
-  local source=${source:-dim} coord_type=$coord_type \
+  local source=${source:-dims} coord_type=$coord_type \
     handle_missing=${handle_missing:-error} coord_limit=${coord_limit:-}
   begin_function
 
@@ -2302,9 +2302,6 @@ calc_coordinates() {
     fi
 
     local -n coordinate_fields=${coord_type}_coordinate_fields
-    if [[ ! "${coordinate_fields:-}" ]]; then
-      succeed
-    fi
 
     local dim_var \
       new_coordinate_data=() \
@@ -2315,14 +2312,27 @@ calc_coordinates() {
       coordinate_fields_count=${coord_type}_coordinate_fields_count \
       coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
 
-    if [[ $source == dims ]]; then
-      coordinate_data=() \
-      coordinate_count=0 \
-      coordinate_rows=0 \
-      unknown_dims= \
-      resolved_dims= \
+    case $source in
+      dims)
+        coordinate_data=() \
+        coordinate_count=0 \
+        coordinate_rows=0 \
+        unknown_dims= \
+        resolved_dims= \
 
-      setup_coord_fields || fail
+        setup_coord_fields || fail
+      ;;
+      coords)
+        :
+      ;;
+      *)
+        log_fatal "Invalid source: $source"
+        fail1
+      ;;
+    esac
+
+    if [[ ! "${coordinate_fields:-}" ]]; then
+      succeed
     fi
 
     local row_index=-1 \
@@ -2335,21 +2345,16 @@ calc_coordinates() {
       (( i++ ))
     done
 
-    if [[ $source == dim ]]; then
+    local total_coord_rows_added=0
+    if [[ $source == dims ]]; then
 
       # it is assumed that dims are already expanded before this point, and so ddims will be used
       log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
       calc_coordinates_next_known_dim || fail
 
-      if [[ "$unknown_dims" ]]; then
-        # TODO handle unknowns according to handler
-        log_debug "Missing dims left blank: ${unknown_dims[*]}"
-      fi
-
     elif [[ $source == coords ]]; then
 
       log_verbose "Refining existing $coord_type cell coordinates"
-      local total_coord_rows_added=0
       begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
         progress_bar $row_index $coordinate_rows
         dim_type=sdim convert_coords_to_dims || fail
@@ -2359,16 +2364,12 @@ calc_coordinates() {
       end_for
       progress_bar_complete
 
-    else
-      log_fatal "Invalid source: $source"
-      fail1
     fi
 
     coordinate_data=( "${new_coordinate_data[@]}" )
     coordinate_count=${#coordinate_data[*]}
     coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-    log_verbose "$coordinate_rows $coord_type coordinates found" 
-
+    log_verbose "$coordinate_rows $coord_type coordinate row found" 
 
   end_function
   handle_return
