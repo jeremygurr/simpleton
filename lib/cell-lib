@@ -742,6 +742,42 @@ build_context_expand() {
   handle_return
 }
 
+# inputs:
+#   $1          full path of file to write to
+#   coord_type 
+write_coordinates_to_file() {
+  local coord_type=${coord_type} target_file=$1
+  begin_function
+
+    local value field_index data_offset row_index
+
+    local -n c_data=${coord_type}_coordinate_data \
+      c_rows=${coord_type}_coordinate_rows \
+      c_fields=${coord_type}_coordinate_fields \
+      c_fields_count=${coord_type}_coordinate_fields_count \
+      c_count=${coord_type}_coordinate_count \
+
+    local line=
+    begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
+      line+="${c_fields[$field_index]} "
+    end_for
+    echo "${line% }" >$target_file || fail
+
+    for (( row_index = 0; row_index < c_rows; row_index++ )); do
+      line=
+      for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+        (( data_offset = c_count / c_fields_count + field_index ))
+        value=${c_data[$data_offset]}
+        quotes=single shell_quote_var value || { fail_later; break 2; }
+        line+="$value "
+      done
+      echo "${line% }" >>$target_file || { fail_later; break; }
+    done
+
+  end_function
+  handle_return
+}
+
 convert_coords_to_dims() {
   local coord_type=${coord_type} row_index=${row_index:-0} dim_type=$dim_type
   begin_function
@@ -1594,7 +1630,7 @@ calc_coordinates_add_row() {
       fi
     done
 
-    # infinite loop detectino
+    # infinite loop detection
     if [[ "${prev_coords[0]:-}" ]]; then
       if [[ "${prev_coords[*]}" == "${new_coords[*]}" ]]; then
         log_fatal "Added same coordinate row twice: ${coord_type}_coordinate_data+=( ${new_coords[*]} )"
@@ -1603,6 +1639,7 @@ calc_coordinates_add_row() {
     fi
     prev_coords=( "${new_coords[@]}" )
 
+    (( total_coord_rows_added++ ))
     log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
 
   end_function
@@ -1663,6 +1700,7 @@ seed_coordinates() {
 
     local seed_field_count=${#seed_fields[*]} \
           seed_data_count=${#seed_data[*]} \
+          total_coord_rows_added=0 \
 
     local seed_table_rows=$(( seed_data_count / seed_field_count ))
 
@@ -2008,6 +2046,40 @@ attempt_default() {
   handle_return
 }
 
+calc_coordinates_row_end() {
+  begin_function
+
+    if [[ "$unknown_dims" ]]; then
+
+      case $handle_missing in
+        error)
+          log_fatal "Could not resolve dims: $unknown_dims"
+          fail1
+        ;;
+        blank)
+          for d in ${unknown_dims[*]}; do
+            local -n m=d_$d
+            m=$missing_member
+          done
+          calc_coordinates_add_row || fail
+        ;;
+        skip)
+          log_debug "Skipped row because of unresolvable dims: $unknown_dims"
+        ;;
+        *)
+          log_fatal "Internal error: invalid handle_missing value: $handle_missing"
+          fail1
+        ;;
+      esac
+
+    else
+      calc_coordinates_add_row || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 # will end the coordinate row one way or another
 # inputs:
 #   unknown_dims
@@ -2020,6 +2092,11 @@ calc_coordinates_next_unknown_dim() {
       resolved_dims=${resolved_dims:-} \
       coord_index \
       row_ended=f \
+
+    if (( coord_limit > 0 && total_coord_rows_added >= coord_limit )); then
+      log_warn "Limit of $coord_limit reached, not calculating any further"
+      succeed
+    fi
 
     if [[ "$unknown_dims" ]]; then
       log_debug "Attempting to resolve unknowns: ${unknown_dims# }"
@@ -2098,40 +2175,6 @@ calc_coordinates_next_unknown_dim() {
   handle_return
 }
 
-calc_coordinates_row_end() {
-  begin_function
-
-    if [[ "$unknown_dims" ]]; then
-
-      case $handle_missing in
-        error)
-          log_fatal "Could not resolve dims: $unknown_dims"
-          fail1
-        ;;
-        blank)
-          for d in ${unknown_dims[*]}; do
-            local -n m=d_$d
-            m=$missing_member
-          done
-          calc_coordinates_add_row || fail
-        ;;
-        skip)
-          log_debug "Skipped row because of unresolvable dims: $unknown_dims"
-        ;;
-        *)
-          log_fatal "Internal error: invalid handle_missing value: $handle_missing"
-          fail1
-        ;;
-      esac
-
-    else
-      calc_coordinates_add_row || fail
-    fi
-
-  end_function
-  handle_return
-}
-
 calc_coords_validate_member() {
   local dim=$1 member=$2
   begin_function
@@ -2177,6 +2220,12 @@ calc_coords_validate_member() {
 calc_coordinates_next_known_dim() {
   local known_dim=${known_dims%% *} log_show_vars=known_dim
   begin_function
+
+    if (( coord_limit > 0 && total_coord_rows_added >= coord_limit )); then
+      log_warn "Limit of $coord_limit reached, not calculating any further"
+      succeed
+    fi
+
     local dim dims \
       coord_index \
       unknown_dims=${unknown_dims:-} \
@@ -2205,6 +2254,7 @@ calc_coordinates_next_known_dim() {
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
         begin_for m in "${ms[@]}"; doo
+
           member=$m
           log_debug "Processing $dim=$member"
           # recursive
@@ -2242,7 +2292,8 @@ calc_coordinates_next_known_dim() {
 # assumes ddims are in array form (not space separated)
 # assumes all checks were done previously to determine if this is needed
 calc_coordinates() {
-  local source=${source:-dim} coord_type=$coord_type handle_missing=${handle_missing:-error}
+  local source=${source:-dim} coord_type=$coord_type \
+    handle_missing=${handle_missing:-error} coord_limit=${coord_limit:-}
   begin_function
 
     if [[ "${localize_dims:-}" ]]; then
@@ -2303,6 +2354,7 @@ calc_coordinates() {
     elif [[ $source == coords ]]; then
 
       log_verbose "Refining existing $coord_type cell coordinates"
+      local total_coord_rows_added=0
       begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
         dim_type=sdim convert_coords_to_dims || fail
         expand_dims $known_dims || fail
