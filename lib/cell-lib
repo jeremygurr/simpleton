@@ -678,8 +678,9 @@ build_context_expand2() {
       fi
 
       has_explicit_member_list=t
-    else
-      build_context_expand_find_members
+    #   don't want to pull members from seed, since adding mocks creates an unexpected behavior here
+    # else
+    #   build_context_expand_find_members
     fi
 
     if [[ -v ${dim_type}_${dim}_aliases ]]; then
@@ -718,16 +719,6 @@ build_context_expand() {
     fi
 
     local dim dim_type o
-
-    # sub_dims are always optional
-    #begin_for dim_type in sub_dims; doo
-    #  local -n dims=$dim_type
-    #  begin_for dim in ${dims[*]:-}; doo
-    #    local -n is_optional=${dim_type}_${dim}_is_optional
-    #    is_optional=t
-    #    write_vars_to_context ${dim_type}_${dim}_is_optional || fail
-    #  end_for
-    #end_for
 
     begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
       local -n dims=$dim_type
@@ -1016,6 +1007,26 @@ expand_dims() {
   handle_return
 }
 
+# leaf dims are dims that are not part of branch_dims
+# they need to be expanded, wheres branch_dims should not be expanded
+load_leaf_dims() {
+  begin_function
+    if [[ ! "${leaf_dims:-}" ]]; then
+      leaf_dims=()
+      local dim
+      for dim in ${all_dims[*]}; do
+        if [[ " ${branch_dims[*]} " != *" $dim "* ]]; then
+          leaf_dims+=( $dim )
+        fi
+      done
+      leaf_dim_count=${#leaf_dims[*]}
+    fi
+  end_function
+  handle_return
+}
+
+# child dims are anchor dims which have not yet been converted into branch dims
+# they are dims which will form sub cells, and need to be expanded
 load_child_dims() {
   begin_function
     local i
@@ -1024,22 +1035,23 @@ load_child_dims() {
       child_dims=()
       local trunk_dim_count=${#trunk_dims[*]}
       if [[ ! "${anchor_dims:-}" ]]; then
-        begin_for (( i = branch_dim_count; i < trunk_dim_count; i++ )); doo
+        for (( i = branch_dim_count; i < trunk_dim_count; i++ )); do
           child_dims+=( ${trunk_dims[$i]} )
-        end_for
+        done
       else
         local anchor_dim branch_dim leftovers=" $anchor_dims "
         
-        begin_for branch_dim in ${branch_dims[*]}; doo
+        for branch_dim in ${branch_dims[*]}; do
           remove_word_from_string leftovers $branch_dim
-        end_for
+        done
 
-        begin_for anchor_dim in $anchor_dims; doo
+        for anchor_dim in $anchor_dims; do
           if [[ " ${trunk_dims[*]} " != *" $anchor_dim "* ]]; then
             log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims[*]}"
             fail1
           fi
-        end_for
+        done
+        maybe_break
         
         child_dims=( $leftovers )
       fi
@@ -1086,11 +1098,11 @@ setup_dims() {
 
     local all_dims=()
     prep_dims trunk_dims sub_dims control_props data_props || fail
-
+    load_leaf_dims || fail
     load_child_dims || fail
 
-    if [[ "${child_dims:-}${sub_dims:-}${control_props:-}${data_props:-}" ]]; then
-      expand_dims ${child_dims[*]:-} ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} || fail
+    if [[ "${leaf_dims:-}" ]]; then
+      expand_dims ${leaf_dims[*]:-} || fail
     fi
 
   end_function
@@ -1866,7 +1878,7 @@ attempt_derive() {
   begin_function
     local -n dim_type=${dim}_dim_type
     local -n derived_from=${dim_type}_${dim}_derived_from
-    values=
+    values=()
     can_derive=f
 
     local derived_from_row derived_from_dim \
@@ -2089,19 +2101,9 @@ calc_coordinates_next_unknown_dim() {
             local m ms=( "${ddims[@]}" )
             unset ddims
             begin_for m in "${ms[@]}"; doo
-
               ddim=$m
               #log_debug "Processing $dim=$member"
-
-              #  Don't need to validate members which have been derived from existing dims
-              #local is_valid=t
-              #calc_coords_validate_member $dim "$member" || fail
-
-              #if [[ $is_valid == t ]]; then
-                # recursive
-                calc_coordinates_next_unknown_dim || fail
-              #fi
-
+              calc_coordinates_next_unknown_dim || fail
             end_for
             row_ended=t
             unset ddim
@@ -2126,7 +2128,7 @@ calc_coords_validate_member() {
   local dim=$1 member=$2
   begin_function
     is_valid=t
-    local values= can_derive
+    local values=() can_derive
     attempt_derive $dim || fail
     if [[ $can_derive == t ]]; then
       if [[ ! "${values[0]:-}" ]]; then
@@ -2134,11 +2136,21 @@ calc_coords_validate_member() {
         is_valid=f
       elif ! array_contains values "$member"; then
         is_valid=f
+#      else
+#        # doing in a less ideal way because 'local' bug was happening with array_contains function
+#        is_valid=f
+#        for (( i = 0; i < ${#values[*]}; i++ )); do
+#          if [[ ${values[$i]} == "$member" ]]; then
+#            is_valid=t
+#            break
+#          fi
+#        done
       fi
       succeed
     fi
 
-    eval "local d_$dim=\$member"
+    #  should have already been set
+    #eval "local d_$dim=\$member"
     local rd
     begin_for rd in $resolved_dims; doo
       if [[ $rd == $dim ]]; then
@@ -2179,7 +2191,7 @@ calc_coordinates_next_known_dim() {
       known_dims=${known_dims:-} \
       resolved_dims=${resolved_dims:-} \
 
-    local dim=${known_dims%% *}
+    dim=${known_dims%% *}
     known_dims=${known_dims##$dim*( )}
 
     if [[ "$dim" ]]; then
@@ -2197,8 +2209,9 @@ calc_coordinates_next_known_dim() {
 
         local is_valid=t m ms=( "${members[@]}" )
         resolved_dims+=" $dim"
-        eval "local d_$dim=\${d_$dim:-} d_${dim}s=\${d_${dim}s:-}"
+        eval "local d_$dim=\${d_$dim:-} d_$dims=\${d_$dims:-}"
         unset members
+        unset -n members
 
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
@@ -2213,7 +2226,8 @@ calc_coordinates_next_known_dim() {
             log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
           fi
         end_for
-        member=
+        unset member
+        unset -n member
 
         # if none of the members are valid, we just skip the row
         # if any are valid, they will have added their own rows already
