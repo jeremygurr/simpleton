@@ -484,6 +484,43 @@ debug_set_watch() {
   fi
 }
 
+stack_trace_inner() {
+  local extra= debug_id= p n r l \
+    stack_level=${stack_level:-0} count=${#FUNCNAME[*]} \
+    before= after= start_frame=${start_frame:-1} \
+
+  echo "${WHITE}FUNCTION DEBUG_ID SOURCE DETAILS$RESET"
+  for ((n = count - 1; n >= start_frame; n--)) ; do
+    (( p = n - 1 ))
+    (( r = count - n - 1 ))
+    debug_id= before= after=
+
+    l=0
+    if [[ -v stack_debug_id[$r] ]]; then
+      debug_id=${stack_debug_id[$r]}
+      l=1
+    else
+      debug_id=-
+    fi
+
+    if [[ -v cooked_stack[$r] ]]; then
+      after+="${cooked_stack[$r]}"
+    fi
+
+    if [[ -v stack_high_level[$r] ]]; then
+      l=2
+      before+=$WHITE
+    fi
+
+    if (( l >= stack_level )); then
+      echo "$RESET$before${FUNCNAME[$n]:-(no func)} $debug_id ${BASH_SOURCE[$n]:-(no source)}:${BASH_LINENO[$p]:-(no line)} $after"
+    fi
+
+  done
+
+  return 0
+}
+
 stack_trace() {
   local start_frame=${start_frame:-2} stack_level=${stack_level:-0}
 
@@ -539,43 +576,6 @@ high_stack_trace() {
   else
     echo "No high stack available." >&$fd_original_err
   fi
-  return 0
-}
-
-stack_trace_inner() {
-  local extra= debug_id= p n r l \
-    stack_level=${stack_level:-0} count=${#FUNCNAME[*]} \
-    before= after=
-
-  echo "${WHITE}FUNCTION DEBUG_ID SOURCE DETAILS$RESET"
-  for ((n = count - 1; n >= start_frame; n--)) ; do
-    (( p = n - 1 ))
-    (( r = count - n - 1 ))
-    debug_id= extra= before= after=
-
-    l=0
-    if [[ -v stack_debug_id[$r] ]]; then
-      debug_id=${stack_debug_id[$r]}
-      l=1
-    else
-      debug_id=-
-    fi
-
-    if [[ -v cooked_stack[$r] ]]; then
-      extra=${cooked_stack[$r]}
-      l=2
-      before=$WHITE
-      after=$RESET
-    else
-      extra=
-    fi
-
-    if (( l >= stack_level )); then
-      echo "$before${FUNCNAME[$n]:-(no func)} $debug_id ${BASH_SOURCE[$n]:-(no source)}:${BASH_LINENO[$p]:-(no line)}$after $extra"
-    fi
-
-  done
-
   return 0
 }
 
