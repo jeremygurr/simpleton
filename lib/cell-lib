@@ -41,9 +41,6 @@ cell_lib_init() {
   [[ ${debug:-f} == t ]] && parallel_default=f
   parallel_execution=${parallel_execution:-${par:-$parallel_default}}
 
-  # Whether we should show logging for each seperate branch or only for leaves
-  show_branches=${show_branches:-f}
-
   # used to detect upstream circular dependencies
   downstream_cell_stack=( ) 
   disable_log=${disable_log:-}
@@ -1628,39 +1625,101 @@ seed_coordinates_prep() {
   handle_return
 }
 
+check_table_field() {
+  local field=$1 expected_value=${expected_value} value=${2:-} values=${3:-} fields
+
+  is_valid=t
+  if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
+    return 0 # this one always matches
+  fi
+
+  if [[ ! "$value" || ! "$values" ]]; then
+
+    get_plural $field fields
+    local -n ddim=d_$field \
+             ddims=d_$fields \
+             pdim=p_$field \
+             pdims=p_$fields \
+
+    if [[ ! "$value" ]]; then
+      value=${ddim:-${pdim:-}}
+    fi
+      
+    if [[ ! "$values" ]]; then
+      values=${ddims:-${pdims:-}}
+    fi
+
+  fi
+      
+  if [[ "${values:-${value}}" == *"*"* ]]; then
+    if [[ "$expected_value" != ${values:-${value}} ]]; then
+      is_valid=f
+    fi
+  elif [[ "$value" && "$value" != all \
+       && "$value" != "$expected_value" ]]; then
+    is_valid=f
+  elif [[ "$values" && "$values" != all \
+       && " $values " != *" $expected_value "* ]]; then
+    is_valid=f
+  fi
+  
+  return 0
+}
+
 # Will add a row to new_coordinate_data based on current ddim values and coordinate_fields
+# inputs:
+#   ignore_missing            (optional)
+#   coordinate_fields
+#   coordinate_fields_count
+# outputs:
+#   new_coordinate_data
+#   total_coord_rows_added
+#   row_is_valid
 calc_coordinates_add_row() {
   local ignore_missing=${ignore_missing:-f}
   begin_function
 
-    progress_bar_nudge
     local i new_coords=()
+    row_is_valid=t
     for (( i = 0; i < coordinate_fields_count; i++ )); do
-      local -n dim_value=d_${coordinate_fields[$i]}
+      local dim_var=${coordinate_fields[$i]}
+      local -n dim_value=d_$dim_var
       if [[ ! "${dim_value:-}" ]]; then
         if [[ $ignore_missing == f ]]; then
-          log_fatal "Missing dim: ${coordinate_fields[$i]}"
+          log_fatal "Missing dim: $dim_var"
           fail1
         fi
         new_coords+=( "" )
-        new_coordinate_data+=( "" )
       else
+        #   this doesn't make sense here, this function is only called after dims have already
+        #   been validated
+        # check_table_field $dim_var "$dim_value"
+        # if [[ $is_valid == f ]]; then
+        #   row_is_valid=f
+        #   break
+        # fi
         new_coords+=( "$dim_value" )
-        new_coordinate_data+=( "$dim_value" )
       fi
     done
 
-    # infinite loop detection
-    if [[ "${prev_coords[0]:-}" ]]; then
-      if [[ "${prev_coords[*]}" == "${new_coords[*]}" ]]; then
-        log_fatal "Added same coordinate row twice: ${coord_type}_coordinate_data+=( ${new_coords[*]} )"
-        fail1
-      fi
-    fi
-    prev_coords=( "${new_coords[@]}" )
+    if [[ $row_is_valid == t ]]; then
 
-    (( total_coord_rows_added++ ))
-    log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
+      # infinite loop detection
+      if [[ "${prev_coords[0]:-}" ]]; then
+        if [[ "${prev_coords[*]}" == "${new_coords[*]}" ]]; then
+          log_fatal "Added same coordinate row twice: ${coord_type}_coordinate_data+=( ${new_coords[*]} )"
+          fail1
+        fi
+      fi
+      prev_coords=( "${new_coords[@]}" )
+
+      new_coordinate_data+=( "${new_coords[@]}" )
+      log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
+      (( total_coord_rows_added++ ))
+
+    else
+      log_debug "Row is invalid: ${new_coords[*]}"
+    fi
 
   end_function
   handle_return
@@ -1712,6 +1771,7 @@ seed_coordinates() {
       coordinate_fields_count=${coord_type}_coordinate_fields_count \
       coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
 
+    log_debug "Seeding $coord_type coordinates with seed table $seed_table"
     seed_coordinates_prep || fail
 
     local -n seed_fields=${seed_table}_fields \
@@ -1736,15 +1796,24 @@ seed_coordinates() {
 
     local field_index seed_field seed_data_index \
       new_coordinate_data=() \
+      is_valid \
+
+    local -n \
+      field_count=seed_field_count \
+      table_fields=seed_fields \
+      table_data=seed_data \
 
     begin_for (( row = 0; row < seed_table_rows; row++ )); doo
-      for field_index in ${!seed_fields[*]}; do
-        seed_field=${seed_fields[$field_index]}
-        local -n dim=d_$seed_field
-        (( seed_data_index = row * seed_field_count + field_index ))
-        dim=${seed_data[$seed_data_index]}
-      done
-      ignore_missing=t calc_coordinates_add_row || fail
+      check_table_row
+      if [[ $is_valid == t ]]; then
+        for field_index in ${!seed_fields[*]}; do
+          seed_field=${seed_fields[$field_index]}
+          local -n dim=d_$seed_field
+          (( seed_data_index = row * seed_field_count + field_index ))
+          dim=${seed_data[$seed_data_index]}
+        done
+        ignore_missing=t calc_coordinates_add_row || fail
+      fi
     end_for
 
     coordinate_data=( "${new_coordinate_data[@]}" )
@@ -2035,6 +2104,11 @@ calc_coordinates_row_end() {
             m=$missing_member
           done
           calc_coordinates_add_row || fail
+          if [[ $row_is_valid == t ]]; then
+            progress_bar_nudge
+          else
+            progress_bar_nudge x
+          fi
         ;;
         skip)
           log_debug "Skipped row because of unresolvable dims: $unknown_dims"
@@ -2047,6 +2121,11 @@ calc_coordinates_row_end() {
 
     else
       calc_coordinates_add_row || fail
+      if [[ $row_is_valid == t ]]; then
+        progress_bar_nudge
+      else
+        progress_bar_nudge x
+      fi
     fi
 
   end_function
@@ -2330,7 +2409,7 @@ calc_coordinates() {
 
     elif [[ $source == coords ]]; then
 
-      log_verbose "Refining existing $coord_type cell coordinates"
+      log_verbose "Refining existing $coord_type dim coordinates"
       front_load=6 progress_bar_start
       begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
         dim_type=sdims convert_coords_to_dims || fail
@@ -3303,18 +3382,25 @@ switch_context() {
       if [[ $dna_exists == t ]]; then
         if [[ "$clean_cells" ]]; then
           local cell_to_clean
-          begin_for cell_to_clean in $clean_cells; doo
-            if [[ /$cell_path/ == */$cell_to_clean/* ]]; then
-              if [[ -e $cyto_path ]]; then
-                log_info "Cleaning cell ${cell_to_clean#/work/*/} => $short_cell..."
-                rm -rf $cyto_path/!(job) || fail
-              else
-                log_info "Cell already clean: $cell_to_clean => $short_cell"
+          cells_already_cleaned=${cells_already_cleaned:-}
+          if [[ " $cells_already_cleaned " == *" $cell_path "* ]]; then
+            log_debug "Cell already cleaned: $cell_path"
+          else
+            begin_for cell_to_clean in $clean_cells; doo
+              if [[ /$cell_path/ == */$cell_to_clean/* ]]; then
+                if [[ -e $cyto_path ]]; then
+                  log_info "Cleaning cell ${cell_to_clean#/work/*/} => $short_cell..."
+                  rm -rf $cyto_path/!(job) || fail
+                else
+                  log_info "Cell already clean: $cell_to_clean => $short_cell"
+                fi
+                #  no we want to clean all matching cells
+                #remove_word_from_string clean_cells "$cell_to_clean" 
+                cells_already_cleaned+=" $cell_path"
+                break
               fi
-              remove_word_from_string clean_cells "$cell_to_clean" 
-              break
-            fi
-          end_for
+            end_for
+          fi
         fi
       fi
 
@@ -4629,46 +4715,27 @@ up_delegate() {
 # inputs:
 #   table_fields       
 #   table_data
-#   row          which row to select from the table
-#   field_count  
+#   offset       (optional) offset into data structure where row starts
+#   row          (optional) which row to select from the table
+# either offset or row must be set
 # outputs:
-#   row_is_valid 
+#   is_valid 
 check_table_row() {
+  local offset=${offset:-} row=${row:-} field_count=${#table_fields[*]}
   begin_function    
     local f t
-    row_is_valid=t
+    if [[ ! "$offset" ]]; then
+      (( offset = row * field_count ))
+    fi
+    is_valid=t
     begin_for (( f = 0; f < field_count; f++ )); doo
 
       local field=${table_fields[$f]}
-      (( t = row * field_count + f ))
+      (( t = offset + f ))
       local expected_value=${table_data[$t]}
-      if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
-        continue # try next field, since this one matches
-      fi
 
-      local fields
-      get_plural $field fields
-
-      local -n dim=d_$field \
-               dims=d_$fields \
-               pdim=p_$field \
-               pdims=p_$fields \
-
-      local value=${dim:-${pdim:-}} \
-            values=${dims:-${pdims:-}}
-
-      if [[ "${values:-${value}}" == *"*"* ]]; then
-        if [[ "$expected_value" != ${values:-${value}} ]]; then
-          row_is_valid=f
-          break
-        fi
-      elif [[ "$value" && "$value" != all \
-           && "$value" != "$expected_value" ]]; then
-        row_is_valid=f
-        break
-      elif [[ "$values" && "$values" != all \
-           && " $values " != *" $expected_value "* ]]; then
-        row_is_valid=f
+      check_table_field $field
+      if [[ $is_valid == f ]]; then
         break
       fi
 
@@ -4717,7 +4784,7 @@ execute_auto_load_tab() {
     local -A keys
     begin_for (( row = 0; row < row_count; row++ )); doo
       check_table_row || fail
-      if [[ $row_is_valid == t ]]; then
+      if [[ $is_valid == t ]]; then
         execute_auto_load_add_constraints || fail
       fi
     end_for
