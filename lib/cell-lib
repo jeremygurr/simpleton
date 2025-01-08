@@ -2939,11 +2939,12 @@ init_context() {
       update_op \
       get_op \
 
+
+    context_path=$cyto_path/context \
     dna_key_path=$dna_path/key \
     down_path=$cyto_path/down \
     job_path=$cyto_path/job \
     key_path=$cyto_path/key \
-    lock_path=$context_path \
     req_path=$cyto_path/req \
     status_path=$cyto_path/status \
     tmp_path=$cyto_path/tmp \
@@ -2952,7 +2953,8 @@ init_context() {
     inner_path=$cyto_path/inner \
     outer_path=$cyto_path/outer \
 
-    replay_path=$job_path/pipe_replay
+    lock_path=$context_path \
+    replay_path=$job_path/pipe_replay \
 
   end_function
   handle_return
@@ -3294,6 +3296,12 @@ load_post_context_dynamic_vars() {
   handle_return
 }
 
+setup_cell_paths() {
+  dna_path=$cell_path/.dna
+  cyto_path=$cell_path/.cyto
+  init_context
+}
+
 build_cyto_inner() {
   local cell_path=$1
 
@@ -3315,7 +3323,6 @@ build_cyto_inner() {
     load_branch_info || fail
     find_seed_path $cell_path || fail
 
-    context_path=$cyto_path/context
     if [[ ! -f $context_path ]]; then
       build_context $cell_path || fail
     fi
@@ -3661,6 +3668,7 @@ execute_command() {
 execute_commands_prep() {
   begin_function
     get_short_cell
+    setup_cell_paths
     load_branch_info || fail
     unset default_anchor_dims
     if [[ $top_level_command == f ]]; then
@@ -3726,6 +3734,8 @@ execute_commands() {
         command_allows_logs=f \
         command_requires_cell=f \
         command_requires_resolved_dims=f \
+        command_modifies_context=f \
+        command_modifies_upstream=f \
 
       if [[ -e $cell_command_path.info ]]; then
         source $cell_command_path.info || fail
@@ -3739,7 +3749,7 @@ execute_commands() {
           local folder folders
           folders=$(find1 $cell_path -type d -not -name '.*') || fail
           begin_for folder in $folders; doo
-            execute_commands $folder ${cell_commands[*]} || fail
+            execute_commands $folder $cell_command || fail
           end_for
         else
           if [[ $top_level_command == t ]]; then
@@ -3765,6 +3775,23 @@ execute_commands() {
 
         if [[ $showed_parameter_help == f ]]; then
           execute_command $cell_path $cell_command || fail
+        fi
+
+        if [[ $command_modifies_context == t \
+           || $command_modifies_upstream == t ]]; then
+          # make sure cell rebuilds context next time it's updated
+          if [[ -e $context_path ]]; then
+            rm $context_path* || fail
+          fi
+        fi
+
+        if [[ $command_modifies_upstream == t ]]; then
+          if [[ -e $up_path ]]; then
+            rm -rf $up_path || fail
+          fi
+          if [[ -e $up_chosen_path ]]; then
+            rm -rf $up_chosen_path || fail
+          fi
         fi
 
       fi
