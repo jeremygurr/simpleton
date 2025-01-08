@@ -456,12 +456,18 @@ show_cell_help() {
   local cell_path=$1
   begin_function
 
-    load_branch_info || fail
+    local top_level_command=t cell_command=help
+    execute_command_prep || fail
+    init_command_vars || fail
+    source $cell_command_path.info || fail
 
     command_requires_cell=t \
     trunk_changed=f \
     command_allows_logs=f \
     switch_context $cell_path || fail
+    setup_dims || fail
+      handle_missing=skip \
+    calc_coords || fail
 
     indent=0
 
@@ -510,44 +516,53 @@ show_cell_help() {
       show_upstreams || fail
     fi
 
-#    if [[ "${trunk_dims:-}" ]]; then
-#      local i pretty_form= member dim show_header=t
-#      #begin_for (( i = 0; i < ${#branch_dims[*]}; i++ )); doo
-#      #  dim=${branch_dims[$i]}
-#      #  eval "member=\${branch_members[$i]}"
-#      #  local pretty_function_name=trunk_dims_${dim}_pretty
-#      #  if function_exists $pretty_function_name; then
-#      #    eval "$pretty_function_name member" || fail
-#      #    pretty_form=" ($member)"
-#      #  else
-#      #    pretty_form=
-#      #  fi
-#      #  out "  $dim=${branch_members[$i]}$pretty_form"
-#      #end_for
-#      (( indent += 2 ))
-#      begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
-#        dim_var=${trunk_dims[$i]}
-#        local -n dim=d_$dim_var
-#        local pretty_function_name=trunk_dims_${dim_var}_pretty
-#        if function_exists $pretty_function_name; then
-#          eval "$pretty_function_name $dim_var" || fail
-#          pretty_form=" ($value)"
-#        else
-#          pretty_form=
-#        fi
-#        local value=${dim:-}
-#        if [[ "${value:-}" ]]; then
-#          if [[ $show_header == t ]]; then
-#            indent=$((indent-2)) out "${NL}Branch dimensions:"
-#            show_header=f
-#          fi
-#          if [[ "$value" == $empty_member ]]; then
-#            value='(empty)'
-#          fi
-#          out "$dim_var=$value$pretty_form"
-#        fi
-#      end_for
-#    fi
+    local dim member show_header=t
+    if [[ "${trunk_dims:-}" ]]; then
+      local i pretty_form=
+      begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
+        dim_var=${trunk_dims[$i]}
+        local -n dim=d_$dim_var
+        local pretty_function_name=trunk_dims_${dim_var}_pretty
+        if function_exists $pretty_function_name; then
+          eval "$pretty_function_name $dim_var" || fail
+          pretty_form=" ($value)"
+        else
+          pretty_form=
+        fi
+        local value=${dim:-}
+        if [[ "${value:-}" ]]; then
+          if [[ $show_header == t ]]; then
+            indent=$((indent-2)) out "${NL}Preset branch dimensions:"
+            show_header=f
+          fi
+          if [[ "$value" == $empty_member ]]; then
+            value='(empty)'
+          fi
+          out "$dim_var=$value$pretty_form"
+        fi
+      end_for
+    fi
+
+    local branch_folders branch_folder last_part full_member
+    show_header=t
+    branch_folders=$(find1 $cell_path -name "*:*" -type d) || fail
+    begin_for branch_folder in $branch_folders; doo
+      if [[ $show_header == t ]]; then
+        indent=$((indent-2)) out "${NL}Pre-existing sub branches:"
+        show_header=f
+      fi
+      last_part=${branch_folder##*/}
+      dim=${last_part%%:*}
+      member=${last_part#$dim:}
+      if [[ -e $branch_folder/.member ]]; then
+        full_member=$(<$branch_folder/.member)
+        if (( ${#full_member} > 80 )); then
+          full_member="${full_member:0:80}..."
+        fi
+        member="$member ($full_member)"
+      fi
+      out "$dim=$member"
+    end_for
 
   end_function
   handle_return

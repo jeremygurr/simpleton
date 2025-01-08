@@ -244,12 +244,6 @@ load_arr_to_code() {
   handle_return
 }
 
-load_tab() {
-  local code=
-  load_tab_to_code "$1" "$2" || return 1
-  eval "$code"
-}
-
 # inputs:
 #   $1   name of derive table variable
 add_derive_table() {
@@ -279,7 +273,9 @@ add_derive_table() {
   handle_return
 }
 
-# usage: load_tab {full path to tab file} {target var to store data in}
+# inputs:
+#   $1     full path to tab file 
+#   $2     target var to store data in
 load_tab_to_code() {
 
   begin_function
@@ -365,6 +361,15 @@ load_tab_to_code() {
 
   end_function
   handle_return
+}
+
+# inputs:
+#   $1     full path to tab file 
+#   $2     target var to store data in
+load_tab() {
+  local code=
+  load_tab_to_code "$1" "$2" || return 1
+  eval "$code"
 }
 
 # usage: split_ordinal {from_var} {ordinal_part_var} {base_part_var}
@@ -808,6 +813,124 @@ convert_coords_to_dims() {
 
     end_for
 
+  end_function
+  handle_return
+}
+
+# inputs:
+#   derive_table   name of var of derive table
+#   out_field      which field to read from the table
+#   out_set        which var to write set of valid members to (optional)
+#   out_arr        which var to write array of valid members to
+# outputs:
+#   out_set        the var out_set points to will contain a set of all matches
+#   out_arr        the var out_arr points to will contain an array of all matches
+execute_derive_table() {
+  local stop_after_first_match=${stop_after_first_match:-f}
+  begin_function        
+      
+    local -A internal_set
+    local out_var=${out_set:-$out_arr}
+          out_set=${out_set:-internal_set} \
+          out_arr=${out_arr:-} \
+
+    local -n derive_fields=${derive_table}_fields \
+             derive_data=${derive_table}_data \
+             dim_set=${out_set} \
+
+    if [[ "$out_arr" ]]; then
+      local -n dim_arr=${out_arr}
+    fi
+
+    if  ! is_set dim_set; then
+      log_fatal "Internal error: execute_derive_table was called with dim_set pointing to a variable that isn't an associative array."
+      fail1
+    fi
+
+    if [[ ! -v derive_fields ]]; then
+      log_fatal "Interal error: Missing ${derive_table}_fields"
+      fail1
+    fi
+
+    local field_count=${#derive_fields[*]} \
+      data_count=${#derive_data[*]} \
+      strict_matching=${strict_matching:-f} \
+      maybe data_index=0 column_index \
+      value= row_result field everything_matches \
+      out_field=$out_field \
+      invalid=f
+
+    begin_while (( data_index < data_count )); doo
+      everything_matches=t
+
+      begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+        field=${derive_fields[$column_index]}
+        value=${derive_data[$((data_index + column_index))]}
+        if [[ $field == $out_field ]]; then
+          row_result=$value
+        else
+
+          local -n dim=d_$field
+
+          if [[ "${dim:-}" ]]; then
+            if [[ "$dim" != "$value" && "$value" != all && "$dim" != all ]]; then
+              #log_debug "Row doesn't match because dim $field = $dim but table shows $value"
+              everything_matches=f
+              break
+            fi
+          else # dim not set
+            if [[ $strict_matching == t && "$value" && "$value" != all ]]; then
+              #log_debug "Row doesn't match because $field is not set"
+              everything_matches=f
+              break
+            fi
+          fi
+
+        fi
+      end_for
+
+      if [[ $everything_matches == t ]]; then
+        #log_debug "Matching row found"
+        if [[ ! -v dim_set["$row_result"] ]]; then
+          dim_set["$row_result"]=1
+          if [[ "$out_arr" ]]; then
+            dim_arr+=( "$row_result" )
+          fi
+        fi
+        if [[ $stop_after_first_match == t ]]; then
+          break
+        fi
+      else
+        #log_debug "No matching row found"
+        :
+      fi
+
+      (( data_index += field_count ))
+    end_while
+
+    log_return_vars=$out_var
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1          name of dim to fetch
+#   coord_type
+# outputs:
+#   values      array of dim members
+fetch_values_from_coordinates() {
+  local dim_var=$1 coord_type=$coord_type
+  begin_function
+    values=() # must not be set to empty string here
+    out_field=$dim_var \
+    out_arr=values \
+    derive_table=${coord_type}_coordinate \
+    execute_derive_table || fail
+    if [[ "${values[*]:-}" ]]; then
+      log_debug "$dim_var fetched from coordinates: ${values[*]}"
+    else
+      log_debug "Failed to fetch $dim_var from coordinates"
+    fi
   end_function
   handle_return
 }
@@ -1316,6 +1439,213 @@ find_seed_path() {
 get_short_cell() {
   short_cell=${cell_path#/work/*/}
   debug_return_vars=short_cell
+}
+
+init_command_vars() {
+  cell_command_path=$path_to_commands/$cell_command \
+    command_allows_logs=f \
+    command_requires_cell=f \
+    command_requires_resolved_dims=f \
+    command_modifies_context=f \
+    command_modifies_upstream=f \
+
+}
+
+setup_cell_paths() {
+  dna_path=$cell_path/.dna
+  cyto_path=$cell_path/.cyto
+  init_context
+}
+
+branch_local_vars='branch_dims branch_members branch_hashes branch_dim_count trunk_cell short_cell prev_branch_info_cell'
+load_branch_info() {
+  local cell_path=${1:-$cell_path}
+
+  begin_function
+
+    if [[ "${prev_branch_info_cell:-}" == $cell_path ]]; then
+      # already loaded
+      succeed
+    fi
+    prev_branch_info_cell=$cell_path
+
+    branch_dims=() \
+    branch_members=() \
+    branch_hashes=() \
+
+    local c=$cell_path p d m
+    begin_while [[ $c == *:* ]]; doo
+      p=${c##*/}
+      if [[ $p == *:* ]]; then
+
+        d=${p%%:*}
+
+        if [[ " ${branch_dims[*]} " == *" $d "* ]]; then
+          log_fatal "Duplicate branch dim found: $d in $cell_path"
+          fail1
+        fi
+
+        branch_dims=( $d ${branch_dims[*]} )
+
+        m=${p#*:}
+        branch_hashes=( $m ${branch_hashes[*]} )
+
+        local member_var_path=$c/.member
+        if [[ -f $member_var_path ]]; then
+          m=$(<$member_var_path) || fail
+        fi
+        branch_members=( "$m" "${branch_members[@]}" )
+
+        local -n dim_var=d_$d
+        dim_var=$m
+
+      fi
+      c=${c%/*}
+    end_while
+
+    trunk_cell=$c
+    branch_dim_count=${#branch_dims[*]}
+
+    if (( branch_dim_count > 0 )); then
+      cell_is_trunk=f
+    else
+      cell_is_trunk=t
+    fi
+
+    if [[ "${branch_dims:-}" ]]; then
+      log_debug "Branch dims found: ${branch_dims[*]}" || fail
+    fi
+
+    local x y dim_string= 
+    if [[ "${branch_hashes:-}" ]]; then
+      dim_string="${branch_hashes[*]}"
+      dim_string=:${dim_string// /\/}
+    fi
+    local short_trunk=${trunk_cell#/*/*/}
+
+  end_function
+  handle_return
+}
+
+execute_command_prep() {
+  begin_function
+
+    get_short_cell
+    load_branch_info || fail
+
+    trunk_changed=f
+    if [[ $trunk_cell != "${previous_trunk:-}" ]]; then
+      trunk_changed=t
+      previous_trunk=$trunk_cell
+    fi
+
+    setup_cell_paths
+
+    unset default_anchor_dims
+    if [[ $top_level_command == f ]]; then
+      anchor_dims=
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1    cell_path   should be real path
+#   $2... commands
+execute_commands() {
+  local cell_path=$1; shift
+  local cell_commands=( $* ) cell_command
+  local log_show_vars='^cell_path cell_commands'
+  begin_function
+
+    if [[ "$pause_at_cells" ]]; then
+      local pac
+      for pac in $pause_at_cells; do
+        if [[ "$cell_path" == *"$pac"* ]]; then
+          pause_qd "Cell reached: $pac."
+        fi
+      done
+    fi
+
+    local top_level_command=${top_level_command_next:-t}
+
+    # so top_level_command is set to t throughout this function, yet if it's called again, it will
+    #   be set to f
+    top_level_command_next=f
+
+    eval "local $branch_local_vars" || fail
+    local previous_trunk=${previous_trunk:-}
+    execute_command_prep || fail
+
+    begin_for cell_command in ${cell_commands[*]}; doo
+
+      substitute_command_alias || fail
+      init_command_vars || fail
+
+      if [[ -e $cell_command_path.info ]]; then
+        source $cell_command_path.info || fail
+      else
+        log_warn "Missing file $cell_command_path.info" || fail
+      fi
+
+      if [[ ! -d $cell_path/.dna && $command_requires_cell == t ]]; then
+
+        if [[ $recursive_command == t ]]; then
+          local folder folders
+          folders=$(find1 $cell_path -type d -not -name '.*') || fail
+          begin_for folder in $folders; doo
+            fork execute_commands $folder $cell_command || fail
+          end_for
+        else
+          if [[ $top_level_command == t ]]; then
+            log_warn "Skipping $cell_path because it is not a cell"
+          else
+            log_verbose "Skipping $cell_path because it is not a cell"
+          fi
+        fi
+
+      else
+
+        if [[ -e $cell_command_path ]]; then
+          source $cell_command_path || fail
+        else
+          log_fatal "Internal error: Missing $cell_command command in $cell_command_path"
+          fail1
+        fi
+
+        local showed_parameter_help=f
+        if [[ "${parameter_questions:-}" ]]; then
+          show_parameters_help || fail
+        fi
+
+        if [[ $showed_parameter_help == f ]]; then
+          execute_command $cell_path $cell_command || fail
+        fi
+
+        if [[ $command_modifies_context == t \
+           || $command_modifies_upstream == t ]]; then
+          # make sure cell rebuilds context next time it's updated
+          if [[ -e $context_path ]]; then
+            rm $context_path* || fail
+          fi
+        fi
+
+        if [[ $command_modifies_upstream == t ]]; then
+          if [[ -e $up_path ]]; then
+            rm -rf $up_path || fail
+          fi
+          if [[ -e $up_chosen_path ]]; then
+            rm -rf $up_chosen_path || fail
+          fi
+        fi
+
+      fi
+
+    end_for
+
+  end_function
+  handle_return
 }
 
 load_dna_contents_update_cell() {
@@ -1852,102 +2182,6 @@ handle_unknown_dims() {
 }
 
 # inputs:
-#   derive_table   name of var of derive table
-#   out_field      which field to read from the table
-#   out_set        which var to write set of valid members to (optional)
-#   out_arr        which var to write array of valid members to
-# outputs:
-#   out_set        the var out_set points to will contain a set of all matches
-#   out_arr        the var out_set points to will contain a set of all matches
-execute_derive_table() {
-  local stop_after_first_match=${stop_after_first_match:-f}
-  begin_function        
-      
-    local -A internal_set
-    local out_var=${out_set:-$out_arr}
-          out_set=${out_set:-internal_set} \
-          out_arr=${out_arr:-} \
-
-    local -n derive_fields=${derive_table}_fields \
-             derive_data=${derive_table}_data \
-             dim_set=${out_set} \
-
-    if [[ "$out_arr" ]]; then
-      local -n dim_arr=${out_arr}
-    fi
-
-    if  ! is_set dim_set; then
-      log_fatal "Internal error: execute_derive_table was called with dim_set pointing to a variable that isn't an associative array."
-      fail1
-    fi
-
-    if [[ ! -v derive_fields ]]; then
-      log_fatal "Interal error: Missing ${derive_table}_fields"
-      fail1
-    fi
-
-    local field_count=${#derive_fields[*]} \
-      data_count=${#derive_data[*]} \
-      strict_matching=${strict_matching:-f} \
-      maybe data_index=0 column_index \
-      value= row_result field everything_matches \
-      out_field=$out_field \
-      invalid=f
-
-    begin_while (( data_index < data_count )); doo
-      everything_matches=t
-
-      begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
-        field=${derive_fields[$column_index]}
-        value=${derive_data[$((data_index + column_index))]}
-        if [[ $field == $out_field ]]; then
-          row_result=$value
-        else
-
-          local -n dim=d_$field
-
-          if [[ "${dim:-}" ]]; then
-            if [[ "$dim" != "$value" && "$value" != all && "$dim" != all ]]; then
-              #log_debug "Row doesn't match because dim $field = $dim but table shows $value"
-              everything_matches=f
-              break
-            fi
-          else # dim not set
-            if [[ $strict_matching == t && "$value" && "$value" != all ]]; then
-              #log_debug "Row doesn't match because $field is not set"
-              everything_matches=f
-              break
-            fi
-          fi
-
-        fi
-      end_for
-
-      if [[ $everything_matches == t ]]; then
-        #log_debug "Matching row found"
-        if [[ ! -v dim_set["$row_result"] ]]; then
-          dim_set["$row_result"]=1
-          if [[ "$out_arr" ]]; then
-            dim_arr+=( "$row_result" )
-          fi
-        fi
-        if [[ $stop_after_first_match == t ]]; then
-          break
-        fi
-      else
-        #log_debug "No matching row found"
-        :
-      fi
-
-      (( data_index += field_count ))
-    end_while
-
-    log_return_vars=$out_var
-  end_function
-  handle_return
-}
-
-# inputs:
 #   dim          dimension to derive
 #   from_dim     optional, will only look for ways to derive 'dim' from 'from_dim'
 # output:
@@ -2101,7 +2335,7 @@ calc_coordinates_row_end() {
         blank)
           for d in ${unknown_dims[*]}; do
             local -n m=d_$d
-            m=$missing_member
+            m=$empty_member
           done
           calc_coordinates_add_row || fail
           if [[ $row_is_valid == t ]]; then
@@ -2567,28 +2801,6 @@ build_context() {
 }
 
 # inputs:
-#   $1          name of dim to fetch
-#   coord_type
-# outputs:
-#   values      array of dim members
-fetch_values_from_coordinates() {
-  local dim_var=$1 coord_type=$coord_type
-  begin_function
-    values=() # must not be set to empty string here
-    out_field=$dim_var \
-    out_arr=values \
-    derive_table=${coord_type}_coordinate \
-    execute_derive_table || fail
-    if [[ "${values[*]:-}" ]]; then
-      log_debug "$dim_var fetched from coordinates: ${values[*]}"
-    else
-      log_debug "Failed to fetch $dim_var from coordinates"
-    fi
-  end_function
-  handle_return
-}
-
-# inputs:
 #   $1   cell path to search for branches
 #   dim  dimension to gather members of
 get_members_from_branches() {
@@ -2960,76 +3172,6 @@ init_context() {
   handle_return
 }
 
-branch_local_vars='branch_dims branch_members branch_hashes branch_dim_count trunk_cell short_cell prev_branch_info_cell'
-load_branch_info() {
-  local cell_path=${1:-$cell_path}
-
-  begin_function
-
-    if [[ "${prev_branch_info_cell:-}" == $cell_path ]]; then
-      # already loaded
-      succeed
-    fi
-    prev_branch_info_cell=$cell_path
-
-    branch_dims=() \
-    branch_members=() \
-    branch_hashes=() \
-
-    local c=$cell_path p d m
-    begin_while [[ $c == *:* ]]; doo
-      p=${c##*/}
-      if [[ $p == *:* ]]; then
-
-        d=${p%%:*}
-
-        if [[ " ${branch_dims[*]} " == *" $d "* ]]; then
-          log_fatal "Duplicate branch dim found: $d in $cell_path"
-          fail1
-        fi
-
-        branch_dims=( $d ${branch_dims[*]} )
-
-        m=${p#*:}
-        branch_hashes=( $m ${branch_hashes[*]} )
-
-        local member_var_path=$c/.member
-        if [[ -f $member_var_path ]]; then
-          m=$(<$member_var_path) || fail
-        fi
-        branch_members=( "$m" "${branch_members[@]}" )
-
-        local -n dim_var=d_$d
-        dim_var=$m
-
-      fi
-      c=${c%/*}
-    end_while
-
-    trunk_cell=$c
-    branch_dim_count=${#branch_dims[*]}
-
-    if (( branch_dim_count > 0 )); then
-      cell_is_trunk=f
-    else
-      cell_is_trunk=t
-    fi
-
-    if [[ "${branch_dims:-}" ]]; then
-      log_debug "Branch dims found: ${branch_dims[*]}" || fail
-    fi
-
-    local x y dim_string= 
-    if [[ "${branch_hashes:-}" ]]; then
-      dim_string="${branch_hashes[*]}"
-      dim_string=:${dim_string// /\/}
-    fi
-    local short_trunk=${trunk_cell#/*/*/}
-
-  end_function
-  handle_return
-}
-
 load_repo_paths() {
   declare -gA repo_paths
   begin_function
@@ -3223,21 +3365,25 @@ get_required_freshness() {
 calc_coords() {
   begin_function
 
+    local coord_type=branch
     if [[ ! "${branch_coordinate_count:-}" ]]; then
-      local coord_type=branch
       calc_coordinates || fail
       if [[ $command_requires_resolved_dims == t ]]; then
         handle_unknown_dims || fail
       fi
+    fi
+    if (( branch_coordinate_count > 0 )); then
       dim_type=ddim convert_coords_to_dims || fail
     fi
 
+    local coord_type=leaf
     if [[ $cell_is_leaf == t && ! "${leaf_coordinate_count:-}" ]]; then
-      local coord_type=leaf
       calc_coordinates || fail
       if [[ $command_requires_resolved_dims == t ]]; then
         handle_unknown_dims || fail
       fi
+    fi
+    if (( leaf_coordinate_count > 0 )); then
       dim_type=ddim convert_coords_to_dims || fail
     fi
 
@@ -3294,12 +3440,6 @@ load_post_context_dynamic_vars() {
 
   end_function
   handle_return
-}
-
-setup_cell_paths() {
-  dna_path=$cell_path/.dna
-  cyto_path=$cell_path/.cyto
-  init_context
 }
 
 build_cyto_inner() {
@@ -3665,19 +3805,6 @@ execute_command() {
   handle_return
 }
 
-execute_commands_prep() {
-  begin_function
-    get_short_cell
-    setup_cell_paths
-    load_branch_info || fail
-    unset default_anchor_dims
-    if [[ $top_level_command == f ]]; then
-      anchor_dims=
-    fi
-  end_function
-  handle_return
-}
-
 substitute_command_alias() {
   begin_function
     local alias_command parameters
@@ -3690,114 +3817,6 @@ substitute_command_alias() {
         succeed
       fi
     done
-  end_function
-  handle_return
-}
-
-# inputs:
-#   $1    cell_path   should be real path
-#   $2... commands
-execute_commands() {
-  local cell_path=$1; shift
-  local cell_commands=( $* ) cell_command
-  local log_show_vars='^cell_path cell_commands'
-  begin_function
-
-    if [[ "$pause_at_cells" ]]; then
-      local pac
-      for pac in $pause_at_cells; do
-        if [[ "$cell_path" == *"$pac"* ]]; then
-          pause_qd "Cell reached: $pac."
-        fi
-      done
-    fi
-
-    local top_level_command=${top_level_command_next:-t}
-
-    # so top_level_command is set to t throughout this function, yet if it's called again, it will
-    #   be set to f
-    top_level_command_next=f
-
-    eval "local $branch_local_vars" || fail
-    local previous_trunk=${previous_trunk:-} trunk_changed=f
-    execute_commands_prep || fail
-    if [[ $trunk_cell != "$previous_trunk" ]]; then
-      trunk_changed=t
-      previous_trunk=$trunk_cell
-    fi
-
-    begin_for cell_command in ${cell_commands[*]}; doo
-
-      substitute_command_alias || fail
-
-      local cell_command_path=$path_to_commands/$cell_command \
-        command_allows_logs=f \
-        command_requires_cell=f \
-        command_requires_resolved_dims=f \
-        command_modifies_context=f \
-        command_modifies_upstream=f \
-
-      if [[ -e $cell_command_path.info ]]; then
-        source $cell_command_path.info || fail
-      else
-        log_warn "Missing file $cell_command_path.info" || fail
-      fi
-
-      if [[ ! -d $cell_path/.dna && $command_requires_cell == t ]]; then
-
-        if [[ $recursive_command == t ]]; then
-          local folder folders
-          folders=$(find1 $cell_path -type d -not -name '.*') || fail
-          begin_for folder in $folders; doo
-            execute_commands $folder $cell_command || fail
-          end_for
-        else
-          if [[ $top_level_command == t ]]; then
-            log_warn "Skipping $cell_path because it is not a cell"
-          else
-            log_verbose "Skipping $cell_path because it is not a cell"
-          fi
-        fi
-
-      else
-
-        if [[ -e $cell_command_path ]]; then
-          source $cell_command_path || fail
-        else
-          log_fatal "Internal error: Missing $cell_command command in $cell_command_path"
-          fail1
-        fi
-
-        local showed_parameter_help=f
-        if [[ "${parameter_questions:-}" ]]; then
-          show_parameters_help || fail
-        fi
-
-        if [[ $showed_parameter_help == f ]]; then
-          execute_command $cell_path $cell_command || fail
-        fi
-
-        if [[ $command_modifies_context == t \
-           || $command_modifies_upstream == t ]]; then
-          # make sure cell rebuilds context next time it's updated
-          if [[ -e $context_path ]]; then
-            rm $context_path* || fail
-          fi
-        fi
-
-        if [[ $command_modifies_upstream == t ]]; then
-          if [[ -e $up_path ]]; then
-            rm -rf $up_path || fail
-          fi
-          if [[ -e $up_chosen_path ]]; then
-            rm -rf $up_chosen_path || fail
-          fi
-        fi
-
-      fi
-
-    end_for
-
   end_function
   handle_return
 }
