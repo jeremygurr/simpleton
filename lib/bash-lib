@@ -127,52 +127,75 @@ micros_to_minute() {
 }
 
 progress_bar_start() {
+  local new_progress_bar_size=$1 front_load=${front_load:-3} 
   if ! log_level_at_least debug; then
-    echo -n "...0% complete" >&$fd_original_err
-    progress_bar_showing=t
-    progress_bar_start_time=${EPOCHREALTIME/./}
-  fi
-}
-
-progress_bar_update() {
-  local current=$1 max=$2 front_load=${front_load:-2} percentage
-  if [[ ${progress_bar_showing:-f} == t ]]; then
-    echo -n "$CLEAR_LINE" >&$fd_original_err
-    (( percentage = 100 * current / max ))
-    local time_taken_micro total_micro remaining_micro extra= remaining_min current_time=${EPOCHREALTIME/./}
-    (( time_taken_micro = current_time - progress_bar_start_time ))
-    (( total_micro = time_taken_micro * max / current ))
-    (( remaining_micro = total_micro - time_taken_micro ))
-
-    remaining_min=$remaining_micro
-    (( percentage < 25 )) && (( remaining_min *= front_load ))
-    micros_to_minute remaining_min
-    if (( remaining_min > 0 )); then
-      extra=" ($remaining_min minute(s) left)"
-    fi
-
-    echo -n "...$percentage% complete$extra" >&$fd_original_err
-  fi
-}
-
-progress_bar_stop() {
-  if [[ ${progress_bar_showing:-f} == t ]]; then
-    local time_taken current_time=${EPOCHREALTIME/./}
-    (( time_taken = current_time - progress_bar_start_time ))
-    micros_to_minute time_taken
-    if (( time_taken > 0 )); then
-      echo "...Completed in $time_taken minutes." >&$fd_original_err
+    progress_bar_total=${progress_bar_total:-0}
+    progress_bar_nesting=${progress_bar_nesting:-0}
+    progress_bar_front_load=${progress_bar_front_load:-$front_load}
+    (( progress_bar_total += new_progress_bar_size ))
+    (( progress_bar_nesting++ ))
+    progress_bar_start_time=${progress_bar_start_time:-${EPOCHREALTIME/./}}
+    progress_bar_current=0
+    
+    if (( progress_bar_total > 2 )); then
+      echo -n "...0% complete" >&$fd_original_err
     else
-      echo -n "${CLEAR_LINE}" >&$fd_original_err
+      echo -n "..." >&$fd_original_err
     fi
-    progress_bar_showing=f
+  fi
+}
+
+progress_bar_next() {
+  local amount_to_add=${1:-1} percentage
+  if (( ${progress_bar_nesting:-0} > 0 )); then
+    (( progress_bar_current += amount_to_add ))
+    if (( progress_bar_total > 2 )); then
+      echo -n "$CLEAR_LINE" >&$fd_original_err
+      (( percentage = 100 * progress_bar_current / progress_bar_total ))
+      local time_taken_micro total_micro remaining_micro extra= remaining_min current_time=${EPOCHREALTIME/./}
+      (( time_taken_micro = current_time - progress_bar_start_time ))
+      (( total_micro = time_taken_micro * progress_bar_total / progress_bar_current ))
+      (( remaining_micro = total_micro - time_taken_micro ))
+
+      remaining_min=$remaining_micro
+      (( percentage < 25 )) && (( remaining_min *= progress_bar_front_load ))
+      micros_to_minute remaining_min
+      if (( remaining_min > 0 )); then
+        extra=" ($remaining_min minute(s) left)"
+      fi
+
+      echo -n "...$percentage% complete$extra" >&$fd_original_err
+    else # too few total items in progress bar to show %
+      local out
+      eval "printf -v out '%.s.' {1..$amount_to_add}"
+      echo -n "$out"
+    fi
   fi
 }
 
 progress_bar_nudge() {
   local output_char=${1:-.}
-  if [[ ${progress_bar_showing:-f} == t ]]; then
+  if (( ${progress_bar_nesting:-0} > 0 )); then
     echo -n "$output_char" >&$fd_original_err
+  fi
+}
+
+progress_bar_stop() {
+  if (( ${progress_bar_nesting:-0} > 0 )); then
+    (( progress_bar_nesting-- ))
+    if (( progress_bar_nesting == 0 )); then
+      local time_taken current_time=${EPOCHREALTIME/./}
+      (( time_taken = current_time - progress_bar_start_time ))
+      micros_to_minute time_taken
+      if (( time_taken > 0 )); then
+        echo "...Completed in $time_taken minutes." >&$fd_original_err
+      else
+        echo -n "${CLEAR_LINE}" >&$fd_original_err
+      fi
+      unset progress_bar_total progress_bar_nesting \
+            progress_bar_front_load progress_bar_start_time \
+            progress_bar_current
+    fi
   fi
 }
 
