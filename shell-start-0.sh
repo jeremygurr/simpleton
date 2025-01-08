@@ -16,6 +16,12 @@ fi
 export prompt_name
 NL=$'\n'
 
+# cell aliases
+alias get='cell get'
+alias update='cell update'
+alias clean='cell clean'
+alias ?='cell . ?'
+
 alias sp='source /etc/profile'
 alias ls='ls --color=auto'
 alias l='ls --color=auto -l'
