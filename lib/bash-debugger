@@ -488,6 +488,7 @@ stack_trace_inner() {
   local extra= debug_id= p n r l \
     stack_level=${stack_level:-0} count=${#FUNCNAME[*]} \
     before= after= start_frame=${start_frame:-1} \
+    short_source=${short_source:-t} \
 
   echo "${WHITE}FUNCTION DEBUG_ID SOURCE DETAILS$RESET"
   for ((n = count - 1; n >= start_frame; n--)) ; do
@@ -503,8 +504,8 @@ stack_trace_inner() {
       debug_id=-
     fi
 
-    if [[ -v cooked_stack[$r] ]]; then
-      after+="${cooked_stack[$r]}"
+    if [[ -v stack_detail[$r] ]]; then
+      after+="${stack_detail[$r]}"
     fi
 
     if [[ -v stack_high_level[$r] ]]; then
@@ -512,8 +513,17 @@ stack_trace_inner() {
       before+=$WHITE
     fi
 
+    local bash_source="${BASH_SOURCE[$n]:-(no source)}"
+    if [[ $short_source == t ]]; then
+      local prefix=${bash_source%/*/*/*/*}
+      if [[ "$prefix" != "$bash_source" ]]; then
+        bash_source="${bash_source#$prefix/}"
+      fi
+    fi
+    bash_source+=":${BASH_LINENO[$p]:-(no line)}"
+
     if (( l >= stack_level )); then
-      echo "$RESET$before${FUNCNAME[$n]:-(no func)} $debug_id ${BASH_SOURCE[$n]:-(no source)}:${BASH_LINENO[$p]:-(no line)} $after"
+      echo "$RESET$before${FUNCNAME[$n]:-(no func)} $debug_id $bash_source $after"
     fi
 
   done
@@ -563,7 +573,7 @@ high_stack_trace() {
     echo >&$fd_original_err
   fi
 
-  if [[ "${cooked_stack[*]}" ]]; then
+  if [[ "${stack_detail[*]}" ]]; then
     local start_frame=${start_frame:-1}
 
     if [ ${tracing_midline:-f} == t ]; then
@@ -607,7 +617,7 @@ debug_show_var() {
   if [[ "$display_var" =~ ^[a-zA-Z_0-9]+$ ]]; then
     eval 'echo "$'$display_var'"' >&$fd_original_err 
   elif [[ "$display_var" == \** ]]; then
-    eval "declare -p | grep '${display_var#\*}' | grep -Ev 'declare -a BASH_ARGV|declare -- _=|declare -- debug_display=|declare -n derive_fields=|declare -- display_var=|.*trace_var.*|.*debug_.*|.*cooked_stack.*|.*watch_output.*|.*debug_watch.*|.*original_cmd.*|.*localize_.*dims.*|.*watch_var.*'" >&$fd_original_err
+    eval "declare -p | grep '${display_var#\*}' | grep -Ev 'declare -a BASH_ARGV|declare -- _=|declare -- debug_display=|declare -n derive_fields=|declare -- display_var=|.*trace_var.*|.*debug_.*|.*cooked_stack.*|.*stack_detail.*|.*watch_output.*|.*debug_watch.*|.*original_cmd.*|.*localize_.*dims.*|.*watch_var.*'" >&$fd_original_err
   elif [[ "${display_var:-}" == \$* ]]; then
     eval 'echo "'${display_var}'"' >&$fd_original_err
   else
