@@ -813,6 +813,25 @@ debug_command_loop() {
         fi
         ;;
       f)
+        echo >&$fd_original_err
+        read -u $fd_original_in -e -p "Shallow Find: " debug_search >&$fd_original_err
+        if [[ "${debug_search:-}" ]]; then
+          if [[ "$debug_search" == ~* ]]; then
+            # use unescaped to support regex if expression starts with ~
+            debug_search=${debug_search#~}
+          else
+            debug_search=${debug_search//\\/\\\\}
+            debug_search=${debug_search//\$/\\\$}
+            debug_search=${debug_search//[/\\[}
+          fi
+          debug_search_old=$debug_search
+          debug_search_deep=f
+          debug_r=0
+          debug_long_command=t
+          debug_save_state
+        fi
+        ;;
+      F)
         if [[ "${debug_search_old:-}" ]]; then
           echo "# Repeating search for $debug_search_old" >&$fd_original_err
           debug_search=${debug_search_old:-}
@@ -882,38 +901,6 @@ debug_command_loop() {
         debug_subshell=t
         debug_save_state
         export -n debug
-        ;;
-      j)
-        echo >&$fd_original_err
-        read -u $fd_original_in -e -p "Shallow Find: " debug_search >&$fd_original_err
-        if [[ "${debug_search:-}" ]]; then
-          if [[ "$debug_search" == ~* ]]; then
-            # use unescaped to support regex if expression starts with ~
-            debug_search=${debug_search#~}
-          else
-            debug_search=${debug_search//\\/\\\\}
-            debug_search=${debug_search//\$/\\\$}
-            debug_search=${debug_search//[/\\[}
-          fi
-          debug_search_old=$debug_search
-          debug_search_deep=f
-          debug_r=0
-          debug_long_command=t
-          debug_save_state
-        fi
-        ;;
-      J)
-        if [[ "${debug_search_old:-}" ]]; then
-          echo "# Shallow find of $debug_search_old" >&$fd_original_err
-          debug_search=${debug_search_old:-}
-          debug_search_deep=f
-          debug_r=0
-          debug_long_command=t
-          debug_save_state
-        else
-          echo "# No previous search" >&$fd_original_err
-          no_follow_once=t
-        fi
         ;;
       l)
         if [[ $debug_path_to_source_file == none ]]; then
@@ -1314,13 +1301,12 @@ debug_command_loop() {
         echo "D  repeat last display command" >&$fd_original_err
         echo "e  evaluate an expression" >&$fd_original_err
         echo "E  repeat last eval expression command" >&$fd_original_err
-        echo "f  repeat previous deep or shallow search" >&$fd_original_err
+        echo "f  jump ahead: shallow substring find" >&$fd_original_err
+        echo "F  repeat previous jump" >&$fd_original_err
         echo "g  continue until the given function is reached" >&$fd_original_err
         echo "G  continue until the previously given function is reached" >&$fd_original_err
         echo "h  toggle syntax highlighting" >&$fd_original_err
         echo "i  next instruction, stepping into function calls" >&$fd_original_err
-        echo "j  jump ahead: shallow substring find" >&$fd_original_err
-        echo "J  repeat previous jump" >&$fd_original_err
         echo "l  list next debug_list_window (default 20) lines of source code" >&$fd_original_err
         echo "L  list previous debug_list_window (default 20) lines of source code" >&$fd_original_err
         echo "n  next line of code (even if it resolves to several different statements)," >&$fd_original_err
