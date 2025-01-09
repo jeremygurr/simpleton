@@ -215,6 +215,9 @@ debug_load_state() {
     [[ ${debug_debug:-f} == t ]] && echo "${CYAN}Loading state from $debug_state_file${RESET}" >&$fd_original_err
     debug_needs_to_load_state=f
     source "$debug_state_file" || return 1
+    if [[ "${debug_log_level_filter:-}" ]]; then
+      log_level_filter=$debug_log_level_filter
+    fi
   fi
   return 0
 }
@@ -240,7 +243,9 @@ debug_ignore='$debug_ignore'
 debug_immediate='$debug_immediate'
 debug_line='$debug_line'
 debug_line_old='$debug_line_old'
+debug_log_level_filter='$debug_original_log_level_filter'
 debug_max_depth='$debug_max_depth'
+debug_original_log_level='$debug_original_log_level'
 debug_original_tracefd='$debug_original_tracefd'
 debug_prev_command='${debug_prev_command//\'/\'\"\'\"\'}'
 debug_prev_function='$debug_prev_function'
@@ -623,6 +628,10 @@ debug_show_var() {
   else
     echo "Invalid var name" >&$fd_original_err
   fi
+}
+
+function_exists() {
+  declare -pf $1 &>/dev/null
 }
 
 debug_command_loop() {
@@ -1081,9 +1090,25 @@ debug_command_loop() {
         ;;
       v)
         echo >&$fd_original_err
+        debug_original_log_level=${debug_original_log_level:-$log_level_filter}
+        local log=
+        read -u $fd_original_in -e -p "New log level: " log >&$fd_original_err
+        if [[ "$log" ]]; then
+          if function_exists resolve_log_var; then
+            resolve_log_var
+          else
+            log_level_filter=$log
+          fi
+          debug_log_level_filter=$log_level_filter
+          echo "# Log level changed to $log_level_filter" >&$fd_original_err
+        fi
         no_follow_once=t
         ;;
       V)
+        debug_original_log_level=${debug_original_log_level:-$log_level_filter}
+        echo "# Restored log level to $debug_original_log_level" >&$fd_original_err
+        log_level_filter=$debug_original_log_level
+        debug_log_level_filter=$log_level_filter
         no_follow_once=t
         ;;
       w)
@@ -1316,6 +1341,8 @@ debug_command_loop() {
         echo "T  show high level call stack" >&$fd_original_err
         echo "u  unignore: remove given function from ignore list" >&$fd_original_err
         echo "U  unignore all functions" >&$fd_original_err
+        echo "v  adjust log level (takes same values as 'log' parameter)" >&$fd_original_err
+        echo "V  restore log level to it's original" >&$fd_original_err
         echo "w  set or clear current watched expression. Expression can contain any string expression which can be given to echo as an argument." >&$fd_original_err
         echo "x  hex display of a variable" >&$fd_original_err
         echo "!  reset tty / bind variables" >&$fd_original_err
