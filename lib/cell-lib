@@ -661,13 +661,28 @@ build_context_expand2() {
 
     local members=() aliases=() \
       has_explicit_member_list=f fun \
-      is_optional=f
+      is_optional=f \
+      member_type= \
 
     if [[ -v ${dim_type}_${dim}_is_optional ]]; then
       local -n is_optional_var=${dim_type}_${dim}_is_optional
       if [[ $is_optional_var == t ]]; then
         is_optional=t
       fi
+    fi
+
+    if [[ -v ${dim_type}_${dim}_member_type ]]; then
+      local -n member_type_var=${dim_type}_${dim}_member_type
+      case member_type_var in
+        dynamic|static)
+          :
+        ;;
+        *)
+          log_fatal "Invalid member_type variable loaded from dna: $member_type. Must be either dynamic or static."
+          fail1
+        ;;
+      esac
+      member_type=$member_type_var
     fi
 
     if [[ -v ${dim_type}_${dim}_members ]]; then
@@ -688,6 +703,14 @@ build_context_expand2() {
       eval "aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )" || fail
     fi
 
+    if [[ ! "$member_type" ]]; then
+      if [[ $has_explicit_member_list == t ]]; then
+        member_type=static
+      else
+        member_type=dynamic
+      fi
+    fi
+
     code="
 ${dim_type}_${dim}_expand() {
   problem=
@@ -706,6 +729,7 @@ ${dim_type}_${dim}_expand() {
     fi
 
     write_to_context fun "$code" || fail
+    write_vars_to_context member_type || fail
 
   end_function
   handle_return
@@ -1449,6 +1473,102 @@ init_command_vars() {
     command_modifies_context=f \
     command_modifies_upstream=f \
 
+}
+
+init_context() {
+  begin_function
+
+    # required_freshness:
+    #   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
+    #   1w means refresh if it's older than a week.
+    # shuffle_chance:
+    #   chance out of 1000 of not following the computed strategy order
+    # min_pause:
+    #   number of ms to wait between cycles
+    #   this number doubles each time there is nothing to do, until it reaches max_pause
+    # reuse_existing_out:
+    #   if set to t: 
+    #   new output folder won't be created when updating, but the existing one will be used
+    #   should set to true when creating a new output folder would be expensive
+    #   these cells must detect for themselves whether a change has happened in an
+    #     update and set something_changed=t accordingly. 
+
+    # need to make sure that expand functions don't bleed into sub command execution
+    local dim_type dim
+    for dim_type in trunk_dims sub_dims control_props data_props; do
+      local -n dims=$dim_type
+      for dim in ${dims[*]:-}; do
+        unset ${dim_type}_${dim}_expand
+      done
+    done
+
+    if [[ $trunk_changed == t ]]; then
+      init_coord branch
+    fi
+
+    init_coord leaf
+    init_coord sub
+    init_coord tree
+
+    cell_can_agg=f \
+    cell_expiration= \
+    check_op_var=f \
+    child_dims=() \
+    control_props=() \
+    current_pause=250 \
+    data_props=() \
+    default_anchor_dims= \
+    default_freshness= \
+    default_strategies=crl \
+    leaf_dims=() \
+    localize_dims= \
+    localize_reverse_dims= \
+    lock_timeout=2 \
+    max_pause=60000 \
+    min_pause=250 \
+    out_fields_choices= \
+    out_file= \
+    out_form_choices='raw simple table json kv' \
+    out_path= \
+    post_validate=f \
+    pre_validate=f \
+    prev_coords=() \
+    refresh_less_than=${refresh_less_than:-1} \
+    retry_delay=1 \
+    retry_max=1 \
+    retry_scale=2 \
+    reuse_existing_out=t \
+    shuffle_chance=100 \
+    sub_dims=() \
+    trunk_dims=() \
+    up=() \
+    update_cost=1 \
+    update_risk=3 \
+
+    unset \
+      check_op \
+      update_op \
+      get_op \
+      aggregate_op \
+
+    context_path=$cyto_path/context \
+    dna_key_path=$dna_path/key \
+    down_path=$cyto_path/down \
+    job_path=$cyto_path/job \
+    key_path=$cyto_path/key \
+    req_path=$cyto_path/req \
+    status_path=$cyto_path/status \
+    tmp_path=$cyto_path/tmp \
+    up_path=$cyto_path/up \
+    up_chosen_path=$cyto_path/up-chosen \
+    inner_path=$cyto_path/inner \
+    outer_path=$cyto_path/outer \
+
+    lock_path=$context_path \
+    replay_path=$job_path/pipe_replay \
+
+  end_function
+  handle_return
 }
 
 setup_cell_paths() {
@@ -3075,103 +3195,6 @@ init_coord() {
 
 }
 
-init_context() {
-  begin_function
-
-    # required_freshness:
-    #   inf means infinite (never refresh based on time). 30s means refresh if it is older than 30 seconds.
-    #   1w means refresh if it's older than a week.
-    # shuffle_chance:
-    #   chance out of 1000 of not following the computed strategy order
-    # min_pause:
-    #   number of ms to wait between cycles
-    #   this number doubles each time there is nothing to do, until it reaches max_pause
-    # reuse_existing_out:
-    #   if set to t: 
-    #   new output folder won't be created when updating, but the existing one will be used
-    #   should set to true when creating a new output folder would be expensive
-    #   these cells must detect for themselves whether a change has happened in an
-    #     update and set something_changed=t accordingly. 
-
-    # need to make sure that expand functions don't bleed into sub command execution
-    local dim_type dim
-    for dim_type in trunk_dims sub_dims control_props data_props; do
-      local -n dims=$dim_type
-      for dim in ${dims[*]:-}; do
-        unset ${dim_type}_${dim}_expand
-      done
-    done
-
-    if [[ $trunk_changed == t ]]; then
-      init_coord branch
-    fi
-
-    init_coord leaf
-    init_coord sub
-    init_coord tree
-
-    cell_expiration= \
-    cell_is_external=f \
-    cell_is_persistent=f \
-    check_op_var=f \
-    child_dims=() \
-    control_props=() \
-    current_pause=250 \
-    data_props=() \
-    default_anchor_dims= \
-    default_freshness= \
-    default_strategies=crl \
-    leaf_dims=() \
-    localize_dims= \
-    localize_reverse_dims= \
-    lock_timeout=2 \
-    max_pause=60000 \
-    min_pause=250 \
-    out_fields_choices= \
-    out_file= \
-    out_form_choices='raw simple table json kv' \
-    out_path= \
-    post_validate=f \
-    pre_validate=f \
-    prev_coords=() \
-    refresh_less_than=${refresh_less_than:-1} \
-    retry_delay=1 \
-    retry_max=1 \
-    retry_scale=2 \
-    reuse_existing_out=t \
-    shuffle_chance=100 \
-    sub_dims=() \
-    trunk_dims=() \
-    up=() \
-    update_cost=1 \
-    update_risk=3 \
-
-    unset \
-      check_op \
-      update_op \
-      get_op \
-
-
-    context_path=$cyto_path/context \
-    dna_key_path=$dna_path/key \
-    down_path=$cyto_path/down \
-    job_path=$cyto_path/job \
-    key_path=$cyto_path/key \
-    req_path=$cyto_path/req \
-    status_path=$cyto_path/status \
-    tmp_path=$cyto_path/tmp \
-    up_path=$cyto_path/up \
-    up_chosen_path=$cyto_path/up-chosen \
-    inner_path=$cyto_path/inner \
-    outer_path=$cyto_path/outer \
-
-    lock_path=$context_path \
-    replay_path=$job_path/pipe_replay \
-
-  end_function
-  handle_return
-}
-
 load_repo_paths() {
   declare -gA repo_paths
   begin_function
@@ -4571,14 +4594,15 @@ decrypt_file_with_shared_key() {
 }
 
 get_sane_value() {
-  local -r value=$1
+  local -r value=$1 
+  local -n s=${2:-sane_value}
   if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
     sane_value=$value
   else
     hash=$(echo "$value" | sha1sum | awk '{ print $1 }')
-    sane_value=${hash:0:8}
+    s=${hash:0:8}
   fi
-  debug_return_vars=sane_value
+  debug_return_vars=s
   return 0
 }
 
