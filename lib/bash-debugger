@@ -622,6 +622,10 @@ debug_show_var() {
   if [[ "$display_var" =~ ^[a-zA-Z_0-9]+$ ]]; then
     get_var_value $display_var val
     echo "$val" >&$fd_original_err 
+  elif [[ "$display_var" == ^^* ]]; then
+    show_table ${display_var#^^}
+  elif [[ "$display_var" == ^* ]]; then
+    show_array ${display_var#^}
   elif [[ "$display_var" == \** ]]; then
     eval "declare -p | grep '${display_var#\*}' | grep -Ev 'declare -a BASH_ARGV|declare -- _=|declare -- debug_display=|declare -n derive_fields=|declare -- display_var=|.*trace_var.*|.*debug_.*|.*cooked_stack.*|.*stack_detail.*|.*watch_output.*|.*debug_watch.*|.*original_cmd.*|.*localize_.*dims.*|.*watch_var.*'" >&$fd_original_err
   elif [[ "${display_var:-}" == \$* ]]; then
@@ -1298,6 +1302,8 @@ debug_command_loop() {
         echo "d  display a variable. Works with arrays and sets also." >&$fd_original_err
         echo "   prefix with * to show declare output for all set variables matching that"
         echo "   prefix with $ to use a raw variable expression which is fed into echo"
+        echo "   prefix with ^ to show an array in long view, with one element per row"
+        echo "   prefix with ^^ to show an array in table form, requiring a {var}_data and {var}_fields variables"
         echo "D  repeat last display command" >&$fd_original_err
         echo "e  evaluate an expression" >&$fd_original_err
         echo "E  repeat last eval expression command" >&$fd_original_err
@@ -1814,6 +1820,33 @@ show_array() {
   for i in "${!array[@]}"; do
     echo "$i: ${array[$i]}" >&$fd_original_err
   done
+}
+
+show_table() {
+  local -n fields=$1_fields data=$1_data
+  if [[ -v fields && -v data ]]; then
+
+    set +T
+    {
+    echo "${fields[*]}"
+    local line= field_count=${#fields[*]} f
+
+    for (( i = 0; i <= ${#data[*]}; i++ )); do
+      (( f = i % field_count ))
+      if (( f == 0 )) && [[ "$line" ]]; then
+        echo "$line"
+        line=
+      fi
+      if (( i < ${#data[*]} )); then
+        line+="${data[$i]} "
+      fi
+    done
+    } | column -t >&$fd_original_err
+    set -T
+
+  else
+    echo "Invalid table variable: $1" >&$fd_original_err
+  fi
 }
 
 debugger_init() {
