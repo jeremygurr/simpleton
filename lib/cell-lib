@@ -2513,6 +2513,8 @@ calc_coordinates_next_unknown_dim() {
           coord_index=${coordinate_dim_index[$dim]}
           dims=${coordinate_fields_plural[$coord_index]}
 
+          log_show_vars='dim phase unknown_dims'
+          fence
           log_debug "Finding values for $dim in phase $phase"
           local values=
           if [[ $phase == derive ]]; then
@@ -2575,6 +2577,13 @@ calc_coords_validate_member() {
   local dim=$1 member=$2
   begin_function
     is_valid=t
+
+    local -n dim_type=${dim}_dim_type
+    local -n is_optional=${dim_type}_${dim}_is_optional
+    if [[ ${is_optional:-f} == t && ( ! "$member" || $member == $empty_member ) ]]; then
+      succeed
+    fi
+
     local values=() can_derive
     attempt_derive $dim || fail
     if [[ $can_derive == t ]]; then
@@ -2583,15 +2592,6 @@ calc_coords_validate_member() {
         is_valid=f
       elif ! array_contains values "$member"; then
         is_valid=f
-#      else
-#        # doing in a less ideal way because 'local' bug was happening with array_contains function
-#        is_valid=f
-#        for (( i = 0; i < ${#values[*]}; i++ )); do
-#          if [[ ${values[$i]} == "$member" ]]; then
-#            is_valid=t
-#            break
-#          fi
-#        done
       fi
       succeed
     fi
@@ -2614,22 +2614,6 @@ calc_coords_validate_member() {
         succeed
       fi
     end_for
-  end_function
-  handle_return
-}
-
-calc_coordinates_next_known_dim_member() {
-  local log_show_vars='dim member'
-  begin_function
-    member=$m
-    log_debug "Processing $dim=$member"
-    # recursive
-    calc_coords_validate_member $dim "$member" || fail
-    if [[ $is_valid == t ]]; then
-      calc_coordinates_next_known_dim || fail
-    else
-      log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
-    fi
   end_function
   handle_return
 }
@@ -2678,7 +2662,20 @@ calc_coordinates_next_known_dim() {
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
         begin_for m in "${ms[@]}"; doo
-          calc_coordinates_next_known_dim_member || fail
+
+          member=$m
+          log_show_vars='dim member'
+          fence
+          log_debug "Processing $dim=$member"
+
+          # recursive
+          calc_coords_validate_member $dim "$member" || fail
+          if [[ $is_valid == t ]]; then
+            calc_coordinates_next_known_dim || fail
+          else
+            log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
+          fi
+
         end_for
         unset member
         unset -n member
@@ -3934,7 +3931,7 @@ after_fork() {
       #echo "$(<$reply_file)" >&$fd_original_err
       source $reply_file || fail
       if [[ ${debugging:-f} == t ]]; then
-        [[ "$debug_debug" == t ]] && echo "debugging=$debugging, so starting debugging after fork" >&$fd_original_err
+        [[ "${debug_debug:-f}" == t ]] && echo "debugging=$debugging, so starting debugging after fork" >&$fd_original_err
         debug_needs_to_load_state=t \
           debug_load_state || fail
         debug_immediate=f \
