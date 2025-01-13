@@ -21,6 +21,7 @@ alias get='cell get'
 alias update='cell update'
 alias clean='cell clean'
 alias ?='cell . ?'
+alias ??='cell . ??'
 
 alias sp='source /etc/profile'
 alias ls='ls --color=auto'
