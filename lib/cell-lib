@@ -2618,13 +2618,28 @@ calc_coords_validate_member() {
   handle_return
 }
 
+calc_coordinates_next_known_dim_member() {
+  local log_show_vars='dim member'
+  begin_function
+    member=$m
+    log_debug "Processing $dim=$member"
+    # recursive
+    calc_coords_validate_member $dim "$member" || fail
+    if [[ $is_valid == t ]]; then
+      calc_coordinates_next_known_dim || fail
+    else
+      log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
+    fi
+  end_function
+  handle_return
+}
+
 # calling this will produce and end at least one coordinate row 
 # inputs:
 #   known_dims (may be empty)
 #   coordinate_dim_index
 #   coordinate_fields_plural
 calc_coordinates_next_known_dim() {
-  local known_dim=${known_dims%% *} log_show_vars=known_dim
   begin_function
 
     if (( coord_limit > 0 && total_coord_rows_added >= coord_limit )); then
@@ -2663,15 +2678,7 @@ calc_coordinates_next_known_dim() {
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
         begin_for m in "${ms[@]}"; doo
-          member=$m
-          log_debug "Processing $dim=$member"
-          # recursive
-          calc_coords_validate_member $dim "$member" || fail
-          if [[ $is_valid == t ]]; then
-            calc_coordinates_next_known_dim || fail
-          else
-            log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
-          fi
+          calc_coordinates_next_known_dim_member || fail
         end_for
         unset member
         unset -n member
