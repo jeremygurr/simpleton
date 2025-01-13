@@ -130,7 +130,7 @@ debug_source_update() {
 debug_source_update_hl() {
   if [[ $debug_highlight == t && $debug_path_to_source_file != none ]]; then
 
-    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/} || { debug_exit=t; exit 1; }
+    debug_path_to_source_file=$(cd "$debug_dir"; cd ${debug_path_to_source_file%/*}; pwd)/${debug_path_to_source_file##*/} || { debug_exit=1; exit 1; }
     local highlighted_source=$tmp_folder/debug_highlight/${debug_path_to_source_file#/}
     if [ ! -f "$highlighted_source" ]; then
       mkdir -p "${highlighted_source%/*}"
@@ -152,7 +152,7 @@ debug_source_line_update() {
     echo "debug_list_stack_pos=$debug_list_stack_pos" >&$fd_original_err
     echo "Array saved_bash_source:" >&$fd_original_err
     show_array saved_bash_source
-    debug_exit=t
+    debug_exit=1
     exit 1
   fi
 
@@ -164,7 +164,7 @@ debug_source_line_update() {
 
   if [[ ! "$debug_line_num" ]]; then
     echo "Internal error: missing debug_line_num" >&$fd_original_err
-    debug_exit=t
+    debug_exit=1
     exit 1
   fi
 
@@ -172,7 +172,7 @@ debug_source_line_update() {
 
   if [[ ! "$debug_current_function" ]]; then
     echo "Internal error: missing debug_current_function" >&$fd_original_err
-    debug_exit=t
+    debug_exit=1
     exit 1
   fi
 
@@ -213,6 +213,7 @@ debug_display_source() {
 debug_load_state() {
   if [[ -f "$debug_state_file" && "${debug_needs_to_load_state:-t}" == t ]]; then
     [[ ${debug_debug:-f} == t ]] && echo "${CYAN}Loading state from $debug_state_file${RESET}" >&$fd_original_err
+    pause "Loading state"
     debug_needs_to_load_state=f
     source "$debug_state_file" || return 1
     if [[ "${debug_log_level_filter:-}" ]]; then
@@ -251,6 +252,7 @@ debug_prev_command='${debug_prev_command//\'/\'\"\'\"\'}'
 debug_prev_function='$debug_prev_function'
 debug_prev_line='$debug_prev_line'
 debug_prev_source_file='$debug_prev_source_file'
+debug_restart_command='$debug_restart_command'
 debug_search='$debug_search'
 debug_search_deep='$debug_search_deep'
 debug_search_old='$debug_search_old'
@@ -729,20 +731,24 @@ debug_command_loop() {
         local new_command
         debug_get_new_command
         debug_restart_command=$new_command
-        debug_exit=t
-        debugging=
+        debug_exit=0
+        debugging=t
+        debug_save_state
         exit 0
         ;;
       B)
         get_effective_debug_id
-        local rewind_debug_id
-        rewind_debug_id=$((effective_debug_id-1))
+        local rewind_debug_id prefix suffix
+        suffix=${effective_debug_id##*.}
+        prefix=${effective_debug_id%.$suffix}
+        rewind_debug_id=$prefix.$((suffix-1))
         echo "# Going back to debug_id=$rewind_debug_id..." >&$fd_original_err
         local new_command
         debug_get_new_command
         debug_restart_command=$new_command
-        debug_exit=t
-        debugging=
+        debug_exit=0
+        debugging=t
+        debug_save_state
         exit 0
         ;;
       c)
@@ -1018,7 +1024,7 @@ debug_command_loop() {
       q) 
         echo "# Quitting (debug state: $debug_state_file)" >&$fd_original_err
         force_save=t debug_save_state
-        debug_exit=t
+        debug_exit=1
         debug_save_state
         if [[ "$reply_file" ]]; then
           echo "debugging=t" >$reply_file
@@ -1525,7 +1531,7 @@ maybe_enable_debug_tracing() {
           && $debug_current_depth -le $debug_max_depth \
           || $debug_expansion -ge 2 ]]; then
       debug_tracing=t
-      [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
+      #[[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
     fi
   fi
 }
@@ -1673,7 +1679,12 @@ debug_inner() {
     debugging=f
   fi
 
-  [[ $debug_exit == t ]] && exit 0
+  if [[ "$debug_exit" ]]; then
+    if [[ "$debug_debug" == t ]]; then
+      echo "${CYAN}Exiting because debug_exit=$debug_exit${RESET}" >&$fd_original_err
+    fi
+    exit $debug_exit
+  fi
 
   return 0
 }
@@ -1723,7 +1734,7 @@ debug_trap() {
     debug_source_file \
 
   debug_tracing=f
-  [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
+  #[[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
   local prev_debug_out_path=$debug_out_path
   debug_out_path=$tmp_folder/debug-out.$BASHPID
   if [[ "$prev_debug_out_path" != $debug_out_path && -v cleanup_on_exit ]]; then
@@ -1739,7 +1750,12 @@ debug_trap() {
 
   debug_load_state || return 1
 
-  [[ $debug_exit == t ]] && exit 1
+  if [[ "$debug_exit" ]]; then
+    if [[ "$debug_debug" == t ]]; then
+      echo "${CYAN}Exiting because debug_exit=$debug_exit${RESET}" >&$fd_original_err
+    fi
+    exit $debug_exit
+  fi
 
   debug_rewind=f
 
@@ -1952,7 +1968,7 @@ debug_start() {
     debug_debug=${debug_debug:-f} \
     debug_dir=$PWD \
     debug_display=${debug_display:-none} \
-    debug_exit=${debug_exit:-f} \
+    debug_exit=${debug_exit:-} \
     debug_expanded_search=${debug_expanded_search:-f} \
     debug_expanded_search=${debug_expanded_search:-f} \
     debug_expansion=${debug_expansion:-1} \
