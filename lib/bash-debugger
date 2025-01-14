@@ -708,13 +708,17 @@ debug_command_loop() {
     debug_long_command=f
     local silent_command=f
     if [[ "$debug_buffered_commands" ]]; then
-      debug_buffered_commands=${debug_buffered_commands##*( )}
-      debug_c=${debug_buffered_commands%% *}
-      debug_buffered_commands=${debug_buffered_commands#$debug_c}
+      debug_c=
+      while [[ "$debug_buffered_commands" ]]; do
+        debug_c=${debug_buffered_commands:0:1}
+        debug_buffered_commands=${debug_buffered_commands:1}
+        if [[ "$debug_c" != ' ' ]]; then
+          break
+        fi
+      done
       silent_command=t
     else
       read -rs -n1 -u $fd_original_in debug_c >&$fd_original_err 2>&1
-      user_interacted=t
     fi
 
     if [[ "$debug_c" != l && "$debug_c" != L ]]; then
@@ -1409,6 +1413,7 @@ debug_get_ok_to_debug() {
   if [[ $debug_immediate == t ]]; then
     [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_immediate${RESET}" >&$fd_original_err
     ok_to_debug=t
+    debug_immediate=f
 
   elif [[ -n "$debug_line" \
           && -z "$file_part" \
@@ -1668,11 +1673,7 @@ debug_inner() {
   debug_step_to_next_line=f
   debug_prev_command=$raw_display_command
 
-  local user_interacted=f
   debug_command_loop
-  if [[ $user_interacted == t ]]; then
-    debug_immediate=f
-  fi
 
   if [[ $debug_untrap == t ]]; then
     debug_tracing=f
