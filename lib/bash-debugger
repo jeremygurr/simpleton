@@ -297,16 +297,16 @@ debug_ignore_remove() {
 debug_display_command_expansion_status() {
   case $debug_expansion in
     0)
-      echo "# Command expansion off" >&$fd_original_err
+      debugger_out "# Command expansion off"
     ;;
     1)
-      echo "# Command expansion basic" >&$fd_original_err
+      debugger_out "# Command expansion basic"
     ;;
     2)
-      echo "# Command expansion deep" >&$fd_original_err
+      debugger_out "# Command expansion deep"
     ;;
     3)
-      echo "# Command expansion unfiltered" >&$fd_original_err
+      debugger_out "# Command expansion unfiltered"
     ;;
   esac
 }
@@ -387,7 +387,7 @@ debug_move_down_stack() {
 
   if (( index < 0 )); then
 
-    echo "# Already at bottom of stack" >&$fd_original_err
+    debugger_out "# Already at bottom of stack"
 
   elif (( index == 0 )); then
 
@@ -395,7 +395,7 @@ debug_move_down_stack() {
 
   else
 
-    echo "# Move down the stack" >&$fd_original_err
+    debugger_out "# Move down the stack"
 
     (( debug_list_stack_pos = index ))
     #local debug_id=
@@ -419,11 +419,11 @@ debug_move_up_stack() {
 
   if (( index >= stack_size )); then
 
-    echo "# Already at top of stack" >&$fd_original_err
+    debugger_out "# Already at top of stack"
 
   else
 
-    echo "# Move up the stack" >&$fd_original_err
+    debugger_out "# Move up the stack"
 
     (( debug_list_stack_pos = index ))
     #local debug_id=
@@ -643,6 +643,12 @@ function_exists() {
   declare -pf $1 &>/dev/null
 }
 
+debugger_out() {
+  if [[ $silent_command == f ]]; then
+    echo "$@" >&$fd_original_err
+  fi
+}
+
 debug_command_loop() {
   local debug_c no_follow_once=f
 
@@ -733,7 +739,7 @@ debug_command_loop() {
         get_effective_debug_id
         local rewind_debug_id
         rewind_debug_id=$effective_debug_id
-        echo "# Going back to debug_id=$rewind_debug_id..." >&$fd_original_err
+        debugger_out "# Going back to debug_id=$rewind_debug_id..."
         local new_command
         debug_get_new_command
         debug_restart_command=$new_command
@@ -748,7 +754,7 @@ debug_command_loop() {
         suffix=${effective_debug_id##*.}
         prefix=${effective_debug_id%.$suffix}
         rewind_debug_id=$prefix.$((suffix-1))
-        echo "# Going back to debug_id=$rewind_debug_id..." >&$fd_original_err
+        debugger_out "# Going back to debug_id=$rewind_debug_id..."
         local new_command
         debug_get_new_command
         debug_restart_command=$new_command
@@ -759,7 +765,7 @@ debug_command_loop() {
         ;;
       c)
         if [[ $debug_path_to_source_file == none ]]; then
-          echo "# Source not available" >&$fd_original_err
+          debugger_out "# Source not available"
         else
           echo "$NL" >&$fd_original_err
           debug_reset_stack_pos
@@ -767,7 +773,7 @@ debug_command_loop() {
         fi
         ;;
       C)
-        echo "# Continuing..." >&$fd_original_err
+        debugger_out "# Continuing..."
         [[ "${fd_bash_trace:-}" ]] && eval "exec $fd_bash_trace>&-"
         debug_r=0
         debug_long_command=t
@@ -783,10 +789,10 @@ debug_command_loop() {
         ;;
       D)
         if [[ "${debug_display:-}" ]]; then
-          echo "# Showing $debug_display" >&$fd_original_err
+          debugger_out "# Showing $debug_display"
           debug_show_var "$debug_display" || fail
         else
-          echo "# No previous display var." >&$fd_original_err
+          debugger_out "# No previous display var."
         fi
         no_follow_once=t
         ;;
@@ -800,10 +806,10 @@ debug_command_loop() {
         ;;
       E)
         if [[ "$debug_expression" ]]; then
-          echo "# Evaluating $debug_expression" >&$fd_original_err
+          debugger_out "# Evaluating $debug_expression"
           eval "$debug_expression" >&$fd_original_err
         else
-          echo "# No previous expression to evaluate" >&$fd_original_err
+          debugger_out "# No previous expression to evaluate"
         fi
         no_follow_once=t
         ;;
@@ -849,7 +855,7 @@ debug_command_loop() {
         ;;
       F)
         if [[ "${debug_search_old:-}" ]]; then
-          echo "# Repeating search for $debug_search_old" >&$fd_original_err
+          debugger_out "# Repeating search for $debug_search_old"
           debug_search=${debug_search_old:-}
           debug_search_deep=t
           debug_r=0
@@ -858,7 +864,7 @@ debug_command_loop() {
           debug_stepping=f
           debug_save_state
         else
-          echo "# No previous search." >&$fd_original_err
+          debugger_out "# No previous search."
           no_follow_once=t
         fi
         ;;
@@ -882,7 +888,7 @@ debug_command_loop() {
       G)
         if [[ "${debug_function_old:-}" ]]; then
           debug_quick_function=$debug_function_old
-          echo "# Continuing until we reach function $debug_quick_function" >&$fd_original_err
+          debugger_out "# Continuing until we reach function $debug_quick_function"
           debug_r=0
           debug_long_command=t
           if [[ "${debug_quick_function:-}" == /* ]]; then
@@ -897,11 +903,11 @@ debug_command_loop() {
         ;;
       h)
         if [[ $debug_highlight == t ]]; then
-          echo "# Syntax highlighting is now off" >&$fd_original_err
+          debugger_out "# Syntax highlighting is now off"
           debug_path_to_source_file=$raw_debug_path_to_source_file
           debug_highlight=f
         else
-          echo "# Syntax highlighting is now on" >&$fd_original_err
+          debugger_out "# Syntax highlighting is now on"
           # debug_path_to_source_file=$highlighted_source
           debug_highlight=t
         fi
@@ -909,7 +915,7 @@ debug_command_loop() {
         no_follow_once=t
         ;;
       i)
-        echo "# Stepping in" >&$fd_original_err
+        debugger_out "# Stepping in"
         debug_r=0
         (( debug_max_depth += 10 ))
         debug_step_to_next_line=t
@@ -920,7 +926,7 @@ debug_command_loop() {
         ;;
       l)
         if [[ $debug_path_to_source_file == none ]]; then
-          echo "# Source not available" >&$fd_original_err
+          debugger_out "# Source not available"
         else
           if [[ $debug_list_dir != none ]]; then
             echo -n "$CLEAR_LINE" >&$fd_original_err
@@ -939,7 +945,7 @@ debug_command_loop() {
         ;;
       L)
         if [[ $debug_path_to_source_file == none ]]; then
-          echo "# Source not available" >&$fd_original_err
+          debugger_out "# Source not available"
         else
           echo -n "$CLEAR_SCREEN" >&$fd_original_err
           [[ $debug_list_dir == forwards ]] && (( debug_list_offset -= debug_list_window ))
@@ -950,7 +956,7 @@ debug_command_loop() {
         fi
         ;;
       n)
-        echo "# Stepping over" >&$fd_original_err
+        debugger_out "# Stepping over"
         debug_r=0
         debug_max_depth=$debug_current_depth
         debug_step_to_next_line=t
@@ -959,7 +965,7 @@ debug_command_loop() {
         export -n debug
         ;;
       N)
-        echo "# Stepping until next line is reached" >&$fd_original_err
+        debugger_out "# Stepping until next line is reached"
         debug_r=0
         debug_max_depth=$debug_current_depth
         debug_step_to_later_line=t
@@ -967,16 +973,14 @@ debug_command_loop() {
         debug_save_state
         ;;
       $CONTROL_N)
-        echo "# Quick stepping over" >&$fd_original_err
+        debugger_out "# Quick stepping over"
         debug_r=0
         debug_untrap=t
         debug_long_command=t
         debug_quick_stop_less_than_depth=$debug_current_depth
         ;;
       o)
-        if [[ $silent_command == f ]]; then
-          echo "# Stepping out" >&$fd_original_err
-        fi
+        debugger_out "# Stepping out"
         debug_max_depth=$((debug_current_depth - 1))
         debug_r=0
         debug_long_command=t
@@ -984,7 +988,7 @@ debug_command_loop() {
         debug_save_state
         ;;
       $CONTROL_O)
-        echo "# Quick stepping out" >&$fd_original_err
+        debugger_out "# Quick stepping out"
         debug_r=0
         debug_untrap=t
         debug_long_command=t
@@ -1028,7 +1032,7 @@ debug_command_loop() {
         no_follow_once=t
         ;;
       q) 
-        echo "# Quitting (debug state: $debug_state_file)" >&$fd_original_err
+        debugger_out "# Quitting (debug state: $debug_state_file)"
         force_save=t debug_save_state
         debug_exit=1
         debug_save_state
@@ -1039,18 +1043,18 @@ debug_command_loop() {
         exit 1
         ;;
       r)
-        echo "# Show low call stack" >&$fd_original_err
+        debugger_out "# Show low call stack"
         start_frame=5 stack_trace
         no_follow_once=t
         ;;
       R)
-        echo "# Rewinding..." >&$fd_original_err
+        debugger_out "# Rewinding..."
         debug_rewind=t
         debug_stepping=t
         debug_r=0
         ;;
       s)
-        echo "# Stepping over small" >&$fd_original_err
+        debugger_out "# Stepping over small"
         debug_r=0
         debug_max_depth=$debug_current_depth
         debug_step_to_next_line=f
@@ -1059,7 +1063,7 @@ debug_command_loop() {
         debug_save_state
         ;;
       S)
-        echo "# Stepping in small" >&$fd_original_err
+        debugger_out "# Stepping in small"
         debug_r=0
         (( debug_max_depth += 10 ))
         debug_step_to_next_line=f
@@ -1070,12 +1074,12 @@ debug_command_loop() {
         export -n debug
         ;;
       t)
-        echo "# Show medium call stack" >&$fd_original_err
+        debugger_out "# Show medium call stack"
         medium_stack_trace
         no_follow_once=t
         ;;
       T)
-        echo "# Show high call stack" >&$fd_original_err
+        debugger_out "# Show high call stack"
         high_stack_trace
         no_follow_once=t
         ;;
@@ -1088,7 +1092,7 @@ debug_command_loop() {
         fi
         ;;
       U)
-        echo "# Unignore all functions" >&$fd_original_err
+        debugger_out "# Unignore all functions"
         debug_ignore=
         no_follow_once=t
         ;;
@@ -1104,13 +1108,13 @@ debug_command_loop() {
             log_level_filter=$log
           fi
           debug_log_level_filter=$log_level_filter
-          echo "# Log level changed to $log_level_filter" >&$fd_original_err
+          debugger_out "# Log level changed to $log_level_filter"
         fi
         no_follow_once=t
         ;;
       V)
         debug_original_log_level=${debug_original_log_level:-$log_level_filter}
-        echo "# Restored log level to $debug_original_log_level" >&$fd_original_err
+        debugger_out "# Restored log level to $debug_original_log_level"
         log_level_filter=$debug_original_log_level
         debug_log_level_filter=$log_level_filter
         no_follow_once=t
@@ -1128,12 +1132,12 @@ debug_command_loop() {
         local v
         read -u $fd_original_in -e -p "Hex Display: " v >&$fd_original_err
         if [[ "$v" ]]; then
-          eval 'echo -n "$'${v#\$}'" | xxd' >&$fd_original_err || true
+          eval 'debugger_out -n "$'${v#\$}'" | xxd'
         fi
         no_follow_once=t
         ;;
       \!)
-        echo "# resetting bind vars" >&$fd_original_err
+        debugger_out "# resetting bind vars"
         bind "$debug_bind_vars"
         ;;
       \()
@@ -1148,7 +1152,7 @@ debug_command_loop() {
       \))
         if (( no_trace_depth > 0 )); then
           no_trace_depth=0
-          echo "# Resetting no_trace_depth to 0" >&$fd_original_err
+          debugger_out "# Resetting no_trace_depth to 0"
         else
           (( debug_expansion++ ))
           if (( debug_expansion > 3 )); then
@@ -1168,7 +1172,7 @@ debug_command_loop() {
         no_follow_once=t
         ;;
       =)
-        echo "# Running until this line in the same depth is reached again" >&$fd_original_err
+        debugger_out "# Running until this line in the same depth is reached again"
         debug_stop_at="$raw_debug_path_to_source_file $debug_line_num"
         debug_r=0
         debug_long_command=t
@@ -1178,7 +1182,7 @@ debug_command_loop() {
         debug_save_state
         ;;
       +)
-        echo "# Running until this line in any depth is reached again" >&$fd_original_err
+        debugger_out "# Running until this line in any depth is reached again"
         debug_stop_at="$raw_debug_path_to_source_file $debug_line_num"
         debug_r=0
         debug_long_command=t
@@ -1201,7 +1205,7 @@ debug_command_loop() {
         ;;
       \{)
         if [[ "${debug_condition_old:-}" ]]; then
-          echo "# Repeating search for $debug_condition_old" >&$fd_original_err
+          debugger_out "# Repeating search for $debug_condition_old"
           debug_condition=${debug_condition_old:-}
           debug_search_deep=t
           debug_r=0
@@ -1209,12 +1213,12 @@ debug_command_loop() {
           debug_subshell=t
           debug_save_state
         else
-          echo "# No previous condition." >&$fd_original_err
+          debugger_out "# No previous condition."
           no_follow_once=t
         fi
         ;;
       \])
-        echo "# Running until a mid level function is reached" >&$fd_original_err
+        debugger_out "# Running until a mid level function is reached"
         (( debug_max_depth += 10 ))
         debug_long_command=t
         debug_step_to_mid_function=t
@@ -1224,7 +1228,7 @@ debug_command_loop() {
         debug_untrap=t
         ;;
       \})
-        echo "# Running until a high level function is reached" >&$fd_original_err
+        debugger_out "# Running until a high level function is reached"
         (( debug_max_depth += 10 ))
         debug_r=0
         debug_long_command=t
@@ -1234,7 +1238,7 @@ debug_command_loop() {
         debug_untrap=t
         ;;
       \\)
-        echo "# Running until a different function is reached" >&$fd_original_err
+        debugger_out "# Running until a different function is reached"
         (( debug_max_depth++ ))
         debug_step_to_next_function=t
         debug_subshell=t
@@ -1242,9 +1246,7 @@ debug_command_loop() {
         debug_save_state
         ;;
       \|)
-        if [[ $silent_command == f ]]; then
-          echo "# Adding $debug_current_function to function ignore list" >&$fd_original_err
-        fi
+        debugger_out "# Adding $debug_current_function to function ignore list"
         debug_ignore+=" $debug_current_function"
         debug_r=0
         debug_stepping=t
@@ -1259,47 +1261,47 @@ debug_command_loop() {
         if [[ $debug_show_time == f ]]; then
           debug_show_time=t
           #PS4='$EPOCHREALTIME + '
-          echo "# Enabled time stamps" >&$fd_original_err
+          debugger_out "# Enabled time stamps"
         else
           debug_show_time=f
           #PS4='+ '
-          echo "# Disabled time stamps" >&$fd_original_err
+          debugger_out "# Disabled time stamps"
         fi
         debug_save_state
         no_follow_once=t
         ;;
       \$)
-        echo "# Entering debug shell" >&$fd_original_err
+        debugger_out "# Entering debug shell"
         debug_shell
         no_follow_once=t
         ;;
       \%)
         if [[ $debug_trace_time == f ]]; then
           debug_trace_time=t
-          echo "# Enabled time tracing" >&$fd_original_err
+          debugger_out "# Enabled time tracing"
         else
           debug_trace_time=f
-          echo "# Disabled time tracing" >&$fd_original_err
+          debugger_out "# Disabled time tracing"
         fi
         debug_save_state
         no_follow_once=t
         ;;
       ^)
         if [[ $debug_follow_source == t ]]; then
-          echo "# Follow source is now off" >&$fd_original_err
+          debugger_out "# Follow source is now off"
           debug_follow_source=f
         else
-          echo "# Follow source is now on" >&$fd_original_err
+          debugger_out "# Follow source is now on"
           debug_follow_source=t
         fi
         debug_save_state
         ;;
       \>)
         if [[ $debug_expanded_search == t ]]; then
-          echo "# Expanded search is now off" >&$fd_original_err
+          debugger_out "# Expanded search is now off"
           debug_expanded_search=f
         else
-          echo "# Expanded search is now on" >&$fd_original_err
+          debugger_out "# Expanded search is now on"
           debug_expanded_search=t
         fi
         debug_save_state
