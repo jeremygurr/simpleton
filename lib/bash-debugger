@@ -213,7 +213,7 @@ debug_display_source() {
 debug_load_state() {
   if [[ -f "$debug_state_file" && "${debug_needs_to_load_state:-t}" == t ]]; then
     [[ ${debug_debug:-f} == t ]] && echo "${CYAN}Loading state from $debug_state_file${RESET}" >&$fd_original_err
-    #pause "Loading state"
+    #pause_qd "Loading state"
     debug_needs_to_load_state=f
     source "$debug_state_file" || return 1
     if [[ "${debug_log_level_filter:-}" ]]; then
@@ -241,7 +241,6 @@ debug_function='$debug_function'
 debug_function_old='$debug_function_old'
 debug_highlight='$debug_highlight'
 debug_ignore='$debug_ignore'
-debug_immediate='$debug_immediate'
 debug_line='$debug_line'
 debug_line_old='$debug_line_old'
 debug_log_level_filter='$debug_log_level_filter'
@@ -775,10 +774,10 @@ debug_command_loop() {
         ;;
       C)
         debugger_out "# Continuing..."
-        debug_output_stop
         debug_r=0
         debug_long_command=t
         debug_save_state
+        debugging=f
         debug_untrap=t
         ;;
       d)
@@ -882,6 +881,7 @@ debug_command_loop() {
             debug_subshell=t
           else
             debug_untrap=t
+            debugging=f
           fi
           debug_save_state
         fi
@@ -898,6 +898,7 @@ debug_command_loop() {
             debug_subshell=t
           else
             debug_untrap=t
+            debugging=f
           fi
           debug_save_state
         fi
@@ -977,8 +978,10 @@ debug_command_loop() {
         debugger_out "# Quick stepping over"
         debug_r=0
         debug_untrap=t
+        debugging=f
         debug_long_command=t
         debug_quick_stop_less_than_depth=$debug_current_depth
+        debug_save_state
         ;;
       o)
         debugger_out "# Stepping out"
@@ -992,8 +995,10 @@ debug_command_loop() {
         debugger_out "# Quick stepping out"
         debug_r=0
         debug_untrap=t
+        debugging=f
         debug_long_command=t
         debug_quick_stop_less_than_depth=$((debug_current_depth - 1))
+        debug_save_state
         ;;
       p)
         echo >&$fd_original_err
@@ -1225,6 +1230,7 @@ debug_command_loop() {
         debug_step_to_mid_function=t
         debug_subshell=t
         debug_r=0
+        debugging=f
         debug_save_state
         debug_untrap=t
         ;;
@@ -1235,6 +1241,7 @@ debug_command_loop() {
         debug_long_command=t
         debug_step_to_hi_function=t
         debug_subshell=t
+        debugging=f
         debug_save_state
         debug_untrap=t
         ;;
@@ -1541,7 +1548,7 @@ maybe_enable_debug_tracing() {
           && $debug_current_depth -le $debug_max_depth \
           || $debug_expansion -ge 2 ]]; then
       debug_tracing=t
-      #[[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
+      [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
     fi
   fi
 }
@@ -1682,9 +1689,8 @@ debug_inner() {
 
   if [[ $debug_untrap == t ]]; then
     debug_tracing=f
-    #debug_expansion=0
+    debug_expansion=0
     debug_output_stop
-    debugging=f
   fi
 
   if [[ "$debug_exit" ]]; then
@@ -1708,6 +1714,12 @@ debug_trap() {
   : {saved_in}<&0 {saved_out}>&1 {saved_err}>&2
   : <&$fd_original_in >&$fd_original_out 2>&$fd_original_err
 
+  #if [[ $debug_debug == t ]]; then
+  #  echo "${CYAN}debug_immediate=$debug_immediate${RESET}" >&$fd_original_err
+  #  echo "${CYAN}debugging=$debugging${RESET}" >&$fd_original_err
+  #  pause_qd
+  #fi
+
   local saved_lineno
   (( saved_lineno = debug_trap_first_line - 1 )) 
 
@@ -1724,11 +1736,10 @@ debug_trap() {
   if [[ ${trace_debugger:-f} == t ]]; then 
     set -x
     BASH_XTRACEFD=2
-    (( trace_debugger-- ))
   fi
 
   if [[ $debug_debug == t ]]; then
-    log_debug_debug "debug_id=$fork_debug_id ${BASH_SOURCE[1]:-no_source}:$saved_lineno/${BASH_LINENO[1]:-no_line} ${FUNCNAME[1]:-no_func} ${BASH_COMMAND}" 
+    log_debug_debug "debug_id=$fork_debug_id ${BASH_SOURCE[1]:-no_source}:${saved_lineno:-${BASH_LINENO[0]:-no_line}} ${FUNCNAME[1]:-no_func} ${BASH_COMMAND}" 
   fi
 
   local debug_path_to_source_file \
@@ -1961,15 +1972,23 @@ log_debug_debug() {
 }
 
 debug_start() {
+  if [[ ${debug_debug:-f} == t ]]; then
+    echo "${CYAN}debug_start() debug_immediate=$debug_immediate debugging=$debugging${RESET}" >&$fd_original_err
+  fi
   debug_buffered_commands=$*
   if [[ "$debug_buffered_commands" ]]; then
     debug_silent_command=t
   fi
   no_trace_depth=0
   parallel_execution=${p_par:-f}
-  if [[ ! -v debugging ]]; then
+  if [[ ! "${debugging:-}" ]]; then
     debugger_init || return 1
   fi
+
+  debug_needs_to_load_state=t \
+  debug_load_state || fail
+
+  debug_immediate=${debug_immediate:-t}
   if [[ $debugging == f ]]; then
     # export \
     debugging=t \
@@ -1988,7 +2007,6 @@ debug_start() {
     debug_function=${debug_function:-} \
     debug_function_old=${debug_function_old:-} \
     debug_id=${debug_id:-t} \
-    debug_immediate=t \
     debug_last_location=${debug_last_location:-} \
     debug_line=${debug_line:-} \
     debug_line_old=${debug_line_old:-} \
@@ -1996,7 +2014,7 @@ debug_start() {
     debug_list_offset=${debug_list_offset:-0} \
     debug_list_stack_pos=${debug_list_stack_pos:-0} \
     debug_list_window=${debug_list_window:-20} \
-    debug_log_level_filter='${debug_log_level_filter:-${log_level_filter:-}}'
+    debug_log_level_filter=${debug_log_level_filter:-${log_level_filter:-}} \
     debug_long_command=${debug_long_command:-f} \
     debug_max_depth=${debug_max_depth:-999} \
     debug_original_tracefd=${debug_original_tracefd:-${BASH_XTRACEFD:-}} \
@@ -2049,13 +2067,12 @@ debug_start() {
       [[ $debug_rewind == t ]] && continue
       set_return_code $debug_rc
       ' DEBUG
-  else
-    debug_immediate=t
   fi
 }
 
 debug() {
   local function_to_debug=$*
+  debug_immediate=t
   if [[ "$function_to_debug" ]]; then
     debug_start
     $function_to_debug
