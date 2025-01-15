@@ -44,52 +44,6 @@ cell_lib_init() {
   # used to detect upstream circular dependencies
   downstream_cell_stack=( ) 
   disable_log=${disable_log:-}
-  #export debug_ignore+="
-  #  cell_close_log_file
-  #  cell_open_log_file
-  #  change_log_file
-  #  defer
-  #  fd_unlock
-  #  fd_write_lock
-  #  find1
-  #  fork
-  #  fork_bg
-  #  fork_fg
-  #  fork_inside
-  #  function_exists
-  #  get_bottom_cell
-  #  get_new_reply_file
-  #  load_log_vars
-  #  load_log_vars_and_write_to_log
-  #  log_debug
-  #  log_error
-  #  log_fatal
-  #  log_info
-  #  log_trace
-  #  log_verbose
-  #  log_warn
-  #  out
-  #  parallel_loop
-  #  pause_tee
-  #  safe_link
-  #  save_log_vars
-  #  setup_exit_trap
-  #  shell_quote_var
-  #  snapshot_source_location
-  #  tee_output_to_log
-  #  unpause_tee
-  #  unrealpath
-  #  untee_output
-  #  write_to_log
-  #  write_to_log_and_save
-  #  write_to_log_console_out
-  #  write_to_log_log_var
-  #  write_to_log_process_vars
-  #  write_to_log_update_cooked
-  #"
-
-  #debug_ignore=( $debug_ignore )
-  #debug_ignore=" ${debug_ignore[*]} "
 
   command_aliases=()
   command_alias_command=()
@@ -662,7 +616,6 @@ build_context_expand2() {
     local members=() aliases=() \
       has_explicit_member_list=f fun \
       is_optional=f \
-      member_type= \
 
     if [[ -v ${dim_type}_${dim}_is_optional ]]; then
       local -n is_optional_var=${dim_type}_${dim}_is_optional
@@ -671,9 +624,11 @@ build_context_expand2() {
       fi
     fi
 
-    if [[ -v ${dim_type}_${dim}_member_type ]]; then
-      local -n member_type_var=${dim_type}_${dim}_member_type
-      case member_type_var in
+    local member_type_var=${dim_type}_${dim}_member_type
+    local -n member_type=$member_type_var
+
+    if [[ -v member_type ]]; then
+      case $member_type in
         dynamic|static)
           :
         ;;
@@ -682,7 +637,6 @@ build_context_expand2() {
           fail1
         ;;
       esac
-      member_type=$member_type_var
     fi
 
     if [[ -v ${dim_type}_${dim}_members ]]; then
@@ -703,7 +657,7 @@ build_context_expand2() {
       eval "aliases=( \"\${${dim_type}_${dim}_aliases[@]}\" )" || fail
     fi
 
-    if [[ ! "$member_type" ]]; then
+    if [[ ! "${member_type:-}" ]]; then
       if [[ $has_explicit_member_list == t ]]; then
         member_type=static
       else
@@ -729,7 +683,7 @@ ${dim_type}_${dim}_expand() {
     fi
 
     write_to_context fun "$code" || fail
-    write_vars_to_context member_type || fail
+    write_vars_to_context $member_type_var || fail
 
   end_function
   handle_return
@@ -3944,11 +3898,15 @@ after_fork() {
       source $reply_file || fail
       if [[ ${debugging:-f} == t ]]; then
         [[ "${debug_debug:-f}" == t ]] && echo "debugging=$debugging, so starting debugging after fork" >&$fd_original_err
+
         debug_needs_to_load_state=t \
-          debug_load_state || fail
+        debug_load_state || fail
+
         debug_immediate=f \
-          first_run=f \
-          debug_start
+        first_run=f \
+        debugging=f \
+        debug_start
+
       fi
       rm $reply_file
       reply_file=
