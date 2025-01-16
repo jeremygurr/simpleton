@@ -813,7 +813,7 @@ execute_derive_table() {
   begin_function        
       
     local -A internal_set
-    local out_var=${out_set:-$out_arr}
+    local out_var=${out_set:-$out_arr} \
           out_set=${out_set:-internal_set} \
           out_arr=${out_arr:-} \
 
@@ -849,6 +849,10 @@ execute_derive_table() {
       begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
         field=${derive_fields[$column_index]}
         value=${derive_data[$((data_index + column_index))]}
+
+        log_show_vars='field value'
+        fence
+
         if [[ $field == $out_field ]]; then
           row_result=$value
         else
@@ -2080,6 +2084,7 @@ check_table_field() {
 }
 
 # Will add a row to new_coordinate_data based on current ddim values and coordinate_fields
+# Should only be called when the row is known to be valid
 # inputs:
 #   ignore_missing            (optional)
 #   coordinate_fields
@@ -2520,7 +2525,22 @@ calc_coordinates_next_unknown_dim() {
               fence
               log_debug "Processing $dim=$member"
 
-              calc_coordinates_next_unknown_dim || fail
+              local is_valid=t
+
+              # don't need to validate if in derive phase, since it's already proven valid by the derive
+              #   process itself
+              if [[ $phase == default ]]; then
+                #pause_qd "Validating default resolve for $dim $member"
+                # recursive
+                calc_coords_validate_member $dim "$member" || fail
+              fi
+
+              if [[ $is_valid == t ]]; then
+                calc_coordinates_next_unknown_dim || fail
+              else
+                log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
+              fi
+
             end_for
             row_ended=t
             unset ddim
@@ -2542,10 +2562,11 @@ calc_coordinates_next_unknown_dim() {
 }
 
 calc_coords_validate_member() {
-  local dim=$1 member=$2
+  local dim=$1 member=$2 log_show_vars='dim member'
   begin_function
     is_valid=t
 
+    log_debug "Validating $dim == $member"
     local -n dim_type=${dim}_dim_type
     local -n is_optional=${dim_type}_${dim}_is_optional
     if [[ ${is_optional:-f} == t && ( ! "$member" || $member == $empty_member ) ]]; then
@@ -2578,6 +2599,11 @@ calc_coords_validate_member() {
       if [[ $can_derive == t ]]; then
         if [[ ! "${values:-}" ]]; then
           is_valid=f
+        else
+          local -n rd_member=d_$rd
+          if [[ "${rd_member:-}" ]] && ! array_contains values "$rd_member"; then
+            is_valid=f
+          fi
         fi
         succeed
       fi
