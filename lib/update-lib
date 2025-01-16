@@ -1001,8 +1001,6 @@ update_members() {
 
 update_aggregation() {
   begin_function
-    debug_immediate=t
-    debug_start
     if function_exists aggregate_results_op; then
       execute_op aggregate_op || fail
     elif [[ "$out_file" ]]; then
@@ -1028,21 +1026,36 @@ update_aggregation() {
 
       if [[ $can_agg == t ]]; then
 
-        local target=$out_path/$out_file
+        local target=$out_path/$out_file member \
+          branches branch wrote_header=f \
 
-        if [[ ! -e $target ]]; then
-          local branches
-          branches=$(find1 $cell_path -type d -name "*:*") || fail
-          local branch wrote_header=f
-          for branch in $branches; do
+        branches=$(find1 $cell_path -type d -name "*:*") || fail
+
+        for branch in $branches; do
+          if [[ -f $branch/$out_file ]]; then
+
+            if [[ -f $branch/.member ]]; then
+              member=$(<$branch/.member) || fail
+            else
+              member=${branch##*:}
+            fi
+
             if [[ $wrote_header == f ]]; then
-              cp $branch/$out_file $target || fail
+              awk '
+                NR == 1 { print "'$current_branch_dim' " $0 } 
+                NR > 1 { print "'"$member"' " $0 }
+                ' $branch/$out_file >$target || fail
               wrote_header=t
             else
-              tail +2 $branch/$out_file >>$target || fail
+              tail +2 $branch/$out_file \
+              | awk '{ print "'"$member"' " $0 }' \
+                >>$target || fail
             fi
-          done
-        fi
+
+          else
+            log_warn "Missing data file for branch $branch"
+          fi
+        done
 
       fi
     fi
