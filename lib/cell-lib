@@ -2692,6 +2692,97 @@ calc_coordinates_next_known_dim() {
   handle_return
 }
 
+xlr8_get_input_string() {
+  begin_function
+    for f in $fields_to_export; do
+      local -n x=$f
+      v=
+      if [[ -v x ]]; then
+        v=$x
+      fi
+      shell_quote_var v
+      input_string+="$f=$v$NL"
+    done
+  end_function
+  handle_return
+}
+
+xlr8_gather_libraries() {
+  begin_function
+    local libs lib source_path target_path
+    libs=$(find1 /repo/simpleton/xlr8-lib -type d) || fail
+    for lib in $libs; do
+      local target_path=$lib/target
+      if [[ ! "$target_path" ]]; then
+        xlr8_build || fail
+      fi
+      library_targets+="$target_path "
+    done
+  end_function
+  handle_return
+}
+
+xlr8_build() {
+  begin_function
+    local source_paths=$source_path
+    xlr8_gather_libraries || fail
+
+    if [[ ! -d $target_path ]]; then
+      mkdir $target_path || fail
+    fi
+    javac -d $target_path --source-path $source_paths || fail
+
+  end_function
+  handle_return
+}
+
+xlr8_execute() {
+  begin_function
+    case $source_type in
+      simple_java)
+        java -cp $target_path Main || fail
+      ;;
+      *)
+        log_fatal "Don't know how to execute source type $source_type yet"
+        fail1
+      ;;
+    esac
+  end_function
+  handle_return
+}
+
+xlr8() {
+  local function_name=$1; shift
+  local fields_to_export=$*
+  begin_function
+
+    debug_start
+
+    local xlr8_command_path=/repo/simpleton/xlr8/$function_name \
+      target_path=$xlr8_command_path/target \
+      source_path=$xlr8_command_path/src \
+
+    if [[ ! -d $xlr8_command_path ]]; then
+      log_fatal "Function $function_name doesn't exist in $xlr8_command_path"
+      fail1
+    fi
+
+    local input_string= v f
+    xlr8_get_input_string || fail
+
+    if [[ ! $xlr8_command_path/target ]]; then
+      xlr8_build $function_name || fail
+    fi
+
+    result=$(echo "$input_string" | xlr8_execute) || fail
+    if [[ "$result" ]]; then
+      source "$result" || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   coord_type
 #   source       set to dims to load coordinates from existing dims
@@ -2705,7 +2796,13 @@ calc_coordinates() {
   begin_function
 
     # need dims and derive tables
-    xlr8 dims_to_table 
+    local -n fields=${coord_type}_coordinate_fields
+    xlr8 dims_to_table fields $fields || fail
+
+    #########################
+    # OLD WAY
+    #########################
+
     if [[ "${localize_dims:-}" ]]; then
       eval "local $localize_dims"
     fi
