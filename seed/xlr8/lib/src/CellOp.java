@@ -1,5 +1,7 @@
 import java.io.*;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public abstract class CellOp {
 
@@ -169,6 +171,10 @@ public abstract class CellOp {
     return var.toString();
   }
 
+  private void exit(BashVars vars, int code) {
+    System.exit(code);
+  }
+
   private void pause_qd(BashVars vars, String message) {
     String extra="";
     if (vars.hasValue("fork_debug_id")) {
@@ -189,7 +195,7 @@ public abstract class CellOp {
       throw new RuntimeException(e);
     }
     if (i < 0) {
-      System.exit(1);
+      exit(vars, 1);
     }
 
     char c = (char)i;
@@ -200,7 +206,7 @@ public abstract class CellOp {
       }
       case 'q' -> {
         System.err.println("Quitting.");
-        System.exit(1);
+        exit(vars, 1);
       }
     }
   }
@@ -322,6 +328,92 @@ public abstract class CellOp {
 
   }
 
+  private boolean reached_debug_id(String fork_debug_id, String debug_id) {
+    final String[] r1 = fork_debug_id.split(".");
+    final String[] r2 = debug_id.split(".");
+    for (int i = 0; i < r1.length; i++) {
+      if (i >= r2.length) {
+        return true;
+      }
+      final int p1 = Integer.parseInt(r1[i]);
+      final int p2 = Integer.parseInt(r2[i]);
+      if (p1 < p2) {
+        return false;
+      } else if (p1 > p2) {
+        return true;
+      }
+    }
+    return true;
+  }
+
+  private String prompt_ynq(BashVars vars, String message) {
+    if (message == null) message = "";
+    String pauseResponse;
+    char c;
+    while (true) {
+      System.err.print(GREEN + message + RESET + " (y/n/q) ");
+
+      int i = 0;
+      try {
+        i = System.in.read();
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      }
+      if (i < 0) {
+        exit(vars, 1);
+      }
+
+      c = (char)i;
+      switch (c) {
+        case 'y' -> {
+          System.err.println("Yes");
+        }
+        case 'n' -> {
+          System.err.println("No");
+        }
+        case 'q' -> {
+          System.err.println("Quit");
+        }
+        default -> {
+          System.err.println("Pick one of: (y)es (n)o (q)uit");
+          continue;
+        }
+      }
+      break;
+    }
+
+    return String.valueOf(c);
+  }
+
+  private String debug_get_new_bisect(BashVars vars, String new_bisect) {
+    String new_command = vars.get("original_cmd");
+    Pattern pattern = Pattern.compile("^(.*) (debug_)?bisect=[^\\ ]+(\\ .*)?$");
+    Matcher matcher = pattern.matcher(new_command);
+    if (matcher.matches()) {
+      String pre = matcher.group(1);
+      String post = matcher.group(3);
+      new_command = pre + post;
+    }
+
+    pattern = Pattern.compile("(([0-9]+\\.)*[0-9]+)\\.\\.(([0-9]+\\.)*[0-9]+)");
+    matcher = pattern.matcher(new_bisect);
+    String debug_bisect_min = matcher.group(1);
+    String debug_bisect_max = matcher.group(3);
+
+    // TODO need to handle forked debug_ids (with .)
+    // DOESN'T work with forking for now
+
+    if (debug_bisect_min.equals(debug_bisect_max)) {
+      new_command += " debug=" + debug_bisect_max + " - 1";  // This won't work, need to figure out how to subtract from forked id
+      err(YELLOW + "Bisect complete, debugging just before issue occurs: " + RESET + new_command);
+    } else {
+      new_command += " bisect=$new_bisect";
+      err(CYAN + "Starting next bisect: " + RESET + new_command);
+    }
+
+    return new_command;
+  }
+
   private void debug_id_inc(BashVars vars) {
     vars.inc("debug_id_current");
 
@@ -341,25 +433,25 @@ public abstract class CellOp {
     }
 
     if (vars.hasValue("debug_id") && !vars.isEqual("debug_id", "t")
-        && reached_debug_id(vars, vars.get("debug_id"))
+        && reached_debug_id(vars.get("fork_debug_id"), vars.get("debug_id"))
     ) {
       if (vars.hasValue("debug_bisect_min")) {
-        String new_bisect;
+        String new_bisect = "";
         if (vars.hasValue("bisect_test")) {
-          eval(vars.get("bisect_test"));
+          eval(vars, vars.get("bisect_test"));
         }
-        final String response = prompt_ynq("Debug bisect: Did the problem happen?");
+        final String response = prompt_ynq(vars, "Debug bisect: Did the problem happen?");
         switch(response) {
-          case 'y':
+          case "y":
             new_bisect=vars.get("debug_bisect_min") + ".." + vars.get("debug_id");
             break;
-          case 'n':
-            new_bisect=vars.getInt("debug_id") + 1 + ".." + vars.get("debug_bisect_max");
+          case "n":
+            new_bisect=vars.getLong("debug_id") + 1 + ".." + vars.get("debug_bisect_max");
             break;
-          case 'q':
+          case "q":
             exit(vars, 1);
         }
-        final String new_command = debug_get_new_bisect(vars);
+        final String new_command = debug_get_new_bisect(vars, new_bisect);
         vars.put("debug_restart_command", new_command);
         vars.put("debug_exit", "t");
         vars.clear("debugging");
@@ -370,10 +462,10 @@ public abstract class CellOp {
         // this is different than bash code, because debugger is more limited
         debug_start(vars);
       }
-    } else {
-      if (vars.hasValue("debug_quick_function")
-          && vars.isEqual("debug_quick_function", vars.getEl("FUNCNAME", 1))
-    } {
+    } else if (
+        vars.hasValue("debug_quick_function")
+        && vars.isEqual("debug_quick_function", vars.getEl("FUNCNAME", 1))
+        ) {
       vars.put("debug_function_old", vars.get("debug_quick_function"));
       vars.clear("debug_quick_function");
       vars.put("debug_immediate", "t");
@@ -382,8 +474,8 @@ public abstract class CellOp {
     }
 
     if (vars.hasValue("debug_quick_stop_less_than_depth")
-        && vars.sizeOfArray("FUNCNAME")
-        <= vars.get("debug_quick_stop_less_than_depth")
+        && vars.sizeOf("FUNCNAME")
+        <= vars.getLong("debug_quick_stop_less_than_depth")
     ) {
       vars.clear("debug_quick_stop_less_than_depth");
       vars.put("debug_immediate", "t");
@@ -394,4 +486,3 @@ public abstract class CellOp {
   }
 
 }
-

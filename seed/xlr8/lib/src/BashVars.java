@@ -313,6 +313,12 @@ public class BashVars {
     } else {
       var.append(toAppend);
     }
+    return this;
+  }
+
+  public int sizeOf(String varName) {
+    final BashVar var = getVar(varName);
+    return var.getSize();
   }
 }
 
