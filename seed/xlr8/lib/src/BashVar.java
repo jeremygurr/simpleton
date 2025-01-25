@@ -23,11 +23,15 @@ public abstract class BashVar {
   }
 
   // this works like BASH where if this var is a list, it will return the first value of that list
-  public abstract String asString();
+  public String asString() {
+    throw new RuntimeException("Can't run asString on a this class " + getClass().getName());
+  }
+
+  public Long asLong() {
+    throw new RuntimeException("Can't run asLong on a this class " + getClass().getName());
+  }
 
   public abstract boolean hasValue();
-
-  public abstract Long asLong();
 
   public abstract BashVar put(Object newValue);
 

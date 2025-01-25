@@ -16,14 +16,17 @@ public class BashVars {
 
   // will not fail if var doesn't exist, but returns null instead
   public BashVar getVarOrNull(String varName) {
+    BashVar var = null;
     for(int i = contexts.size() - 1; i >= 0; i--) {
       final Map<String, BashVar> varMap = contexts.get(i);
       if(varMap.containsKey(varName)) {
-        final BashVar var = varMap.get(varName);
-        return var;
+        var = varMap.get(varName);
       }
     }
-    return null;
+    if(varName.equals("FUNCNAME")) {
+      var = BashVarFuncname.make();
+    }
+    return var;
   }
 
   // will fail if var doesn't exist
