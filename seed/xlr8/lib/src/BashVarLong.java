@@ -39,7 +39,7 @@ public class BashVarLong extends BashVar {
   }
 
   public String toString() {
-    return value.toString();
+    return "Long: " + name + "=" + value;
   }
 
   public boolean isEqualTo(Object value) {
@@ -49,6 +49,22 @@ public class BashVarLong extends BashVar {
   @Override
   public String bashValue() {
     return value.toString();
+  }
+
+  @Override
+  public BashVarLong clone() {
+    return new BashVarLong(name, value);
+  }
+
+  @Override
+  public boolean isEqualToVar(BashVar var) {
+    if (var instanceof BashVarLong bvl) {
+      return value.equals(bvl.value);
+    } else if (var instanceof BashVarString bvs) {
+      return bvs.isEqualToVar(this);
+    } else {
+      return false;
+    }
   }
 
 }

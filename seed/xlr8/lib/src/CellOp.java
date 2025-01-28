@@ -116,8 +116,6 @@ public abstract class CellOp {
   }
 
   void end_function(BashVars vars) {
-    vars.removeContext();
-    vars.clear("log_return_vars");
     final String current_function = vars.get("current_function");
     if (vars.getLong("function_level") > 0) {
       vars.put("struct_type", "end of " + current_function);
@@ -137,6 +135,7 @@ public abstract class CellOp {
       case 1:
         trace_time_close(vars, current_function);
     }
+    vars.removeContext();
     vars.put("debug_return_vars", vars.get("log_return_vars", ""));
   }
 

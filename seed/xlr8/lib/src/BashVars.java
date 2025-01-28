@@ -18,7 +18,7 @@ public class BashVars {
     final List<BashVar> result = new ArrayList<>();
 
     for (BashVar var : contexts.get(0).values()) {
-      if (!var.valueIsGenerated() && !var.equals(originalValues.get(var.name))) {
+      if (!var.valueIsGenerated() && !var.isEqualToVar(originalValues.get(var.name))) {
         result.add(var);
       }
     }
@@ -128,7 +128,7 @@ public class BashVars {
     if (var != null) {
       var.put(newValue);
     } else {
-      final Map<String, BashVar> context = contexts.getLast();
+      final Map<String, BashVar> context = contexts.getFirst();
       context.put(varName, BashVar.make(varName, newValue));
     }
     return this;
@@ -178,9 +178,16 @@ public class BashVars {
     return var.getSize();
   }
 
+  /**
+   *
+   * @param varName
+   * @return true if varName exists and is true. Returns false if it doesn't exist or is set to false.
+   */
   public boolean isTrue(String varName) {
-    final BashVar var = getVar(varName);
-    if (var.isString()) {
+    final BashVar var = getVarOrNull(varName);
+    if (var == null) {
+      return false;
+    } else if (var.isString()) {
       return var.asString().equals("t");
     } else {
       throw new RuntimeException("Var " + varName + " is not a String");
@@ -202,7 +209,7 @@ public class BashVars {
   }
 
   // Will create a new array var if it doesn't already exist
-  public BashVars putKey(String varName, Object index, Object newValue) {
+  public BashVars putKey(String varName, Object index, String newValue) {
     BashVar var = getVarOrNull(varName);
     if (var == null) {
       var = BashVarList.make(varName);
@@ -335,6 +342,14 @@ public class BashVars {
   public int sizeOf(String varName) {
     final BashVar var = getVar(varName);
     return var.getSize();
+  }
+
+  public BashVars saveOriginals() {
+    final Map<String, BashVar> map = contexts.get(0);
+    for (BashVar var : map.values()) {
+      originalValues.put(var.name, var.clone());
+    }
+    return this;
   }
 }
 

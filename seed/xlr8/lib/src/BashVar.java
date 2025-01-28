@@ -1,7 +1,7 @@
 import java.util.List;
 import java.util.Map;
 
-public abstract class BashVar implements Comparable<BashVar> {
+public abstract class BashVar implements Comparable<BashVar>, Cloneable {
   public final String name;
 
   public BashVar(String varName) {
@@ -21,6 +21,9 @@ public abstract class BashVar implements Comparable<BashVar> {
       }
       case Long longVar -> {
         return new BashVarLong(varName, longVar);
+      }
+      case Integer intVar -> {
+        return new BashVarLong(varName, intVar.longValue());
       }
       default -> {
         throw new RuntimeException("Can't make a var out of this type: " + newValue.getClass().getName());
@@ -51,12 +54,16 @@ public abstract class BashVar implements Comparable<BashVar> {
 
   public boolean isString() {
     switch (this) {
-      case BashVarString _ -> { return true; }
-      default -> { return false; }
+      case BashVarString _ -> {
+        return true;
+      }
+      default -> {
+        return false;
+      }
     }
   }
 
-  public BashVar putKey(Object index, Object newValue) {
+  public BashVar putKey(Object index, String newValue) {
     throw new RuntimeException("putKey can't be run on " + getClass().getName());
   }
 
@@ -117,5 +124,9 @@ public abstract class BashVar implements Comparable<BashVar> {
     return result;
   }
 
-}
+  @Override
+  abstract public BashVar clone();
 
+  abstract public boolean isEqualToVar(BashVar var);
+
+}

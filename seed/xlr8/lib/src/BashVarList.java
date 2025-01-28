@@ -14,12 +14,29 @@ public class BashVarList extends BashVar {
   }
 
   @Override
-  public BashVar putKey(Object index, Object newValue) {
+  public BashVar putKey(Object index, String newValue) {
+    int i;
+
     if (index instanceof Long indexLong) {
-      value.set(Math.toIntExact(indexLong), newValue.toString());
+      i = Math.toIntExact(indexLong);
+    } else if (index instanceof Integer indexInt) {
+      i = indexInt;
     } else {
       throw new RuntimeException("Can only use Longs in putKey of a List var");
     }
+
+    if (i < value.size()) {
+      value.set(i, newValue);
+    } else {
+      for (int p = value.size(); p <= i; p++) {
+        if (p == i) {
+          value.add(newValue);
+        } else {
+          value.add("");
+        }
+      }
+    }
+
     return this;
   }
 
@@ -84,7 +101,7 @@ public class BashVarList extends BashVar {
       result.append(" " + value.get(i));
     }
     result.append(" )");
-    return result.toString();
+    return "List: " + name + "=" + result.toString();
   }
 
   @Override
@@ -97,6 +114,19 @@ public class BashVarList extends BashVar {
     b.append(")");
 
     return b.toString();
+  }
+
+  @Override
+  public BashVarList clone() {
+    return new BashVarList(name, new ArrayList<>(value));
+  }
+
+  public boolean isEqualToVar(BashVar var) {
+    if (var instanceof BashVarList bvl) {
+      return value.equals(bvl.value);
+    } else {
+      return false;
+    }
   }
 
 }

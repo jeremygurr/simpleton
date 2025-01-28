@@ -57,7 +57,8 @@ public class Main {
 
   private static void importVars(BashVars vars, Reader reader) throws IOException {
     final BufferedReader in = new BufferedReader(reader);
-    final Pattern pattern = Pattern.compile("(\\w+)=\\$'(.*)'");
+    final Pattern quotedPattern = Pattern.compile("^(\\w+)=\\$'(.*)'$");
+    final Pattern simplePattern = Pattern.compile("^(\\w+)=(\\w*)$");
     while (true) {
 
       final String line = in.readLine();
@@ -65,14 +66,21 @@ public class Main {
         break;
       }
 
-      final Matcher matcher = pattern.matcher(line);
-      if (!matcher.matches()) {
-        throw new RuntimeException("Invalid assignment statement in input: " + line);
+      Matcher matcher = quotedPattern.matcher(line);
+      if (matcher.matches()) {
+        final String varName = matcher.group(1);
+        final String content = matcher.group(2);
+        vars.put(varName, unescape(content));
+      } else {
+        matcher = simplePattern.matcher(line);
+        if (matcher.matches()) {
+          final String varName = matcher.group(1);
+          final String content = matcher.group(2);
+          vars.put(varName, unescape(content));
+        } else {
+          throw new RuntimeException("Invalid assignment statement in input: " + line);
+        }
       }
-
-      final String varName = matcher.group(1);
-      final String content = matcher.group(2);
-      vars.put(varName, unescape(content));
 
     }
 
@@ -91,7 +99,13 @@ public class Main {
   public static void main(String[] args) throws Exception {
     final Op op = new Op();
     final BashVars vars = BashVars.make();
-    importVars(vars, new InputStreamReader(System.in));
+    InputStream in = System.in;
+    if (args.length > 0) {
+      in = new FileInputStream(args[0]);
+    }
+    importVars(vars, new InputStreamReader(in));
+    vars.saveOriginals();
+    vars.putIfUnset("debug_id_current", 0);
     op.main(vars);
     exportVars(vars, new OutputStreamWriter(System.out));
   }

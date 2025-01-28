@@ -39,7 +39,7 @@ public class BashVarString extends BashVar {
 
   @Override
   public String toString() {
-    return value;
+    return "String: " + name + "=" + shellQuoted(value);
   }
 
   public boolean stringContains(String containsThis) {
@@ -57,6 +57,21 @@ public class BashVarString extends BashVar {
   @Override
   public String bashValue() {
     return value;
+  }
+
+  @Override
+  public BashVarString clone() {
+    return new BashVarString(name, value);
+  }
+
+  public boolean isEqualToVar(BashVar var) {
+    if (var instanceof BashVarLong bvl) {
+      return value.equals(bvl.toString());
+    } else if (var instanceof BashVarString bvs) {
+      return bvs.value.equals(this.value);
+    } else {
+      return false;
+    }
   }
 
 }

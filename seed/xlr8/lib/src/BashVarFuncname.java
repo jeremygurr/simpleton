@@ -1,6 +1,7 @@
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Emulates FUNCNAME array in BASH
@@ -26,7 +27,7 @@ public class BashVarFuncname extends BashVar {
     StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
     // Convert to an array of strings (if needed)
     String[] javaStack = Arrays.stream(stackTrace)
-        .map(StackTraceElement::toString)
+        .map(ste -> ste.getClassName() + "." + ste.getMethodName())
         .toArray(String[]::new);
     fullStack.addAll(List.of(javaStack));
     return fullStack;
@@ -67,4 +68,24 @@ public class BashVarFuncname extends BashVar {
     throw new RuntimeException("Attempted to get bashValue on " + getClass().getName());
   }
 
+  @Override
+  public BashVarFuncname clone() {
+    return this;
+  }
+
+  @Override
+  public boolean equals(Object o) {
+    if (o == null || getClass() != o.getClass()) return false;
+    return true;
+  }
+
+  @Override
+  public int hashCode() {
+    return 0;
+  }
+
+  @Override
+  public boolean isEqualToVar(BashVar var) {
+    return var instanceof BashVarFuncname;
+  }
 }

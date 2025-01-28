@@ -1,3 +1,5 @@
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeSet;
 
@@ -37,9 +39,9 @@ public class BashVarMap extends BashVar {
   }
 
   @Override
-  public BashVar putKey(Object index, Object newValue) {
+  public BashVar putKey(Object index, String newValue) {
     if (index instanceof String indexString) {
-      value.put(indexString, newValue.toString());
+      value.put(indexString, newValue);
     } else {
       throw new RuntimeException("Can only use Strings in putKey of a Map var");
     }
@@ -64,7 +66,7 @@ public class BashVarMap extends BashVar {
       result.append(" " + entry.getKey() + "=" + entry.getValue());
     }
     result.append(" )");
-    return result.toString();
+    return "Map: " + name + "=" + result.toString();
   }
 
   public boolean containsKey(String key) {
@@ -99,6 +101,19 @@ public class BashVarMap extends BashVar {
       value.remove(indexString);
     } else {
       throw new RuntimeException("Can only use Strings in unsetKey of a Map var");
+    }
+  }
+
+  @Override
+  public BashVarMap clone() {
+    return new BashVarMap(name, new HashMap<>(value));
+  }
+
+  public boolean isEqualToVar(BashVar var) {
+    if (var instanceof BashVarMap bvm) {
+      return value.equals(bvm.value);
+    } else {
+      return false;
     }
   }
 
