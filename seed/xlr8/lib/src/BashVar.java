@@ -1,20 +1,26 @@
 import java.util.List;
 import java.util.Map;
 
-public abstract class BashVar {
-  public static BashVar make(Object newValue) {
+public abstract class BashVar implements Comparable<BashVar> {
+  public final String name;
+
+  public BashVar(String varName) {
+    this.name = varName;
+  }
+
+  public static BashVar make(String varName, Object newValue) {
     switch (newValue) {
       case Map map -> {
-        return new BashVarMap(map);
+        return new BashVarMap(varName, map);
       }
       case List list -> {
-        return new BashVarList(list);
+        return new BashVarList(varName, list);
       }
       case String string -> {
-        return new BashVarString(string);
+        return new BashVarString(varName, string);
       }
       case Long longVar -> {
-        return new BashVarLong(longVar);
+        return new BashVarLong(varName, longVar);
       }
       default -> {
         throw new RuntimeException("Can't make a var out of this type: " + newValue.getClass().getName());
@@ -85,5 +91,31 @@ public abstract class BashVar {
   public void append(String toAppend) {
     throw new RuntimeException("Can't run append on this class: " + getClass().getName());
   }
+
+  public boolean valueIsGenerated() {
+    return false;
+  }
+
+  @Override
+  public int compareTo(BashVar o) {
+    return name.compareTo(o.name);
+  }
+
+  public abstract String bashValue();
+
+  protected String escape(String raw) {
+    return raw.replaceAll("\n", "\\n")
+        .replaceAll("\t", "\\t")
+        ;
+  }
+
+  protected String shellQuoted(String raw) {
+    String result = raw;
+    if (result.matches("\\W")) {
+      result = "$'" + escape(raw) + "'";
+    }
+    return result;
+  }
+
 }
 

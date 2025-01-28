@@ -4,11 +4,12 @@ import java.util.List;
 public class BashVarList extends BashVar {
   private List<String> value;
 
-  public static BashVarList make() {
-    return new BashVarList(new ArrayList<>());
+  public static BashVarList make(String varName) {
+    return new BashVarList(varName, new ArrayList<>());
   }
 
-  protected BashVarList(List<String> newValue) {
+  protected BashVarList(String varName, List<String> newValue) {
+    super(varName);
     value = newValue;
   }
 
@@ -85,4 +86,17 @@ public class BashVarList extends BashVar {
     result.append(" )");
     return result.toString();
   }
+
+  @Override
+  public String bashValue() {
+    final StringBuilder b = new StringBuilder();
+    b.append("( ");
+    for (String s : value) {
+      b.append(shellQuoted(s) + " ");
+    }
+    b.append(")");
+
+    return b.toString();
+  }
+
 }

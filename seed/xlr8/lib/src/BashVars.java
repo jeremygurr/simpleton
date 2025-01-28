@@ -14,6 +14,19 @@ public class BashVars {
     return vars;
   }
 
+  public List<BashVar> getChangedVars() {
+    final List<BashVar> result = new ArrayList<>();
+
+    for (BashVar var : contexts.get(0).values()) {
+      if (!var.valueIsGenerated() && !var.equals(originalValues.get(var.name))) {
+        result.add(var);
+      }
+    }
+
+    Collections.sort(result);
+    return result;
+  }
+
   // will not fail if var doesn't exist, but returns null instead
   public BashVar getVarOrNull(String varName) {
     BashVar var = null;
@@ -116,7 +129,7 @@ public class BashVars {
       var.put(newValue);
     } else {
       final Map<String, BashVar> context = contexts.getLast();
-      context.put(varName, BashVar.make(newValue));
+      context.put(varName, BashVar.make(varName, newValue));
     }
     return this;
   }
@@ -148,7 +161,7 @@ public class BashVars {
     final Map<String, BashVar> last = contexts.getLast();
     if (!last.containsKey(varName)) {
       if (defaultValue != null) {
-        last.put(varName, BashVar.make(defaultValue));
+        last.put(varName, BashVar.make(varName, defaultValue));
       } else {
         last.put(varName, null);
       }
@@ -192,7 +205,7 @@ public class BashVars {
   public BashVars putKey(String varName, Object index, Object newValue) {
     BashVar var = getVarOrNull(varName);
     if (var == null) {
-      var = BashVarList.make();
+      var = BashVarList.make(varName);
       final Map<String, BashVar> context = contexts.getLast();
       context.put(varName, var);
     }

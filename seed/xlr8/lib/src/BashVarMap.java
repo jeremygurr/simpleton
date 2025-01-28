@@ -3,7 +3,8 @@ import java.util.TreeSet;
 
 public class BashVarMap extends BashVar {
   Map<String, String> value;
-  protected BashVarMap(Map<String, String> newValue) {
+  protected BashVarMap(String varName, Map<String, String> newValue) {
+    super(varName);
     value = newValue;
   }
 
@@ -76,6 +77,21 @@ public class BashVarMap extends BashVar {
     } else {
       return defaultValue;
     }
+  }
+
+  @Override
+  public String bashValue() {
+    final StringBuilder b = new StringBuilder();
+    b.append("( ");
+
+    for (Map.Entry<String, String> entry : value.entrySet()) {
+      b.append(shellQuoted(entry.getKey())).append(" ")
+       .append(shellQuoted(entry.getValue())).append(" ");
+    }
+
+    b.append(")");
+
+    return b.toString();
   }
 
   public void unsetKey(Object index) {

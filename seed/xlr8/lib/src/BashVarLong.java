@@ -2,7 +2,8 @@ public class BashVarLong extends BashVar {
   // never null
   private Long value;
 
-  public BashVarLong(Long newValue) {
+  public BashVarLong(String varName, Long newValue) {
+    super(varName);
     value = newValue;
   }
 
@@ -43,6 +44,11 @@ public class BashVarLong extends BashVar {
 
   public boolean isEqualTo(Object value) {
     return this.value.equals(value);
+  }
+
+  @Override
+  public String bashValue() {
+    return value.toString();
   }
 
 }

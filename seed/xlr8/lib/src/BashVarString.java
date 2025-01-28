@@ -1,7 +1,8 @@
 public class BashVarString extends BashVar {
   private String value;
 
-  public BashVarString(String newValue) {
+  public BashVarString(String varName, String newValue) {
+    super(varName);
     value = newValue;
   }
 
@@ -22,7 +23,7 @@ public class BashVarString extends BashVar {
 
   @Override
   public BashVar put(Object newValue) {
-    switch(newValue) {
+    switch (newValue) {
       case Long long_value -> {
         value = long_value.toString();
       }
@@ -51,6 +52,11 @@ public class BashVarString extends BashVar {
 
   public void append(String toAppend) {
     value += toAppend;
+  }
+
+  @Override
+  public String bashValue() {
+    return value;
   }
 
 }

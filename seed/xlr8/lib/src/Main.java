@@ -1,8 +1,7 @@
 import java.io.*;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import static java.lang.Math.min;
 
 public class Main {
 
@@ -79,7 +78,14 @@ public class Main {
 
   }
 
-  private static void exportVars(BashVars vars, Writer writer) {
+  private static void exportVars(BashVars vars, Writer writer) throws IOException {
+    final List<BashVar> changedVars = vars.getChangedVars();
+
+    final BufferedWriter w = new BufferedWriter(writer);
+    for (BashVar var : changedVars) {
+      w.write(var.name + "=" + var.bashValue() + "\n");
+    }
+    w.flush();
   }
 
   public static void main(String[] args) throws Exception {

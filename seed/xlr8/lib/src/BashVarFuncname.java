@@ -8,6 +8,10 @@ import java.util.List;
 public class BashVarFuncname extends BashVar {
   private List<String> externalStack = new ArrayList<>();
 
+  public BashVarFuncname() {
+    super("FUNCNAME");
+  }
+
   public static BashVarFuncname make() {
     return new BashVarFuncname();
   }
@@ -32,7 +36,7 @@ public class BashVarFuncname extends BashVar {
   public String getEl(int index) {
     final List<String> fullStack = getFullStack();
     if (index >= fullStack.size() || index < 0) {
-      throw new RuntimeException("Invalid index for var: " + index + " (max is " + (fullStack.size() - 1) +")" );
+      throw new RuntimeException("Invalid index for var: " + index + " (max is " + (fullStack.size() - 1) + ")");
     }
     return fullStack.get(index);
   }
@@ -52,4 +56,15 @@ public class BashVarFuncname extends BashVar {
     }
     return this;
   }
+
+  @Override
+  public boolean valueIsGenerated() {
+    return true;
+  }
+
+  @Override
+  public String bashValue() {
+    throw new RuntimeException("Attempted to get bashValue on " + getClass().getName());
+  }
+
 }
