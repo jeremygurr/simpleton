@@ -8,14 +8,6 @@ public class Op extends CellOp {
     return vars.return_value;
   }
 
-  private boolean y() {
-    return false;
-  }
-
-  private boolean x() {
-    return false;
-  }
-
 }
 
 

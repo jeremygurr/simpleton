@@ -2710,7 +2710,7 @@ xlr8_get_input_string() {
 xlr8_gather_libraries() {
   begin_function
     local libs lib source_path target_path
-    libs=$(find1 /repo/simpleton/xlr8-lib -type d) || fail
+    libs=$(find1 /work/xlr8 -type d) || fail
     for lib in $libs; do
       local target_path=$lib/target
       if [[ ! "$target_path" ]]; then
@@ -2795,14 +2795,6 @@ calc_coordinates() {
     handle_unknown=${handle_unknown:-error} coord_limit=${coord_limit:-}
   begin_function
 
-    # need dims and derive tables
-    local -n fields=${coord_type}_coordinate_fields
-    xlr8 dims_to_table fields $fields || fail
-
-    #########################
-    # OLD WAY
-    #########################
-
     if [[ "${localize_dims:-}" ]]; then
       eval "local $localize_dims"
     fi
@@ -2840,6 +2832,16 @@ calc_coordinates() {
     if [[ ! "${coordinate_fields:-}" ]]; then
       succeed
     fi
+
+    # need dims and derive tables
+    local -n fields=${coord_type}_coordinate_fields
+    xlr8 dims_to_table fields $fields || fail
+
+    debug_start
+
+    #########################
+    # OLD WAY
+    #########################
 
     local row_index=-1 \
       known_dims="${coordinate_fields[*]}" \
@@ -2960,6 +2962,25 @@ get_highest_trunk_context_cell() {
   handle_return
 }
 
+append_parent_trunks() {
+  local cell_path=$1
+  begin_function
+    if [[ "$cell_path" == */*/* ]]; then
+      append_parent_trunks ${cell_path%/*}
+    fi
+    if [[ -e $cell_path/.dna ]]; then
+      if [[ ! -e $cell_path/.cyto ]]; then
+        build_cyto $cell_path || fail
+      fi
+      if [[ -e $cell_path/.cyto/context-trunk ]]; then
+        log_debug "Appending parent trunk context ${cell_path#/*/*/}"
+        cat $cell_path/.cyto/context-trunk >>$context_path.new || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 build_context() {
   local cell_path=$1
   begin_function
@@ -2999,22 +3020,25 @@ build_context() {
       rm $context_path.new || fail
     fi
 
+    if [[ "$cell_path" == */*/* ]]; then
+      append_parent_trunks ${cell_path%/*} || fail
+    fi
+
     if [[ -e $context_path-trunk ]]; then
       cat $context_path-trunk >>$context_path.new || fail
-      context_exists=t
     fi
 
     if [[ -e $context_path-branch ]]; then
       cat $context_path-branch >>$context_path.new || fail
-      context_exists=t
     fi
 
     if [[ -e $context_path-leaf ]]; then
       cat $context_path-leaf >>$context_path.new || fail
-      context_exists=t
     fi
 
-    mv $context_path.new $context_path || fail
+    if [[ -e $context_path.new ]]; then
+      mv $context_path.new $context_path || fail
+    fi
 
   end_function
   handle_return

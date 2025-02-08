@@ -65,6 +65,7 @@ RUN --mount=type=cache,target=/var/cache/apk \
     mandoc-doc \
     net-tools \
     net-tools-doc \
+    openjdk23 \
     openrc \
     openrc-bash-completion \
     openrc-doc \
