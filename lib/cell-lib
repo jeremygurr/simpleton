@@ -1833,12 +1833,9 @@ load_dna_contents() {
 
   begin_function
 
-    local items
-    items=$(find1 $folder -not -name '.*' -not -name 'dna-root' | sort -g) || fail
-
-    if [[ "${dna_roots:-}" && $folder != */dna-root/* ]]; then
-      load_dna_contents_dna_root || fail
-    fi
+    local items= new_items
+    new_items=$(find1 $folder -not -name '.*' | sort -g) || fail
+    items+="$NL$new_items"
 
     local current_var=${prefix%_} ord item_name item_var= result 
     if [[ $pass_thru == f ]]; then
@@ -1911,8 +1908,6 @@ build_context_dna() {
 
     local derive_tables=() derived_dim_vars=()
     if [[ -d $dna_path ]]; then
-      local dna_roots
-      dna_roots=$(find -L $dna_path -name up -prune -o -name up-chosen -prune -o -name down -prune -o -name dna-root -print | sort -g) || fail
       prefix= load_dna_contents $dna_path || fail
 
       build_context_expand || fail
@@ -1951,6 +1946,25 @@ build_context_dna() {
   handle_return
 }
 
+load_parent_context() {
+  local cell_path=$1
+  begin_function
+    if [[ "$cell_path" == */*/* ]]; then
+      load_parent_context ${cell_path%/*}
+    fi
+    if [[ -e $cell_path/.dna ]]; then
+      if [[ ! -e $cell_path/.cyto ]]; then
+        build_cyto $cell_path || fail
+      fi
+      if [[ -e $cell_path/.cyto/context-trunk ]]; then
+        log_debug "Appending parent trunk context ${cell_path#/*/*/}"
+        cat $cell_path/.cyto/context-trunk >>$context_path.new || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 build_context_trunk() {
   begin_function
 
@@ -1960,6 +1974,10 @@ build_context_trunk() {
 
     if [[ -e $context_path-$context_type.new ]]; then
       rm $context_path-$context_type.new || fail
+    fi
+
+    if [[ "$cell_path" == */*/* ]]; then
+      load_parent_context ${cell_path%/*} || fail
     fi
 
     build_context_dna || fail
@@ -2758,7 +2776,7 @@ xlr8() {
 
     debug_start
 
-    local xlr8_command_path=/repo/simpleton/xlr8/$function_name \
+    local xlr8_command_path=/work/xlr8/op/$function_name \
       target_path=$xlr8_command_path/target \
       source_path=$xlr8_command_path/src \
 
@@ -2835,7 +2853,7 @@ calc_coordinates() {
 
     # need dims and derive tables
     local -n fields=${coord_type}_coordinate_fields
-    xlr8 dims_to_table fields $fields || fail
+    xlr8 load_table fields $fields || fail
 
     debug_start
 
@@ -2962,25 +2980,6 @@ get_highest_trunk_context_cell() {
   handle_return
 }
 
-append_parent_trunks() {
-  local cell_path=$1
-  begin_function
-    if [[ "$cell_path" == */*/* ]]; then
-      append_parent_trunks ${cell_path%/*}
-    fi
-    if [[ -e $cell_path/.dna ]]; then
-      if [[ ! -e $cell_path/.cyto ]]; then
-        build_cyto $cell_path || fail
-      fi
-      if [[ -e $cell_path/.cyto/context-trunk ]]; then
-        log_debug "Appending parent trunk context ${cell_path#/*/*/}"
-        cat $cell_path/.cyto/context-trunk >>$context_path.new || fail
-      fi
-    fi
-  end_function
-  handle_return
-}
-
 build_context() {
   local cell_path=$1
   begin_function
@@ -3018,10 +3017,6 @@ build_context() {
 
     if [[ -e $context_path.new ]]; then
       rm $context_path.new || fail
-    fi
-
-    if [[ "$cell_path" == */*/* ]]; then
-      append_parent_trunks ${cell_path%/*} || fail
     fi
 
     if [[ -e $context_path-trunk ]]; then
@@ -3346,24 +3341,6 @@ broken_link_check() {
       log_debug "Broken links found in cyto: $broken_links. Will rebuild cyto."
       problem_found=t
     fi
-  end_function
-  handle_return
-}
-
-load_dna_contents_dna_root() {
-  begin_function
-    local dna_folder=${dna_folder:-}
-    if [[ $folder == */.dna ]]; then
-      dna_folder=$folder
-    fi
-    local child_path=${folder#$dna_folder} root_path
-    local dna_root new_items
-    begin_for dna_root in $dna_roots; doo
-      if [[ -d $dna_root$child_path ]]; then
-        new_items=$(find1 $dna_root$child_path -not -name '.*' -not -name 'dna-root' | sort -g) || fail
-        items+="$NL$new_items"
-      fi
-    end_for
   end_function
   handle_return
 }
@@ -4735,18 +4712,6 @@ get_sane_value() {
 
 is_cell() {
   [[ -d "$1/.dna" ]]
-}
-
-load_parent_context() {
-  local cell=$1
-  local parent=${cell%/*}
-  if [[ ${#parent} -gt 1 ]]; then
-    load_parent_context $parent || return 1
-  fi
-  if [[ -f $cell/.dna/context ]]; then
-    source $cell/.dna/context || return 1
-  fi
-  return 0
 }
 
 # Used by the help system to describe a command and it's parameters to the user
