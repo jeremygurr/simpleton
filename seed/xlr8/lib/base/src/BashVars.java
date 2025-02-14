@@ -95,6 +95,15 @@ public class BashVars {
     return get(varName, null);
   }
 
+  public List<String> getList(String varName) {
+    BashVar var = getVarOrNull(varName);
+    if (var != null) {
+      return var.asList();
+    } else {
+      throw new RuntimeException("Var doesn't exist: " + varName);
+    }
+  }
+
   // Will NOT fail if var doesn't exist.
   public boolean hasValue(String varName) {
     final BashVar var = getVarOrNull(varName);
@@ -222,7 +231,7 @@ public class BashVars {
 
   // unset a specific element of a list
   // does nothing if the var doesn't exist
-  public BashVars unset(String varName, Object index) {
+  public BashVars unsetKey(String varName, Object index) {
     BashVar var = getVarOrNull(varName);
     if (var != null) {
       var.unsetKey(index);
@@ -239,6 +248,13 @@ public class BashVars {
         varMap.remove(varName);
         break;
       }
+    }
+    return this;
+  }
+
+  public BashVars unset(String... vars) {
+    for (String var : vars) {
+      unset(var);
     }
     return this;
   }
@@ -351,5 +367,6 @@ public class BashVars {
     }
     return this;
   }
+
 }
 

@@ -2711,6 +2711,7 @@ calc_coordinates_next_known_dim() {
 }
 
 xlr8_get_input_string() {
+  local fields_to_export=$*
   begin_function
     for f in $fields_to_export; do
       local -n x=$f
@@ -2721,35 +2722,6 @@ xlr8_get_input_string() {
       shell_quote_var v
       input_string+="$f=$v$NL"
     done
-  end_function
-  handle_return
-}
-
-xlr8_gather_libraries() {
-  begin_function
-    local libs lib source_path target_path
-    libs=$(find1 /work/xlr8 -type d) || fail
-    for lib in $libs; do
-      local target_path=$lib/target
-      if [[ ! "$target_path" ]]; then
-        xlr8_build || fail
-      fi
-      library_targets+="$target_path "
-    done
-  end_function
-  handle_return
-}
-
-xlr8_build() {
-  begin_function
-    local source_paths=$source_path
-    xlr8_gather_libraries || fail
-
-    if [[ ! -d $target_path ]]; then
-      mkdir $target_path || fail
-    fi
-    javac -d $target_path --source-path $source_paths || fail
-
   end_function
   handle_return
 }
@@ -2779,24 +2751,110 @@ xlr8() {
     local xlr8_command_path=/work/xlr8/op/$function_name \
       target_path=$xlr8_command_path/target \
       source_path=$xlr8_command_path/src \
+      standard_fields='
+        bisect_test
+        debug_bisect
+        debug_bisect_max
+        debug_bisect_min
+        debug_exit
+        debug_function_old
+        debug_id
+        debug_id_current
+        debug_immediate
+        debug_quick_function
+        debug_quick_stop_less_than_depth
+        debug_restart_command
+        debug_step_to_mid_function
+        debugging
+        fork_debug_id
+        fork_id_current
+        pause_at_functions
+        pause_at_vars
+        secret_vars
+        show_time
+        show_time_prev
+        trace_condition
+        trace_expression
+        trace_fun
+        trace_structure
+        trace_time
+        trace_time_fd
+        trace_time_log
+        trace_var
+        trace_var_always
+        trace_var_old
+        trace_var_sub
+      '
 
     if [[ ! -d $xlr8_command_path ]]; then
       log_fatal "Function $function_name doesn't exist in $xlr8_command_path"
       fail1
     fi
 
-    local input_string= v f
-    xlr8_get_input_string || fail
-
-    if [[ ! $xlr8_command_path/target ]]; then
-      xlr8_build $function_name || fail
+    if [[ ! -d $target_path ]]; then
+      fork execute_commands "$xlr8_command_path" update || fail
     fi
+
+    if [[ ! -d $target_path ]]; then
+      log_fatal "Function $function_name didn't produce a target path"
+      fail1
+    fi
+
+    local input_string= v f
+    xlr8_get_input_string $standard_fields $fields_to_export || fail
 
     result=$(echo "$input_string" | xlr8_execute) || fail
     if [[ "$result" ]]; then
       source "$result" || fail
     fi
 
+  end_function
+  handle_return
+}
+
+calc_coordinates_slow() {
+  begin_function
+    local row_index=-1 \
+      known_dims="${coordinate_fields[*]}" \
+
+    declare -Ag coordinate_dim_index
+    local d i=0
+    for d in ${coordinate_fields[*]}; do
+      coordinate_dim_index[$d]=$i
+      (( i++ ))
+    done
+
+    local total_coord_rows_added=0
+    if (( coordinate_rows > 0 )); then
+      log_verbose "Refining existing $coord_type dim coordinates"
+      front_load=6 progress_bar_start $coordinate_rows
+      begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
+        dim_type=sdims convert_coords_to_dims || fail
+        expand_dims $known_dims || fail
+        handle_unknown=skip \
+        calc_coordinates_next_known_dim || fail
+        progress_bar_next
+        log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
+      end_for
+      progress_bar_stop
+    else
+      # it is assumed that dims are already expanded before this point, and so ddims will be used
+      log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+      calc_coordinates_next_known_dim || fail
+    fi
+
+    coordinate_data=( "${new_coordinate_data[@]}" )
+  end_function
+  handle_return
+}
+
+xlr8_get_dim_fields() {
+  local fields=$*
+  begin_function
+    local field
+    for field in $*; do
+      
+    done
   end_function
   handle_return
 }
@@ -2809,7 +2867,7 @@ xlr8() {
 # assumes ddims are in array form (not space separated)
 # assumes all checks were done previously to determine if this is needed
 calc_coordinates() {
-  local source=${source:-dims} coord_type=$coord_type \
+  local clear_existing_coords=${clear_existing_coords:-t} coord_type=$coord_type \
     handle_unknown=${handle_unknown:-error} coord_limit=${coord_limit:-}
   begin_function
 
@@ -2828,73 +2886,40 @@ calc_coordinates() {
       coordinate_fields_count=${coord_type}_coordinate_fields_count \
       coordinate_fields_plural=${coord_type}_coordinate_fields_plural \
 
-    case $source in
-      dims)
-        coordinate_data=() \
-        coordinate_count=0 \
-        coordinate_rows=0 \
-        unknown_dims= \
-        resolved_dims= \
+    if [[ $clear_existing_coords == t ]]; then
+      coordinate_data=() \
+      coordinate_count=0 \
+      coordinate_rows=0 \
+      unknown_dims= \
+      resolved_dims= \
 
-        setup_coord_fields || fail
-      ;;
-      coords)
-        :
-      ;;
-      *)
-        log_fatal "Invalid source: $source"
-        fail1
-      ;;
-    esac
+      setup_coord_fields || fail
+    fi
 
     if [[ ! "${coordinate_fields:-}" ]]; then
       succeed
     fi
 
-    # need dims and derive tables
-    local -n fields=${coord_type}_coordinate_fields
-    xlr8 load_table fields $fields || fail
-
-    debug_start
-
-    #########################
-    # OLD WAY
-    #########################
-
-    local row_index=-1 \
-      known_dims="${coordinate_fields[*]}" \
-
-    declare -Ag coordinate_dim_index
-    local d i=0
-    for d in ${coordinate_fields[*]}; do
-      coordinate_dim_index[$d]=$i
-      (( i++ ))
-    done
-
-    local total_coord_rows_added=0
-    if [[ $source == dims ]]; then
-
-      # it is assumed that dims are already expanded before this point, and so ddims will be used
-      log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-      calc_coordinates_next_known_dim || fail
-
-    elif [[ $source == coords ]]; then
-
-      log_verbose "Refining existing $coord_type dim coordinates"
-      front_load=6 progress_bar_start $coordinate_rows
-      begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
-        dim_type=sdims convert_coords_to_dims || fail
-        expand_dims $known_dims || fail
-        handle_unknown=skip \
-        calc_coordinates_next_known_dim || fail
-        progress_bar_next
-        log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
-      end_for
-      progress_bar_stop
-
+    if [[ ${xlr8:-f} == t ]]; then
+      local -n fields=${coord_type}_coordinate_fields
+      local dt dt_fields=
+      for dt in ${derive_tables[*]}; do
+        dt_fields+="${dt}_fields ${dt}_data "
+      done
+      local coord_fields="
+        coordinate_data
+        coordinate_count
+        coordinate_rows
+        coordinate_fields_count
+        coordinate_fields_plural
+      "
+      local dim_fields
+      xlr8_get_dim_fields ${trunk_dims[*]}
+      xlr8 load_coordinates $coord_fields $dim_fields $fields $dt_fields || fail
+    else
+      calc_coordinates_slow || fail
     fi
 
-    coordinate_data=( "${new_coordinate_data[@]}" )
     coordinate_count=${#coordinate_data[*]}
     coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
     log_verbose "$coordinate_rows $coord_type coordinate rows found" 

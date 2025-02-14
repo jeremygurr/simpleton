@@ -121,9 +121,9 @@ public abstract class CellOp {
       vars.put("struct_type", "end of " + current_function);
       debug_id_inc(vars);
       final Long stack_pos = vars.getLong("stack_pos");
-      vars.unset("stack_debug_id", stack_pos)
-          .unset("stack_detail", stack_pos)
-          .unset("stack_high_level", stack_pos)
+      vars.unsetKey("stack_debug_id", stack_pos)
+          .unsetKey("stack_detail", stack_pos)
+          .unsetKey("stack_high_level", stack_pos)
       ;
     }
     final long function_level = vars.getLong("function_level");
@@ -258,7 +258,7 @@ public abstract class CellOp {
               pause_qd(vars, "Var changed: $var.");
             }
           }
-          vars.unset("trace_var_sub", var);
+          vars.unsetKey("trace_var_sub", var);
           vars.putKey("trace_var_old", var, value);
         } else if (!vars.getMapValue("trace_var_old", var, "").equals(value)
             || vars.get("trace_var_always", "f").equals("t")
@@ -277,7 +277,7 @@ public abstract class CellOp {
               pause_qd(vars, "Var changed: $var.");
             }
           }
-          vars.unset("trace_var_sub", var);
+          vars.unsetKey("trace_var_sub", var);
           vars.putKey("trace_var_old", var, value);
         }
       }
@@ -482,6 +482,25 @@ public abstract class CellOp {
       debug_start(vars);
     }
 
+  }
+
+  protected void log_fatal(String message) {
+    ......
+  }
+
+  protected void log_verbose(String message) {
+    ......
+  }
+
+  protected void log_debug(String message) {
+    ......
+  }
+
+  protected String get_plural(String dim) {
+
+  }
+
+  protected String get_var_value(List<String> array) {
   }
 
 }

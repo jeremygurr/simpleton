@@ -129,4 +129,8 @@ public abstract class BashVar implements Comparable<BashVar>, Cloneable {
 
   abstract public boolean isEqualToVar(BashVar var);
 
+  public List<String> asList() {
+    throw new RuntimeException("This var can't be represented as a list");
+  }
+
 }

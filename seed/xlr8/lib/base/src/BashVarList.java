@@ -129,4 +129,9 @@ public class BashVarList extends BashVar {
     }
   }
 
+  @Override
+  public List<String> asList() {
+    return value;
+  }
+
 }
