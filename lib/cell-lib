@@ -2710,17 +2710,27 @@ calc_coordinates_next_known_dim() {
   handle_return
 }
 
+# Will not output fields that don't exist
 xlr8_get_input_string() {
   local fields_to_export=$*
   begin_function
     for f in $fields_to_export; do
       local -n x=$f
-      v=
       if [[ -v x ]]; then
-        v=$x
+        if is_array x; then
+          local m
+          v="( "
+          for m in "${x[@]}"; do
+            shell_quote_var m
+            v+="$m "
+          done
+          v+=")"
+        else
+          v=$x
+        fi
+        shell_quote_var v
+        input_string+="$f=$v$NL"
       fi
-      shell_quote_var v
-      input_string+="$f=$v$NL"
     done
   end_function
   handle_return
@@ -2800,6 +2810,13 @@ xlr8() {
       fail1
     fi
 
+    if [[ -f $target_path/Main.class ]]; then
+      source_type=simple_java
+    else
+      log_fatal "Can't identify source type of xlr8 op: $xlr8_command_path"
+      fail1
+    fi
+
     local input_string= v f
     xlr8_get_input_string $standard_fields $fields_to_export || fail
 
@@ -2849,11 +2866,16 @@ calc_coordinates_slow() {
 }
 
 xlr8_get_dim_fields() {
-  local fields=$*
+  local dims=$*
   begin_function
     local field
-    for field in $*; do
-      
+    dim_fields=
+    for dim in $*; do
+      dim_fields+="
+        ${dim_type}_${dim}_aliases
+        ${dim_type}_${dim}_members
+        ${dim_type}_${dim}_is_optional
+        "
     done
   end_function
   handle_return
@@ -2914,6 +2936,7 @@ calc_coordinates() {
         coordinate_fields_plural
       "
       local dim_fields
+      local dim_type=trunk_dims
       xlr8_get_dim_fields ${trunk_dims[*]}
       xlr8 load_coordinates $coord_fields $dim_fields $fields $dt_fields || fail
     else
