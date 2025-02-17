@@ -1,3 +1,4 @@
+import java.sql.Array;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -33,16 +34,43 @@ public class Op extends CellOp {
     }
   }
 
-  private List<String> expand_dim(BashVars vars, String value) {
+  private List<String> expand_dim(BashVars vars, String dimVarType, String dimVar, String value) {
     begin_function(vars);
+    final ArrayList<String> result = new ArrayList<>();
+
+    final String memberVar = dimVarType + "_" + dimVar + "_members";
+    if (vars.hasValue(memberVar)) {
+      final List<String> members = vars.getList(memberVar);
+      if (members.contains(value)) {
+        result.add(value);
+      }
+    }
+
+    final String aliasVar = dimVarType + "_" + dimVar + "_aliases";
+    if (result.isEmpty() && vars.hasValue(aliasVar)) {
+      final List<String> aliases = vars.getList(aliasVar);
+      for (String alias : aliases) {
+        String aliasKey = alias.substring(0, alias.indexOf(' '));
+        if (aliasKey.equals(value)) {
+          result.addAll(List.of(alias.split(" ")).subList(1, 0));
+          break;
+        }
+      }
+    }
+
+    if (result.isEmpty() && !vars.hasValue(memberVar)) {
+      result.add(value);
+    }
+
     end_function(vars);
+    return result;
   }
 
-  private List<String> expand_dim_members(BashVars vars, List<String> members) {
+  private List<String> expand_dim_members(BashVars vars, String dimVarType, String dimVar, List<String> members) {
     begin_function(vars);
     final List<String> new_values = new ArrayList<>();
     for (String value : members) {
-      List<String> values = expand_dim(vars, value);
+      List<String> values = expand_dim(vars, dimVarType, dimVar, value);
       if (!values.isEmpty()) {
         new_values.addAll(values);
       }
@@ -59,6 +87,7 @@ public class Op extends CellOp {
       final String ddims = "d_" + dimsVar;
       final String sdim = "s_" + dimVar;
       final String sdims = "s_" + dimsVar;
+      final String dimVarType = vars.get(dimVar + "_dim_type");
       if (!vars.hasValue(ddim) && !vars.hasValue(ddims) &&
           (vars.hasValue(sdim) || vars.hasValue(sdims))) {
         log_debug("Expanding dim " + dimVar);
@@ -73,7 +102,7 @@ public class Op extends CellOp {
           single = true;
         }
 
-        final List<String> new_values = expand_dim_members(vars, members);
+        final List<String> new_values = expand_dim_members(vars, dimVarType, dimVar, members);
         if (single == true && new_values.size() > 1) {
           log_fatal("Too many values for " + dimVar + ": " + get_var_value(new_values));
           throw new RuntimeException();
@@ -94,6 +123,12 @@ public class Op extends CellOp {
     end_function(vars);
   }
 
+  private void calc_coordinates_next_known_dim(BashVars vars, Coordinates c_old) {
+    begin_function(vars);
+    final Coordinates c = Coordinates.make(c_old);
+    end_function(vars);
+  }
+
   int main(BashVars vars) {
     vars.return_value = 0;
     begin_function(vars);
@@ -109,9 +144,8 @@ public class Op extends CellOp {
       log_verbose("Refining existing " + vars.get("coord_type") + " dim coordinates");
       for (c.row_index = 0; c.row_index < c.coordinate_rows; c.row_index++) {
         convert_coords_to_dims(vars, c, DimType.sdims);
-        // TODO how to handle function failure?
         expand_dims(vars, c.known_dims);
-        c.handle_unknown=HandleUnknownType.skip;
+        c.handle_unknown = HandleUnknownType.skip;
         calc_coordinates_next_known_dim(vars, c);
         log_debug("Finished coordinate row " + c.row_index+1 + " of " + c.coordinate_rows);
       }
