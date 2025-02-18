@@ -95,6 +95,15 @@ public class BashVars {
     return get(varName, null);
   }
 
+  public List<String> getList(String varName, List<String> defaultValue) {
+    BashVar var = getVarOrNull(varName);
+    if (var != null) {
+      return var.asList();
+    } else {
+      return defaultValue;
+    }
+  }
+
   public List<String> getList(String varName) {
     BashVar var = getVarOrNull(varName);
     if (var != null) {
@@ -137,7 +146,7 @@ public class BashVars {
     if (var != null) {
       var.put(newValue);
     } else {
-      final Map<String, BashVar> context = contexts.getFirst();
+      final Map<String, BashVar> context = contexts.getLast();
       context.put(varName, BashVar.make(varName, newValue));
     }
     return this;
@@ -368,5 +377,19 @@ public class BashVars {
     return this;
   }
 
+  public boolean getBoolean(String varName, Boolean defaultValue) {
+    BashVar var = getVarOrNull(varName);
+    if (var != null) {
+      return var.asBoolean();
+    } else if (defaultValue != null) {
+      return defaultValue;
+    } else {
+      throw new RuntimeException("Var doesn't exist: " + varName);
+    }
+  }
+
+  public boolean getBoolean(String varName) {
+    return getBoolean(varName, null);
+  }
 }
 

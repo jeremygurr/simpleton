@@ -123,9 +123,83 @@ public class Op extends CellOp {
     end_function(vars);
   }
 
+  private boolean calc_coords_validate_member(BashVars vars, Coordinates c, String dim, String member) {
+    begin_function(vars);
+    boolean isValid = true;
+    log_debug("Validating " + dim + " == " + member);
+    final String dim_type = vars.get(dim + "_dim_type");
+    final boolean is_optional = vars.getBoolean(dim_type + "_" + dim + "_is_optional", false);
+    if (!is_optional || !member.equals("")) {
+      vars.put("values", List.of());
+      vars.put("can_derive", false);
+      attempt_derive(vars, c, dim, null, false);
+      if (vars.getBoolean("can_derive")) {
+        if (!vars.hasValue("values")) {
+          isValid = false;
+        } else if (!vars.containsKey("values", member)) {
+          isValid = false;
+        }
+      } else { // can't derive
+        for (String rd : c.resolved_dims) {
+          if (rd.equals(dim)) {
+            continue;
+          }
+          attempt_derive(vars, c, rd, dim, true);
+          if (vars.getBoolean("can_derive")) {
+            if (!vars.hasValue("values")) {
+              isValid = false;
+            } else {
+              final String rd_member = vars.get("d_" + rd, "");
+              if (!rd_member.isEmpty() && !vars.containsKey("values", rd_member)) {
+                isValid = false;
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    end_function(vars);
+    return isValid;
+  }
+
   private void calc_coordinates_next_known_dim(BashVars vars, Coordinates c_old) {
     begin_function(vars);
     final Coordinates c = Coordinates.make(c_old);
+
+    if (!c.known_dims.isEmpty()) {
+      final String dim = c.known_dims.removeFirst();
+      log_debug("Checking known dim " + dim);
+      int coord_index = c.coordinate_dim_index.get(dim);
+      final String dims = c.coordinate_fields_plural.get(coord_index);
+      final String member_var = "d_" + dim;
+      final String members_var = "d_" + dims;
+      final List<String> members = vars.getList(members_var, vars.getList(member_var, List.of()));
+
+      if (!members.isEmpty()) {
+        c.resolved_dims.add(dim);
+        vars.addContext();
+        vars.unset(members_var);
+        for(String m : members) {
+          log_debug("Processing " + dim + "=" + m);
+          boolean isValid = calc_coords_validate_member(vars, c, dim, m);
+          if (isValid) {
+            calc_coordinates_next_known_dim(vars, c);
+          } else {
+            log_debug("Dim member doesn't fit row constraints: " + dim + " = " + m + ", skipping row");
+          }
+        }
+        vars.unset(member_var);
+      } else { // members is empty
+        log_debug("Adding " + dim + " to unknown list");
+        c.unknown_dims.add(dim);
+        calc_coordinates_next_known_dim(vars, c);
+      }
+    } else { // no known_dims left
+      calc_coordinates_next_unknown_dim(vars, c);
+    }
+
     end_function(vars);
   }
 

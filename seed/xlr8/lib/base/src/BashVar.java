@@ -19,6 +19,9 @@ public abstract class BashVar implements Comparable<BashVar>, Cloneable {
       case String string -> {
         return new BashVarString(varName, string);
       }
+      case Boolean bool -> {
+        return new BashVarString(varName, bool ? "t" : "f");
+      }
       case Long longVar -> {
         return new BashVarLong(varName, longVar);
       }
@@ -133,4 +136,7 @@ public abstract class BashVar implements Comparable<BashVar>, Cloneable {
     throw new RuntimeException("This var can't be represented as a list");
   }
 
+  public boolean asBoolean() {
+    throw new RuntimeException("This var can't be represented as a boolean");
+  }
 }

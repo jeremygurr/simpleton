@@ -22,6 +22,14 @@ public class BashVarString extends BashVar {
   }
 
   @Override
+  public boolean asBoolean() {
+    if (value.equals("t")) {
+      return true;
+    }
+    return false;
+  }
+
+  @Override
   public BashVar put(Object newValue) {
     switch (newValue) {
       case Long long_value -> {
