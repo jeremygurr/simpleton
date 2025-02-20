@@ -123,6 +123,44 @@ public class Op extends CellOp {
     end_function(vars);
   }
 
+  private void attempt_derive(BashVars vars, Coordinates c, String dim_type, String dim, String fromDim, boolean findOnlyOne) {
+    begin_function(vars);
+    final BashVar derived_from = vars.getVarOrNull(dim_type + "_" + dim + "_derived_from");
+    final BashVar can_derive = vars.getVar("can_derive");
+    final BashVar values = vars.getVar("values");
+    boolean derivedFromIncomplete = false;
+    final ArrayList<String> resolvedDependencyRows = new ArrayList<>();
+
+    if (derived_from != null) {
+      boolean oneRowComplete = false;
+      for (String derivedFromRow : derived_from.asList()) {
+        if (fromDim != null && stringContains(derivedFromRow, fromDim)) {
+          boolean completeRow = true;
+          for (String derivedFromDim : derivedFromRow.split(" ")) {
+            final String derivedFromDimValue = vars.get("d_" + derivedFromDim, "");
+            if (!derivedFromDimValue.isEmpty()) {
+              completeRow = false;
+              break;
+            }
+          }
+          if (completeRow) {
+            oneRowComplete = true;
+            resolvedDependencyRows.add(derivedFromRow);
+          }
+        }
+      }
+      if (!oneRowComplete) {
+        derivedFromIncomplete = true;
+      }
+    }
+
+    if (!derivedFromIncomplete) {
+      
+    }
+
+    end_function(vars);
+  }
+
   private boolean calc_coords_validate_member(BashVars vars, Coordinates c, String dim, String member) {
     begin_function(vars);
     boolean isValid = true;
@@ -132,7 +170,7 @@ public class Op extends CellOp {
     if (!is_optional || !member.equals("")) {
       vars.put("values", List.of());
       vars.put("can_derive", false);
-      attempt_derive(vars, c, dim, null, false);
+      attempt_derive(vars, c, dim_type, dim, null, false);
       if (vars.getBoolean("can_derive")) {
         if (!vars.hasValue("values")) {
           isValid = false;
@@ -144,7 +182,7 @@ public class Op extends CellOp {
           if (rd.equals(dim)) {
             continue;
           }
-          attempt_derive(vars, c, rd, dim, true);
+          attempt_derive(vars, c, dim_type, rd, dim, true);
           if (vars.getBoolean("can_derive")) {
             if (!vars.hasValue("values")) {
               isValid = false;
