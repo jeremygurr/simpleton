@@ -2630,6 +2630,67 @@ calc_coords_validate_member() {
   handle_return
 }
 
+# input: dim_type dim
+set_cross_dims() {
+  begin_function
+    local -n member=d_$dim
+    local derive_table=${dim_type}_${dim}_derive
+    local -n derive_fields=${derive_table}_fields \
+             derive_data=${derive_table}_data \
+
+    if [[ -v derive_fields ]]; then
+
+      local field_count=${#derive_fields[*]} \
+        data_count=${#derive_data[*]} \
+        row_index data_index=0 column_index \
+        value= field \
+        found_match=f
+
+      local row_count=$((data_count / field_count))
+
+      for (( row_index = 0; row_index < row_count; row_index++ )); do
+
+        found_match=f
+        for (( column_index = 0; column_index < field_count; column_index++ )); do
+          field=${derive_fields[$column_index]}
+          if [[ $field == $dim ]]; then
+            (( data_index = row_index * field_count + column_index ))
+            value=${derive_data[$data_index]}
+            if [[ "$value" == "$member" ]]; then
+              found_match=t
+            fi
+            break
+          fi
+        done
+
+        if [[ $found_match == t ]]; then
+          for (( column_index = 0; column_index < field_count; column_index++ )); do
+            field=${derive_fields[$column_index]}
+            if [[ $field != $dim ]]; then
+              (( data_index = row_index * field_count + column_index ))
+              value=${derive_data[$data_index]}
+              local -n field_dim=d_$field
+              if [[ ! "${field_dim:-}" ]]; then
+                field_dim=$value
+              elif [[ "${field_dim}" != "$value" ]]; then
+                conflict=t
+              fi
+            fi
+          done
+
+          break
+        fi
+
+      done
+
+    else
+      log_warn "is_cross_dim was set, but there is no derive table to use."
+    fi
+
+  end_function
+  handle_return
+}
+
 # calling this will produce and end at least one coordinate row 
 # inputs:
 #   known_dims (may be empty)
@@ -2671,6 +2732,9 @@ calc_coordinates_next_known_dim() {
         unset members
         unset -n members
 
+        local -n dim_type=${dim}_dim_type
+        local -n is_cross_dim=${dim_type}_${dim}_is_cross_dim
+
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
         begin_for m in "${ms[@]}"; doo
@@ -2683,7 +2747,15 @@ calc_coordinates_next_known_dim() {
           # recursive
           calc_coords_validate_member $dim "$member" || fail
           if [[ $is_valid == t ]]; then
-            calc_coordinates_next_known_dim || fail
+            conflict=f
+            if [[ ${is_cross_dim:-f} == t ]]; then
+              set_cross_dims || fail
+            fi
+            if [[ $conflict == f ]]; then
+              calc_coordinates_next_known_dim || fail
+            else
+              log_debug "Row skipped because of cross dim conflict: $dim = $member conflicts with $field = $field_dim"
+            fi
           else
             log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
           fi
