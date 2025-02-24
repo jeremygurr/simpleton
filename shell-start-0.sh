@@ -20,6 +20,7 @@ NL=$'\n'
 alias get='cell get'
 alias update='cell update'
 alias clean='cell clean'
+alias status='cell status'
 alias ?='cell . ?'
 alias ??='cell . ??'
 
