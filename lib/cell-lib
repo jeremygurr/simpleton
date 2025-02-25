@@ -1633,6 +1633,92 @@ execute_command_prep() {
   handle_return
 }
 
+# Inputs:
+#   $1    cell_path   should be real path
+#   $2    command
+execute_command() {
+  local cell_path=$1 cell_command=$2 \
+    log_show_vars='short_cell cell_command'
+  begin_function_hi
+
+    case $cell_command in
+      dim-*|up-*)
+        if [[ $cell_path == /seed/* ]]; then
+          cell_path=/work${cell_path#/seed}
+        fi
+      ;;
+      *)
+        if [[ $cell_path != /work* ]]; then
+          log_fatal "You must run this command from within the workspace (any subfolder of /work)"
+          fail1
+        fi
+      ;;
+    esac
+
+    if [[ $top_level_command == f ]]; then
+      strong_log=t log_info "Executing cell command: $short_cell $cell_command" || fail
+    fi
+
+    if [[ ! -e "$cell_path" ]]; then
+      plant_seed $cell_path || {
+        log_fatal "Not a cell: $cell_path"
+        fail1
+      }
+    fi
+
+    if [[ ! -e $cell_path/.dna && $command_requires_cell == t ]]; then
+      log_fatal "Invalid cell: $cell_path"
+      fail1
+    fi
+
+    if [[ $command_allows_logs == t ]]; then
+      disable_log=f
+    else
+      disable_log=t
+    fi
+
+    if [[ $disable_log == t ]]; then
+      #log_debug "Logging disabled." || fail
+      :
+    else
+      execute_command_log_prep || fail
+    fi
+
+    if [[ $disable_log == f ]]; then
+      : ${omni_log_fork_child:=0}
+      (( omni_log_fork_child++ ))
+      previous_log_pos=$omni_log_pos
+      cell_open_log_file || fail
+      (( previous_log_pos++ ))
+    fi
+
+    local omni_log_fork_parent=${omni_log_fork_parent:-}-${omni_log_fork_child:-1} \
+      omni_log_fork_child=0
+    omni_log_fork_parent=${omni_log_fork_parent#-}
+
+    if [[ " ${command_history:-}" == *" $cell_command $short_cell "* ]]; then
+      log_fatal "Circular dependency found: arrived at $cell_command $short_cell a second time."
+      fail1
+    fi
+
+    command_history+="$cell_command $short_cell "
+
+    local cell_command_function=${cell_command//-/_}_command
+    if function_exists $cell_command_function; then
+      $cell_command_function || fail
+    else
+      log_fatal "Missing command function $cell_command_function which should be in $cell_command_path"
+      fail1
+    fi
+
+    if [[ $disable_log == f ]]; then
+      cell_close_log_file || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   $1    cell_path   should be real path
 #   $2... commands
@@ -1696,6 +1782,8 @@ execute_commands() {
           log_fatal "Internal error: Missing $cell_command command in $cell_command_path"
           fail1
         fi
+
+        validate_command_parameters || fail
 
         local showed_parameter_help=f
         if [[ "${parameter_questions:-}" ]]; then
@@ -3960,88 +4048,28 @@ execute_command_log_prep() {
   handle_return
 }
 
-# Inputs:
-#   $1    cell_path   should be real path
-#   $2    command
-execute_command() {
-  local cell_path=$1 cell_command=$2 \
-    log_show_vars='short_cell cell_command'
-  begin_function_hi
+validate_command_parameters() {
+  begin_function
+    local name required type=command
+    local -n parameter_names=parameter_names_$type \
+      parameter_defaults=parameter_defaults_$type \
+      parameter_required=parameter_required_$type \
 
-    case $cell_command in
-      dim-*|up-*)
-        if [[ $cell_path == /seed/* ]]; then
-          cell_path=/work${cell_path#/seed}
-        fi
-      ;;
-      *)
-        if [[ $cell_path != /work* ]]; then
-          log_fatal "You must run this command from within the workspace (any subfolder of /work)"
-          fail1
-        fi
-      ;;
-    esac
-
-    if [[ $top_level_command == f ]]; then
-      strong_log=t log_info "Executing cell command: $short_cell $cell_command" || fail
-    fi
-
-    if [[ ! -e "$cell_path" ]]; then
-      plant_seed $cell_path || {
-        log_fatal "Not a cell: $cell_path"
-        fail1
-      }
-    fi
-
-    if [[ ! -e $cell_path/.dna && $command_requires_cell == t ]]; then
-      log_fatal "Invalid cell: $cell_path"
-      fail1
-    fi
-
-    if [[ $command_allows_logs == t ]]; then
-      disable_log=f
-    else
-      disable_log=t
-    fi
-
-    if [[ $disable_log == t ]]; then
-      #log_debug "Logging disabled." || fail
-      :
-    else
-      execute_command_log_prep || fail
-    fi
-
-    if [[ $disable_log == f ]]; then
-      : ${omni_log_fork_child:=0}
-      (( omni_log_fork_child++ ))
-      previous_log_pos=$omni_log_pos
-      cell_open_log_file || fail
-      (( previous_log_pos++ ))
-    fi
-
-    local omni_log_fork_parent=${omni_log_fork_parent:-}-${omni_log_fork_child:-1} \
-      omni_log_fork_child=0
-    omni_log_fork_parent=${omni_log_fork_parent#-}
-
-    if [[ " ${command_history:-}" == *" $cell_command $short_cell "* ]]; then
-      log_fatal "Circular dependency found: arrived at $cell_command $short_cell a second time."
-      fail1
-    fi
-
-    command_history+="$cell_command $short_cell "
-
-    local cell_command_function=${cell_command//-/_}_command
-    if function_exists $cell_command_function; then
-      $cell_command_function || fail
-    else
-      log_fatal "Missing command function $cell_command_function which should be in $cell_command_path"
-      fail1
-    fi
-
-    if [[ $disable_log == f ]]; then
-      cell_close_log_file || fail
-    fi
-
+    begin_for (( index = 0; index < ${#parameter_names[*]}; index++ )); doo
+      name=${parameter_names[$index]}
+      required=${parameter_required[$index]}
+      local -n parameter_var=$name
+      if [[ ! "${parameter_var:-}" ]]; then
+        while true; do
+          choose "Enter required parameter (use ? if you need help): $name=" parameter_var || fail
+          if [[ "$parameter_var" == \? ]]; then
+            show_parameter_help_single || fail
+            continue
+          fi
+          break
+        done
+      fi
+    end_for
   end_function
   handle_return
 }
@@ -4849,14 +4877,16 @@ add_parameter() {
     default=${default:-} \
     choices=${choices:-} \
     aliases=${aliases:-} \
+    required=${required:-f} \
     delay_questions=${delay_questions:-f} \
 
-  local -n parameter_names=parameter_names_$type
-  local -n parameter_descriptions=parameter_descriptions_$type
-  local -n parameter_choices=parameter_choices_$type
-  local -n parameter_defaults=parameter_defaults_$type
-  local -n parameter_aliases=parameter_aliases_$type
-  local -n parameter_delay_questions=parameter_delay_questions_$type
+  local -n parameter_names=parameter_names_$type \
+    parameter_descriptions=parameter_descriptions_$type \
+    parameter_choices=parameter_choices_$type \
+    parameter_defaults=parameter_defaults_$type \
+    parameter_aliases=parameter_aliases_$type \
+    parameter_delay_questions=parameter_delay_questions_$type \
+    parameter_required=parameter_required_$type \
 
   parameter_names+=( "$name" ) 
   parameter_descriptions+=( "$description" ) 
@@ -4864,6 +4894,7 @@ add_parameter() {
   parameter_choices+=( "$choices" )
   parameter_aliases+=( "$aliases" )
   parameter_delay_questions+=( $delay_questions )
+  parameter_required+=( $required )
 
   if [[ $delay_questions == t ]]; then
     parameter_delayed_questions+=" $name"
