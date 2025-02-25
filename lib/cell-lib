@@ -721,10 +721,10 @@ build_context_expand() {
 #   $1          full path of file to write to
 #   coord_type 
 write_coordinates_to_file() {
-  local coord_type=${coord_type} target_file=$1
+  local coord_type=${coord_type} target_file=$1 skip_dims=${skip_dims:-}
   begin_function
 
-    local value field_index data_offset row_index
+    local value field_index data_offset row_index field
 
     local -n c_data=${coord_type}_coordinate_data \
       c_rows=${coord_type}_coordinate_rows \
@@ -734,7 +734,10 @@ write_coordinates_to_file() {
 
     local line=
     begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
-      line+="${c_fields[$field_index]} "
+      field=${c_fields[$field_index]}
+      if [[ " $skip_dims " != *" $field "* ]]; then
+        line+="$field "
+      fi
     end_for
     echo "${line% }" >$target_file || fail
 
@@ -742,9 +745,12 @@ write_coordinates_to_file() {
       line=
       for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
         (( data_offset = row_index * c_fields_count + field_index ))
-        value=${c_data[$data_offset]}
-        quotes=single shell_quote_var value || { fail_later; break 2; }
-        line+="$value "
+        field=${c_fields[$field_index]}
+        if [[ " $skip_dims " != *" $field "* ]]; then
+          value=${c_data[$data_offset]}
+          quotes=single shell_quote_var value || { fail_later; break 2; }
+          line+="$value "
+        fi
       done
       echo "${line% }" >>$target_file || { fail_later; break; }
     done
