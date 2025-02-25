@@ -757,6 +757,7 @@ write_coordinates_to_file() {
 #   coord_type
 #   row_index              defaults to 0
 #   target_dim_var_type    one of: sdims ddims sdim ddim
+# will load nothing if the given row_index doesn't exist in the coordinate table
 convert_coords_to_dims() {
   local coord_type=${coord_type} row_index=${row_index:-0} target_dim_var_type=$target_dim_var_type
   begin_function
@@ -768,37 +769,46 @@ convert_coords_to_dims() {
              c_data=${coord_type}_coordinate_data \
              c_fields_count=${coord_type}_coordinate_fields_count \
 
-    begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
-      field=${c_fields[$field_index]}
-      fields=${c_fields_plural[$field_index]}
+    local c_data_count=0
+    if [[ -v c_data ]]; then
+      c_data_count=${#c_data[*]}
+    fi
 
-      local -n sdim=s_$field sdims=s_$fields ddim=d_$field ddims=d_$fields
+    if (( c_data_count >= c_fields_count * (row_index + 1) )); then
 
-      (( data_offset = c_fields_count * row_index + field_index ))
-      case $target_dim_var_type in 
-        sdims)
-          sdims=${c_data[$data_offset]}
-          unset sdim ddim ddims
-        ;;
-        ddims)
-          ddims=${c_data[$data_offset]}
-          unset sdim sdims ddim
-        ;;
-        sdim)
-          sdim=${c_data[$data_offset]}
-          unset sdims ddim ddims
-        ;;
-        ddim)
-          ddim=${c_data[$data_offset]}
-          unset sdim sdims ddims
-        ;;
-        *)
-          log_fatal "Invalid target_dim_var_type: $target_dim_var_type"
-          fail1
-        ;;
-      esac
+      begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
+        field=${c_fields[$field_index]}
+        fields=${c_fields_plural[$field_index]}
 
-    end_for
+        local -n sdim=s_$field sdims=s_$fields ddim=d_$field ddims=d_$fields
+
+        (( data_offset = c_fields_count * row_index + field_index ))
+        case $target_dim_var_type in 
+          sdims)
+            sdims=${c_data[$data_offset]}
+            unset sdim ddim ddims
+          ;;
+          ddims)
+            ddims=${c_data[$data_offset]}
+            unset sdim sdims ddim
+          ;;
+          sdim)
+            sdim=${c_data[$data_offset]}
+            unset sdims ddim ddims
+          ;;
+          ddim)
+            ddim=${c_data[$data_offset]}
+            unset sdim sdims ddims
+          ;;
+          *)
+            log_fatal "Invalid target_dim_var_type: $target_dim_var_type"
+            fail1
+          ;;
+        esac
+
+      end_for
+
+    fi
 
   end_function
   handle_return
