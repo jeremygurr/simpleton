@@ -23,6 +23,7 @@ alias clean='cell clean'
 alias clean0='cell clean0'
 alias clean2='cell clean2'
 alias status='cell status'
+alias plant='cell plant'
 alias mock='cell mock'
 alias dim='cell dim'
 alias up='cell up'
@@ -664,10 +665,6 @@ seed() {
 }
 
 work() {
-  cd_to_work
-}
-
-plant() {
   cd_to_work
 }
 
