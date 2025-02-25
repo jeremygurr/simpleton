@@ -753,8 +753,12 @@ write_coordinates_to_file() {
   handle_return
 }
 
+# inputs:
+#   coord_type
+#   row_index              defaults to 0
+#   target_dim_var_type    one of: sdims ddims sdim ddim
 convert_coords_to_dims() {
-  local coord_type=${coord_type} row_index=${row_index:-0} dim_type=$dim_type
+  local coord_type=${coord_type} row_index=${row_index:-0} target_dim_var_type=$target_dim_var_type
   begin_function
 
     local field fields field_index values=() count field_count data_offset
@@ -771,7 +775,7 @@ convert_coords_to_dims() {
       local -n sdim=s_$field sdims=s_$fields ddim=d_$field ddims=d_$fields
 
       (( data_offset = c_fields_count * row_index + field_index ))
-      case $dim_type in 
+      case $target_dim_var_type in 
         sdims)
           sdims=${c_data[$data_offset]}
           unset sdim ddim ddims
@@ -789,7 +793,7 @@ convert_coords_to_dims() {
           unset sdim sdims ddims
         ;;
         *)
-          log_fatal "Invalid dim_type: $dim_type"
+          log_fatal "Invalid target_dim_var_type: $target_dim_var_type"
           fail1
         ;;
       esac
@@ -918,31 +922,6 @@ fetch_values_from_coordinates() {
     else
       log_debug "Failed to fetch $dim_var from coordinates"
     fi
-  end_function
-  handle_return
-}
-
-# can work on leaves or branches
-extract_resolvable_dims() {
-  begin_function
-    local i field coord_type=branch values=() count
-    begin_for (( i = 0; i < ${#branch_coordinate_fields[*]}; i++ )); doo
-      field=${branch_coordinate_fields[$i]}
-      local strict_matching=t stop_after_first_match=t
-      fetch_values_from_coordinates $field || fail
-      count=${#values[*]}
-
-      local -n is_shortcut=trunk_dims_${field}_is_shortcut
-      if [[ "${is_shortcut:-f}" == t ]] && (( count > 1 )); then
-        values=( "${values[0]}" )
-        count=1
-      fi
-
-      local -n dim=d_$field
-      if (( count == 1 )); then
-        dim=${values[0]}
-      fi
-    end_for
   end_function
   handle_return
 }
@@ -2919,7 +2898,7 @@ calc_coordinates_slow() {
       log_verbose "Refining existing $coord_type dim coordinates"
       front_load=6 progress_bar_start $coordinate_rows
       begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
-        dim_type=sdims convert_coords_to_dims || fail
+        target_dim_var_type=sdims convert_coords_to_dims || fail
         expand_dims $known_dims || fail
         handle_unknown=skip \
         calc_coordinates_next_known_dim || fail
@@ -3047,7 +3026,7 @@ build_context_leaf() {
         log_fatal "Could not resolve all branch dims in build_context_leaf"
         fail1
       fi
-      dim_type=ddim convert_coords_to_dims || fail
+      target_dim_var_type=ddim convert_coords_to_dims || fail
 
       write_vars_to_context \
         branch_coordinate_data \
@@ -3621,7 +3600,7 @@ calc_coords() {
     local coord_type=leaf
     if [[ $cell_is_leaf == t && ! "${leaf_coordinate_count:-}" ]]; then
       if (( branch_coordinate_count > 0 )); then
-        dim_type=ddim convert_coords_to_dims || fail
+        target_dim_var_type=ddim convert_coords_to_dims || fail
       fi
       calc_coordinates || fail
       if [[ $command_requires_resolved_dims == t ]]; then
@@ -3629,7 +3608,7 @@ calc_coords() {
       fi
     fi
     if (( leaf_coordinate_count > 0 )); then
-      dim_type=ddim convert_coords_to_dims || fail
+      target_dim_var_type=ddim convert_coords_to_dims || fail
     fi
 
   end_function
