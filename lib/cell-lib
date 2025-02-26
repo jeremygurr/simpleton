@@ -4142,11 +4142,10 @@ substitute_command_alias() {
   handle_return
 }
 
-# this should be run in a subshell
-fork_inside() {
+prep_fork() {
   begin_function_lo
 
-    local change_log2=$change_log
+    change_log2=${change_log:-}
     # Prevents this variable from bleeding through to lower called functions
     change_log=
 
@@ -4166,6 +4165,17 @@ fork_inside() {
 
     cleanup_on_exit=
     setup_exit_trap
+
+  end_function
+  handle_return
+}
+
+# this should be run in a subshell
+fork_inside() {
+  begin_function_lo
+
+    local change_log2
+    prep_fork || fail
 
     if [[ "$to_var" ]]; then
       eval "$to_var=\$($fork_command)"; return_code=$?
@@ -4249,6 +4259,23 @@ get_new_reply_file() {
   return 0
 }
 
+before_fork() {
+  begin_function_lo
+
+    if [[ ${background:-f} == t ]]; then
+      change_log=t
+    fi
+
+    : ${omni_log_fork_child:=0}
+    (( omni_log_fork_child++ ))
+
+    get_new_reply_file || fail
+    defer "rm $reply_file"
+
+  end_function
+  handle_return
+}
+
 # usage: fork {command to execute}
 #  background=f (whether to run as a background process)
 #  change_log=f (whether to change the log)
@@ -4261,15 +4288,7 @@ fork() {
       change_log=${change_log:-f} \
       to_var=${to_var:-}
 
-    if [[ $background == t ]]; then
-      change_log=t
-    fi
-
-    : ${omni_log_fork_child:=0}
-    (( omni_log_fork_child++ ))
-
-    get_new_reply_file || fail
-    defer "rm $reply_file"
+    before_fork || fail
 
     if [[ $background == t ]]; then
       ( fork_inside ) &
