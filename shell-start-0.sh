@@ -357,9 +357,6 @@ alias b=back
 alias bb='back; back;'
 alias bbb='back; back; back;'
 
-alias up='cell update'
-alias clean='cell clean'
-
 # git stuff
 alias gc='git checkout'
 alias gb='git branch -vv'

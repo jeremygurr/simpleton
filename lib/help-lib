@@ -383,7 +383,7 @@ show_upstream_single() {
   local up_name=$1 choice_path=$2
   begin_function
     out "$up_name: $choice_path"
-    if (( help_depth > 1 )); then
+    if (( help_depth > 1 )) || [[ $recursive_command == t ]]; then
       # recursive
       fork show_upstream_recursive $choice_path || fail
     fi
@@ -437,13 +437,14 @@ show_upstreams() {
 }
 
 show_upstream_recursive() {
-  local cell_path=$1
+  local cell_path=$1 indent=${indent:-0}
   begin_function
     load_branch_info || fail
 
     command_requires_cell=t \
     trunk_changed=f \
     command_allows_logs=f \
+    anchor_dims= \
     switch_context $cell_path || fail
 
     (( indent+=2 ))
@@ -465,6 +466,7 @@ show_cell_help() {
     command_requires_cell=t \
     trunk_changed=f \
     command_allows_logs=f \
+    anchor_dims= \
     switch_context $cell_path || fail
     setup_dims || fail
       handle_unknown=skip \
@@ -488,8 +490,10 @@ show_cell_help() {
 
     if [[ "${trunk_dims:-}" ]]; then
       indent=$((indent-2)) out "${NL}Dimensions: (add {dim}=? to command to see details, or cell . ?? to show all details)"
+      {
       dim_type=trunk_dims \
       show_dimensions ${trunk_dims[*]} || fail
+      } | sort
     fi
 
     if [[ "${sub_dims:-}" || "${data_props:-}" || "${control_props:-}" ]]; then
@@ -630,6 +634,7 @@ show_parameters_help() {
   begin_function
     local p
     load_branch_info || fail
+    anchor_dims= \
     switch_context $cell_path || fail
     begin_for p in ${parameter_questions[*]}; doo
       if [[ " ${parameter_delayed_questions:-} " == *\ $p\ * ]]; then
