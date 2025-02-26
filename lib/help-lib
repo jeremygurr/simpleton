@@ -250,8 +250,8 @@ show_help_for_command() {
       indent=2 out "$command_description"
       local name description default i choices aliases dq
       local types=command
-      if (( help_depth > 1 )); then
-        types='command global'
+      if (( help_depth + command_detail > 1 )); then
+        types+=' global'
       fi
       begin_for type in $types; doo
 
@@ -353,13 +353,18 @@ show_dimension_details() {
 show_dimension() {
   local dim=$1 help_depth=${help_depth:-2} indent=${indent:-0}
   begin_function
+    local -n dim_type=${dim}_dim_type
     if [[ -v ${dim_type}_${dim}_description ]]; then
       eval "description=\$${dim_type}_${dim}_description" || fail
     else
       description='No description'
     fi
-    out "$dim: $description"
-    if (( help_depth > 1 )); then
+    local message="$dim"
+    if (( help_depth + command_detail > 0 )); then
+      message+=": $description"
+    fi
+    out "$message"
+    if (( help_depth + command_detail > 1 )); then
       indent=$((indent+2)) show_dimension_details $dim || fail
     fi
   end_function
@@ -367,7 +372,7 @@ show_dimension() {
 }
 
 show_dimensions() {
-  local dims=( $* ) dim dim_type=$dim_type description values 
+  local dims=( $* ) dim description values 
   begin_function
     begin_for dim in $(echo "${dims[*]}" | sed 's/ /\n/g' | sort); doo
       if [[ " ${branch_dims[*]:-} " == *" $dim "* ]]; then
@@ -382,8 +387,12 @@ show_dimensions() {
 show_upstream_single() {
   local up_name=$1 choice_path=$2
   begin_function
-    out "$up_name: $choice_path"
-    if (( help_depth > 1 )) || [[ $recursive_command == t ]]; then
+    local message="$up_name"
+    if (( help_depth + command_detail > 0 )); then
+      message+=": $choice_path"
+    fi
+    out "$message"
+    if (( help_depth + command_detail > 1 )) || [[ $recursive_command == t ]]; then
       # recursive
       fork show_upstream_recursive $choice_path || fail
     fi
@@ -400,7 +409,7 @@ show_upstream_multi() {
       local choice_var=${choice_name//-/_}
       local -n choice_path=up_${up_var}_choices_${choice_var}_path
       out "Choice $choice_name: $choice_path"
-      if (( help_depth > 1 )); then
+      if (( help_depth + command_detail > 1 )); then
         # recursive
         fork show_upstream_recursive $choice_path || fail
       fi
