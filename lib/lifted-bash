@@ -164,6 +164,32 @@ reached_debug_id() {
   done
 }
 
+handle_user_interrupt() {
+  local c
+  while true; do
+    read -u $fd_original_in -sr -N 1 -p "${YELLOW}Paused by user.${RESET} (r)esume (d)ebug (q)uit? " c >&$fd_original_err
+    case "$c" in
+      d)
+        echo "debug" >&$fd_original_err
+        debug_start n
+      ;;
+      q)
+        echo "quit" >&$fd_original_err
+        exit 100
+      ;;
+      r)
+        echo "resume" >&$fd_original_err
+        :
+      ;;
+      *)
+        echo "invalid key, try again" >&$fd_original_err
+        continue
+      ;;
+    esac
+    break
+  done
+}
+
 # ALSO IN: CellOp
 debug_id_inc() {
   (( no_trace_depth++ ))
@@ -174,6 +200,13 @@ debug_id_inc() {
     fork_debug_id=$fork_id_current.$fork_debug_id
   fi
 
+  if read -u $fd_original_in -t 0; then
+    local c
+    read -u $fd_original_in -sr -N 1 c
+    if [[ "$c" == "$NL" ]]; then
+      handle_user_interrupt
+    fi
+  fi
   show_trace_vars
 
   if [[ "${struct_type:-}" && "${pause_at_functions:-}" \
