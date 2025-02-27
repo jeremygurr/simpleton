@@ -66,16 +66,29 @@ show_trace_vars() {
     done
   fi
 
+  stack_detail[$stack_pos]=
+  if [[ "${log_show_vars:-}" ]]; then
+    local var value show_vars
+    for var in $log_show_vars; do
+      value=
+      local real_var=${var#^}
+      real_var=${real_var#*=}
+      get_var_value $real_var
+      show_vars+="$real_var=$value "
+    done
+    stack_detail[$stack_pos]+="${show_vars% } "
+  fi
   if [[ "${trace_var:-}" ]]; then
     local var value
     for var in $trace_var; do
       get_var_value $var
+      local show_val=$value
+      if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $var "* ]]; then
+        show_val='****'
+      fi
+      stack_detail[$stack_pos]+="$var=$show_val "
       if [[ -v trace_var_sub[$var] ]]; then
         if [[ "${trace_var_sub[$var]}" != "$value" ]]; then
-          local show_val=$value
-          if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $var "* ]]; then
-            show_val='****'
-          fi
           show_time_update
           echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id ${YELLOW}$var=$show_val$RESET" >&$fd_original_err
           if [[ " ${pause_at_vars} " == *" $var "* ]]; then
@@ -85,10 +98,6 @@ show_trace_vars() {
         unset trace_var_sub[$var]
         trace_var_old[$var]=$value
       elif [[ "${trace_var_old[$var]:-}" != "$value" || ${trace_var_always:-f} == t ]]; then
-        local show_val=$value
-        if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $var "* ]]; then
-          show_val='****'
-        fi
         if [[ $fork_debug_id != 1 || "$value" != '(unset)' ]]; then
           show_time_update
           echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id $var=$show_val$RESET" >&$fd_original_err
@@ -123,17 +132,7 @@ show_trace_vars() {
       trace_var_old=$result
     fi
   fi
-  if [[ "${log_show_vars:-}" ]]; then
-    local var value show_vars
-    for var in $log_show_vars; do
-      value=
-      local real_var=${var#^}
-      real_var=${real_var#*=}
-      get_var_value $real_var
-      show_vars+="$real_var=$value "
-    done
-    stack_detail[$stack_pos]="${show_vars% }"
-  fi
+  stack_detail[$stack_pos]="${stack_detail[$stack_pos]% }"
 }
 
 reached_debug_id() {
