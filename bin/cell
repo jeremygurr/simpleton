@@ -20,12 +20,12 @@ bash_lifted_init || exit 1
 cell_lib_init || exit 1
 
 command_detail=${command_detail:-1}
+help_depth=0
 
 show_flag_usage() {
   out "Flags are shortcuts for longer settings, and only the following are defined:"
   out "  Flag   Equivalent setting"
   out "  ------ -----------------------------"
-  out "  -a     trace_var_always=t"
   out "  -d     log=debug"
   out "  -i     show_debug_id=a"
   out "  -q     command_detail-- (command_detail defaults to 1)"
@@ -42,12 +42,9 @@ handle_flag() {
     flag=${flags:0:1}
     flags=${flags#?}
     case $flag in
-      \?|\?\?)
+      \?)
         show_flag_usage
-        exit 0
-        ;;
-      a)
-        trace_var_always=t
+        exit 100
         ;;
       d)
         log=debug
@@ -142,11 +139,6 @@ show_usage() {
 
 get_help_depth_and_flags() {
   begin_function
-    if [[ "${parameter_questions:-}" ]]; then
-      : ${help_depth:=2}
-    else
-      : ${help_depth:=0}
-    fi
     for parameter in ${parameters[*]}; do
       case $parameter in
         help|--help|-h|\?)
@@ -179,7 +171,7 @@ get_cells() {
         *)
           if [[ ! -d $parameter ]]; then
             # is a command
-            succeed
+            abort
           else
             cells+=( $parameter )
           fi
@@ -214,7 +206,7 @@ get_commands() {
             leftovers=()
           elif [[ -d $parameter ]]; then
             # it's a cell
-            succeed
+            abort
           else
             leftovers+=( $parameter )
           fi
@@ -245,6 +237,26 @@ handle_leftovers() {
       show_usage 
       fail_later1; break 2
     done
+  end_function
+  handle_return
+}
+
+handle_questions() {
+  begin_function
+    local remaining= name
+    if [[ "${parameter_questions:-}" ]]; then
+      for name in $parameter_questions; do
+        local found_help=f
+        show_parameter_help_single || fail
+        if [[ $found_help == f ]]; then
+          remaining+="$name "
+        fi
+      done
+      if [[ ! "$remaining" ]]; then
+        succeed
+      fi
+      parameter_questions="${remaining% }"
+    fi
   end_function
   handle_return
 }
@@ -315,6 +327,7 @@ top_level() {
       if [[ -e $path_to_commands/all.info ]]; then
         source $path_to_commands/all.info || fail
       fi
+      handle_questions || fail
       get_cells || fail
       get_commands || fail
       handle_leftovers || fail
@@ -331,10 +344,10 @@ top_level() {
         if [[ ! "${commands:-}" && ! "${parameter_questions:-}" ]]; then
           if (( handled == 0 )); then
             show_usage
-            succeed
+            abort
           else
             # nothing else to do
-            succeed
+            abort
           fi
         fi
         cells=( . )
@@ -344,7 +357,7 @@ top_level() {
         begin_for command in ${commands[*]}; doo
           show_help_for_command $command || fail
         end_for
-        succeed
+        abort
       fi
 
       begin_for cell_path in ${cells[*]}; doo
@@ -353,7 +366,7 @@ top_level() {
       end_for
 
       if (( current_parameter_index >= ${#parameters[*]} )); then
-        succeed
+        abort
       fi
 
     end_while

@@ -429,7 +429,7 @@ load_dna_item() {
           log_fatal "Unknown dna object: $item."
           fail1
         else
-          succeed
+          abort
         fi
       ;;
     esac
@@ -1467,7 +1467,7 @@ init_context() {
       done
     done
 
-    if [[ $trunk_changed == t ]]; then
+    if [[ ${trunk_changed:-t} == t ]]; then
       init_coord branch
     fi
 
@@ -1549,7 +1549,7 @@ load_branch_info() {
 
     if [[ "${prev_branch_info_cell:-}" == $cell_path ]]; then
       # already loaded
-      succeed
+      abort
     fi
     prev_branch_info_cell=$cell_path
 
@@ -1755,6 +1755,7 @@ execute_commands() {
 
       if [[ -e $cell_command_path.info ]]; then
         source $cell_command_path.info || fail
+        handle_questions || fail
       else
         log_warn "Missing file $cell_command_path.info" || fail
       fi
@@ -1785,15 +1786,7 @@ execute_commands() {
         fi
 
         validate_command_parameters || fail
-
-        local showed_parameter_help=f
-        if [[ "${parameter_questions:-}" ]]; then
-          show_parameters_help || fail
-        fi
-
-        if [[ $showed_parameter_help == f ]]; then
-          execute_command $cell_path $cell_command || fail
-        fi
+        execute_command $cell_path $cell_command || fail
 
         if [[ $command_modifies_context == t \
            || $command_modifies_upstream == t ]]; then
@@ -2418,7 +2411,7 @@ attempt_derive() {
 
     if [[ $derived_from_incomplete == t ]]; then
       #log_debug "Can't derive $dim because it has unresolved dependencies"
-      succeed
+      abort
     fi
 
     if function_exists ${dim_type}_${dim}_derive; then
@@ -2467,7 +2460,7 @@ attempt_derive() {
         if [[ ! "${new_values[*]:-}" ]]; then
           log_debug "No derived members found in derive table $derive_table which are valid for this row"
           values=()
-          succeed
+          abort
         fi
 
         if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
@@ -2572,7 +2565,7 @@ calc_coordinates_next_unknown_dim() {
 
     if (( coord_limit > 0 && total_coord_rows_added >= coord_limit )); then
       log_warn "Limit of $coord_limit reached, not calculating any further"
-      succeed
+      abort
     fi
 
     if [[ "$unknown_dims" ]]; then
@@ -2647,7 +2640,7 @@ calc_coordinates_next_unknown_dim() {
             end_for
             row_ended=t
             unset ddim
-            succeed
+            abort
 
           fi
 
@@ -2673,7 +2666,7 @@ calc_coords_validate_member() {
     local -n dim_type=${dim}_dim_type
     local -n is_optional=${dim_type}_${dim}_is_optional
     if [[ ${is_optional:-f} == t && ( ! "$member" || $member == $empty_member ) ]]; then
-      succeed
+      abort
     fi
 
     local values=() can_derive
@@ -2685,7 +2678,7 @@ calc_coords_validate_member() {
       elif ! array_contains values "$member"; then
         is_valid=f
       fi
-      succeed
+      abort
     fi
 
     #  should have already been set
@@ -2708,7 +2701,7 @@ calc_coords_validate_member() {
             is_valid=f
           fi
         fi
-        succeed
+        abort
       fi
     end_for
   end_function
@@ -2836,7 +2829,7 @@ calc_coordinates_next_known_dim() {
 
     if (( coord_limit > 0 && total_coord_rows_added >= coord_limit )); then
       log_warn "Limit of $coord_limit reached, not calculating any further"
-      succeed
+      abort
     fi
 
     local dim dims \
@@ -2901,7 +2894,7 @@ calc_coordinates_next_known_dim() {
 
         # if none of the members are valid, we just skip the row
         # if any are valid, they will have added their own rows already
-        succeed
+        abort
 
       else # no members
         log_debug "Adding $dim to unknown list"
@@ -3126,7 +3119,7 @@ calc_coordinates() {
     fi
 
     if [[ ! "${coordinate_fields:-}" ]]; then
-      succeed
+      abort
     fi
 
     if [[ ${xlr8:-f} == t ]]; then
@@ -3975,7 +3968,7 @@ cell_open_log_file() {
   begin_function
     if [[ ! "${log_path:-}" ]]; then
       # can't log until this is set
-      succeed
+      abort
     fi
      
     if [[ "${omni_log_job_id:-0}" != 0 ]]; then
@@ -4135,7 +4128,7 @@ substitute_command_alias() {
         cell_command=${alias_command%% *}
         parameters=${alias_command#$cell_command }
         update_original_cmd=f parameters_to_env $parameters
-        succeed
+        abort
       fi
     done
   end_function
@@ -4947,7 +4940,7 @@ add_parameter() {
     description=$description \
     default=${default:-} \
     choices=${choices:-} \
-    aliases=${aliases:-} \
+    aliases=${aliases:-${alias:-}} \
     required=${required:-f} \
     delay_questions=${delay_questions:-f} \
 
