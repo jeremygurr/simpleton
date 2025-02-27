@@ -19,6 +19,7 @@ NL=$'\n'
 # cell aliases
 alias get='cell get'
 alias update='cell update'
+alias upd='cell update'
 alias clean='cell clean'
 alias clean0='cell clean0'
 alias clean2='cell clean2'
