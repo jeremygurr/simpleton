@@ -127,8 +127,8 @@ micros_to_minute() {
 }
 
 progress_bar_start() {
-  local new_progress_bar_size=$1 front_load=${front_load:-3} 
-  if ! log_level_at_least verbose && [[ "${trace_structure:-f}" == f ]]; then
+  local new_progress_bar_size=$1 front_load=${front_load:-3} below_log=${below_log:-verbose}
+  if ! log_level_at_least $below_log && [[ "${trace_structure:-f}" == f ]]; then
     progress_bar_total=${progress_bar_total:-0}
     progress_bar_nesting=${progress_bar_nesting:-0}
     progress_bar_front_load=${progress_bar_front_load:-$front_load}
@@ -150,7 +150,6 @@ progress_bar_next() {
   if (( ${progress_bar_nesting:-0} > 0 )); then
     (( progress_bar_current += amount_to_add ))
     if (( progress_bar_total > 2 )); then
-      echo -n "$CLEAR_LINE" >&$fd_original_err
       (( percentage = 100 * progress_bar_current / progress_bar_total ))
       local time_taken_micro total_micro remaining_micro extra= remaining_min current_time=${EPOCHREALTIME/./}
       (( time_taken_micro = current_time - progress_bar_start_time ))
@@ -164,7 +163,11 @@ progress_bar_next() {
         extra=" ($remaining_min minute(s) left)"
       fi
 
-      echo -n "...$percentage% complete$extra" >&$fd_original_err
+      if [[ "${progress_bar_last_percentage:-}" != $percentage ]]; then
+        echo -n "$CLEAR_LINE" >&$fd_original_err
+        echo -n "...$percentage% complete$extra" >&$fd_original_err
+      fi
+      progress_bar_last_percentage=$percentage
     else # too few total items in progress bar to show %
       local out
       eval "printf -v out '%.s.' {1..$amount_to_add}"

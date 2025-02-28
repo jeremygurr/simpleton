@@ -242,15 +242,26 @@ load_tab_to_code() {
       fail1
     fi
 
-    content=$(<$full_path)
 
-    if [[ "$content" == '+='* ]]; then
-      content=${content#'+='}
-      append=t
+    #  simpler to not support this for now
+    #content=$(<$full_path)
+    #if [[ "$content" == '+='* ]]; then
+    #  content=${content#'+='}
+    #  append=t
+    #fi
+
+    local row_index=0 fd line_count
+    line_count=$(wc -l $full_path)
+    line_count=${line_count%% *}
+    exec {fd}<$full_path || fail
+
+    if (( line_count > 100 )); then
+      debug
+      log_verbose "Loading large table ${full_path##*/}..."
+      below_log=debug front_load=4 progress_bar_start $line_count
     fi
+    begin_while IFS= read -u $fd -r line || [[ "$line" ]]; doo
 
-    local row_index=0
-    begin_while IFS= read -r line || [[ "$line" ]]; doo
       trim_ws line
       if [[ ! "$line" ]]; then
         continue
@@ -300,11 +311,13 @@ load_tab_to_code() {
         code+="$NL"
 
       fi
+
+      progress_bar_next
        
       (( row_index++ )) 
 
-    done < <(echo -n "$content")
-    maybe_break
+    end_while
+    progress_bar_stop
 
     code+=")$NL"
 
@@ -3047,6 +3060,11 @@ calc_coordinates_slow() {
       coordinate_dim_index[$d]=$i
       (( i++ ))
     done
+
+    local seed_table=to_${coord_type}_coords_fields
+    if [[ -v $seed_table ]]; then
+      seed_coordinates || fail
+    fi
 
     local total_coord_rows_added=0
     if (( coordinate_rows > 0 )); then
