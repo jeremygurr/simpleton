@@ -62,25 +62,26 @@ get_tmp_file() {
 }
 
 write_to_context() {
-  local context_type=$context_type new_type=$1 content=$2
+  local context_type=$context_type new_type=$1 
+  local -n _content=$2
   begin_function_lo
     last_type=${last_type:-var}
     if [[ $last_type == fun || $new_type == fun ]]; then
       echo >>$context_path-$context_type.new || fail
     fi
-    if (( ${#content} > 100 )); then
-      content=$(echo -n "$content" | trim_stream)
+    if (( ${#_content} > 100 )); then
+      _content=$(echo -n "$_content" | trim_stream)
     else
-      trim_ws content
+      trim_ws _content
     fi
-    echo "${content}" >>$context_path-$context_type.new || fail
+    echo "${_content}" >>$context_path-$context_type.new || fail
     last_type=$new_type
-    eval "$content" || {
+    eval "$_content" || {
       if [[ "${var_full_path:-}" ]]; then
         log_fatal "Invalid dna file: $var_full_path"
       else
         log_fatal "Invalid dna file. Contents:"
-        log_fatal "$content"
+        log_fatal "$_content"
       fi
       fail1
     }
@@ -100,7 +101,8 @@ write_vars_to_context() {
         local quoted_val=${val:-}
         shell_quote_var quoted_val
       fi
-      write_to_context var "$var=$quoted_val" || fail
+      local content="$var=$quoted_val"
+      write_to_context var content || fail
     end_for
   end_function
   handle_return
@@ -451,7 +453,7 @@ load_dna_item() {
     esac
 
     if [[ "${context_type:-}" ]]; then
-      write_to_context $load_type "$code" || fail
+      write_to_context $load_type code || fail
     else
       eval "$code" || fail
     fi
@@ -703,7 +705,7 @@ ${dim_type}_${dim}_expand() {
       build_context_expand_members_known || fail
     fi
 
-    write_to_context fun "$code" || fail
+    write_to_context fun code || fail
     write_vars_to_context $member_type_var || fail
 
   end_function
@@ -1983,7 +1985,7 @@ load_dna_contents() {
 
     if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
       make_array_assignment $current_var array_content || fail
-      write_to_context var "$array_assignment" || fail
+      write_to_context var array_assignment || fail
     fi
 
   end_function
@@ -2107,16 +2109,17 @@ build_context_branch() {
       quotes=single shell_quote_var member
       assignment="d_$dim=$member"
       members_string+="$member "
-      write_to_context var "$assignment" || fail
+      write_to_context var assignment || fail
     end_for
 
-    write_to_context var "
+    local content="
 branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
 branch_hashes=( ${branch_hashes[*]} )
 cell_is_leaf=$cell_is_leaf
-" || fail
+"
+    write_to_context var content || fail
 
     mv $context_path-$context_type.new $context_path-$context_type || fail
 
@@ -3626,7 +3629,7 @@ load_dna_contents_handle_dir() {
       array_content+=( "$item_name" )
       if [[ -L $item || -d $item ]]; then
         result="${current_var}_${item_var}_path=$real_path"
-        write_to_context var "$result" || fail
+        write_to_context var result || fail
       fi
     fi
 
