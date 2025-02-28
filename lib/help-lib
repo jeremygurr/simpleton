@@ -201,10 +201,9 @@ show_parameter_help_inner() {
       name="${parameter_names[$i]}" \
       description="${parameter_descriptions[$i]}" \
       aliases="${parameter_aliases[$i]}" \
-      dq=${parameter_delay_questions[$i]} \
       show_use_eq=${show_use_eq:-f} \
 
-    if [[ $dq == t && $show_use_eq == t ]]; then
+    if [[ $show_use_eq == t ]]; then
       local best_alias=$name
       if [[ "$aliases" ]]; then
         best_alias=${aliases%% *}
@@ -214,17 +213,19 @@ show_parameter_help_inner() {
     trim_ws description
 
     choices=
-    if [[ -v parameter_choices[$i] && "${parameter_choices[$i]:-}" ]]; then
-      choices=${parameter_choices[$i]}
-    elif [[ -v ${name}_choices ]]; then
-      local -n n_choices=${name}_choices
-      choices=$n_choices
-    elif function_exists ${name}_get_choices; then
+    if function_exists ${name}_get_choices; then
       ${name}_get_choices || fail
       choices="${choices[*]}"
+    elif [[ -v parameter_choices[$i] && "${parameter_choices[$i]:-}" ]]; then
+      choices=${parameter_choices[$i]}
     fi
 
-    default="${parameter_defaults[$i]}"
+    local -n n_default=default_${name}
+    if [[ "${n_default:-}" ]]; then
+      default=$n_default
+    else
+      default="${parameter_defaults[$i]}"
+    fi
 
     out "$name:"
     (( indent += 2 ))
@@ -248,7 +249,7 @@ show_help_for_command() {
     if [[ -f $path_to_commands/$command.info ]]; then
       source $path_to_commands/$command.info || fail
       indent=2 out "$command_description"
-      local name description default i choices aliases dq
+      local name description default i choices aliases
       local types=command
       if (( command_detail > 1 )); then
         types+=' global'
@@ -260,7 +261,6 @@ show_help_for_command() {
           parameter_choices=parameter_choices_$type \
           parameter_defaults=parameter_defaults_$type \
           parameter_aliases=parameter_aliases_$type \
-          parameter_delay_questions=parameter_delay_questions_$type \
 
         if [[ "${parameter_names:-}" ]]; then
           out "$NL$WHITE${type^} Parameters:$RESET"
@@ -604,7 +604,6 @@ show_parameter_help_single() {
         parameter_choices=parameter_choices_$type \
         parameter_defaults=parameter_defaults_$type \
         parameter_aliases=parameter_aliases_$type \
-        parameter_delay_questions=parameter_delay_questions_$type \
 
       begin_for i in ${!parameter_names[*]}; doo
         local aliases=${parameter_aliases[$i]:-}
