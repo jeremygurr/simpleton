@@ -1471,10 +1471,7 @@ init_context() {
       done
     done
 
-    if [[ ${trunk_changed:-t} == t ]]; then
-      init_coord branch
-    fi
-
+    init_coord branch
     init_coord leaf
     init_coord sub
     init_coord tree
@@ -3168,31 +3165,27 @@ build_context_leaf() {
       rm $context_path-$context_type.new || fail
     fi
 
-    #if [[ ! "${parameter_questions:-}" ]]; then
+    local unknown_dims=() \
+      coord_type=branch \
 
-      local unknown_dims=() \
-        coord_type=branch \
+    handle_unknown=skip \
+    calc_coordinates || fail
+    fence
 
-        handle_unknown=skip \
-      calc_coordinates || fail
+    if [[ "${unknown_dims:-}" ]]; then
+      log_fatal "Could not resolve all branch dims in build_context_leaf"
+      fail1
+    fi
+    target_dim_var_type=ddim convert_coords_to_dims || fail
 
-      if [[ "${unknown_dims:-}" ]]; then
-        # TODO will need to find a better way to do this
-        log_fatal "Could not resolve all branch dims in build_context_leaf"
-        fail1
-      fi
-      target_dim_var_type=ddim convert_coords_to_dims || fail
-
-      write_vars_to_context \
-        branch_coordinate_data \
-        branch_coordinate_count \
-        branch_coordinate_rows \
-        branch_coordinate_fields \
-        branch_coordinate_fields_count \
-        branch_coordinate_fields_plural \
-        || fail
-
-    #fi
+    write_vars_to_context \
+      branch_coordinate_data \
+      branch_coordinate_count \
+      branch_coordinate_rows \
+      branch_coordinate_fields \
+      branch_coordinate_fields_count \
+      branch_coordinate_fields_plural \
+      || fail
 
     if [[ -e $context_path-$context_type.new ]]; then
       mv $context_path-$context_type.new $context_path-$context_type || fail
@@ -3431,8 +3424,8 @@ for_each_member() {
 
     local dims
     get_plural $dim dims
-    local -n dims_members=$dims
-    dims_members=
+    local -n dims_members=d_$dims
+    unset dims_members
     loop_over_var=values \
       head="local member=\$value dim=$dim command_history=\${command_history:-}
         eval 'local d_$dim=\"\$member\"'" \
