@@ -263,7 +263,7 @@ load_tab_to_code() {
 
     if (( line_count > 100 )); then
       log_verbose "Loading large table ${full_path##*/}..."
-      below_log=debug progress_bar_start $line_count
+      below_log=trace progress_bar_start $line_count
     fi
     begin_while IFS= read -u $fd -r line || [[ "$line" ]]; doo
 
@@ -2160,7 +2160,7 @@ seed_coordinates_prep() {
 }
 
 check_table_field() {
-  local field=$1 expected_value=${expected_value} value=${2:-} values=${3:-} fields
+  local field=$1 expected_value=$expected_value value=${2:-} values=${3:-} fields
 
   is_valid=t
   if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
@@ -2207,12 +2207,48 @@ check_table_field() {
   return 0
 }
 
+# inputs:
+#   table_fields       
+#   table_data
+#   offset       (optional) offset into data structure where row starts
+#   row          (optional) which row to select from the table
+# either offset or row must be set
+# outputs:
+#   is_valid 
+check_table_row() {
+  local offset=${offset:-} row=${row:-} field_count=${#table_fields[*]}
+  begin_function    
+    local f t
+    if [[ ! "$offset" ]]; then
+      (( offset = row * field_count ))
+    fi
+    is_valid=t
+    begin_for (( f = 0; f < field_count; f++ )); doo
+
+      log_show_vars=f
+      fence
+
+      local field=${table_fields[$f]}
+      (( t = offset + f ))
+      local expected_value=${table_data[$t]}
+
+      check_table_field $field
+      if [[ $is_valid == f ]]; then
+        break
+      fi
+
+    end_for
+  end_function
+  handle_return
+}
+
 # Will add a row to new_coordinate_data based on current ddim values and coordinate_fields
 # Should only be called when the row is known to be valid
 # inputs:
-#   ignore_missing            (optional)
 #   coordinate_fields
 #   coordinate_fields_count
+#   ignore_missing            (optional)
+#   validate_row              (optional)
 # outputs:
 #   new_coordinate_data
 #   total_coord_rows_added
@@ -2222,7 +2258,6 @@ calc_coordinates_add_row() {
   begin_function
 
     local i new_coords=()
-    row_is_valid=t
     for (( i = 0; i < coordinate_fields_count; i++ )); do
       local dim_var=${coordinate_fields[$i]}
       local -n dim_value=d_$dim_var
@@ -2233,35 +2268,22 @@ calc_coordinates_add_row() {
         fi
         new_coords+=( "" )
       else
-        #   this doesn't make sense here, this function is only called after dims have already
-        #   been validated
-        # check_table_field $dim_var "$dim_value"
-        # if [[ $is_valid == f ]]; then
-        #   row_is_valid=f
-        #   break
-        # fi
         new_coords+=( "$dim_value" )
       fi
     done
 
-    if [[ $row_is_valid == t ]]; then
-
-      # infinite loop detection
-      if [[ "${prev_coords[0]:-}" ]]; then
-        if [[ "${prev_coords[*]}" == "${new_coords[*]}" ]]; then
-          log_fatal "Added same coordinate row twice: ${coord_type}_coordinate_data+=( ${new_coords[*]} )"
-          fail1
-        fi
+    # infinite loop detection
+    if [[ "${prev_coords[0]:-}" ]]; then
+      if [[ "${prev_coords[*]}" == "${new_coords[*]}" ]]; then
+        log_fatal "Added same coordinate row twice: ${coord_type}_coordinate_data+=( ${new_coords[*]} )"
+        fail1
       fi
-      prev_coords=( "${new_coords[@]}" )
-
-      new_coordinate_data+=( "${new_coords[@]}" )
-      log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
-      (( total_coord_rows_added++ ))
-
-    else
-      log_debug "Row is invalid: ${new_coords[*]}"
     fi
+    prev_coords=( "${new_coords[@]}" )
+
+    new_coordinate_data+=( "${new_coords[@]}" )
+    log_verbose "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
+    (( total_coord_rows_added++ ))
 
   end_function
   handle_return
@@ -2293,6 +2315,26 @@ setup_coord_fields() {
     esac
 
     coordinate_fields_count=${#coordinate_fields[*]}
+  end_function
+  handle_return
+}
+
+# internal function
+seed_coordinates_handle_row() {
+  log_show_vars=row
+  begin_function
+    localize
+    local is_valid
+    check_table_row
+    if [[ $is_valid == t ]]; then
+      for field_index in ${!seed_fields[*]}; do
+        seed_field=${seed_fields[$field_index]}
+        local -n dim=d_$seed_field
+        (( seed_data_index = row * seed_field_count + field_index ))
+        dim=${seed_data[$seed_data_index]}
+      done
+      ignore_missing=t calc_coordinates_add_row || fail
+    fi
   end_function
   handle_return
 }
@@ -2330,13 +2372,11 @@ seed_coordinates() {
 
     local seed_table_rows=$(( seed_data_count / seed_field_count ))
 
-    localize
-
     setup_coord_fields || fail
 
     local field_index seed_field seed_data_index \
       new_coordinate_data=() \
-      is_valid \
+      row_is_valid \
 
     local -n \
       field_count=seed_field_count \
@@ -2344,16 +2384,7 @@ seed_coordinates() {
       table_data=seed_data \
 
     begin_for (( row = 0; row < seed_table_rows; row++ )); doo
-      check_table_row
-      if [[ $is_valid == t ]]; then
-        for field_index in ${!seed_fields[*]}; do
-          seed_field=${seed_fields[$field_index]}
-          local -n dim=d_$seed_field
-          (( seed_data_index = row * seed_field_count + field_index ))
-          dim=${seed_data[$seed_data_index]}
-        done
-        ignore_missing=t calc_coordinates_add_row || fail
-      fi
+      seed_coordinates_handle_row || fail
     end_for
 
     coordinate_data=( "${new_coordinate_data[@]}" )
@@ -3067,33 +3098,34 @@ calc_coordinates_slow() {
       (( i++ ))
     done
 
-    local seed_table=to_${coord_type}_coords_fields
-    if [[ -v $seed_table ]]; then
+    local seed_table=to_${coord_type}_coords
+    if [[ -v ${seed_table}_fields ]]; then
       seed_coordinates || fail
-    fi
-
-    local total_coord_rows_added=0
-    if (( coordinate_rows > 0 )); then
-      log_verbose "Refining existing $coord_type dim coordinates"
-      front_load=6 progress_bar_start $coordinate_rows
-      begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
-        target_dim_var_type=sdims convert_coords_to_dims || fail
-        expand_dims $known_dims || fail
-        handle_unknown=skip \
-        calc_coordinates_next_known_dim || fail
-        progress_bar_next
-        log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
-      end_for
-      progress_bar_stop
     else
-      # it is assumed that dims are already expanded before this point, and so ddims will be used
-      log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-      front_load=6 progress_bar_start $coordinate_rows
-      calc_coordinates_next_known_dim || fail
-      progress_bar_stop
+      local total_coord_rows_added=0
+      if (( coordinate_rows > 0 )); then
+        log_verbose "Refining existing $coord_type dim coordinates"
+        front_load=6 progress_bar_start $coordinate_rows
+        begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
+          target_dim_var_type=sdims convert_coords_to_dims || fail
+          expand_dims $known_dims || fail
+          handle_unknown=skip \
+          calc_coordinates_next_known_dim || fail
+          progress_bar_next
+          log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
+        end_for
+        progress_bar_stop
+      else
+        # it is assumed that dims are already expanded before this point, and so ddims will be used
+        log_verbose "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+        front_load=6 progress_bar_start $coordinate_rows
+        calc_coordinates_next_known_dim || fail
+        progress_bar_stop
+      fi
+
+      coordinate_data=( "${new_coordinate_data[@]}" )
     fi
 
-    coordinate_data=( "${new_coordinate_data[@]}" )
   end_function
   handle_return
 }
@@ -5113,38 +5145,6 @@ up_delegate() {
       safe_link $out_item $cell_path/ || fail
     end_for
 
-  end_function
-  handle_return
-}
-
-# inputs:
-#   table_fields       
-#   table_data
-#   offset       (optional) offset into data structure where row starts
-#   row          (optional) which row to select from the table
-# either offset or row must be set
-# outputs:
-#   is_valid 
-check_table_row() {
-  local offset=${offset:-} row=${row:-} field_count=${#table_fields[*]}
-  begin_function    
-    local f t
-    if [[ ! "$offset" ]]; then
-      (( offset = row * field_count ))
-    fi
-    is_valid=t
-    begin_for (( f = 0; f < field_count; f++ )); doo
-
-      local field=${table_fields[$f]}
-      (( t = offset + f ))
-      local expected_value=${table_data[$t]}
-
-      check_table_field $field
-      if [[ $is_valid == f ]]; then
-        break
-      fi
-
-    end_for
   end_function
   handle_return
 }
