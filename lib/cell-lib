@@ -2820,6 +2820,32 @@ set_cross_dims() {
   handle_return
 }
 
+calc_coordinates_next_known_dim_member() {
+  log_show_vars='dim m'
+  begin_function
+    eval "local $localize_dims"
+    member=$m
+    log_debug "Processing $dim=$member"
+
+    # recursive
+    calc_coords_validate_member $dim "$member" || fail
+    if [[ $is_valid == t ]]; then
+      conflict=f
+      if [[ ${is_cross_dim:-f} == t ]]; then
+        set_cross_dims || fail
+      fi
+      if [[ $conflict == f ]]; then
+        calc_coordinates_next_known_dim || fail
+      else
+        log_debug "Row skipped because of cross dim conflict"
+      fi
+    else
+      log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
+    fi
+  end_function
+  handle_return
+}
+
 # calling this will produce and end at least one coordinate row 
 # inputs:
 #   known_dims (may be empty)
@@ -2848,6 +2874,7 @@ calc_coordinates_next_known_dim() {
       coord_index=${coordinate_dim_index[$dim]}
       dims=${coordinate_fields_plural[$coord_index]}
 
+      eval "local -I d_$dim d_$dims"
       local -n member=d_$dim \
         members=d_$dims
 
@@ -2857,7 +2884,6 @@ calc_coordinates_next_known_dim() {
 
         local is_valid=t m ms=( "${members[@]}" )
         resolved_dims+=" $dim"
-        eval "local d_$dim=\${d_$dim:-} d_$dims=\${d_$dims:-}"
         unset members
         unset -n members
 
@@ -2867,27 +2893,8 @@ calc_coordinates_next_known_dim() {
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
         begin_for m in "${ms[@]}"; doo
+          calc_coordinates_next_known_dim_member || fail
 
-          member=$m
-          log_show_vars='dim member'
-          fence
-          log_debug "Processing $dim=$member"
-
-          # recursive
-          calc_coords_validate_member $dim "$member" || fail
-          if [[ $is_valid == t ]]; then
-            conflict=f
-            if [[ ${is_cross_dim:-f} == t ]]; then
-              set_cross_dims || fail
-            fi
-            if [[ $conflict == f ]]; then
-              calc_coordinates_next_known_dim || fail
-            else
-              log_debug "Row skipped because of cross dim conflict"
-            fi
-          else
-            log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
-          fi
 
         end_for
         unset member

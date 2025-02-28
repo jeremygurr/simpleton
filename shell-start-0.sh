@@ -616,6 +616,17 @@ cd_to_trunk() {
   return 0
 }
 
+cd_to_branch() {
+  local d=$PWD last_cell=$PWD
+  while [[ $d == */.dna* ]]; do
+    d=${d%/*}
+  done
+  if [[ $d != $PWD ]]; then
+    cd $d || return 1
+  fi
+  return 0
+}
+
 cd_to_seed() {
   local seed=/seed${PWD#/work}
 
@@ -652,6 +663,10 @@ cd_to_work() {
 
 leaf() {
   cd_to_leaf
+}
+
+branch() {
+  cd_to_branch
 }
 
 trunk() {
