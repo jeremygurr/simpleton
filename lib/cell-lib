@@ -1129,24 +1129,6 @@ expand_dims() {
   handle_return
 }
 
-# leaf dims are dims that are not part of branch_dims
-# they need to be expanded, wheres branch_dims should not be expanded
-load_leaf_dims() {
-  begin_function
-    if [[ ! "${leaf_dims:-}" ]]; then
-      leaf_dims=()
-      local dim
-      for dim in ${all_dims[*]}; do
-        if [[ " ${branch_dims[*]} " != *" $dim "* ]]; then
-          leaf_dims+=( $dim )
-        fi
-      done
-      leaf_dim_count=${#leaf_dims[*]}
-    fi
-  end_function
-  handle_return
-}
-
 # child dims are anchor dims which have not yet been converted into branch dims
 # they are dims which will form sub cells, and need to be expanded
 load_child_dims() {
@@ -1225,11 +1207,11 @@ setup_dims() {
 
     all_dims=()
     prep_dims trunk_dims sub_dims control_props data_props || fail
-    load_leaf_dims || fail
     load_child_dims || fail
-
-    if [[ "${leaf_dims:-}" ]]; then
-      expand_dims ${leaf_dims[*]:-} || fail
+    if [[ $cell_is_leaf == t ]]; then
+      expand_dims ${control_props[*]:-} ${data_props[*]:-} || fail
+    else
+      expand_dims ${child_dims[*]:-} || fail
     fi
 
   end_function
@@ -1502,7 +1484,6 @@ init_context() {
     default_anchor_dims= \
     default_freshness= \
     default_strategies=crl \
-    leaf_dims=() \
     localize_dims= \
     localize_reverse_dims= \
     lock_timeout=2 \
@@ -4071,6 +4052,9 @@ switch_context() {
 
         source $context_path || fail
         calc_anchor_dims || fail
+        if [[ $cell_is_leaf == t ]]; then
+          coord_type=branch target_dim_var_type=ddim convert_coords_to_dims || fail
+        fi
 
         local problem_found=f
         broken_link_check || fail
