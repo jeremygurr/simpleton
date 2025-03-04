@@ -255,13 +255,13 @@ walk() {
       path=${PWD%%/.cyto/*}
       walk_add_choice "b" "$path" "branch"
       if [[ -d up ]]; then
-        walk_add_choice "u" "up"
+        walk_add_choice "U" "up"
       fi
       if [[ -d down ]]; then
         walk_add_choice "d" "down"
       fi
       if [[ -d up-chosen ]]; then
-        walk_add_choice "U" "up-chosen"
+        walk_add_choice "u" "up-chosen"
       fi
     else
       if [[ $PWD == *:* ]]; then
