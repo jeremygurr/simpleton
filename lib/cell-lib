@@ -2530,6 +2530,46 @@ attempt_derive() {
   handle_return
 }
 
+# input:
+#   dim
+#   dim_type
+#   $1        target var name
+# output:
+#   values    array of dim members
+read_dim() {
+  local -n target=$1
+  begin_function
+    local -n is_secret=${dim_type}_${dim}_is_secret
+    begin_loop; doo
+      if [[ "${is_secret:-f}" == t ]]; then
+        read -u $fd_original_in -p "(? for more info) $dim=" -rs values >&$fd_original_err || fail
+        echo '************'
+      else
+        read -u $fd_original_in -p "(? for more info) $dim=" -r values >&$fd_original_err || fail
+      fi
+      if [[ "$values" == \?* ]]; then
+        command_detail=2 show_dimension $dim || fail
+      #elif [[ "$values" == \?\? ]]; then
+      #  command_detail=2 show_dimension $dim || fail
+      else
+        local problem=
+        dim_var=$dim expand_dim_members values || fail
+        if [[ "$problem" ]]; then
+          echo "$problem" >&$fd_original_err
+        else
+          # value is valid
+          if [[ "${new_values[*]}" != "$values" ]]; then
+            echo "Expanded to: ${new_values[*]}" >&$fd_original_err || fail
+            values=( "${new_values[@]}" )
+          fi
+          break
+        fi
+      fi
+    end_loop
+  end_function
+  handle_return
+}
+
 attempt_default() {
   local dim=$1
   begin_function
@@ -2543,16 +2583,12 @@ attempt_default() {
 
     if [[ ! "${values:-}" ]] && function_exists ${dim_type}_${dim}_expand; then
       value= ${dim_type}_${dim}_expand || fail
+      already_expanded=t
     fi
 
     if [[ "${values:-}" == ask ]]; then
-      local -n is_secret=${dim_type}_${dim}_is_secret
-      if [[ "${is_secret:-f}" == t ]]; then
-        read -p "$dim=" -rs values || fail
-        echo '************'
-      else
-        read -p "$dim=" -r values || fail
-      fi
+      read_dim values || fail
+      already_expanded=t
     fi
 
     if [[ ! "${values:-}" ]]; then
@@ -2561,6 +2597,7 @@ attempt_default() {
       if [[ -v is_optional_var && $is_optional_var == t ]]; then
         values=( $empty_member )
       fi
+      already_expanded=t
 
     fi
 
@@ -2636,7 +2673,7 @@ calc_coordinates_next_unknown_dim() {
           fence
           log_debug "Finding values for $dim in phase $phase"
 
-          local values=
+          local values= already_expanded=f
           if [[ $phase == derive ]]; then
             attempt_derive $dim || fail
           else
@@ -2653,9 +2690,13 @@ calc_coordinates_next_unknown_dim() {
               ddim=d_$dim \
               ddims=d_$dims \
 
-            unset sdim ddim ddims
-            sdims=( "${values[@]}" )
-            expand_dims $dim || fail
+            unset sdim ddim ddims sdims
+            if [[ $already_expanded == f ]]; then
+              sdims=( "${values[@]}" )
+              expand_dims $dim || fail
+            else
+              ddims=( "${values[@]}" )
+            fi
 
             log_debug "Resolved $dim with $phase: ${ddims[*]:0:30}"
             remove_word_from_string unknown_dims $dim
