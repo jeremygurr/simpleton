@@ -120,7 +120,7 @@ load_fun_to_code() {
     else
       content=$(echo -n "$content" | sed 's/^/    /')
       code="$name() {
-  begin_function
+  begin_function_lo
 $content
   end_function
   handle_return
@@ -764,7 +764,7 @@ convert_coords_to_dims() {
 #   out_arr        the var out_arr points to will contain an array of all matches
 execute_derive_table() {
   local stop_after_first_match=${stop_after_first_match:-f}
-  begin_function        
+  begin_function_lo
       
     local -A internal_set
     local out_var=${out_set:-$out_arr} \
@@ -940,7 +940,7 @@ get_plural() {
 # input: dim_var value
 # output: values 
 expand_dim() {
-  begin_function
+  begin_function_lo
 
     local -n dim_type=${dim_var}_dim_type
     values=
@@ -971,16 +971,16 @@ expand_dim() {
 #   new_values   array of expanded members
 expand_dim_members() {
   local -n _members=$1
-  begin_function
+  begin_function_lo
     local members=( "${_members[@]}" )
     local value values
     new_values=()
-    begin_for value in "${members[@]}"; doo
+    for value in "${members[@]}"; do
       expand_dim || fail
       if [[ "$values" ]]; then
         new_values+=( "${values[@]}" )
       fi
-    end_for
+    done
   end_function
   handle_return
 }
@@ -997,10 +997,10 @@ expand_dim_members() {
 # ddims will be an array after this function
 expand_dims() {
   local to_expand=$*
-  begin_function
+  begin_function_lo
 
     local dim_var plural dim_type
-    begin_for dim_var in $to_expand; doo
+    for dim_var in $to_expand; do
 
       local dims_var
       get_plural $dim_var dims_var
@@ -1011,7 +1011,7 @@ expand_dims() {
       if [[ ! "${ddim:-}" && ! "${ddims:-}" && \
             ( "${sdim:-}" || "${sdims:-}" ) ]]; then
 
-        log_debug "Expanding dim $dim_var"
+        #log_debug "Expanding dim $dim_var"
 
         local members single=t
         if [[ "${sdims:-}" ]]; then
@@ -1045,7 +1045,7 @@ expand_dims() {
         fi
       fi
 
-    end_for
+    done
 
   end_function
   handle_return
@@ -2304,7 +2304,7 @@ attempt_derive() {
     old_values_string=${old_values_string:-} \
     stop_after_first_match=${stop_after_first_match:-f} \
 
-  begin_function
+  begin_function_lo
     local -n dim_type=${dim}_dim_type
     local -n derived_from=${dim_type}_${dim}_derived_from
     values=()
@@ -2316,7 +2316,7 @@ attempt_derive() {
 
     if [[ "${derived_from:-}" ]]; then
       local one_row_complete=f
-      begin_for derived_from_row in "${derived_from[@]}"; doo
+      for derived_from_row in "${derived_from[@]}"; do
         if [[ ! "$from_dim" || " $derived_from_row " == *" $from_dim "* ]]; then
           complete_row=t
           for derived_from_dim in $derived_from_row; do
@@ -2331,7 +2331,7 @@ attempt_derive() {
             resolved_dependencies+=( "$derived_from_row" )
           fi
         fi
-      end_for
+      done
       if [[ $one_row_complete == f ]]; then
         derived_from_incomplete=t
       fi
@@ -2355,7 +2355,7 @@ attempt_derive() {
       fi
       local derive_table
       local -n derive_tables=${dim}_derive_tables
-      begin_for derive_table in ${derive_tables[*]}; doo
+      for derive_table in ${derive_tables[*]}; do
 
         local found=f
         local -n fields=${derive_table}_fields
@@ -2398,7 +2398,7 @@ attempt_derive() {
           copy_set new_values old_values
         fi
 
-      end_for
+      done; maybe_break_lo
       keys_to_array old_values values
 
     fi
@@ -2414,9 +2414,9 @@ attempt_derive() {
 #   values    array of dim members
 read_dim() {
   local -n target=$1
-  begin_function
+  begin_function_lo
     local -n is_secret=${dim_type}_${dim}_is_secret
-    begin_loop; doo
+    while true; do
       if [[ "${is_secret:-f}" == t ]]; then
         read -u $fd_original_in -p "(? for more info) $dim=" -rs values >&$fd_original_err || fail
         echo '************' >&$fd_original_err
@@ -2441,14 +2441,14 @@ read_dim() {
           break
         fi
       fi
-    end_loop
+    done
   end_function
   handle_return
 }
 
 attempt_default() {
   local dim=$1
-  begin_function
+  begin_function_lo
 
     local problem
     local -n dim_type=${dim}_dim_type
@@ -2561,7 +2561,7 @@ calc_coordinates_dedup() {
 #   all other ddims which may be used to derive the unknown dims
 calc_coordinates_next_unknown_dim() {
   local log_show_vars=unknown_dims
-  begin_function
+  begin_function_lo
     local dim dims \
       phase unknown_dims=${unknown_dims:-} \
       resolved_dims=${resolved_dims:-} \
@@ -2575,8 +2575,8 @@ calc_coordinates_next_unknown_dim() {
 
     if [[ "$unknown_dims" ]]; then
       log_debug "Attempting to resolve unknowns: ${unknown_dims# }"
-      begin_for phase in derive default; doo
-        begin_for dim in $unknown_dims; doo
+      for phase in derive default; do
+        for dim in $unknown_dims; do
 
           local -n dim_type=${dim}_dim_type
           coord_index=${coordinate_dim_index[$dim]}
@@ -2616,7 +2616,7 @@ calc_coordinates_next_unknown_dim() {
 
             local member ms=( "${ddims[@]}" )
             unset ddims
-            begin_for member in "${ms[@]}"; doo
+            for member in "${ms[@]}"; do
               ddim=$member
 
               log_show_vars='dim phase member unknown_dims'
@@ -2639,15 +2639,15 @@ calc_coordinates_next_unknown_dim() {
                 log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
               fi
 
-            end_for
+            done; maybe_break_lo
             row_ended=t
             unset ddim
             abort
 
           fi
 
-        end_for
-      end_for
+        done; maybe_break_lo
+      done; maybe_break_lo
     fi
 
     if [[ $row_ended == f ]]; then
@@ -2661,7 +2661,7 @@ calc_coordinates_next_unknown_dim() {
 
 calc_coords_validate_member() {
   local dim=$1 member=$2 log_show_vars='dim member'
-  begin_function
+  begin_function_lo
     is_valid=t
 
     log_debug "Validating $dim == $member"
@@ -2686,7 +2686,7 @@ calc_coords_validate_member() {
     #  should have already been set
     #eval "local d_$dim=\$member"
     local rd
-    begin_for rd in $resolved_dims; doo
+    for rd in $resolved_dims; do
       if [[ $rd == $dim ]]; then
         continue
       fi
@@ -2705,7 +2705,7 @@ calc_coords_validate_member() {
         fi
         abort
       fi
-    end_for
+    done
   end_function
   handle_return
 }
@@ -2752,7 +2752,7 @@ member_conflicts() {
 
 # input: dim_type dim
 set_cross_dims() {
-  begin_function
+  begin_function_lo
     local -n member=d_$dim
     local derive_table=${dim_type}_${dim}_derive
     local -n derive_fields=${derive_table}_fields \
@@ -2823,7 +2823,7 @@ set_cross_dims() {
 
 calc_coordinates_next_known_dim_member() {
   log_show_vars='dim m'
-  begin_function
+  begin_function_lo
     localize
     local -n member=d_$dim
     member=$m
@@ -2854,7 +2854,7 @@ calc_coordinates_next_known_dim_member() {
 #   coordinate_dim_index
 #   coordinate_fields_plural
 calc_coordinates_next_known_dim() {
-  begin_function
+  begin_function_lo
 
     if (( coord_limit > 0 && total_coord_rows_added >= coord_limit )); then
       log_warn "Limit of $coord_limit reached, not calculating any further"
@@ -2894,9 +2894,9 @@ calc_coordinates_next_known_dim() {
 
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
-        begin_for m in "${ms[@]}"; doo
+        for m in "${ms[@]}"; do
           calc_coordinates_next_known_dim_member || fail
-        end_for
+        done; maybe_break_lo
         unset member
         unset -n member
 
