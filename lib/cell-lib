@@ -109,7 +109,7 @@ write_vars_to_context() {
 #   prefix
 # outputs:
 #   code
-load_fun() {
+load_fun_to_code() {
   local full_path=$1 content name=$2
   begin_function
     content=$(<$full_path)
@@ -229,10 +229,73 @@ add_derive_table() {
   handle_return
 }
 
+# not handling failure here for performance reasons
+# should be nearly impossible to fail at this point anyway
+maybe_write_newline_to_context() {
+  local new_type=$1
+  last_type=${last_type:-none}
+  if [[ $last_type != none ]]; then
+    if [[ $last_type == fun || $new_type == fun \
+       || $last_type == tab || $new_type == tab \
+       ]]; then
+      echo >>$context_path-$context_type.new
+    fi
+  fi
+  last_type=$new_type
+}
+
+# this duplicates code from write_dna_tab_to_context on purpose for performance reasons
+# inputs:
+#   $1     full path to tab file. It is assumed existence check has already happened.
+#   $2     target var to store data in (includes prefix)
+load_dna_tab() {
+
+  begin_function
+    local full_path=$1 name=$2
+
+    eval "$(
+    awk '
+    NR == 1 { print "'$name'_fields=( " $0 " )"; print "'$name'_data=(" }
+    NR > 1 { print "  " $0 }
+    END { print ")" }
+    ' $full_path
+    )"
+
+    if [[ $name == *_derive ]]; then
+      add_derive_table $name || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1     full path to tab file. It is assumed existence check has already happened.
+#   $2     target var to store data in (includes prefix)
+write_dna_tab_to_context() {
+
+  begin_function
+    local full_path=$1 name=$2
+
+    maybe_write_newline_to_context tab
+    awk '
+    NR == 1 { print "'$name'_fields=( " $0 " )"; print "'$name'_data=(" }
+    NR > 1 { print "  " $0 }
+    END { print ")" }
+    ' $full_path >>$context_path-$context_type.new || fail
+
+    if [[ $name == *_derive ]]; then
+      load_dna_tab $full_path $name || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   $1     full path to tab file 
 #   $2     target var to store data in
-load_tab_to_code() {
+load_tab_to_code_deprecated() {
 
   begin_function
     local full_path=$1 content name=$2 append=f
@@ -372,7 +435,67 @@ extract_simple_name_across_array() {
   return 0
 }
 
+# inputs:
+#   $1             full path to dna file
+#   prefix         optional prefix
+#   context_type   if empty, only loads the variable, if set, records to context
 load_dna_item() {
+  begin_function
+    local var_full_path=$1 prefix=${prefix:-} \
+      suffix= \
+      file_name \
+
+    last_type=${last_type:-var}
+
+    file_name=${var_full_path##*/}
+    if [[ $file_name == *.* ]]; then
+      suffix=${file_name##*.}
+      file_name=${file_name%.*}
+    fi
+
+    local var_name o code= load_type=var
+    extract_simple_name file_name o var_name
+    var_name=$prefix${var_name//-/_}
+
+    case "$suffix" in
+      var)
+        load_var_to_code $var_full_path $var_name || fail
+      ;;
+      arr)
+        load_arr_to_code $var_full_path $var_name || fail
+      ;;
+      fun)
+        load_fun_to_code $var_full_path $var_name || fail
+        load_type=fun
+      ;;
+      tab)
+        if [[ "${context_type:-}" ]]; then
+          write_dna_tab_to_context $var_full_path $var_name || fail
+        else
+          load_dna_tab $var_full_path $var_name || fail
+        fi
+      ;;
+      *)
+        if [[ $ignore_unknown == f ]]; then
+          log_fatal "Unknown dna object: $item."
+          fail1
+        fi
+      ;;
+    esac
+
+    if [[ "$code" ]]; then
+      if [[ "${context_type:-}" ]]; then
+        write_to_context $load_type code || fail
+      else
+        eval "$code" || fail
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
+load_dna_item_deprecated() {
   begin_function
     local var_full_path=$1 prefix=${prefix:-} \
       suffix= code \
@@ -412,7 +535,7 @@ load_dna_item() {
         }
       ;;
       fun)
-        load_fun $var_full_path $var_name || {
+        load_fun_to_code $var_full_path $var_name || {
           log_fatal "Failed to load function from $var_full_path"
           fail1
         }
@@ -429,13 +552,6 @@ load_dna_item() {
         if [[ $is_auto == t ]]; then
           auto_load+=( $var_name.tab )
         fi
-      ;;
-      raw)
-        load_raw $var_full_path $var_name || {
-          log_fatal "Failed to load raw variable from $var_full_path"
-          fail1
-        }
-        load_type=fun
       ;;
       *)
         if [[ $ignore_unknown == f ]]; then
