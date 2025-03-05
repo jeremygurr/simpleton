@@ -588,6 +588,7 @@ find1() {
 }
 
 cd_to_leaf() {
+  cd_to_branch || return 1
   while true; do
     local members=( $(find1 . -type d -name "*:*" | sort -g) ) || return 1
     if [[ "$members" ]]; then
@@ -601,6 +602,7 @@ cd_to_leaf() {
 
 cd_to_trunk() {
   local d=$PWD last_cell=$PWD
+  cd_to_branch || return 1
   while [[ $d =~ : ]]; do
     d=${d%/*}
     if [[ -e $d/.dna ]]; then
@@ -618,7 +620,7 @@ cd_to_trunk() {
 
 cd_to_branch() {
   local d=$PWD last_cell=$PWD
-  while [[ $d == */.dna* ]]; do
+  while [[ $d == */.dna* || $d == */.cyto* ]]; do
     d=${d%/*}
   done
   if [[ $d != $PWD ]]; then
