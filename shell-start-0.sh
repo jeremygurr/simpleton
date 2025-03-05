@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 
+SIMPLETON_LIB=/repo/simpleton/lib
+source $SIMPLETON_LIB/lifted-bash || exit 1
+bash_lifted_init
+source $SIMPLETON_LIB/bash-lib || exit 1
+source $SIMPLETON_LIB/walk-lib || exit 1
+
 if [[ "${ADD_PATH:-}" ]]; then
   export PATH=$ADD_PATH:$PATH
 fi
@@ -42,6 +48,86 @@ alias uuu='builtin cd ../../..'
 alias vi=vim
 alias vis='vim /etc/profile.d/shell-start-0.sh'
 alias w=walk
+
+# used by /etc/profile, this avoids a warning
+BB_ASH_VERSION=
+ZSH_VERSION= 
+
+walk() {
+
+  begin_function
+
+    walk_init || fail
+
+    show_selection() {
+      local extra=
+      if [[ -f $current_selection/.member ]]; then
+        extra=" $(<$current_selection/.member)"
+        if (( ${#extra} > 60 )); then
+          extra=" ${extra:0:60}..."
+        fi
+      fi
+
+      echo "$HIGHLIGHT$hbar_equals$NL$(short_path $current_selection)$RESET$extra"
+    }
+
+    adjust_choices() {
+      if [[ -d $current_selection/.. ]]; then
+        hidden=f walk_add_choice "." "$current_selection/.." ".."
+      fi
+
+      local path
+      if [[ -d $current_selection/.dna ]]; then
+        if [[ $current_selection == *:* ]]; then
+          path=${current_selection%%:*}
+          path=${path%/*}
+          walk_add_choice "t" "$path" "trunk"
+        fi
+
+        path=$current_selection/.cyto/up-chosen
+        if [[ -d $path ]]; then
+          walk_add_choice "u" "$path" "upstream cells"
+        fi
+
+        path=$current_selection/.cyto/down
+        if [[ -d $path ]]; then
+          walk_add_choice "d" "$path" "downstream cells"
+        fi
+
+        walk_add_dirs $current_selection || return 1
+      elif [[ ${current_selection##*/} == down ]]; then
+        walk_add_dirs $current_selection || return 1
+      elif [[ ${current_selection##*/} == up-chosen ]]; then
+        walk_add_dirs $current_selection || return 1
+      fi
+      return 0
+    }
+
+    handle_walk_responses() {
+      if [[ -d "$response" ]]; then
+        current_selection="$(realpath $response)"
+      fi
+    }
+
+    local result= current_selection=$(realpath .)
+
+    if [[ $current_selection == /seed/* ]]; then
+      current_selection=/work${current_selection#/seed}
+    fi
+
+    while [[ $current_selection == */.* && $current_selection == /*/*/* ]]; do
+      current_selection=${current_selection%/*}
+    done
+
+    prompt="Choose (press enter to stop here): " walk_execute $current_selection || fail
+
+    if [[ -d "$result" ]]; then
+      cd $(realpath $result) || fail
+    fi
+
+  end_function
+  handle_return
+}
 
 # saves existing dir before changing to the given dir
 cd() {
@@ -122,188 +208,6 @@ show_array() {
     else
       echo "$i: ${_array[$i]:-}"
     fi
-  done
-}
-
-walk_split_choice() {
-  local remainder
-  key=${choice%% *}
-  code=${choice#$key }
-  code=${code%% *}
-  remainder=${choice##$key $code }
-  if [[ "$remainder" != "$choice" ]]; then
-    message=$remainder
-  else
-    message=$code
-  fi
-}
-
-walk_menu() {
-  local choice key code message
-  for choice in "${choices[@]}"; do
-    walk_split_choice
-    echo "$key  $message"
-  done
-  local input
-  read -sp "Where to go? " -n1 input || return 1
-  result=
-  for choice in "${choices[@]}" "${hidden_choices[@]}"; do
-    walk_split_choice
-    if [[ $key == $input ]]; then
-      result=$code
-      break
-    fi
-  done
-  if [[ "$result" ]]; then
-    echo "${message%% *}"
-  else
-    echo
-  fi
-}
- 
-walk_add_choice() {
-  local hidden=${hidden:-f} key=$1 
-  shift 1
-  local remaining=$*
-  local code=${remaining%% *}
-  if [[ ! "${code_set[$code]:-}" ]]; then
-    if [[ $hidden == f ]]; then
-      choices+=( "$key $remaining" )
-    else
-      hidden_choices+=( "$key $remaining" )
-    fi
-    code_set[$code]=1
-  fi
-}
-
-walk_add_dirs() {
-  local dirs d extra
-  dirs=$(find -L . -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
-  if [[ "$dirs" ]]; then
-    for d in $dirs; do
-      (( i++ ))
-      extra=
-      if [[ -f $d/.member ]]; then
-        extra=" $(<$d/.member)"
-        if (( ${#extra} > 60 )); then
-          extra="${extra:0:60}..."
-        fi
-      fi
-      walk_add_choice "$i" "${d#./}" "${d##*/}$extra"
-    done
-  fi
-}
-
-walk() {
-  local hidden_choices choices choice path i real_stack=()
-  local -A code_set
-  echo "Press ? for more info or q to quit"
-  while true; do
-
-    local extra=
-    if [[ -f $PWD/.member ]]; then
-      extra=" $(<$PWD/.member)"
-      if (( ${#extra} > 60 )); then
-        extra=" ${extra:0:60}..."
-      fi
-    fi
-
-    local highlight=$'\033[1;33m' \
-      reset=$'\033[0m'
-    echo "$highlight$hbar_equals$NL$(short_path)$reset$extra"
-
-    code_set=()
-    hidden_choices=(
-      "q quit"
-      "? help"
-      )
-    choices=()
-    i=0
-
-    if [[ -d .. ]]; then
-      hidden=t walk_add_choice "." ".."
-    fi
-
-    if (( ${#real_stack[*]} > 0 )); then
-      walk_add_choice "R" "unreal" "unreal-path"
-    fi
-    if [[ -L $PWD ]]; then
-      walk_add_choice "r" "real" "real-path"
-    fi
-    if [[ $PWD == */.dna/* || $PWD == */.dna ]]; then
-      path=${PWD%%/.dna/*}
-      walk_add_choice "b" "$path" "branch"
-      if [[ -d choices ]]; then
-        walk_add_choice "c" "choices"
-      fi
-      if [[ -d trunk_dims ]]; then
-        walk_add_choice "t" "trunk_dims"
-      fi
-      if [[ -d sub_dims ]]; then
-        walk_add_choice "s" "sub_dims"
-      fi
-      if [[ -d props ]]; then
-        walk_add_choice "p" "props"
-      fi
-      if [[ -d up ]]; then
-        walk_add_choice "u" "up"
-      fi
-      if [[ -d down ]]; then
-        walk_add_choice "d" "down"
-      fi
-    elif [[ $PWD == */.cyto/* || $PWD == */.cyto ]]; then
-      path=${PWD%%/.cyto/*}
-      walk_add_choice "b" "$path" "branch"
-      if [[ -d up ]]; then
-        walk_add_choice "U" "up"
-      fi
-      if [[ -d down ]]; then
-        walk_add_choice "d" "down"
-      fi
-      if [[ -d up-chosen ]]; then
-        walk_add_choice "u" "up-chosen"
-      fi
-    else
-      if [[ $PWD == *:* ]]; then
-        path=${PWD%%:*}
-        path=${path%/*}
-        walk_add_choice "t" "$path" "trunk"
-      fi
-      if [[ -d .cyto ]]; then
-        walk_add_choice "c" ".cyto"
-      fi
-      if [[ -d .dna ]]; then
-        walk_add_choice "d" ".dna"
-      fi
-    fi
-    walk_add_dirs || return 1
-
-    if [[ "$choices" ]]; then
-      walk_menu || break
-      if [[ "$result" == help ]]; then
-        echo "Press one of the characters in the menu to go to the corrosponding folders, or q to quit."
-        # later
-        #echo "You can also use / to search for a substring."
-      elif [[ "$result" == quit ]]; then
-        break
-      elif [[ "$result" == real ]]; then
-        real_stack+=( $PWD )
-        cd $(realpath $PWD) || return 1
-      elif [[ "$result" == unreal ]]; then
-        cd ${real_stack[-1]} || return 1
-        unset real_stack[-1]
-      elif [[ -d "$result" ]]; then
-        cd "$result" || return 1
-      else
-        echo "Invalid selection, try again."
-        continue
-      fi
-
-    else
-      echo "Nothing to see here."
-      break
-    fi
-
   done
 }
 
@@ -700,22 +604,6 @@ parse_git_branch() {
   done
 }
 
-RED="\[\033[0;31m\]"
-DIM_RED="\[\033[1;31m\]"
-RESET="\[\033[0m\]"
-BLUE="\[\033[0;34m\]"
-DIM_BLUE="\[\033[1;34m\]"
-PURPLE="\[\033[0;35m\]"
-DIM_PURPLE="\[\033[1;35m\]"
-CYAN="\[\033[0;36m\]"
-GREEN="\[\033[0;32m\]"
-DIM_GREEN="\[\033[1;32m\]"
-YELLOW="\[\033[0;33m\]"
-DIM_YELLOW="\[\033[1;33m\]"
-
-TAB=$'\t'
-NL=$'\n'
-
 get_cell_location_string() {
   local p= close=f
 
@@ -849,18 +737,18 @@ big_prompt() {
   fi
 
   export PS1="
-| $DIM_GREEN\$prompt_name $DIM_BLUE\d \A $RED\$(prompt_error_string)$YELLOW\$(pid_path)$CYAN\$(custom_prompt_status 2>/dev/null)$RESET
-| $DIM_YELLOW\$(short_path) $DIM_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+| $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
+| $YELLOW\$(short_path) $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
   export PS2='> '
   export PS4='+ '
 }
 
 medium_prompt() {
-  export PS1="$DIM_GREEN\$prompt_name $YELLOW\W $DIM_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+  export PS1="$GREEN\$prompt_name $DIM_YELLOW\W $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
 }
 
 small_prompt() {
-  export PS1="$YELLOW\W $DIM_PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+  export PS1="$DIM_YELLOW\W $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
 }
 
 big_prompt
