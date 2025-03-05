@@ -53,6 +53,20 @@ alias w=walk
 BB_ASH_VERSION=
 ZSH_VERSION= 
 
+find_dna_work_cells() {
+  local dir=$1 possibility only_one=${only_one:-f}
+  local possibilities=$(find $dir/* -name ".*" -prune -o -type l)
+  for possibility in $possibilities; do
+    local real=$(realpath $possibility) || return 1
+    if [[ $real == /work/* && -d "$real/.dna" ]]; then
+      work_cells+=" $real"
+    elif [[ -d $real ]]; then
+      find_dna_work_cells $real || return 1
+    fi
+  done
+  return 0
+}
+
 walk() {
 
   begin_function
@@ -84,6 +98,13 @@ walk() {
           walk_add_choice "t" "$path" "trunk"
         fi
 
+        path=$current_selection/.dna
+        local work_cells=
+        only_one=t find_dna_work_cells $path
+        if [[ "${work_cells}" ]]; then
+          walk_add_choice "U" "$path" "dna upstream cells"
+        fi
+
         path=$current_selection/.cyto/up-chosen
         if [[ -d $path ]]; then
           walk_add_choice "u" "$path" "upstream cells"
@@ -99,6 +120,14 @@ walk() {
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == up-chosen ]]; then
         walk_add_dirs $current_selection || return 1
+      elif [[ ${current_selection##*/} == .dna ]]; then
+        local work_cells= work_cell
+        find_dna_work_cells $current_selection || return 1
+        for work_cell in $work_cells; do
+          (( i++ ))
+          local short_cell=${work_cell#/work/*/}
+          walk_add_choice "$i" "${work_cell#./}" "${short_cell}"
+        done
       fi
       return 0
     }
@@ -106,6 +135,7 @@ walk() {
     handle_walk_responses() {
       if [[ -d "$response" ]]; then
         current_selection="$(realpath $response)"
+        walk_filter=
       fi
     }
 
@@ -127,6 +157,7 @@ walk() {
 
   end_function
   handle_return
+
 }
 
 # saves existing dir before changing to the given dir
@@ -704,10 +735,14 @@ prompt_error_string() {
 }
 
 short_path() {
-  local p=$PWD
-  if [[ "$p" == /*/*/*/* ]]; then
-    p=${PWD%/*/*/*}
-    p=${PWD#$p/}
+  local p=$1
+  local o=$p
+  if [[ "$p" == */*/*/*/*/* ]]; then
+    p=${p#/work/*/}
+  fi
+  if [[ "$p" == */*/*/*/*/* ]]; then
+    p=${p%*/*/*/*/*}
+    p=${o#$p/}
   fi
   echo -n "$p"
 }
@@ -738,7 +773,7 @@ big_prompt() {
 
   export PS1="
 | $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
-| $YELLOW\$(short_path) $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+| $YELLOW\$(short_path \$PWD) $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
   export PS2='> '
   export PS4='+ '
 }
