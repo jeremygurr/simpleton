@@ -257,6 +257,7 @@ debug_search_deep='$debug_search_deep'
 debug_search_old='$debug_search_old'
 debug_show_time='$debug_show_time'
 debug_silent_command='$debug_silent_command'
+debug_start_ts='$debug_start_ts'
 debug_trace_time='$debug_trace_time'
 debug_skip_ignore='$debug_skip_ignore'
 debug_step_to_later_line='$debug_step_to_later_line'
@@ -646,10 +647,32 @@ debugger_out() {
   fi
 }
 
+# input:
+#   $1   previous timestamp (in microseconds, as from EPOCHREALTIME
+#   $2   next timestamp
+#   $3   var name to write result to, writes time in seconds with .
+micro_time_diff() {
+  local before=$1 after=$2
+  local -n to_var=$3
+  local diff=$((after-before)) p1 p2
+  diff="000000$diff"
+  p1=${diff%%??????}
+  p2=${diff#$p1}
+  p1=${p1##*(0)}
+  to_var="${p1:-0}.$p2"
+}
+
 debug_command_loop() {
   local debug_c no_follow_once=f
 
   debug_r=-1
+  local time_diff=
+
+  if [[ $debug_show_time == t && "${debug_start_ts:-}" ]]; then
+    local ts=${EPOCHREALTIME/./}
+    micro_time_diff $debug_start_ts $ts time_diff
+  fi
+
   while [[ $debug_r == -1 ]]; do
 
     local current_source_line_without_comment=none
@@ -695,10 +718,8 @@ debug_command_loop() {
       if [[ $BASH_SUBSHELL -gt 0 ]]; then
         debug_prefix+="$YELLOW$BASH_SUBSHELL:$BASHPID "
       fi
-      if [[ $debug_show_time == t && "${debug_start_ts:-}" ]]; then
-        local ts=${EPOCHREALTIME/./}
-        local time_diff=$((ts-debug_start_ts))
-        debug_prefix+="${DIM_WHITE}+$time_diff "
+      if [[ "$time_diff" ]]; then
+        debug_prefix+="${WHITE}+$time_diff "
         debug_start_ts=
       fi
       if [[ "$fork_debug_id" ]]; then
@@ -713,6 +734,7 @@ debug_command_loop() {
     fi
 
     debug_long_command=f
+    local got_user_input=f
     if [[ "$debug_buffered_commands" ]]; then
       debug_c=
       while [[ "$debug_buffered_commands" ]]; do
@@ -725,6 +747,7 @@ debug_command_loop() {
     else
       read -rs -n1 -u $fd_original_in debug_c >&$fd_original_err 2>&1
       debug_silent_command=f
+      got_user_input=t
     fi
 
     if [[ "$debug_c" != l && "$debug_c" != L ]]; then
@@ -1281,14 +1304,11 @@ debug_command_loop() {
       \#)
         if [[ $debug_show_time == f ]]; then
           debug_show_time=t
-          #PS4='$EPOCHREALTIME + '
           debugger_out "# Enabled time stamps"
         else
           debug_show_time=f
-          #PS4='+ '
           debugger_out "# Disabled time stamps"
         fi
-        debug_save_state
         no_follow_once=t
         ;;
       \$)
@@ -1406,8 +1426,9 @@ debug_command_loop() {
     esac
   done
 
-  if [[ $debug_show_time == t ]]; then
+  if [[ $debug_show_time == t && $got_user_input == t ]]; then
     debug_start_ts=${EPOCHREALTIME/./}
+    debug_save_state
   fi
 
   if [[ $debug_trace_time == t ]]; then
