@@ -3,6 +3,41 @@
 type -t update_lib_loaded >/dev/null && return 0
 update_lib_loaded=t
 
+# will write all trunk and sub dim names to the output file
+write_output_fields() {
+  begin_function_lo
+    if [[ $cell_is_leaf == f ]]; then
+      log_fatal "write_update_fields should only be run on a leaf cell"
+      fail1
+    fi
+    local d result=
+    for d in ${trunk_dims[*]:-} ${sub_dims[*]:-}; do
+      result+=" $d"
+    done
+    echo "${result# }" >$out_path/$out_file || fail
+  end_function
+  handle_return
+}
+
+# will write a row of data to the output file based on current dim values
+write_output_row() {
+  begin_function_lo
+    if [[ $cell_is_leaf == f ]]; then
+      log_fatal "write_update_row should only be run on a leaf cell"
+      fail1
+    fi
+    local d result=
+    for d in ${trunk_dims[*]:-} ${sub_dims[*]:-}; do
+      local -n m=d_$d
+      local s=${m:-}
+      quotes=single shell_quote_var s
+      result+=" $s"
+    done
+    echo "${result# }" >>$out_path/$out_file || fail
+  end_function
+  handle_return
+}
+
 # inputs: 
 #   upstream
 prep_upstream() {
@@ -1002,9 +1037,7 @@ update_members() {
 
 update_aggregation() {
   begin_function
-    if function_exists aggregate_results_op; then
-      execute_op aggregate_op || fail
-    elif [[ "$out_file" ]]; then
+    if [[ "$out_file" ]]; then
       if [[ ! "${current_branch_dim:-}" ]]; then
         log_fatal "Internal error: missing current_branch_dim"
         fail1
@@ -1035,22 +1068,11 @@ update_aggregation() {
         for branch in $branches; do
           if [[ -f $branch/$out_file ]]; then
 
-            if [[ -f $branch/.member ]]; then
-              member=$(<$branch/.member) || fail
-            else
-              member=${branch##*:}
-            fi
-
             if [[ $wrote_header == f ]]; then
-              awk '
-                NR == 1 { print "'$current_branch_dim' " $0 } 
-                NR > 1 { print "'"$member"' " $0 }
-                ' $branch/$out_file >$target || fail
+              cp $branch/$out_file $target || fail
               wrote_header=t
             else
-              tail +2 $branch/$out_file \
-              | awk '{ print "'"$member"' " $0 }' \
-                >>$target || fail
+              tail +2 $branch/$out_file >>$target || fail
             fi
 
           else

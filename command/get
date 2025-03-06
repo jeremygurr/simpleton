@@ -392,49 +392,24 @@ get_command_output() {
   handle_return
 }
 
-get_command_load_data_member() {
-  local log_show_vars='dim member'
-  begin_function_hi
-
-    local child_dims=( ${child_dims[*]:-} )
-
-    remove_word_from_string out_fields $dim
-
-    local sane_value
-    get_sane_value "$member" || fail
-    local cell_path=$parent_cell/$dim:$sane_value
-    if [[ ! -d "$cell_path" ]]; then
-      abort
-    fi
-
-    load_branch_info || fail
-    switch_context $cell_path || fail
-    setup_dims || fail
-
-    get_command_load_data || fail
-
-  end_function
-  handle_return
-}
-
 get_command_load_data_branch() {
   begin_function
 
+    local short_cell
+    get_short_cell
     log_verbose "Loading branch $short_cell..."
+    local subs
+    subs=$(find1 $cell_path -type d -not -name '.*') || fail1
+    local cell_path=
 
-    par=f fork=f \
-    function=get_command_load_data_member \
-    parent_cell=$cell_path \
-    anchor_dims= \
-    get_members_from=existing_branches \
-    for_each_member $child_dims || fail
+    begin_for cell_path in $subs; doo
+      if [[ -d $cell_path/.dna ]]; then
+        get_command_load_data_leaf || fail
+      else
+        get_command_load_data_branch || fail
+      fi
+    end_for
 
-    if [[ $used_default_fields == t ]]; then
-      out_fields="$child_dims $out_fields"
-    fi
-
-    # Is this really needed?
-    cell_path=$original_cell_path
   end_function
   handle_return
 }
@@ -442,52 +417,22 @@ get_command_load_data_branch() {
 get_command_load_data_leaf() {
   begin_function
 
-    if [[ -f $out_path/output.tab ]]; then
+    if [[ -f $cell_path/output.tab ]]; then
 
+      local short_cell
+      get_short_cell
       log_verbose "Loading leaf data for $short_cell"
-      local context_type= output_table output_fields
+      local context_type= output_data output_fields
       load_dna_item $out_path/output.tab || fail
 
-      local extra_fields=${trunk_dims[*]}
-
       if (( ${#table_fields[*]} == 0 )); then
-        local table_fields_prep=( ${extra_fields[*]} ${output_fields[*]} )
-        dedup_array table_fields_prep table_fields
-      else
-        local d i=0
-        for d in ${extra_fields[*]} ${output_fields[@]}; do
-          if [[ -v table_fields[$i] && "${table_fields[$i]}" != "$d" ]]; then
-            log_fatal "Different data columns across cells not supported yet"
-            fail1
-          fi
-          (( i++ ))
-        done; maybe_break
+        table_fields=( ${output_fields[*]} )
+      elif [[ "${table_fields[*]}" != "${output_fields[*]}" ]]; then
+        log_fatal "Fields are different across sub cells. This should not be possible. Try clean updating."
+        fail1
       fi
 
-      coord_type=branch target_dim_var_type=ddim convert_coords_to_dims || fail
-      local row dim \
-        field_count=${#output_fields[*]} data_count=${#output_data[*]}
-      local row_count=$((data_count/field_count)) start
-      for (( row = 0; row < row_count; row++ )); do
-        #fence
-        for dim in ${table_fields[*]}; do
-          #fence
-          local -n trunk_member=d_$dim
-          if [[ "${trunk_member:-}" ]]; then
-            table_data+=( "$trunk_member" )
-          else
-            local value
-            table_var=output field=$dim get_value_from_table
-            if [[ "$value" ]]; then
-              table_data+=( "$value" )
-            else
-              table_data+=( "(unset)" )
-            fi
-          fi
-        done
-        #(( start = row * field_count ))
-        #table_data+=( "${output_data[@]:$start:$field_count}" )
-      done
+      table_data+=( "${output_data[@]}" )
 
     fi
 
@@ -535,11 +480,11 @@ get_command() {
     load_branch_info || fail
     switch_context $cell_path || fail
     setup_dims || fail
-    if [[ $cell_is_leaf == f ]]; then
-      # If the cell is a leaf, this has already been done in switch_context
-      calc_coords_branch || fail
-      fence
-    fi
+    #if [[ $cell_is_leaf == f ]]; then
+    #  # If the cell is a leaf, this has already been done in switch_context
+    #  calc_coords_branch || fail
+    #fi
+    fence
 
     local out_form=${out_form:-${form:-${default_out_form:-simple}}} \
       out_fields=${out_fields:-${fields:-${field:-}}} \
@@ -559,6 +504,7 @@ get_command() {
     else
 
       get_command_load_data || fail
+      fence
 
       local get_show_file=${get_show_file:-}
       get_command_output
