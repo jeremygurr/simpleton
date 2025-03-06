@@ -55,13 +55,16 @@ ZSH_VERSION=
 
 find_dna_work_cells() {
   local dir=$1 possibility only_one=${only_one:-f}
-  local possibilities=$(find $dir/* -name ".*" -prune -o -type l)
+  local possibilities=$(find $dir/* -name ".*" -prune -o '(' -type l -print ')')
   for possibility in $possibilities; do
     local real=$(realpath $possibility) || return 1
-    if [[ $real == /work/* && -d "$real/.dna" ]]; then
-      work_cells+=" $real"
+    if [[ $real == /work/* && -e ${real%/*}/.dna ]]; then
+      work_cells+=" $possibility,,,$real"
+      if [[ $only_one == t ]]; then
+        break
+      fi
     elif [[ -d $real ]]; then
-      find_dna_work_cells $real || return 1
+      find_dna_work_cells $possibility || return 1
     fi
   done
   return 0
@@ -121,12 +124,15 @@ walk() {
       elif [[ ${current_selection##*/} == up-chosen ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == .dna ]]; then
-        local work_cells= work_cell
+        local work_cells= work_cell pw possibility
         find_dna_work_cells $current_selection || return 1
-        for work_cell in $work_cells; do
+        for pw in $work_cells; do
           (( i++ ))
+          possibility=${pw%,,,*}
+          possibility=${possibility#$current_selection/}
+          work_cell=${pw#*,,,}
           local short_cell=${work_cell#/work/*/}
-          walk_add_choice "$i" "${work_cell#./}" "${short_cell}"
+          walk_add_choice "$i" "${work_cell%/*}" "$possibility -> ${short_cell}"
         done
       fi
       return 0
@@ -145,9 +151,9 @@ walk() {
       current_selection=/work${current_selection#/seed}
     fi
 
-    while [[ $current_selection == */.* && $current_selection == /*/*/* ]]; do
-      current_selection=${current_selection%/*}
-    done
+    #while [[ $current_selection == */.* && $current_selection == /*/*/* ]]; do
+    #  current_selection=${current_selection%/*}
+    #done
 
     prompt="Choose (press enter to stop here): " walk_execute $current_selection || fail
 
