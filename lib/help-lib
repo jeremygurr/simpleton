@@ -298,6 +298,37 @@ show_upstream_recursive() {
   handle_return
 }
 
+show_branch_members() {
+  begin_function
+    if [[ "${trunk_dims:-}" ]]; then
+      local i pretty_form=
+      begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
+        dim_var=${trunk_dims[$i]}
+        local -n dim=d_$dim_var
+        local pretty_function_name=trunk_dims_${dim_var}_pretty
+        if function_exists $pretty_function_name; then
+          eval "$pretty_function_name $dim_var" || fail
+          pretty_form=" ($value)"
+        else
+          pretty_form=
+        fi
+        local value=${dim:-}
+        if [[ "${value:-}" ]]; then
+          if [[ $show_header == t ]]; then
+            indent=$((indent-2)) out "${NL}Branch dimensions:"
+            show_header=f
+          fi
+          if [[ "$value" == $empty_member ]]; then
+            value='(empty)'
+          fi
+          out "$dim_var=$value$pretty_form"
+        fi
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
 show_cell_help() {
   local cell_path=$1
   begin_function
@@ -311,10 +342,19 @@ show_cell_help() {
     trunk_changed=f \
     command_allows_logs=f \
     anchor_dims= \
+
     switch_context $cell_path || fail
+
     setup_dims || fail
-      handle_unknown=skip \
+
+    handle_unknown=skip \
     calc_coords || fail
+
+    if [[ $cell_is_leaf == t ]]; then
+      coord_type=branch \
+      target_dim_var_type=ddim \
+      convert_coords_to_dims || fail
+    fi
 
     indent=0
 
@@ -364,31 +404,7 @@ show_cell_help() {
     fi
 
     local dim member show_header=t
-    if [[ "${trunk_dims:-}" ]]; then
-      local i pretty_form=
-      begin_for (( i = 0; i < ${#trunk_dims[*]}; i++ )); doo
-        dim_var=${trunk_dims[$i]}
-        local -n dim=d_$dim_var
-        local pretty_function_name=trunk_dims_${dim_var}_pretty
-        if function_exists $pretty_function_name; then
-          eval "$pretty_function_name $dim_var" || fail
-          pretty_form=" ($value)"
-        else
-          pretty_form=
-        fi
-        local value=${dim:-}
-        if [[ "${value:-}" ]]; then
-          if [[ $show_header == t ]]; then
-            indent=$((indent-2)) out "${NL}Preset branch dimensions:"
-            show_header=f
-          fi
-          if [[ "$value" == $empty_member ]]; then
-            value='(empty)'
-          fi
-          out "$dim_var=$value$pretty_form"
-        fi
-      end_for
-    fi
+    show_branch_members || fail
 
     local branch_folders branch_folder last_part full_member
     show_header=t

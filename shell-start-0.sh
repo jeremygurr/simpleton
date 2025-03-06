@@ -532,7 +532,7 @@ cd_to_leaf() {
   cd_to_branch || return 1
   while true; do
     local members=( $(find1 . -type d -name "*:*" | sort -g) ) || return 1
-    if [[ "$members" ]]; then
+    if [[ "${members:-}" ]]; then
       cd $members || return 1
     else
       break
