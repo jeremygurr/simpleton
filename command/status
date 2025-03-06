@@ -1,10 +1,121 @@
 #!/usr/bin/env bash
 
-output_status() {
+source $SIMPLETON_LIB/update-lib
+
+output_age() {
   begin_function
+
+    local last_good_update_file=$status_path/last-good-update-end \
+      age='-' \
+      last_good_ts \
+      last_good_date \
+      age_s \
+
+    if [[ -e $last_good_update_file ]]; then
+      last_good_ts=$(date -r $last_good_update_file +%s) || fail
+      last_good_date=$(date -r $last_good_update_file) || fail
+      (( age_s = EPOCHSECONDS - last_good_ts ))
+      convert_from_seconds $age_s age
+    fi
+
+    if (( command_detail < 1 )); then
+      message+="age:$age "
+    else
+      message+="  Data Age$COL20: $age$NL"
+      message+="  Last Good Update$COL20: $last_good_date$NL"
+    fi
+
+  end_function
+  handle_return
+}
+
+output_needs_update() {
+  begin_function
+
+    local up_path=$cyto_path/up \
+      log_message="No update needed" \
+      needs_update= \
+
+    get_needs_update_internal $cell_path || fail
+
+    local freshness=fresh
+    if [[ $needs_update == t ]]; then
+      freshness=stale
+    fi
+
+    if (( command_detail < 1 )); then
+      message+="$freshness "
+    else
+      message+="  Freshness$COL20: $freshness$NL"
+    fi
+
+    if (( command_detail == 0 )); then
+      message+="$log_message "
+    elif (( command_detail > 0 )); then
+      message+="  Update Status$COL20: $log_message$NL"
+    fi
+
+  end_function
+  handle_return
+}
+
+output_status_leaf() {
+  begin_function
+
     local indent=${indent:-0}
 
-    out -n "${WHITE}Cell: $short_cell${RESET}"
+    if (( command_detail < 1 )); then
+      message+="$short_cell "
+    else
+      message+="Cell: $short_cell$NL"
+    fi
+
+    if (( command_detail >= 0 )); then
+      output_age || fail
+    fi
+    output_needs_update || fail
+
+  end_function
+  handle_return
+}
+
+output_status_branch() {
+  begin_function
+
+    local indent=${indent:-0}
+    local subs sub
+    subs=$(find1 $cell_path -not -name ".*" -type d) || fail
+    for sub in $subs; do
+      output_status_folder $sub || fail
+    done
+
+  end_function
+  handle_return
+}
+
+output_status_folder() {
+  local cell_path=$1 indent=${indent:-0}
+  begin_function
+
+    local cell_is_leaf \
+      cyto_path=$cell_path/.cyto \
+
+    local status_path=$cyto_path/status \
+      context_check_file=$cyto_path/context-check \
+
+    if [[ ! -f $context_check_file ]]; then
+      switch_context $cell_path || fail
+    else
+      source $context_check_file || fail
+    fi
+
+    if [[ $cell_is_leaf == t ]]; then
+      output_status_leaf || fail
+    else
+      output_status_branch || fail
+    fi
+
+    message=${message%%*( )}
 
   end_function
   handle_return
@@ -15,18 +126,17 @@ status_command() {
 
     local cell_path=${cell_path:-}
 
-    switch_context $cell_path || {
-      log_fatal "Context failed to load for $short_cell"
-      fail1
-    }
-    setup_dims || fail
-    calc_coords || fail
-
-    coord_type=branch \
-    target_dim_var_type=ddim \
-    convert_coords_to_dims || fail
-
-    output_status
+    local message=
+    if (( command_detail < 0 )); then
+      output_status_folder $cell_path || fail
+      echo "$message" | column -t
+    elif (( command_detail == 0 )); then
+      output_status_folder $cell_path || fail
+      echo "$message" | column -t -l4
+    else
+      output_status_folder $cell_path || fail
+      echo "$message"
+    fi
 
     command_successful=t
 
