@@ -62,18 +62,23 @@ output_needs_update() {
 output_status_leaf() {
   begin_function
 
-    local indent=${indent:-0}
+    local indent=${indent:-0} \
+      message= \
+      short_cell=${cell_path#$base_path/} \
 
     if (( command_detail < 1 )); then
-      message+="$short_cell "
+      message+="${short_cell:-.} "
     else
-      message+="Cell: $short_cell$NL"
+      message+="Cell: ${cell_path#/work/*/}$NL"
     fi
 
     if (( command_detail >= 0 )); then
       output_age || fail
     fi
     output_needs_update || fail
+
+    message=${message%%*( )}
+    echo "$message"
 
   end_function
   handle_return
@@ -84,7 +89,7 @@ output_status_branch() {
 
     local indent=${indent:-0}
     local subs sub
-    subs=$(find1 $cell_path -not -name ".*" -type d) || fail
+    subs=$(find1 $cell_path -not -name ".*" -type d | sort) || fail
     for sub in $subs; do
       output_status_folder $sub || fail
     done
@@ -97,6 +102,7 @@ output_status_folder() {
   local cell_path=$1 indent=${indent:-0}
   begin_function
 
+    log_verbose "Checking status of $cell_path"
     local cell_is_leaf \
       cyto_path=$cell_path/.cyto \
 
@@ -115,8 +121,6 @@ output_status_folder() {
       output_status_branch || fail
     fi
 
-    message=${message%%*( )}
-
   end_function
   handle_return
 }
@@ -124,18 +128,15 @@ output_status_folder() {
 status_command() {
   begin_function
 
-    local cell_path=${cell_path:-}
+    local cell_path=$cell_path
+      base_path=$cell_path
 
-    local message=
     if (( command_detail < 0 )); then
-      output_status_folder $cell_path || fail
-      echo "$message" | column -t
+      output_status_folder $cell_path | column -t || fail
     elif (( command_detail == 0 )); then
-      output_status_folder $cell_path || fail
-      echo "$message" | column -t -l4
+      output_status_folder $cell_path | column -t -l4 || fail
     else
       output_status_folder $cell_path || fail
-      echo "$message"
     fi
 
     command_successful=t
