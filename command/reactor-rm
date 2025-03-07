@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+select_reactor() {
+  local starting_folder=$1
+  begin_function
+
+    walk_init || fail
+
+    show_selection() {
+      local highlight=$'\033[1;33m' \
+        reset=$'\033[0m'
+      echo "$highlight$hbar_equals$NL$(short_path $current_selection)$reset"
+    }
+
+    adjust_choices() {
+      walk_add_dirs $current_selection || return 1
+      return 0
+    }
+
+    handle_walk_responses() {
+      if [[ -d "$response" ]]; then
+        current_selection="$response"
+      fi
+    }
+
+    local result= \
+      prompt="Choose a reactor to remove (press enter to accept current choice): " \
+
+    walk_execute $starting_folder || fail
+    if [[ "$result" ]]; then
+      reactor=$result
+    else 
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
+reactor_rm_command() {
+  begin_function
+
+    local reactor_to_remove=${name:-} reactor
+
+    if [[ ! "$reactor_to_remove" ]]; then
+      select_reactor $cell_path/.dna/reactors || fail
+      reactor_to_remove=$reactor
+    fi
+
+    if [[ ! "$reactor_to_remove" ]]; then
+      log_fatal "You must specify which reactor to remove"
+      fail1
+    fi
+
+    if [[ -d "$reactor_to_remove" ]]; then
+      rm -r "$reactor_to_remove" || fail
+      remove_empty_parents "${reactor_to_remove%/*}" || fail
+      log_info "Reactor has been removed."
+    else
+      log_warn "Reactor has already been removed."
+    fi
+
+    command_successful=t
+
+  end_function
+  handle_return
+}
+

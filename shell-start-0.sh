@@ -30,6 +30,7 @@ alias clean='cell clean'
 alias clean0='cell clean0'
 alias clean2='cell clean2'
 alias status='cell status'
+alias reactor='cell reactor'
 alias plant='cell plant'
 alias mock='cell mock'
 alias dim='cell dim'
@@ -745,6 +746,7 @@ short_path() {
   local o=$p
   if [[ "$p" == */*/*/*/*/* ]]; then
     p=${p#/work/*/}
+    o=$p
   fi
   if [[ "$p" == */*/*/*/*/* ]]; then
     p=${p%*/*/*/*/*}

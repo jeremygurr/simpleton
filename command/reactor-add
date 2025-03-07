@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+
+select_reactor() {
+  local starting_folder=$1
+  begin_function
+
+    walk_init || fail
+
+    show_selection() {
+      local extra=
+      if [[ -f $current_selection/.member ]]; then
+        extra=" $(<$current_selection/.member)"
+        if (( ${#extra} > 60 )); then
+          extra=" ${extra:0:60}..."
+        fi
+      fi
+
+      local highlight=$'\033[1;33m' \
+        reset=$'\033[0m'
+      echo "$highlight$hbar_equals$NL$(short_path $current_selection)$reset$extra"
+    }
+
+    adjust_choices() {
+      if [[ -d $current_selection/.. ]]; then
+        hidden=f walk_add_choice "." "$current_selection/.." ".."
+      fi
+
+      if [[ $current_selection == *:* ]]; then
+        path=${current_selection%%:*}
+        path=${path%/*}
+        walk_add_choice "t" "$path" "trunk"
+      fi
+
+      walk_add_dirs $current_selection || return 1
+      return 0
+    }
+
+    handle_walk_responses() {
+      if [[ -d "$response" ]]; then
+        current_selection="$(unrealpath $response)"
+      fi
+    }
+
+    local result= \
+      prompt="Choose a reactor cell (press enter to accept current choice): " \
+
+    reactor_cell=
+    walk_execute $starting_folder || fail
+    if [[ "$result" ]]; then
+      reactor_cell=$result
+    else 
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
+reactor_add_command() {
+  begin_function
+
+    local target=${target:-} name=${name:-}
+
+    local dna_path=$cell_path/.dna reactor_cell
+
+    if [[ ! "$target" ]]; then
+      reactor_cell=${cell_path#/*/*/}
+      reactor_cell=${cell_path%/$reactor_cell}
+      select_reactor $reactor_cell || fail
+      target=$reactor_cell
+    fi
+
+    if [[ ! "$target" ]]; then
+      log_fatal "You must specify a reactor cell."
+      fail1
+    fi
+
+    local before
+    if [[ ! "$name" ]]; then
+      name=${target%/}
+      name=${name#/*/*/}
+      while [[ $name == */*:* ]]; do
+        name=${name#/*:*}
+      done
+      name=${name//\//-}
+    fi
+
+    local reactor=$dna_path/reactors/$name
+
+    if [[ -e $reactor ]]; then
+      log_fatal "A reactor already exists with this name: $name"
+      fail1
+    fi
+
+    mkdir -p ${reactor%/*} || fail
+    target=$(realpath $target)
+    if [[ ! -d $target/.dna ]]; then
+      log_fatal "$target doesn't exist or is not a cell"
+      fail1
+    fi
+
+    safe_link $target $reactor || fail
+    log_info "Reactor has been added."
+
+    command_successful=t
+
+  end_function
+  handle_return
+}
+
