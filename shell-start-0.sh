@@ -642,63 +642,49 @@ parse_git_branch() {
   done
 }
 
-get_cell_location_string() {
-  local p= close=f
+cell_info() {
+  local p=
 
-  if [[ -d $PWD/.dna ]]; then
+  if [[ $PWD == /work/* || $PWD == /seed/* ]]; then
     local cell_name=$(realpath $PWD)
     cell_name=${cell_name#/*/*/}
     while [[ $cell_name == *:* || $cell_name == */.* ]]; do
       cell_name=${cell_name%/*:*}
       cell_name=${cell_name%/.*}
     done
-    p+="($cell_name) "
-  fi
 
-  if [[ $PWD == /work/* ]]; then
-    p+="[work"
-    close=t
-  elif [[ $PWD == /seed/* ]]; then
-    p+="[seed"
-    close=t
-  fi
-
-  if [[ $PWD == */.cyto || $PWD == */.cyto/* ]]; then
-    p+=" cyto"
-  fi
-
-  if [[ $PWD == */.dna || $PWD == */.dna/* ]]; then
-    p+=" dna"
-  fi
-
-  local sub_branches=( $(find1 . -name "*:*") ) || return 1
-  if [[ $PWD =~ : ]]; then
-    if [[ "${sub_branches:-}" ]]; then
-      p+=" branch"
+    if [[ $PWD == /seed/* ]]; then
+      p+="[seed "
     else
-      p+=" leaf"
+      if [[ $PWD == */.cyto || $PWD == */.cyto/* ]]; then
+        p+="[cyto "
+      elif [[ $PWD == */.dna || $PWD == */.dna/* ]]; then
+        p+="[dna "
+      else
+        local sub_branches=( $(find1 . -name "*:*") ) || return 1
+        if [[ "${sub_branches:-}" ]]; then
+          if [[ $PWD =~ : ]]; then
+            p+="[branch "
+          else
+            p+="[trunk "
+          fi
+        else
+          if [[ $PWD =~ : ]]; then
+            p+="[leaf "
+          else
+            p+="[trunk "
+          fi
+        fi
+      fi
+      p+="$cell_name] "
     fi
-  elif [[ "${sub_branches:-}" ]]; then
-    p+=" trunk"
+    echo "$p"
   fi
-
-  if [[ $PWD == */up/* ]]; then
-    p+=" up"
-  elif [[ $PWD == */down/* ]]; then
-    p+=" down"
-  fi
-
-  if [[ $close == t ]]; then
-    p+="] "
-  fi
-
-  cell_location_string=$p
 }
 
 # could be overridden by other components
 custom_prompt_status() {
-  get_cell_location_string
-  echo -n "$cell_location_string "
+  :
 }
 
 out_exec() {
@@ -752,7 +738,7 @@ prompt_error_string() {
 }
 
 short_path() {
-  local p=$1
+  local p=$PWD
   local o=$p
   if [[ "$p" == */*/*/*/*/* ]]; then
     p=${p#/work/*/}
@@ -790,7 +776,7 @@ big_prompt() {
   fi
 
   export PS1="
-| $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET$YELLOW\$(short_path \$PWD)$PURPLE\$(parse_git_branch 2>/dev/null)$RESET
+| $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$DIM_CYAN\$(cell_info)$PURPLE\$(parse_git_branch 2>/dev/null)$YELLOW\$(short_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
 | $ "
   export PS2='> '
   export PS4='+ '
@@ -802,7 +788,7 @@ medium_prompt() {
   fi
 
   export PS1="
-| $GREEN\$prompt_name $DIM_RED\$(prompt_error_string)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET$YELLOW\$(short_path \$PWD)$PURPLE\$(parse_git_branch 2>/dev/null)$RESET
+| $GREEN\$prompt_name $DIM_RED\$(prompt_error_string)$DIM_CYAN\$(cell_info)$PURPLE\$(parse_git_branch 2>/dev/null)$YELLOW\$(short_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
 | $ "
   export PS2='> '
   export PS4='+ '
