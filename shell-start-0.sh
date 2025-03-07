@@ -2,8 +2,8 @@
 
 SIMPLETON_LIB=/repo/simpleton/lib
 source $SIMPLETON_LIB/lifted-bash || exit 1
-bash_lifted_init
 source $SIMPLETON_LIB/bash-lib || exit 1
+bash_lifted_init
 source $SIMPLETON_LIB/walk-lib || exit 1
 
 if [[ "${ADD_PATH:-}" ]]; then
@@ -168,7 +168,7 @@ walk() {
 
 # saves existing dir before changing to the given dir
 cd() {
-  local target=$1 old=$PWD
+  local target=${1:-} old=$PWD
   if [[ ! "$target" ]]; then
     target=$HOME
   fi
