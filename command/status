@@ -2,27 +2,95 @@
 
 source $SIMPLETON_LIB/update-lib
 
-output_age() {
+quick_switch() {
   begin_function
 
-    local last_good_update_file=$status_path/last-good-update-end \
-      age='-' \
-      last_good_ts \
-      last_good_date \
-      age_s \
+    cyto_path=$cell_path/.cyto
 
+    status_path=$cyto_path/status \
+    context_check_file=$cyto_path/context-check \
+
+    if [[ ! -f $context_check_file ]]; then
+      switch_context $cell_path || fail
+    else
+      source $context_check_file || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+compute_age() {
+  begin_function
+    local last_good_update_file=$status_path/last-good-update-end
     if [[ -e $last_good_update_file ]]; then
       last_good_ts=$(date -r $last_good_update_file +%s) || fail
       last_good_date=$(date -r $last_good_update_file) || fail
       (( age_s = EPOCHSECONDS - last_good_ts ))
       convert_from_seconds $age_s age
     fi
+  end_function
+  handle_return
+}
+
+output_age_upstream_single() {
+  local upstream=$1 indent=${indent:-0}
+  begin_function
+    local cell_is_leaf cyto_path status_path context_check_file cell_path
+    cell_path=$(realpath $upstream)
+    quick_switch $cell_path || fail
+
+    local age='-' \
+      last_good_ts \
+      last_good_date \
+      age_s \
+
+    compute_age || fail
+
+    local pad
+    printf -v pad %${indent}s
+    message+="${pad}${upstream##*/} age:$age$NL"
+
+    # recursive
+    output_age_upstream $cell_path || fail
+
+  end_function
+  handle_return
+}
+
+output_age_upstream() {
+  local cell_path=$1 indent=${indent:-0}
+  begin_function
+    local upstreams upstream
+    upstreams=$(find1 $cyto_path/up-chosen -type d -not -name ".*" | sort) || fail
+    (( indent += 2 ))
+    begin_for upstream in $upstreams; doo
+      output_age_upstream_single $upstream || fail
+    end_for
+    (( indent -= 2 ))
+  end_function
+  handle_return
+}
+
+output_age() {
+  begin_function
+
+    local age='-' \
+      last_good_ts \
+      last_good_date \
+      age_s \
+
+    compute_age || fail
 
     if (( command_detail < 1 )); then
       message+="age:$age "
     else
-      message+="  Data Age$COL20: $age$NL"
-      message+="  Last Good Update$COL20: $last_good_date$NL"
+      message+="  Data Age$COL30: $age$NL"
+      message+="  Last Good Update$COL30: $last_good_date$NL"
+      if (( command_detail > 1 )); then
+        message+="  Upstream Ages:$NL"
+        indent=$((indent+2)) output_age_upstream $cell_path || fail
+      fi
     fi
 
   end_function
@@ -46,13 +114,13 @@ output_needs_update() {
     if (( command_detail < 1 )); then
       message+="$freshness "
     else
-      message+="  Freshness$COL20: $freshness$NL"
+      message+="  Freshness$COL30: $freshness$NL"
     fi
 
     if (( command_detail == 0 )); then
       message+="$log_message "
     elif (( command_detail > 0 )); then
-      message+="  Update Status$COL20: $log_message$NL"
+      message+="  Update Status$COL30: $log_message$NL"
     fi
 
   end_function
@@ -103,17 +171,8 @@ output_status_folder() {
   begin_function
 
     log_verbose "Checking status of $cell_path"
-    local cell_is_leaf \
-      cyto_path=$cell_path/.cyto \
-
-    local status_path=$cyto_path/status \
-      context_check_file=$cyto_path/context-check \
-
-    if [[ ! -f $context_check_file ]]; then
-      switch_context $cell_path || fail
-    else
-      source $context_check_file || fail
-    fi
+    local cell_is_leaf cyto_path status_path context_check_file
+    quick_switch $cell_path || fail
 
     if [[ $cell_is_leaf == t ]]; then
       output_status_leaf || fail
