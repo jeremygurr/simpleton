@@ -43,6 +43,61 @@ show_time_update() {
   fi
 }
 
+handle_user_interrupt() {
+  local c silent=f prompt=${1:-Paused.}
+  echo >&$fd_original_err
+  while true; do
+    if [[ $silent == t ]]; then
+      read -u $fd_original_in -sr -N 1 c >&$fd_original_err
+    else
+      read -u $fd_original_in -sr -N 1 -p "${YELLOW}$prompt${RESET} (r)esume, (l)og level change, (d)ebug, (q)uit? " c >&$fd_original_err
+    fi
+    silent=f
+    case "$c" in
+      d)
+        echo "debug" >&$fd_original_err
+        debug_immediate=t
+        debug_start n
+      ;;
+      l)
+        echo "log level change" >&$fd_original_err
+        local log=
+        read -u $fd_original_in -e -p "New log level: " log >&$fd_original_err
+        if [[ "$log" ]]; then
+          if function_exists resolve_log_var; then
+            resolve_log_var
+          else
+            log_level_filter=$log
+          fi
+          log_format=default
+          log_level_filter_changed
+          debug_log_level_filter=$log_level_filter
+          echo "Log level changed to $log_level_filter" >&$fd_original_err
+        else
+          continue
+        fi
+      ;;
+      q)
+        echo "quit" >&$fd_original_err
+        exit 100
+      ;;
+      r)
+        echo "resume" >&$fd_original_err
+        :
+      ;;
+      $NL)
+        silent=t
+        continue
+      ;;
+      *)
+        echo "invalid key, try again" >&$fd_original_err
+        continue
+      ;;
+    esac
+    break
+  done
+}
+
 show_trace_vars() {
   local indent=0 prefix= showed_something=f new_time
 
@@ -92,7 +147,7 @@ show_trace_vars() {
           show_time_update
           echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id ${YELLOW}$var=$show_val$RESET" >&$fd_original_err
           if [[ " ${pause_at_vars} " == *" $var "* ]]; then
-            pause_qd "Var changed: $var."
+            handle_user_interrupt "Var changed: $var."
           fi
         fi
         unset trace_var_sub[$var]
@@ -105,7 +160,7 @@ show_trace_vars() {
         unset trace_var_sub[$var]
         trace_var_old[$var]=$value
         if [[ " ${pause_at_vars} " == *" $var "* ]]; then
-          pause_qd "Var changed: $var."
+          handle_user_interrupt "Var changed: $var."
         fi
       fi
     done
@@ -163,60 +218,6 @@ reached_debug_id() {
   done
 }
 
-handle_user_interrupt() {
-  local c silent=f
-  while true; do
-    if [[ $silent == t ]]; then
-      read -u $fd_original_in -sr -N 1 c >&$fd_original_err
-    else
-      read -u $fd_original_in -sr -N 1 -p "${YELLOW}Paused by user.${RESET} (r)esume, (l)og level change, (d)ebug, (q)uit? " c >&$fd_original_err
-    fi
-    silent=f
-    case "$c" in
-      d)
-        echo "debug" >&$fd_original_err
-        debug_immediate=t
-        debug_start n
-      ;;
-      l)
-        echo "log level change" >&$fd_original_err
-        local log=
-        read -u $fd_original_in -e -p "New log level: " log >&$fd_original_err
-        if [[ "$log" ]]; then
-          if function_exists resolve_log_var; then
-            resolve_log_var
-          else
-            log_level_filter=$log
-          fi
-          log_format=default
-          log_level_filter_changed
-          debug_log_level_filter=$log_level_filter
-          echo "Log level changed to $log_level_filter" >&$fd_original_err
-        else
-          continue
-        fi
-      ;;
-      q)
-        echo "quit" >&$fd_original_err
-        exit 100
-      ;;
-      r)
-        echo "resume" >&$fd_original_err
-        :
-      ;;
-      $NL)
-        silent=t
-        continue
-      ;;
-      *)
-        echo "invalid key, try again" >&$fd_original_err
-        continue
-      ;;
-    esac
-    break
-  done
-}
-
 # ALSO IN: CellOp
 debug_id_inc() {
   (( no_trace_depth++ ))
@@ -238,7 +239,7 @@ debug_id_inc() {
 
   if [[ "${struct_type:-}" && "${pause_at_functions:-}" \
      && " $pause_at_functions " == *" ${FUNCNAME[1]} "* ]]; then
-    pause_qd "Reached ${struct_type:-}."
+    handle_user_interrupt "Reached ${struct_type:-}."
   fi
 
   if [[ "${debug_id:-}" && $debug_id != t ]] && reached_debug_id $debug_id; then
