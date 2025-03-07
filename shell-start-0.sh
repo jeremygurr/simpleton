@@ -645,6 +645,16 @@ parse_git_branch() {
 get_cell_location_string() {
   local p= close=f
 
+  if [[ -d $PWD/.dna ]]; then
+    local cell_name=$(realpath $PWD)
+    cell_name=${cell_name#/*/*/}
+    while [[ $cell_name == *:* || $cell_name == */.* ]]; do
+      cell_name=${cell_name%/*:*}
+      cell_name=${cell_name%/.*}
+    done
+    p+="($cell_name) "
+  fi
+
   if [[ $PWD == /work/* ]]; then
     p+="[work"
     close=t
@@ -663,12 +673,12 @@ get_cell_location_string() {
 
   local sub_branches=( $(find1 . -name "*:*") ) || return 1
   if [[ $PWD =~ : ]]; then
-    if [[ "$sub_branches" ]]; then
+    if [[ "${sub_branches:-}" ]]; then
       p+=" branch"
     else
       p+=" leaf"
     fi
-  elif [[ "$sub_branches" ]]; then
+  elif [[ "${sub_branches:-}" ]]; then
     p+=" trunk"
   fi
 
