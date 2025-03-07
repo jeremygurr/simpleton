@@ -755,29 +755,40 @@ pre_update() {
     #   could potentially invalidate it, requiring another update
     touch $status_path/up-to-date || fail
 
+    can_agg=f
+    if [[ "$out_file" ]]; then
+      local -n dim_type=${current_branch_dim}_dim_type
+      local -n member_type=${dim_type}_${current_branch_dim}_member_type
+      can_agg=t
+      if [[ "$member_type" == static ]]; then
+        local m s
+        local -n members=${dim_type}_${current_branch_dim}_members
+        for m in $members; do
+          get_sane_value $m s
+          if [[ ! -d $cell_path/${current_branch_dim}:$s ]]; then
+            can_agg=f
+            break
+          fi
+        done
+      fi
+    fi
+
+    if [[ $can_agg == t ]]; then
+      local parent_cell=${cell_path%/*}
+      while [[ -d $parent_cell/.dna ]]; do
+        if [[ -e $parent_cell/$out_file ]]; then
+          rm $parent_cell/$out_file || fail
+        fi
+        parent_cell=${parent_cell%/*}
+      done
+    fi
+
     if [[ $reuse_existing_out == t && -f $status_path/last-good-update-end ]]; then
       # Don't allow cells to reuse old data when it is mid-modification and this update fails
       rm $status_path/last-good-update-end || fail
     fi
 
-    setup_dims || fail
     calc_coords_leaf || fail
-    fence
-
-    # This should have already happened when the mock was set in the first place
-    #if [[ $current_mock != f ]]; then
-    #  kind=data clean_cell $cell_path || fail
-    #fi
-
-    # This already happens in switch_context
-    #if [[ $cell_is_leaf == t ]]; then
-    #  local known_dims=()
-    #  local missing_dims=()
-    #  prep_dims sub_dims control_props data_props || fail
-    #  expand_dims || fail
-    #  coord_type=leaf \
-    #  calc_coordinates || fail
-    #fi
 
   end_function
   handle_return
@@ -1062,21 +1073,6 @@ update_aggregation() {
       if [[ ! "${current_branch_dim:-}" ]]; then
         log_fatal "Internal error: missing current_branch_dim"
         fail1
-      fi
-
-      local -n dim_type=${current_branch_dim}_dim_type
-      local -n member_type=${dim_type}_${current_branch_dim}_member_type
-      local can_agg=t
-      if [[ "$member_type" == static ]]; then
-        local m s
-        local -n members=${dim_type}_${current_branch_dim}_members
-        for m in $members; do
-          get_sane_value $m s
-          if [[ ! -d $cell_path/${current_branch_dim}:$s ]]; then
-            can_agg=f
-            break
-          fi
-        done
       fi
 
       if [[ $can_agg == t ]]; then
@@ -1481,6 +1477,7 @@ update_command() {
 
     if [[ $needs_update == t ]]; then
 
+      local can_agg=f
       pre_update || fail
       deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
 
