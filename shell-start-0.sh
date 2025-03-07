@@ -762,7 +762,7 @@ short_path() {
     p=${p%*/*/*/*/*}
     p=${o#$p/}
   fi
-  echo -n "$p"
+  echo -n "$p "
 }
 
 pid_path() {
@@ -790,17 +790,29 @@ big_prompt() {
   fi
 
   export PS1="
-| $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
-| $YELLOW\$(short_path \$PWD) $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+| $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET$YELLOW\$(short_path \$PWD)$PURPLE\$(parse_git_branch 2>/dev/null)$RESET
+| $ "
   export PS2='> '
   export PS4='+ '
 }
 
 medium_prompt() {
-  export PS1="$GREEN\$prompt_name $DIM_YELLOW\W $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+  if [ ! "$BASH" ]; then
+    return 0
+  fi
+
+  export PS1="
+| $GREEN\$prompt_name $DIM_RED\$(prompt_error_string)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET$YELLOW\$(short_path \$PWD)$PURPLE\$(parse_git_branch 2>/dev/null)$RESET
+| $ "
+  export PS2='> '
+  export PS4='+ '
 }
 
 small_prompt() {
+  if [ ! "$BASH" ]; then
+    return 0
+  fi
+
   export PS1="$DIM_YELLOW\W $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
 }
 
