@@ -299,6 +299,7 @@ split_ordinal() {
     _o=${BASH_REMATCH[1]}
     _b=${BASH_REMATCH[2]}
   else
+    _o=0
     _b=$_f
   fi
   debug_return_vars="$2 $3"
@@ -1445,7 +1446,7 @@ init_context() {
     tmp_path=$cyto_path/tmp \
     up_path=$cyto_path/up \
     up_chosen_path=$cyto_path/up-chosen \
-    inner_path=$cyto_path/inner \
+    reactor_path=$cyto_path/reactors \
     outer_path=$cyto_path/outer \
 
     lock_path=$context_path \
@@ -1838,6 +1839,7 @@ load_dna_contents() {
     local current_var=${prefix%_} ord item_name item_var= result 
     if [[ $pass_thru == f ]]; then
       local array_content=( )
+      local -n array_ord=${current_var}_ord
     fi
     current_var=${current_var//-/_}
 
@@ -1875,6 +1877,7 @@ load_dna_contents() {
 
       if [[ -d $item ]]; then
         if [[ $recursive == t ]]; then
+          # recursive
           load_dna_contents_handle_dir || fail
         fi
       else
@@ -1888,6 +1891,20 @@ load_dna_contents() {
       write_to_context var array_assignment || fail
     fi
 
+  end_function
+  handle_return
+}
+
+build_context_reactors() {
+  begin_function_lo
+    debug_start
+    reactor_groups=
+    local ord
+    for ord in ${reactors_ord[*]:-}; do
+      reactor_groups+="$ord "
+    done
+    reactor_groups=( $(echo "${reactor_groups% }" | sed 's/ /\n/g' | sort -gu) )
+    write_vars_to_context reactor_groups || fail
   end_function
   handle_return
 }
@@ -1924,6 +1941,8 @@ build_context_dna() {
 
       cat $context_path-$context_type.new2 >>$context_path-$context_type.new || fail
       rm $context_path-$context_type.new2 || fail
+
+      build_context_reactors || fail
 
     elif [[ -f $dna_path ]]; then
       safe_link $dna_path $context_path-$context_type.new || fail
@@ -3640,6 +3659,7 @@ load_dna_contents_handle_dir() {
         result="${current_var}_${item_var}_path=$real_path"
         write_to_context var result || fail
       fi
+      array_ord+=( $ord )
     fi
 
     if [[ ! -d $real_path/.dna ]]; then
@@ -3704,20 +3724,20 @@ link_choices() {
   handle_return
 }
 
-make_cyto_inner() {
+make_cyto_reactors() {
   begin_function
-    mkdir $inner_path || fail
-    local inner_name
-    begin_for inner_name in ${inner[*]}; doo
-      local dep_path=$inner_path/$inner_name \
-        inner_var=${inner_name//-/_}
-      local -n path=inner_${inner_var}_path
+    mkdir $reactor_path || fail
+    local reactor_name
+    begin_for reactor_name in ${reactors[*]}; doo
+      local dep_path=$reactor_path/$reactor_name \
+        reactor_var=${reactor_name//-/_}
+      local -n path=reactors_${reactor_var}_path
       if [[ ! -v path ]]; then
-        log_fatal "Missing inner path var"
+        log_fatal "Missing reactor path var"
         fail1
       fi
       if [[ ! -d $path ]]; then
-        log_fatal "Missing inner path"
+        log_fatal "Missing reactor path"
         fail1
       fi
       safe_link $path $dep_path || fail
@@ -3881,8 +3901,8 @@ build_cyto_inner() {
       make_cyto_up || fail
     fi
 
-    if [[ "${inner:-}" && ! -d $inner_path && $cell_is_leaf == t ]]; then
-      make_cyto_inner || fail
+    if [[ "${reactors:-}" && ! -d $reactor_path && $cell_is_leaf == t ]]; then
+      make_cyto_reactors || fail
     fi
 
   end_function
