@@ -1217,11 +1217,12 @@ update_self_retry_loop() {
 
     if [[ $can_update == t ]]; then
       local attempt=1 reactors_left=( ${reactors[*]:-} )
+      local max_attempts=$((max_attempts + ${#reactors_left[*]}))
       while true; do
 
         local attempt_string=
         if (( max_attempts > 1 )); then
-          attempt_string=", attempt $((attempt+1)) of $retry_max"
+          attempt_string=", attempt $attempt of $max_attempts"
         fi
           
         update_self || fail
@@ -1234,7 +1235,6 @@ update_self_retry_loop() {
 
         if [[ "${reactors_left:-}" ]]; then
 
-          debug_start
           local reactor=${reactors_left[0]}
           log_verbose "Executing reactor $reactor"
           reactors_left=( ${reactors_left[*]:1} )
@@ -1244,12 +1244,14 @@ update_self_retry_loop() {
           fork execute_commands $(realpath $reactor_cell) update || fail
 
         else
+
           log_info "Waiting $delay seconds before trying again" 
           sleep $delay
           (( delay *= retry_scale )) || true
           (( delay > retry_delay_max )) && delay=$retry_delay_max
-          (( attempt++ ))
+
         fi
+        (( attempt++ ))
 
         update_upstreams || fail
 
