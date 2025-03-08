@@ -53,12 +53,102 @@ CLEAR_SCREEN=$'\033[2J\r\033[H'
 original_cmd=${original_cmd:-"$0 $*"}
 alias debug_once='[[ ! "${debug_once_triggered:-}" ]] && { debug_once_triggered=t; debug_start; }'
 
+# duplicated from bash-lib
+shell_quote_var() {
+  local var_name=$1
+  local -n var=$var_name
+  local quotes=${quotes:-single} # can be single, double, or dollar
+  local newlines=${newlines:-escaped} # can be escaped or preserved
+  local quote_empty=${quote_empty:-t}
+
+  if [[ ! -v var ]]; then
+    echo "shell_quote_var called on unset var: $1" >&2
+    return 1
+  fi
+
+  if [[ "$var" =~ \<|\>|\(|\)|\"|\'|\\|\ |\$|$NL ]]; then
+    if [[ $quotes == single ]]; then
+      var=${var//\'/\'\"\'\"\'}
+      var="'$var'"
+    elif [[ $quotes == dollar ]]; then
+      var=${var//\'/\\x27}
+      var=${var//$NL/\\n}
+      var="\$'$var'"
+    else
+      var=${var//\\/\\\\}
+      var=${var//\"/\\\"}
+      var=${var//\$/\\\$}
+      var="$DQ$var$DQ"
+    fi
+  elif [[ ! "$var" && $quote_empty == t ]]; then
+    if [[ $quotes == single ]]; then
+      var="''"
+    elif [[ $quotes == dollar ]]; then
+      var="\$''"
+    else
+      var='""'
+    fi
+  fi
+
+  if [[ "$newlines" == escaped ]]; then
+    var=${var//$NL/\\n}
+  fi
+
+  return 0
+}
+
 is_array() {
   local -n array=$1
   if [[ ! -v array[*] ]]; then
     return 1
   fi
   [[ ${array@a} == a ]]
+}
+
+# duplicated from bash-lib
+# variable should be checked to see if it is set first
+is_set() {
+  local -n _set=$1
+  local rc
+  set +u
+  [[ ${_set@a} == A ]]; rc=$?
+  set -u
+  return $rc
+}
+
+# duplicated from bash-lib
+get_var_value() {
+  local -n _var=$1 _val=${2:-value} || return 1
+  _val='(unbound)'
+  if is_array _var; then
+    if [[ "${_var:-}" ]] && (( ${#_var[*]} > 20 )); then
+      _val="( ${_var[*]:0:20} ... )"
+    else
+      _val="( ${_var[*]:-} )"
+    fi
+  elif is_set _var; then
+    local c=0 k v
+    _val="( "
+    for k in "${!_var[@]}"; do
+      v=${_var[$k]}
+      if [[ "${v:-}" ]]; then
+        _val+="$k=$v "
+      else
+        _val+="$k=(empty) "
+      fi
+      (( c++ ))
+      if (( c > 20 )); then
+        _val+="... "
+        break
+      fi
+    done
+    _val+=")"
+  elif [[ -v _var ]]; then
+    _val=$_var
+    quotes=single shell_quote_var _val
+  else
+    _val='(unset)'
+  fi
 }
 
 side_log() {
