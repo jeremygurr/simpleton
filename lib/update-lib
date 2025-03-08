@@ -794,36 +794,6 @@ pre_update() {
   handle_return
 }
 
-create_outer_links() {
-  begin_function
-
-    local outer_cell_path outer_cell_name
-
-    get_bottom_cell ${inner_cell_link%/*} || fail
-    outer_cell_path=$bottom_cell
-
-    local outer_link=$outer_path/$outer_cell_name
-    if [[ ! -e $outer_link ]]; then
-      if [[ ! -d $outer_path ]]; then
-        mkdir $outer_path || fail
-      fi
-      safe_link $outer_cell_path $outer_link || fail
-    else
-      local link_target
-      link_target=$(readlink $outer_link) || fail
-      if [[ $link_target != $outer_cell_path ]]; then
-        log_fatal "Link conflict: A link already exists but doesn't point to the same place."
-        log_fatal "  source:   $outer_link"
-        log_fatal "  target 1: $outer_cell_path"
-        log_fatal "  target 2: $link_target"
-        fail1
-      fi
-    fi
-
-  end_function
-  handle_return
-}
-
 create_downstream_links() {
   begin_function
 
@@ -913,43 +883,6 @@ create_sub_cell() {
     member=$member \
     repair=t \
     plant_member || fail
-
-  end_function
-  handle_return
-}
-
-update_inner() {
-  begin_function
-
-    local old_link=$inner_cell_link \
-      old_target=$(readlink $inner_cell_link) \
-      new_target=$cell_path || fail
-
-    if [[ $cell_is_leaf == t ]]; then
-      create_outer_links || fail
-    fi
-
-    local update_outer_link=f
-    if [[ ! -e $old_link ]]; then
-      log_debug "Will update outer link because file is missing"
-      update_outer_link=t
-    else
-      local new_target_length=${#new_target} \
-        old_target_length=${#old_target}
-
-      if (( new_target_length > old_target_length )); then
-        log_debug "Will update outer link because new target is more specific"
-        update_outer_link=t
-      elif [[ ${old_target#$new_target} == ${old_target} ]]; then
-        log_debug "Will update outer link because new target is different"
-        update_outer_link=t
-      fi
-    fi
-
-    if [[ $update_outer_link == t ]]; then
-      log_debug "Linking upstream cell to it's outer cell cyto up folder"
-      force=t safe_link $cell_path $old_link || fail
-    fi
 
   end_function
   handle_return
@@ -1194,7 +1127,7 @@ update_self() {
     log_debug "Executing local update of $short_cell$attempt_string" 
 
     update_successful=
-    can_retry=f
+    can_retry=t
 
     local reuse_existing_out=${reuse_existing_out:-t}
 
@@ -1283,22 +1216,42 @@ update_self_retry_loop() {
     fi
 
     if [[ $can_update == t ]]; then
-      for ((retry=0; retry < retry_max; retry++)); do
-
-        if [[ $retry -gt 0 ]]; then
-          log_info "Waiting $delay seconds before trying again" 
-          sleep $delay
-          let 'delay *= retry_scale' || true
-        fi
+      local attempt=1 reactors_left=( ${reactors[*]:-} )
+      while true; do
 
         local attempt_string=
-        if (( retry_max > 1 )); then
-          attempt_string=", attempt $((retry+1)) of $retry_max"
+        if (( max_attempts > 1 )); then
+          attempt_string=", attempt $((attempt+1)) of $retry_max"
         fi
           
         update_self || fail
 
-        [[ $can_retry == f || $update_successful == t ]] && break
+        [[ $can_retry == f \
+        || $update_successful == t \
+        || $attempt -ge $max_attempts \
+        && ! "${reactors_left:-}" \
+        ]] && break
+
+        if [[ "${reactors_left:-}" ]]; then
+
+          debug_start
+          local reactor=${reactors_left[0]}
+          log_verbose "Executing reactor $reactor"
+          reactors_left=( ${reactors_left[*]:1} )
+          local reactor_cell=${reactor_path}/$reactor
+
+          downstream_cell_name=${short_cell//\//_} \
+          fork execute_commands $(realpath $reactor_cell) update || fail
+
+        else
+          log_info "Waiting $delay seconds before trying again" 
+          sleep $delay
+          (( delay *= retry_scale )) || true
+          (( delay > retry_delay_max )) && delay=$retry_delay_max
+          (( attempt++ ))
+        fi
+
+        update_upstreams || fail
 
       done
     fi
@@ -1405,20 +1358,6 @@ get_dep_member() {
   return 0
 }
 
-update_inners() {
-  begin_function
-    local i_path needs_update= inners
-    inners=$(find1 $inner_path -type d -not -name '.*') || fail
-    begin_for i_path in $inners; doo
-      outer_cell_name=${short_cell//\//_} \
-      inner_cell_link=$i_path \
-      anchor_dims= \
-      fork execute_commands $i_path update || fail
-    end_for
-  end_function
-  handle_return
-}
-
 update_command() {
   begin_function
 
@@ -1469,10 +1408,6 @@ update_command() {
       update_downstream || fail
     fi
 
-    if [[ "${inner_cell_link:-}" ]]; then
-      update_inner || fail
-    fi
-
     get_needs_update $cell_path || fail
 
     if [[ $needs_update == t ]]; then
@@ -1503,7 +1438,7 @@ update_command() {
             fence
             update_aggregation || fail
           else
-            log_fatal "Internal error: cell is not a leaf, yet it doesn't have leaf dims?"
+            log_fatal "Internal error: cell is not a leaf, yet it doesn't have child dims?"
             fail1
           fi
         fi
@@ -1514,14 +1449,6 @@ update_command() {
     else
       update_successful=t
       abort
-    fi
-
-    if [[ $update_successful == t
-       && $cell_is_leaf == t
-       && $needs_inner == t
-       && "${inner:-}" ]]; then
-      log_debug "Updating inner cells"
-      update_inners || fail
     fi
 
   end_function
