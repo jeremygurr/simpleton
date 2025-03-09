@@ -656,42 +656,87 @@ build_context_expand() {
   handle_return
 }
 
+# writes branch + sub coords to a file, skipping dims specified in skip_dims
+# it assumes we are on a leaf, so branch coords should be a single row
+# also assumes that there is 1 or more sub coord rows
 # inputs:
 #   $1          full path of file to write to
-#   coord_type 
+#   skip_dims   (optional) dims to skip
 write_coordinates_to_file() {
-  local coord_type=${coord_type} target_file=$1 skip_dims=${skip_dims:-}
+  local target_file=$1 skip_dims=${skip_dims:-}
   begin_function
+
+    if [[ -f $target_file ]]; then
+      log_fatal "Target file $target_file already exists. It must be deleted before calling this function."
+      fail1
+    fi
 
     local value field_index data_offset row_index field
 
-    local -n c_data=${coord_type}_coordinate_data \
-      c_rows=${coord_type}_coordinate_rows \
-      c_fields=${coord_type}_coordinate_fields \
-      c_fields_count=${coord_type}_coordinate_fields_count \
-      c_count=${coord_type}_coordinate_count \
+    local -n b_data=branch_coordinate_data \
+      b_rows=branch_coordinate_rows \
+      b_fields=branch_coordinate_fields \
+      b_fields_count=branch_coordinate_fields_count \
+      b_count=branch_coordinate_count \
+
+    local -n s_data=sub_coordinate_data \
+      s_rows=sub_coordinate_rows \
+      s_fields=sub_coordinate_fields \
+      s_fields_count=sub_coordinate_fields_count \
+      s_count=sub_coordinate_count \
+
+    if (( b_rows > 1 )); then
+      log_fatal "write_coordinates_to_file can only be used on a leaf, where there is no more than one branch coordinate row."
+      fail1
+    fi
+
+    if [[ ! "{s_fields:-}" || s_rows -eq 0 ]]; then
+      log_fatal "There must be at least one sub coord row to call write_coordinates_to_file"
+      fail1
+    fi
 
     local line=
-    begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
-      field=${c_fields[$field_index]}
+    if (( b_rows == 1 )); then
+      begin_for (( field_index = 0; field_index < b_fields_count; field_index++ )); doo
+        field=${b_fields[$field_index]}
+        if [[ " $skip_dims " != *" $field "* ]]; then
+          line+="$field "
+        fi
+      end_for
+    fi
+
+    begin_for (( field_index = 0; field_index < s_fields_count; field_index++ )); doo
+      field=${s_fields[$field_index]}
       if [[ " $skip_dims " != *" $field "* ]]; then
         line+="$field "
       fi
     end_for
-    echo "${line% }" >$target_file || fail
+    echo "${line% }" >>$target_file || fail
 
-    for (( row_index = 0; row_index < c_rows; row_index++ )); do
+    for (( row_index = 0; row_index < s_rows; row_index++ )); do
       line=
-      for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
-        (( data_offset = row_index * c_fields_count + field_index ))
-        field=${c_fields[$field_index]}
+      if (( b_rows == 1 )); then
+        for (( field_index = 0; field_index < b_fields_count; field_index++ )); do
+          field=${b_fields[$field_index]}
+          if [[ " $skip_dims " != *" $field "* ]]; then
+            value=${b_data[$field_index]}
+            quotes=single shell_quote_var value
+            line+="$value "
+          fi
+        done
+      fi
+
+      for (( field_index = 0; field_index < s_fields_count; field_index++ )); do
+        (( data_offset = row_index * s_fields_count + field_index ))
+        field=${s_fields[$field_index]}
         if [[ " $skip_dims " != *" $field "* ]]; then
-          value=${c_data[$data_offset]}
-          quotes=single shell_quote_var value || { fail_later; break 2; }
+          value=${s_data[$data_offset]}
+          quotes=single shell_quote_var value
           line+="$value "
         fi
       done
-      echo "${line% }" >>$target_file || { fail_later; break; }
+
+      echo "${line% }" >>$target_file || fail
     done
 
   end_function
@@ -1136,7 +1181,7 @@ setup_dims() {
     prep_dims trunk_dims sub_dims control_props data_props || fail
     load_child_dims || fail
     if [[ $cell_is_leaf == t ]]; then
-      expand_dims ${control_props[*]:-} ${data_props[*]:-} || fail
+      expand_dims ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} || fail
     else
       expand_dims ${child_dims[*]:-} || fail
     fi
@@ -1400,7 +1445,7 @@ init_context() {
     init_coord branch
     init_coord leaf
     init_coord sub
-    init_coord tree
+    #init_coord tree
 
     cell_expiration= \
     check_op_var=f \
@@ -2222,10 +2267,10 @@ setup_coord_fields() {
         coordinate_fields=( ${sub_dims[*]:-} )
         coordinate_fields_plural=( ${sub_dims_plural[*]:-} )
       ;;
-      tree)
-        coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
-        coordinate_fields_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} )
-      ;;
+      #tree)
+      #  coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
+      #  coordinate_fields_plural=( ${trunk_dims_plural[*]:-} ${sub_dims_plural[*]:-} )
+      #;;
       *)
         log_fatal "Internal error: invalid coord_type=$coord_type"
         fail1
