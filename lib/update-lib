@@ -483,6 +483,10 @@ update_upstream() {
     
     update_upstream_get_locks || fail
 
+    if [[ -f $chosen_target_link/color.var ]]; then
+      color_upstream_found=t
+    fi
+
   end_function
   handle_return
 }
@@ -1126,6 +1130,136 @@ update_self_move_out_path() {
   handle_return
 }
 
+get_max_color() {
+  begin_function_lo
+    local a=$1 b=$2
+
+    case $b in 
+      green|yellow|red|blue|black) 
+        max_color=$b
+      ;;
+      *)
+        log_fatal "Invalid color: $b"
+        fail1
+      ;;
+    esac
+
+    case $a in
+      green)
+        :
+      ;;
+      yellow)
+        case $b in 
+          green) 
+            max_color=$a
+          ;;
+        esac
+      ;;
+      red)
+        case $b in 
+          green|yellow) 
+            max_color=$a
+          ;;
+        esac
+      ;;
+      blue)
+        case $b in 
+          green|yellow|red) 
+            max_color=$a
+          ;;
+        esac
+      ;;
+      black)
+        case $b in 
+          green|yellow|red|blue) 
+            max_color=$a
+          ;;
+        esac
+      ;;
+      *)
+        log_fatal "Invalid color: $a"
+        fail1
+      ;;
+    esac
+  end_function
+  handle_return
+}
+
+write_fields_to_output_tab() {
+  local fields=( "$@" )
+  begin_function_lo
+    local line=
+    if [[ "${branch_dims:-}" ]]; then
+      line+="${branch_dims[*]} "
+    fi
+    line+="${fields[*]}"
+    echo "$line" >$cell_path/output.tab || fail
+  end_function
+  handle_return
+}
+
+write_row_to_output_tab() {
+  local data=( "$@" )
+  begin_function_lo
+    local line= d
+    if [[ "${branch_dims:-}" ]]; then
+      for d in ${branch_dims[*]}; do
+        local dim=d_$d
+        local m=${dim:-}
+        shell_quote_var m
+        line+="$m "
+      done
+    fi
+    for d in "${data[@]}"; do
+      shell_quote_var d
+      line+="$d "
+    done
+    echo "${line% }" >>$cell_path/output.tab || fail
+  end_function
+  handle_return
+}
+
+update_handle_color() {
+  begin_function
+
+    if [[ $missing == t ]]; then
+      # aggregate upstream results
+      local up_name path up_color up_problem max_color
+      color=green problem_detail=
+
+      for up_name in ${up[*]}; do
+        path=${up_chosen_path}/$up_name
+        up_color=
+        up_problem=
+        if [[ -f $path/color.var ]]; then
+          up_color=$(<$path/color.var)
+          get_max_color "$up_color" "$color" || fail
+          color=$max_color
+          if [[ -f $path/problem_detail.var ]]; then
+            up_problem=$(<$path/problem_detail.var)
+            if [[ "$problem_detail" ]]; then
+              problem_detail+=" $up_problem"
+            else
+              problem_detail=$up_problem
+            fi
+          fi
+        fi
+      done
+      maybe_break
+
+    fi
+
+    echo "$color" >$cell_path/color.var || fail
+    if [[ "${problem_detail:-}" ]]; then
+      echo "$problem_detail" >$cell_path/problem_detail.var || fail
+    fi
+
+    write_fields_to_output_tab color problem_detail || fail
+    write_row_to_output_tab "$color" "$problem_detail" || fail
+  end_function
+  handle_return
+}
+
 update_self() {
   local log_vars='short_cell'
   begin_function
@@ -1155,10 +1289,14 @@ update_self() {
     tee_output_to_log || fail
     if [[ $current_mock == f ]]; then
       localize
+      local color problem_detail
       ignore_missing=t execute_op update || {
         log_fatal "Internal error while executing update operator."
         fail1
       }
+      if [[ $color_upstream_found == t || "${color:-}" ]]; then
+        update_handle_color || fail
+      fi
     else # mocking
 
       log_warn "Using mock: $current_mock ($short_cell)"
@@ -1431,6 +1569,7 @@ update_command() {
       pre_update || fail
       deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
 
+      local color_upstream_found=f
       if [[ "$update_successful" != f ]]; then
         if [[ $current_mock == f ]]; then
           update_upstreams || fail
