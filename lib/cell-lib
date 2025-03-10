@@ -1409,8 +1409,7 @@ init_command_vars() {
     command_requires_cell=f \
     command_requires_resolved_dims=f \
     command_modifies_context=f \
-    command_modifies_upstream=f \
-
+    command_modifies_upstream=f
 }
 
 alias localize='[[ "${localize_dims:-}" ]] && eval "local -I $localize_dims"'
@@ -1456,6 +1455,7 @@ init_context() {
     default_anchor_dims= \
     default_freshness= \
     default_strategies=crl \
+    dna_up_files=() \
     localize_dims= \
     localize_reverse_dims= \
     lock_timeout=2 \
@@ -1818,12 +1818,17 @@ load_dna_contents_update_cell() {
 
 load_dna_contents_handle_file() {
   begin_function_lo
-    if [[ -L $item && ! -e $item ]]; then
+    if [[ -L $item ]]; then
       if [[ $real_path == /work/* ]]; then
-        load_dna_contents_update_cell $real_path || fail
+        dna_up_files+=( "$item" )
+        if [[ ! -e $item ]]; then
+          load_dna_contents_update_cell $real_path || fail
+        fi
       else
-        log_fatal "Broken link found: $item"
-        fail1
+        if [[ ! -e $item ]]; then
+          log_fatal "Broken link found: $item"
+          fail1
+        fi
       fi
     fi
     prefix=$new_prefix load_dna_item $item || fail
@@ -1974,6 +1979,10 @@ build_context_dna() {
     local derive_tables=() derived_dim_vars=()
     if [[ -d $dna_path ]]; then
       prefix= load_dna_contents $dna_path || fail
+
+      if [[ "${dna_up_files:-}" ]]; then
+        write_vars_to_context dna_up_files || fail
+      fi
 
       build_context_expand || fail
       if [[ ! "${default_anchor_dims:-}" ]]; then
