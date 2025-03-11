@@ -550,8 +550,8 @@ cd_to_leaf() {
 }
 
 cd_to_trunk() {
-  local d=$PWD last_cell=$PWD
   cd_to_branch || return 1
+  local d=$PWD last_cell=$PWD
   while [[ $d =~ : ]]; do
     d=${d%/*}
     if [[ -e $d/.dna ]]; then
