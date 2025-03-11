@@ -112,6 +112,11 @@ walk() {
         path=$current_selection/.cyto/up-chosen
         if [[ -d $path ]]; then
           walk_add_choice "u" "$path" "upstream cells"
+        else
+          path=$current_selection/.dna/up
+          if [[ -d $path ]]; then
+            walk_add_choice "u" "$path" "upstream cells"
+          fi
         fi
 
         path=$current_selection/.cyto/down
@@ -123,6 +128,8 @@ walk() {
       elif [[ ${current_selection##*/} == down ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == up-chosen ]]; then
+        walk_add_dirs $current_selection || return 1
+      elif [[ ${current_selection##*/} == up ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == .dna ]]; then
         local work_cells= work_cell pw possibility
