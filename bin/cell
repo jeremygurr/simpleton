@@ -195,6 +195,13 @@ get_help_depth_and_flags() {
   handle_return
 }
 
+is_command() {
+  local parameter=$1
+  [[ -f "$path_to_commands/$parameter.info" ]] \
+  || array_contains command_aliases $parameter \
+  || wild_file_exists $path_to_commands/$parameter-*.info
+}
+
 get_cells() {
   begin_function
     for (( ; current_parameter_index < ${#parameters[*]}; current_parameter_index++ )); do
@@ -204,11 +211,13 @@ get_cells() {
           :
         ;;
         *)
-          if [[ ! -d $parameter ]]; then
-            # is a command
+          if is_command $parameter; then
             abort
-          else
+          elif [[ -d $parameter ]]; then
             cells+=( $parameter )
+          else
+            log_fatal "Not a command or cell: $parameter"
+            fail1
           fi
         ;;
       esac
@@ -239,7 +248,7 @@ get_commands() {
           elif [[ -f "$path_to_commands/$leftover_command.info" ]]; then
             commands+=( $leftover_command )
             leftovers=()
-          elif [[ -d $parameter ]]; then
+          elif ! is_command $parameter && [[ -d $parameter ]]; then
             # it's a cell
             abort
           else
