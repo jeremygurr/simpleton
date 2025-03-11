@@ -1818,26 +1818,6 @@ load_dna_contents_update_cell() {
   handle_return
 }
 
-load_dna_contents_handle_file() {
-  begin_function_lo
-    if [[ -L $item ]]; then
-      if [[ $real_path == /work/* ]]; then
-        dna_up_files+=( "$item" )
-        if [[ ! -e $item ]]; then
-          load_dna_contents_update_cell $real_path || fail
-        fi
-      else
-        if [[ ! -e $item ]]; then
-          log_fatal "Broken link found: $item"
-          fail1
-        fi
-      fi
-    fi
-    prefix=$new_prefix load_dna_item $item || fail
-  end_function
-  handle_return
-}
-
 build_dim_info() {
   begin_function
 
@@ -1920,17 +1900,18 @@ load_dna_contents() {
       fi
 
       local real_path=$(realpath -m $item)
+      if [[ -L $item ]]; then
 
-      if [[ ! -e $real_path ]]; then
-        if [[ $real_path == /work/* ]]; then
-          local seed_path
-          ignore_nonexistent=t \
-          find_seed_path $real_path || fail
-          deep=t plant_seed_internal "$seed_path" "$work_path" || fail
-        else
-          log_fatal "Missing file in dna: $item"
-          fail1
+        debug_start
+        local real_path_parent=${real_path%/*}
+
+        if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
+          dna_up_files+=( "$item" )
+          if [[ ! -e $real_path ]]; then
+            load_dna_contents_update_cell $real_path || fail
+          fi
         fi
+
       fi
 
       if [[ -d $item ]]; then
@@ -1938,8 +1919,11 @@ load_dna_contents() {
           # recursive
           load_dna_contents_handle_dir || fail
         fi
-      else
-        load_dna_contents_handle_file || fail
+      elif [[ -f $item ]]; then
+        prefix=$new_prefix load_dna_item $item || fail
+      elif [[ -L $item ]]; then
+        log_fatal "Broken link in dna: $item"
+        fail1
       fi
 
     end_for
