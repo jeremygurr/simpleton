@@ -76,22 +76,42 @@ walk() {
   begin_function
 
     walk_init || fail
+    local back_stack=()
 
     show_selection() {
-      local extra=
-      if [[ -f $current_selection/.member ]]; then
-        extra=" $(<$current_selection/.member)"
-        if (( ${#extra} > 60 )); then
-          extra=" ${extra:0:60}..."
-        fi
-      fi
+      local extra= branches=() branch member current_selection=$current_selection
+      echo "$HIGHLIGHT$hbar_equals$NL$(short_path $current_selection)$RESET"
 
-      echo "$HIGHLIGHT$hbar_equals$NL$(short_path $current_selection)$RESET$extra"
+      while [[ $current_selection == *:* && $current_selection == /*/*/* ]]; do
+        if [[ -f $current_selection/.member ]]; then
+          member=" $(<$current_selection/.member)"
+          if (( ${#member} > 60 )); then
+            member="${member:0:60}..."
+          fi
+        else
+          member=
+        fi
+        branch=${current_selection##*/}
+        current_selection=${current_selection%/*}
+        if [[ $branch == *:* ]]; then
+          branches+=( "$branch$member" )
+        fi
+      done
+
+      local i
+      for (( i = ${#branches[*]} - 1; i >= 0; i-- )); do
+        branch=${branches[$i]}
+        echo "$branch"
+      done
     }
 
     adjust_choices() {
       if [[ -d $current_selection/.. ]]; then
         hidden=f walk_add_choice "." "$current_selection/.." ".."
+      fi
+
+      if [[ "${back_stack:-}" ]]; then
+        hidden=f walk_add_choice "b" "*back*" "back"
       fi
 
       local path
@@ -147,10 +167,14 @@ walk() {
     }
 
     handle_walk_responses() {
-      if [[ -d "$response" ]]; then
+      if [[ "$response" == "*back*" ]]; then
+        current_selection=${back_stack[-1]}
+        unset back_stack[-1]
+      elif [[ -d "$response" ]]; then
+        back_stack+=( "$current_selection" )
         current_selection="$(realpath $response)"
-        walk_filter=
       fi
+      walk_filter=
     }
 
     local result= current_selection=$(realpath .)
@@ -158,10 +182,6 @@ walk() {
     if [[ $current_selection == /seed/* ]]; then
       current_selection=/work${current_selection#/seed}
     fi
-
-    #while [[ $current_selection == */.* && $current_selection == /*/*/* ]]; do
-    #  current_selection=${current_selection%/*}
-    #done
 
     prompt="Choose (press enter to stop here): " walk_execute $current_selection || fail
 
