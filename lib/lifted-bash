@@ -32,7 +32,7 @@ bash_lifted_init() {
 }
 
 show_time_update() {
-  if [[ "${show_time:-f}" == t && showed_something=f ]]; then
+  if [[ "${show_time:-f}" == t && $showed_something == f ]]; then
     new_time=${EPOCHREALTIME/./}
     if [[ "${show_time_prev:-}" ]]; then
       micro_time_diff $show_time_prev $new_time prefix
@@ -72,7 +72,8 @@ handle_user_interrupt() {
           fi
           log_format=default
           log_level_filter_changed
-          debug_log_level_filter=$log_level_filter
+          debug_log_level_filter=$log
+          reply_to_caller "debug_log_level_filter=$debug_log_level_filter"
           echo "Log level changed to $log_level_filter" >&$fd_original_err
         else
           continue
@@ -100,16 +101,18 @@ handle_user_interrupt() {
 }
 
 show_trace_vars() {
-  local indent=0 prefix= showed_something=f new_time
+  local indent=0 prefix= new_time
 
   if [[ ${show_debug_id:-f} == a ]]; then
     show_time_update
     echo -n " $prefix$DIM_DEBUG_COLOR$fork_debug_id$RESET" >&$fd_original_err
+    showed_something=t
   fi
 
   if [[ $trace_structure == t && "${struct_type:-}" ]]; then
     show_time_update
     echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id$RESET ${struct_type:-}" >&$fd_original_err
+    showed_something=t
   fi
 
   if [[ "${trace_fun:-}" ]]; then
@@ -118,6 +121,7 @@ show_trace_vars() {
       if [[ "${struct_type:-}" == *" $fun" ]]; then
         show_time_update
         echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id ${struct_type:-}$RESET" >&$fd_original_err
+        showed_something=t
       fi
     done
   fi
@@ -147,6 +151,7 @@ show_trace_vars() {
         if [[ "${trace_var_sub[$var]}" != "$value" ]]; then
           show_time_update
           echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id ${YELLOW}$var=$show_val$RESET" >&$fd_original_err
+          showed_something=t
           if [[ " ${pause_at_vars} " == *" $var "* ]]; then
             handle_user_interrupt "Var changed: $var."
           fi
@@ -157,6 +162,7 @@ show_trace_vars() {
         if [[ $fork_debug_id != 1 || "$value" != '(unset)' ]]; then
           show_time_update
           echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id $var=$show_val$RESET" >&$fd_original_err
+          showed_something=t
         fi
         unset trace_var_sub[$var]
         trace_var_old[$var]=$value
@@ -174,6 +180,7 @@ show_trace_vars() {
     if [[ "${trace_var_old:-}" != "$result" ]]; then
       show_time_update
       echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id $trace_condition=$result$RESET" >&$fd_original_err
+      showed_something=t
       trace_var_old=$result
     fi
   fi
@@ -185,6 +192,7 @@ show_trace_vars() {
     if [[ "${trace_var_old:-}" != "$result" ]]; then
       show_time_update
       echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id expression=$result$RESET" >&$fd_original_err
+      showed_something=t
       trace_var_old=$result
     fi
   fi
@@ -223,6 +231,7 @@ reached_debug_id() {
 debug_id_inc() {
   (( no_trace_depth++ ))
   (( debug_id_current++ ))
+  local showed_something=f 
 
   fork_debug_id=$debug_id_current
   if [[ "$fork_id_current" ]]; then
@@ -238,6 +247,11 @@ debug_id_inc() {
   fi
   show_trace_vars
 
+  local slow_down=${slow_down:-${slow:-}}
+  if [[ "$slow_down" ]]; then
+    sleep $slow
+  fi
+
   if [[ "${struct_type:-}" && "${pause_at_functions:-}" \
      && " $pause_at_functions " == *" ${FUNCNAME[1]} "* ]]; then
     handle_user_interrupt "Reached ${struct_type:-}."
@@ -247,7 +261,6 @@ debug_id_inc() {
     if [[ "${debug_debug:-}" == t ]]; then
       log_debug_debug "debug_id matched: $debug_id" >&$fd_original_err
     fi
-    #debug_ignore_remove ${FUNCNAME[*]:1:4}
     if [[ "${debug_bisect_min:-}" ]]; then
       local response new_bisect
       if [[ "${bisect_test:-}" ]]; then
@@ -439,10 +452,37 @@ alias begin_function='
 '
   
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
+# This one switches between a low level and a mid level function, based on the grip variable
+# grip=0 is default, where these functions will be low level
+# grip=1 makes these functions mid level
+alias begin_function_grip='
+  (( no_trace_depth++ ))
+  local grip=${grip:-0} return_value=0 break_out=f function_level=0 repair_attempted=f current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
+  if (( grip > 0 )); then
+    function_level=1
+    trace_time_open
+    struct_type="start of $current_function" debug_id_inc
+    log_vars= log_show_vars=
+    stack_debug_id[$stack_pos]=$fork_debug_id
+  fi
+  while true; do
+  if (( grip > 0 )); then
+    if [[ ${debug_step_to_mid_function:-f} == t ]]; then
+      debug_id=t
+      debug_immediate=t
+      unignore_this_function=f \
+      debug_start n
+    fi
+  fi
+  (( no_trace_depth-- ))
+'
+  
+# The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 alias begin_function_lo='
   (( no_trace_depth++ ))
   local return_value=0 break_out=f function_level=0 repair_attempted=f function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur log_show_vars= log_vars=
   while true; do
+  (( no_trace_depth-- ))
 '
 
 alias end_function='
@@ -522,13 +562,6 @@ alias failed='(( return_value > 0 && return_value < 100 ))'
 alias abort='{ return_value=0; break_out=t; break; }'
 alias succeeded='(( return_value == 0 || return_value >= 100 ))'
 alias handle_break='[[ $break_out == t ]] && break'
-
-reply_to_caller() {
-  if [[ "${reply_file:-}" ]]; then
-    echo "$*" >>$reply_file || return 1
-  fi
-  return 0
-}
 
 attempt_autorepair() {
   local repair_successful=f func_name=$1
