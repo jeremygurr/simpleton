@@ -425,7 +425,6 @@ real() {
 }
 
 # this unlinks a linked file by copying what it links to locally
-unset localize
 localize() {
   for file; do
 
@@ -460,17 +459,14 @@ rcp() {
   RSYNC_RSH="$shell" rsync -a --append --inplace --partial --progress "$@"
 }
 
-unset gl
 gl() {
   git --no-pager log -n ${lines:-20} --decorate --pretty=tformat:"%Cblue %h %Creset %<(25)%ci %C(auto)%d%Creset %s" "$@"
 }
 
-unset gB
 gB() {
   git --no-pager log -n ${lines:-20} --simplify-by-decoration --all --date-order --decorate --pretty=tformat:"%Cblue %h %Creset %<(25)%ci %C(auto)%d%Creset %s" "$@"
 }
 
-unset gcm
 gcm() {
   local message="$1"; shift
   if [ "$message" ]; then
@@ -480,7 +476,6 @@ gcm() {
   fi
 }
 
-unset ifout
 ifout() {
   awk 'BEGIN { rc=1 } length($0) > 0 { rc=0; print } END { exit rc }'
 }
@@ -490,7 +485,6 @@ alias f2='find . -maxdepth 2 -not -path "*/.git*"'
 alias f3='find . -maxdepth 3 -not -path "*/.git*"'
 alias f4='find . -maxdepth 4 -not -path "*/.git*"'
 
-unset f
 f() {
   local return_code=0
   if [ "$*" ]; then
@@ -504,33 +498,30 @@ f() {
   return $return_code
 }
 
-unset fd
 fd() {
-  local depth=$1; shift
-  local return_code=0
-  find . -mindepth $depth -maxdepth $depth -name "$@" 2>/dev/null | ifout || return_code=1
-
-  return $return_code
+  find . -name '.?*' -prune -o -type d "$@" -print
 }
 
-unset ff
+fdepth() {
+  local depth=$1; shift
+  find . -mindepth $depth -maxdepth $depth -name "$@" 2>/dev/null | ifout 
+}
+
 ff() {
   local i
   for ((i = 1; i < 20; i++)); do
     echo "searching depth $i..."
-    fd $i "$@"
+    fdepth $i "$@"
     if [ "$?" != 0 ]; then
       echo -e "$MOVE_UP"
     fi
   done
 }
 
-unset grepr
 grepr() {
   grep -D skip -n -s -r -I "$@" *
 }
 
-unset grepri
 grepri() {
   grep -D skip -n -s -r -i -I "$@" *
 }
@@ -652,7 +643,6 @@ work() {
   cd_to_work
 }
 
-unset parse_git_branch
 parse_git_branch() {
   local p=$PWD
   while [[ "$p" =~ / ]]; do
@@ -703,8 +693,8 @@ cell_info() {
           fi
         fi
       fi
-      p+="$cell_name] "
     fi
+    p+="$cell_name] "
     echo "$p"
   fi
 }
