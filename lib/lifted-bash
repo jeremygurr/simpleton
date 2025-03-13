@@ -16,6 +16,20 @@ fork_id_current=
 
 fork_debug_id=0
 
+handle_special_vars() {
+  local -n vars=$1
+  local t new_vars=
+  for t in $vars; do
+    if [[ $t == ^* ]]; then
+      t=${t#^}
+      new_vars+="$t ${t}s d_$t d_${t}s s_$t s_${t}s "
+    else
+      new_vars+="$t "
+    fi
+  done
+  vars=${new_vars% }
+}
+
 # Run this near the top of scripts using this functionality, after the commandline parameters 
 #   have been processed
 bash_lifted_init() {
@@ -24,20 +38,17 @@ bash_lifted_init() {
   log_var_show_vars_stack=()
 
   trace_vars=${trace_vars:-${trace_var:-}}
-  local t new_trace_vars=
-  for t in $trace_vars; do
-    if [[ $t == ^* ]]; then
-      t=${t#^}
-      new_trace_vars+="$t ${t}s d_$t d_${t}s s_$t s_${t}s "
-    else
-      new_trace_vars+="$t "
-    fi
-  done
-  trace_vars=${new_trace_vars% }
 
   pause_at_functions=${pause_at_functions:-${pause_at_function:-${pause:-}}}
   pause_at_cells=${pause_at_cells:-${pause_at_cell:-${pause:-}}}
   pause_at_vars=${pause_at_vars:-${pause_at_var:-${pause:-}}}
+  if [[ "$pause_at_vars" ]]; then
+    trace_vars+=" $pause_at_vars"
+  fi
+
+  handle_special_vars trace_vars
+  handle_special_vars pause_at_vars
+
   DEBUG_COLOR=$CYAN
   DIM_DEBUG_COLOR=$DIM_CYAN
   trace_structure=${trace_structure:-${trace_struct:-}}
@@ -52,7 +63,7 @@ bash_lifted_init() {
 }
 
 show_time_update() {
-  if [[ "${show_time:-f}" == t && $showed_something == f ]]; then
+  if [[ "${show_time:-f}" == t && ${showed_something:-f} == f ]]; then
     new_time=${EPOCHREALTIME/./}
     if [[ "${show_time_prev:-}" ]]; then
       micro_time_diff $show_time_prev $new_time prefix
@@ -158,6 +169,7 @@ show_trace_vars() {
     done
     stack_detail[$stack_pos]+="${show_vars% } "
   fi
+
   if [[ "${trace_vars:-}" ]]; then
     local var value
     for var in $trace_vars; do
@@ -172,7 +184,7 @@ show_trace_vars() {
           show_time_update
           echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id ${YELLOW}$var=$show_val$RESET" >&$fd_original_err
           showed_something=t
-          if [[ " ${pause_at_vars} " == *" $var "* ]]; then
+          if [[ " $pause_at_vars " == *" $var "* ]]; then
             handle_user_interrupt "Var changed: $var."
           fi
         fi
@@ -183,12 +195,12 @@ show_trace_vars() {
           show_time_update
           echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id $var=$show_val$RESET" >&$fd_original_err
           showed_something=t
+          if [[ " $pause_at_vars " == *" $var "* ]]; then
+            handle_user_interrupt "Var changed: $var."
+          fi
         fi
         unset trace_var_sub[$var]
         trace_var_old[$var]=$value
-        if [[ " ${pause_at_vars} " == *" $var "* ]]; then
-          handle_user_interrupt "Var changed: $var."
-        fi
       fi
     done
   fi
