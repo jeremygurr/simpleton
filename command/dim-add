@@ -161,52 +161,64 @@ dim_add_command() {
     dim_add_find_shared_dim || fail
 
     local dims=${dims:-${dim:-}} dim
-    if [[ ! "${dims:-}" ]]; then
-      dim_add_choose_dim || fail
+    local should_exit=f
+    if [[ "$dims" ]]; then
+      should_exit=t
     fi
 
-    local next_ord= bases \
-      type_path=$seed_path/.dna/${type}s
-    if [[ ! -d $type_path ]]; then
-      mkdir $type_path || fail
-    fi
+    begin_loop; do
 
-    dim_add_get_next_ord || fail
-
-    begin_for dim in $dims; doo
-
-      local base_dim=${dim%%-*}
-      if [[ "$base_dim" == _* ]]; then
-        base_dim=$dim
+      if [[ ! "${dims:-}" ]]; then
+        dim_add_choose_dim || fail
       fi
-      log_info "Adding $type $base_dim"
 
-      local added_something=f \
-        from_dim_path=$shared_dim_folder/$dim \
-      local to_dim_path=$type_path/$next_ord-$base_dim
-      (( next_ord++ ))
+      local next_ord= bases \
+        type_path=$seed_path/.dna/${type}s
+      if [[ ! -d $type_path ]]; then
+        mkdir $type_path || fail
+      fi
 
-      if [[ "$bases " != *" $dim "* ]]; then
-        if [[ -d $from_dim_path ]]; then
-          safe_link $from_dim_path $to_dim_path || fail
-          added_something=t
-        else
-          log_fatal "Dim not found: $dim in $shared_dim_folder"
-          log_fatal "You can run this command without specifying dim to get a list of options"
-          fail1
+      dim_add_get_next_ord || fail
+
+      begin_for dim in $dims; doo
+
+        local base_dim=${dim%%-*}
+        if [[ "$base_dim" == _* ]]; then
+          base_dim=$dim
         fi
-      fi
+        log_info "Adding $type $base_dim"
 
-      if [[ $type == trunk_dim ]] && \
-         [[ $create_each == t || $create_other == t ]]; then
-        dim_add_create_branches || fail
-      fi
+        local added_something=f \
+          from_dim_path=$shared_dim_folder/$dim \
+        local to_dim_path=$type_path/$next_ord-$base_dim
+        (( next_ord++ ))
 
-      if [[ $added_something == f ]]; then
-        log_warn "Dim $base_dim already added, nothing to do."
-      fi
+        if [[ "$bases " != *" $dim "* ]]; then
+          if [[ -d $from_dim_path ]]; then
+            safe_link $from_dim_path $to_dim_path || fail
+            added_something=t
+          else
+            log_fatal "Dim not found: $dim in $shared_dim_folder"
+            log_fatal "You can run this command without specifying dim to get a list of options"
+            fail1
+          fi
+        fi
 
-    end_for
+        if [[ $type == trunk_dim ]] && \
+           [[ $create_each == t || $create_other == t ]]; then
+          dim_add_create_branches || fail
+        fi
+
+        if [[ $added_something == f ]]; then
+          log_warn "Dim $base_dim already added, nothing to do."
+        fi
+
+      end_for
+
+      dims=
+
+      [[ $should_exit == t ]] && break
+    end_loop
 
     command_successful=t
 
