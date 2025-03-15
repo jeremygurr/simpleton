@@ -39,9 +39,34 @@ bash_lifted_init() {
 
   trace_vars=${trace_vars:-${trace_var:-}}
 
-  pause_at_functions=${pause_at_functions:-${pause_at_function:-${pause:-}}}
-  pause_at_cells=${pause_at_cells:-${pause_at_cell:-${pause:-}}}
-  pause_at_vars=${pause_at_vars:-${pause_at_var:-${pause:-}}}
+  pause_at_functions=${pause_at_functions:-${pause_at_function:-}}
+  pause_at_cells=${pause_at_cells:-${pause_at_cell:-}}
+  pause_at_vars=${pause_at_vars:-${pause_at_var:-}}
+  pause_at_debug_id=${pause_at_debug_id:-${pause_at_debug:-}}
+
+  if [[ "${pause:-}" ]]; then
+    if [[ "$pause" =~ / ]]; then
+      if [[ ! "$pause_at_cells" ]]; then
+        pause_at_cells=$pause
+      fi
+    elif [[ "$pause" =~ ^[0-9\.]+$ ]]; then
+      if [[ ! "$pause_at_debug_id" ]]; then
+        pause_at_debug_id=$pause
+      fi
+    elif [[ "$pause" =~ ^[a-zA-Z_0-9]+$ ]]; then
+      if [[ ! "$pause_at_vars" ]]; then
+        pause_at_vars=$pause
+      fi
+      if [[ ! "$pause_at_cells" ]]; then
+        pause_at_cells=$pause
+      fi
+    elif [[ "$pause" =~ ^[a-zA-Z_0-9\^\ ]+$ ]]; then
+      if [[ ! "$pause_at_vars" ]]; then
+        pause_at_vars=$pause
+      fi
+    fi
+  fi
+
   if [[ "$pause_at_vars" ]]; then
     trace_vars+=" $pause_at_vars"
   fi
@@ -288,10 +313,12 @@ debug_id_inc() {
     handle_user_interrupt "Reached ${struct_type:-}."
   fi
 
-  if [[ "${debug_id:-}" && $debug_id != t ]] && reached_debug_id $debug_id; then
-    if [[ "${debug_debug:-}" == t ]]; then
-      log_debug_debug "debug_id matched: $debug_id" >&$fd_original_err
-    fi
+  if [[ "${pause_at_debug_id:-}" ]] && reached_debug_id $pause_at_debug_id; then
+    pause_at_debug_id=
+    debug_immediate=t
+    unignore_this_function=f \
+    debug_start n
+  elif [[ "${debug_id:-}" && $debug_id != t ]] && reached_debug_id $debug_id; then
     if [[ "${debug_bisect_min:-}" ]]; then
       local response new_bisect
       if [[ "${bisect_test:-}" ]]; then
@@ -319,10 +346,6 @@ debug_id_inc() {
       debug_start n
     fi
   elif [[ "${debug_quick_function:-}" && $debug_quick_function == ${FUNCNAME[1]} ]]; then
-    if [[ "${debug_debug:-}" == t ]]; then
-      log_debug_debug "debug_quick_function matched: $debug_quick_function" >&$fd_original_err
-      #show_array FUNCNAME
-    fi
     #debug_ignore_remove ${FUNCNAME[*]:1:4}
     debug_function_old=$debug_quick_function
     debug_quick_function=

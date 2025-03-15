@@ -945,8 +945,8 @@ prep_dims() {
           sdim=s_$dim_var sdims=s_$dims_var \
           pdim=p_$dim_var pdims=p_$dims_var \
 
-        sdim=${sdim:-${pdim:-${dim:-}}} \
-        sdims=${sdims:-${pdims:-${dims:-}}} \
+        sdim=${sdim:-${pdim:-}} \
+        sdims=${sdims:-${pdims:-}} \
 
         # from here on out only sdims and ddims should be used
         # sdims may contain shortcuts, ddims are always expanded (never shortcuts)
@@ -3487,25 +3487,31 @@ for_each_member() {
     get_members_from=${get_members_from:-coords} \
     cell_path=${cell_path:-} \
 
-  member_count=0
   local log_vars='fork par' \
     log_show_vars='dim function'
   begin_function
 
-    case $get_members_from in
-      coords)
-        coord_type=branch \
-        fetch_values_from_coordinates $dim || fail
-        sort_array values
-      ;;
-      existing_branches)
-        get_members_from_branches || fail
-      ;;
-      *)
-        log_fatal "Internal error: invalid get_members_from value: $get_members_from"
-        fail1
-      ;; 
-    esac
+    local dims values=() member_count=0
+    get_plural $dim dims
+    local -n dims_members=d_$dims dim_members=d_$dim
+    values=( "${dims_members[@]:-${dim_members[@]:-}}" )
+
+    if [[ ! "${values}" ]]; then
+      case $get_members_from in
+        coords)
+          coord_type=branch \
+          fetch_values_from_coordinates $dim || fail
+          sort_array values
+        ;;
+        existing_branches)
+          get_members_from_branches || fail
+        ;;
+        *)
+          log_fatal "Internal error: invalid get_members_from value: $get_members_from"
+          fail1
+        ;; 
+      esac
+    fi
 
     member_count=${#values[*]}
 
@@ -3519,10 +3525,7 @@ for_each_member() {
       fail1
     fi
 
-    local dims
-    get_plural $dim dims
-    local -n dims_members=d_$dims
-    unset dims_members
+    unset dim_members dims_members
     loop_over_var=values \
       head="local member=\$value dim=$dim command_history=\${command_history:-}
         eval 'local d_$dim=\"\$member\"'" \
