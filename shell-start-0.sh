@@ -757,11 +757,11 @@ prompt_error_string() {
 short_path() {
   local p=$PWD
   local o=$p
-  if [[ "$p" == */*/*/*/*/* ]]; then
+  if [[ "$p" == */*/*/*/* ]]; then
     p=${p#/work/*/}
     o=$p
   fi
-  if [[ "$p" == */*/*/*/*/* ]]; then
+  if [[ "$p" == */*/*/*/* ]]; then
     p=${p%*/*/*/*/*}
     p=${o#$p/}
   fi
