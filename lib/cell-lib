@@ -95,7 +95,7 @@ write_vars_to_context() {
         array_to_string val quoted_val
       else
         local quoted_val=${val:-}
-        newlines=preserved shell_quote_var quoted_val
+        shell_quote_var quoted_val
       fi
       local content="$var=$quoted_val"
       write_to_context var content || fail
@@ -153,7 +153,7 @@ load_var_to_code() {
     fi
 
     if [[ "$content" != [\"\']* ]]; then
-      quotes=single newlines=preserved shell_quote_var content
+      shell_quote_var content
     fi
 
     if [[ $append == t ]]; then
@@ -192,7 +192,7 @@ load_arr_to_code() {
       trim_ws line
       if [[ "$line" ]]; then
         if [[ "$line" != [\"\']* ]]; then
-          quotes=single shell_quote_var line
+          shell_quote_var line
         fi
         code+=" $line" || fail
       fi
@@ -348,9 +348,21 @@ load_dna_item() {
       file_name=${file_name%.*}
     fi
 
-    local var_name o code= load_type=var
+    local var_name o code= load_type=var is_auto=f
     extract_simple_name file_name o var_name
-    var_name=$prefix${var_name//-/_}
+
+    if [[ $var_name == auto-* ]]; then
+      is_auto=t
+      var_name=${var_name#auto-}
+    fi
+
+    var_name=${var_name//-/_}
+
+    if [[ $is_auto == t ]]; then
+      auto_loads+=( $var_name.$suffix )
+    fi
+
+    var_name=$prefix$var_name
 
     case "$suffix" in
       var)
@@ -700,7 +712,7 @@ write_coordinates_to_file() {
         field=${c_fields[$field_index]}
         if [[ " $skip_dims " != *" $field "* ]]; then
           value=${c_data[$data_offset]}
-          quotes=single shell_quote_var value
+          shell_quote_var value
           line+="$value "
         fi
       done
@@ -1420,6 +1432,7 @@ init_context() {
     init_coord sub
     #init_coord tree
 
+    auto_loads=() \
     cell_expiration= \
     check_op_var=f \
     child_dims=() \
@@ -1946,7 +1959,12 @@ build_context_dna() {
 
     local derive_tables=() derived_dim_vars=()
     if [[ -d $dna_path ]]; then
+
+      auto_loads=()
+
       prefix= load_dna_contents $dna_path || fail
+
+      write_vars_to_context auto_loads || fail
 
       if [[ "${dna_up_files:-}" ]]; then
         write_vars_to_context dna_up_files || fail
@@ -2052,7 +2070,7 @@ build_context_branch() {
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
       dim=${branch_dims[$i]}
       member=${branch_members[$i]}
-      quotes=single shell_quote_var member
+      shell_quote_var member
       assignment="d_$dim=$member"
       members_string+="$member "
       write_to_context var assignment || fail
@@ -5224,25 +5242,25 @@ up_delegate() {
 #   row          which row to select from the table
 #   field_count
 #   prefix       prefix of variable name to set
-execute_auto_load_add_constraints() {
-  begin_function
-    local f t
-    begin_for (( f = 0; f < field_count; f++ )); doo
-
-      local field=${table_fields[$f]}
-      (( t = row * field_count + f ))
-      expected_value=${table_data[$t]}
-      if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
-        continue # try next field, since this one matches
-      fi
-
-      keys["$field $expected_value"]=1
-
-    end_for
-
-  end_function
-  handle_return
-}
+#execute_auto_load_add_constraints() {
+#  begin_function
+#    local f t
+#    begin_for (( f = 0; f < field_count; f++ )); doo
+#
+#      local field=${table_fields[$f]}
+#      (( t = row * field_count + f ))
+#      expected_value=${table_data[$t]}
+#      if [[ "$expected_value" == all || "$expected_value" == "" ]]; then
+#        continue # try next field, since this one matches
+#      fi
+#
+#      keys["$field $expected_value"]=1
+#
+#    end_for
+#
+#  end_function
+#  handle_return
+#}
 
 #execute_auto_load_tab() {
 #  local table_name=$1 prefix=${prefix:-}
@@ -5293,6 +5311,12 @@ execute_auto_loads() {
 #          execute_auto_load_tab ${item%.tab} || fail
 #        ;;
         *.var)
+          local v=${item%.*}
+          if [[ -v $v ]]; then
+            local quoted=${!v}
+            quoted=${quoted//\"/\\\"}
+            eval "$v=\"$quoted\""
+          fi
         ;;
         *)
           log_fatal "Can't auto load $item"
