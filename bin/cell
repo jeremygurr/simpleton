@@ -247,11 +247,11 @@ get_commands() {
           fi
 
           if [[ -f "$path_to_commands/$parameter.info" ]]; then
-            commands+=( $parameter )
+            cell_commands+=( $parameter )
           elif array_contains command_aliases $parameter; then
-            commands+=( $parameter )
+            cell_commands+=( $parameter )
           elif [[ -f "$path_to_commands/$leftover_command.info" ]]; then
-            commands+=( $leftover_command )
+            cell_commands+=( $leftover_command )
             leftovers=()
           elif ! is_command $parameter && [[ -d $parameter ]]; then
             # it's a cell
@@ -276,9 +276,9 @@ handle_leftovers() {
           out "Choose a subcommand of $leftover:$NL"
           local sub
           for sub in ${subs[*]}; do
-            local command=${sub##*/}
-            command=${command%.info}
-            commands+=( $command )
+            local cell_command=${sub##*/}
+            cell_command=${cell_command%.info}
+            cell_commands+=( $cell_command )
           done
           continue
         fi
@@ -309,6 +309,8 @@ handle_questions() {
         else
           parameter_questions="${remaining% }"
         fi
+      else
+        succeed
       fi
     fi
   end_function
@@ -330,11 +332,11 @@ handle_cell() {
         }
     fi
 
-    if (( ${#commands[*]} > 0 )); then
+    if (( ${#cell_commands[*]} > 0 )); then
       if [[ $multi_cell == f ]]; then
-        execute_commands $cell_path ${commands[*]} || fail
+        execute_commands $cell_path ${cell_commands[*]} || fail
       else
-        fork execute_commands $cell_path ${commands[*]} || fail
+        fork execute_commands $cell_path ${cell_commands[*]} || fail
       fi
     elif [[ ! "${parameter_questions:-}" ]]; then
       show_cell_help $cell_path || fail
@@ -369,13 +371,13 @@ top_level() {
     reset_flags
     get_help_depth_and_flags || fail
 
-    command="$original_cmd" omni_log_init || fail
+    omni_log_init $original_cmd || fail
 
     local current_parameter_index=0 leftovers=() leftover_command handled=0
     begin_while true; doo
 
       cells=() \
-      commands=() \
+      cell_commands=() \
       leftovers=() \
 
       if [[ -e $path_to_commands/all.info ]]; then
@@ -386,7 +388,7 @@ top_level() {
       get_commands || fail
       handle_leftovers || fail
 
-      if (( ${#commands[*]} > 1 )); then
+      if (( ${#cell_commands[*]} > 1 )); then
         multi_commands=t
       fi
 
@@ -395,7 +397,7 @@ top_level() {
       fi
 
       if [[ ! "${cells:-}" ]]; then
-        if [[ ! "${commands:-}" && ! "${parameter_questions:-}" ]]; then
+        if [[ ! "${cell_commands:-}" && ! "${parameter_questions:-}" ]]; then
           if (( handled == 0 )); then
             show_usage
             abort
@@ -422,9 +424,10 @@ top_level() {
         cells=( $potential_cell )
       fi
 
-      if [[ "${commands:-}" && ! "${parameter_questions:-}" ]] && (( help_depth > 0 )); then
-        begin_for command in ${commands[*]}; doo
-          show_help_for_command $command || fail
+      if [[ "${cell_commands:-}" && ! "${parameter_questions:-}" ]] && (( help_depth > 0 )); then
+        local cell_command
+        begin_for cell_command in ${cell_commands[*]}; doo
+          show_help_for_command $cell_command || fail
         end_for
         abort
       fi
