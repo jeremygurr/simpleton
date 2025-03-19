@@ -2819,9 +2819,10 @@ member_conflicts() {
 
 # input: dim_type dim
 set_cross_dims() {
-  begin_function_lo
+  begin_function_grip
     local -n member=d_$dim
     if function_exists ${dim_type}_${dim}_cross_dim_expand; then
+      # sets conflict={dim} if a conflict is found
       ${dim_type}_${dim}_cross_dim_expand || fail
     else
       local derive_table=${dim_type}_${dim}_derive
@@ -2868,8 +2869,7 @@ set_cross_dims() {
                    multi_member=d_$fields \
                    target_member="$value" \
                    member_conflicts; then
-                  conflict=t
-                  log_debug "Conflict found: $dim = $member conflicts with $field = ${field_dim:-${field_dims:-}}"
+                  conflict=$field
                   break
                 else
                   log_debug "Cross dim set: $field=$value"
@@ -2888,13 +2888,19 @@ set_cross_dims() {
       fi
     fi
 
+    if [[ "$conflict" ]]; then
+      local -n conflict_member=d_$conflict
+      log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_member:-}"
+      pause
+    fi
+
   end_function
   handle_return
 }
 
 calc_coordinates_next_known_dim_member() {
   log_show_vars='dim m'
-  begin_function
+  begin_function_grip
     localize
     local -n member=d_$dim
     member=$m
@@ -2903,11 +2909,11 @@ calc_coordinates_next_known_dim_member() {
     # recursive
     calc_coords_validate_member $dim "$member" || fail
     if [[ $is_valid == t ]]; then
-      conflict=f
+      conflict=
       if [[ ${is_cross_dim:-f} == t ]]; then
         set_cross_dims || fail
       fi
-      if [[ $conflict == f ]]; then
+      if [[ ! "$conflict" ]]; then
         calc_coordinates_next_known_dim || fail
       else
         log_debug "Row skipped because of cross dim conflict"
@@ -2925,7 +2931,7 @@ calc_coordinates_next_known_dim_member() {
 #   coordinate_dim_index
 #   coordinate_fields_plural
 calc_coordinates_next_known_dim() {
-  begin_function
+  begin_function_grip
 
     if (( coord_limit > 0 && total_coord_rows_added >= coord_limit )); then
       log_warn "Limit of $coord_limit reached, not calculating any further"
