@@ -65,16 +65,24 @@ get_current_host_regex() {
 }
 
 ssh_setup_prompt() {
+  local fixed_host=${fixed_host:-} host=$host
   begin_function
 
-    local new_prompt="$NL\$? \\h $magic_shell_prompt$NL" \
+    local new_prompt
+
+    if [[ ! "$fixed_host" ]]; then
+      new_prompt="$NL\$? \\h $magic_shell_prompt$NL"
       host=${host%%.*}
+    else
+      new_prompt="$NL\$? $fixed_host $magic_shell_prompt$NL"
+      host=$fixed_host
+    fi
 
     log_debug "Setting prompt to $new_prompt"
 
     get_current_host_regex || fail
 
-    command="if [[ ! \"\$BASH_VERSION\" ]]; then bash; fi ${NL} stty -echo ${NL} PS1='$new_prompt'; unset PROMPT_COMMAND" \
+    command="if [ ! \"\$BASH_VERSION\" ]; then bash; fi ${NL} stty -echo ${NL} PS1='$new_prompt'; unset PROMPT_COMMAND" \
       timeout=5 \
       host_prompt=$current_host_regex \
       run_pipe_command || fail
@@ -309,10 +317,20 @@ ssh_switch_to_user() {
 ssh_enter_docker_container() {
   local container_name=$1
   begin_function
+
     command="pbrun /usr/bin/docker exec -it $container_name /bin/sh" \
     timeout=10 \
     succeed_after='\$\ ' \
     run_pipe_command || fail
+
+    if [[ $command_successful == t ]]; then
+      fixed_host=$container_name ssh_setup_prompt || fail
+    fi
+    
+    if [[ $command_successful == t ]]; then
+      log_debug "Docker jump was successful"
+    fi
+
   end_function
   handle_return
 } 
@@ -482,8 +500,8 @@ ssh_connect() {
     prep_background_communication "$ssh_command_essence" || fail
 
     if [[ $pipe_replay_state != replaying && -e $known_hosts ]]; then
-      log_and_run "cp $known_hosts $known_hosts.old" || fail
-      log_and_run "grep -v '$host' $known_hosts.old >$known_hosts" || {
+      cp $known_hosts $known_hosts.old || fail
+      grep -v '$host' $known_hosts.old >$known_hosts || {
         [[ $? -gt 1 ]] && fail1
         }
       rm $known_hosts.old
