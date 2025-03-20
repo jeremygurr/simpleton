@@ -1,4 +1,4 @@
-ARG ALPINE_IMAGE=alpine:v3.21.0
+ARG ALPINE_IMAGE=alpine:v3.21.3
 
 FROM $ALPINE_IMAGE
 
@@ -11,6 +11,10 @@ ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine/
 
 COPY target/repositories /etc/apk/
 RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@$ALPINE_REPO@g" /etc/apk/repositories 
+
+ENV LANG=en_US.UTF-8
+ENV LANGUAGE=en_US.en
+ENV LC_ALL=en_US.UTF-8
 
 RUN ln -s /var/cache/apk /etc/apk/cache 
 
@@ -63,6 +67,7 @@ RUN --mount=type=cache,target=/var/cache/apk \
     man-pages \
     mandoc \
     mandoc-doc \
+    musl-locales \
     net-tools \
     net-tools-doc \
     openjdk23 \

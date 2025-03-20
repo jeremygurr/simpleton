@@ -3,7 +3,9 @@
 get_formatted_data() {
   begin_function
 
-    local i field value o c row row_type row_begin 
+    local i field value o c row row_type row_begin \
+      pretty=${pretty:-t}
+    local -A pretty_function pretty_form
 
     o=
     row_type=header
@@ -12,6 +14,17 @@ get_formatted_data() {
         i=${selected_field_indices[$c]}
         field=${table_fields[$i]}
         value=$field
+
+        local -n dim_type=${field}_dim_type
+        if [[ -v $dim_type ]]; then
+          local pretty_function_name=${dim_type}_${field}_pretty_function
+          local -n pretty_form_name=${dim_type}_${field}_pretty_form
+          if function_exists $pretty_function_name; then
+            pretty_function[$field]=$pretty_function_name
+          elif [[ "${pretty_form_name:-}" ]]; then
+            pretty_form[$field]=$pretty_form_name
+          fi
+        fi
         each_field || fail
       end_for
     fi
@@ -35,6 +48,15 @@ get_formatted_data() {
             i=${selected_field_indices[$c]}
             field=${table_fields[$i]}
             value=${table_data[$((i + row_begin))]}
+
+            if [[ $pretty == t ]]; then
+              if [[ -v pretty_function[$field] ]]; then
+                ${pretty_function[$field]} $dim_var || fail
+              elif [[ -v pretty_form[$field] ]]; then
+                format_var ${pretty_form[$field]} value
+              fi
+            fi
+
             each_field || fail
           end_for
         fi

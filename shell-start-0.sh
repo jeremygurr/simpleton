@@ -22,6 +22,10 @@ fi
 export prompt_name
 NL=$'\n'
 
+#export CHARSET=UTF-8
+#export LANG=en_US.UTF-8
+#export LC_ALL=en_US.UTF-8
+
 # cell aliases
 alias get='cell get'
 alias update='cell update'
