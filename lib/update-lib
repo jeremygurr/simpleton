@@ -38,6 +38,22 @@ write_output_row() {
   handle_return
 }
 
+# Adds the branch coords (from existing dims) to the given table file
+append_coords_to_file() {
+  local from=$1 to=$2 coord_type=$coord_type
+  begin_function
+    log_verbose "Appending $coord_type coordinates to $to from $from"
+    local old_table
+    load_dna_tab $from old_table || fail
+    seed_table=old_table seed_coordinates || fail
+    if [[ -e $to ]]; then
+      rm $to || fail
+    fi
+    write_coordinates_to_file $to || fail
+  end_function
+  handle_return
+}
+
 # inputs: 
 #   upstream
 prep_upstream() {
@@ -337,13 +353,53 @@ update_upstream_choose() {
       fail1
     fi
 
+    local choice short_up=${upstream##*/} short_choice
+    short_up=${short_up//-/_}
+    local -n actual_choices=${short_up}_choices
+    if [[ "${actual_choices:-}" ]]; then
+
+      debug_start
+      local new_choices=() actual_choice short_choices=
+
+      for choice in ${choices[*]}; do
+        short_choice="${choice##*/} "
+        short_choices+="$short_choice "
+      done
+
+      for actual_choice in $actual_choices; do
+
+        local found=f
+
+        for choice in ${choices[*]}; do
+          short_choice="${choice##*/} "
+          if [[ $short_choice == $actual_choices ]]; then
+            found=t
+            new_choices+=( $choice )
+            break
+          fi
+        done
+
+        if [[ $found == f ]]; then
+          log_fatal "Invalid choice for ${short_up}_choices. Must be one of: $short_choices"
+          fail1
+        fi
+
+      done
+
+      choices=( "${new_choices[@]}" )
+
+    fi
+
     chosen=
     if [[ -e "$chosen_target_link" ]]; then
       chosen=$(readlink $chosen_target_link) || fail
+      if [[ ${chosen##*/} != ${choices##*/} ]]; then
+        chosen=
+      fi
     fi
 
     needs_update=
-    if (( ${#choices[*]} == 1 )); then
+    if (( ${#choices[*]} == 1 )) ; then
       chosen=$choices
       maybe_fix_choice $chosen || fail
     else # more than one choice available
@@ -1292,13 +1348,20 @@ update_self() {
     if [[ $current_mock == f ]]; then
       localize
       local color problem_detail
+
       ignore_missing=t execute_op update || {
         log_fatal "Internal error while executing update operator."
         fail1
       }
+
       if [[ $color_upstream_found == t || "${color:-}" ]]; then
         update_handle_color || fail
       fi
+
+      if [[ -f $out_path/raw.tab ]]; then
+        coord_type=tree append_coords_to_file $out_path/raw.tab $out_path/output.tab || fail
+      fi
+
     else # mocking
 
       log_warn "Using mock: $current_mock ($short_cell)"
