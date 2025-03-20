@@ -2563,10 +2563,12 @@ calc_coordinates_row_end() {
 
     if [[ "$unknown_dims" ]]; then
       log_debug "Skipped row because of unresolvable dims: ${unknown_dims##*( )}"
+      problem_message="Could not resolve dims: ${unknown_dims##*( )}"
       progress_bar_nudge x
     else
       ignore_missing=t \
       calc_coordinates_add_row || fail
+      problem_message=
       progress_bar_nudge
     fi
 
@@ -3180,6 +3182,7 @@ calc_coordinates() {
 
     local dim_var \
       new_coordinate_data=() \
+      problem_message= \
 
     local -n coordinate_data=${coord_type}_coordinate_data \
       coordinate_count=${coord_type}_coordinate_count \
@@ -3191,11 +3194,11 @@ calc_coordinates() {
       coordinate_data=() \
       coordinate_count=0 \
       coordinate_rows=0 \
-      unknown_dims= \
-      resolved_dims= \
 
       setup_coord_fields || fail
     fi
+
+    unknown_dims= resolved_dims=
 
     if [[ ! "${coordinate_fields:-}" ]]; then
       abort
@@ -3228,6 +3231,9 @@ calc_coordinates() {
     if (( coordinate_count == 0 )); then
       case ${handle_no_coords:-error} in
         error)
+          if [[ "$problem_message" ]]; then
+            log_fatal "$problem_message"
+          fi
           log_fatal "Could not calculate any coordinate rows. Try specifying more dims."
           fail1
         ;;
