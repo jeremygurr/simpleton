@@ -59,6 +59,10 @@ alias w=walk
 BB_ASH_VERSION=
 ZSH_VERSION= 
 
+pause() {
+  read -p "Press enter. "
+}
+
 find_dna_work_cells() {
   local dir=$1 possibility only_one=${only_one:-f}
   local possibilities=$(find $dir/* -name ".*" -prune -o '(' -type l -print ')')
