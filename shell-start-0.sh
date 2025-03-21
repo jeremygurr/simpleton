@@ -11,6 +11,7 @@ if [[ "${ADD_PATH:-}" ]]; then
 fi
 
 shopt -s extglob dotglob globstar huponexit
+set +o histexpand
 
 complete -r # remove built-in shell completion since it currently has problems
 
