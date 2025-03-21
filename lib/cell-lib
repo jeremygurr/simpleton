@@ -786,15 +786,19 @@ convert_coords_to_dims() {
 }
 
 # inputs:
-#   derive_table   name of var of derive table
-#   out_field      which field to read from the table
-#   out_set        which var to write set of valid members to (optional)
-#   out_arr        which var to write array of valid members to
+#   derive_table            name of var of derive table
+#   out_field               which field to read from the table
+#   out_set                 which var to write set of valid members to (optional)
+#   out_arr                 which var to write array of valid members to
+#   stop_after_first_match  optional
+#   validate_rows           optional
 # outputs:
 #   out_set        the var out_set points to will contain a set of all matches
 #   out_arr        the var out_arr points to will contain an array of all matches
 execute_derive_table() {
-  local stop_after_first_match=${stop_after_first_match:-f}
+  local stop_after_first_match=${stop_after_first_match:-f} \
+    validate_rows=${validate_rows:-t}
+
   begin_function_grip
       
     local -A internal_set
@@ -839,26 +843,34 @@ execute_derive_table() {
         fence_grip
 
         if [[ $field == $out_field ]]; then
+
           if [[ "$value" ]]; then
             row_result=$value
           else
             row_result=$empty_member
           fi
+
+          if [[ $validate_rows == f ]]; then
+            break
+          fi
+
         else
 
           local -n dim=d_$field
 
-          if [[ "${dim:-}" ]]; then
-            if [[ "$dim" != "$value" && "$value" != all && "$dim" != all ]]; then
-              #log_debug "Row doesn't match because dim $field = $dim but table shows $value"
-              everything_matches=f
-              break
-            fi
-          else # dim not set
-            if [[ $strict_matching == t && "$value" && "$value" != all ]]; then
-              #log_debug "Row doesn't match because $field is not set"
-              everything_matches=f
-              break
+          if [[ $validate_rows == t ]]; then
+            if [[ "${dim:-}" ]]; then
+              if [[ "$dim" != "$value" && "$value" != all && "$dim" != all ]]; then
+                #log_debug "Row doesn't match because dim $field = $dim but table shows $value"
+                everything_matches=f
+                break
+              fi
+            else # dim not set
+              if [[ $strict_matching == t && "$value" && "$value" != all ]]; then
+                #log_debug "Row doesn't match because $field is not set"
+                everything_matches=f
+                break
+              fi
             fi
           fi
 
@@ -898,6 +910,7 @@ fetch_values_from_coordinates() {
   local dim_var=$1 coord_type=$coord_type
   begin_function
     values=() # must not be set to empty string here
+    validate_rows=f \
     out_field=$dim_var \
     out_arr=values \
     derive_table=${coord_type}_coordinate \
@@ -1927,7 +1940,6 @@ load_dna_contents() {
             continue 2
           fi
         done
-        debug_start
         item_name=${item_name##*:}
       fi
 
@@ -3541,26 +3553,26 @@ for_each_member() {
   begin_function
 
     local dims values=() member_count=0
-    get_plural $dim dims
-    local -n dims_members=d_$dims dim_members=d_$dim
-    values=( "${dims_members[@]:-${dim_members[@]:-}}" )
 
-    if [[ ! "${values}" ]]; then
-      case $get_members_from in
-        coords)
-          coord_type=branch \
-          fetch_values_from_coordinates $dim || fail
-          sort_array values
-        ;;
-        existing_branches)
-          get_members_from_branches || fail
-        ;;
-        *)
-          log_fatal "Internal error: invalid get_members_from value: $get_members_from"
-          fail1
-        ;; 
-      esac
-    fi
+    case $get_members_from in
+      coords)
+        coord_type=branch \
+        fetch_values_from_coordinates $dim || fail
+        sort_array values
+      ;;
+      existing_dims)
+        get_plural $dim dims
+        local -n dims_members=d_$dims dim_members=d_$dim
+        values=( "${dims_members[@]:-${dim_members[@]:-}}" )
+      ;;
+      existing_branches)
+        get_members_from_branches || fail
+      ;;
+      *)
+        log_fatal "Internal error: invalid get_members_from value: $get_members_from"
+        fail1
+      ;; 
+    esac
 
     member_count=${#values[*]}
 
