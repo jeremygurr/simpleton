@@ -2007,6 +2007,26 @@ build_context_reactors() {
   handle_return
 }
 
+load_parent_context() {
+  local path=$1
+  begin_function
+    if [[ "$path" == /*/*/* ]]; then
+      load_parent_context ${path%/*}
+    fi
+    local root_path=$path/.root
+    if [[ -e $root_path ]]; then
+      log_debug "Appending parent trunk context ${path#/*/*/}"
+      echo "$NL# FROM $root_path" >>$context_path-$context_type.new || fail
+      if [[ -d $root_path ]]; then
+        load_dna_contents $root_path || fail
+      elif [[ -f $root_path ]]; then
+        cat $root_path >>$context_path-$context_type.new || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 build_context_trunk_dna() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
@@ -2027,7 +2047,7 @@ build_context_trunk_dna() {
         load_parent_context ${cell_path%/*} || fail
       fi
 
-      echo "# This section was generated from $dna_path" >>$context_path.new || fail
+      echo "$NL# FROM $dna_path" >>$context_path-$context_type.new || fail
       prefix= load_dna_contents $dna_path || fail
 
       write_vars_to_context auto_loads || fail
@@ -2043,8 +2063,7 @@ build_context_trunk_dna() {
       write_vars_to_context default_anchor_dims || fail
 
       mv $context_path-$context_type.new $context_path-$context_type.new2 || fail
-      echo "#!/usr/env bash
-# This file is generated$NL" >$context_path-$context_type.new || fail
+      echo "#!/usr/env bash" >$context_path-$context_type.new || fail
       local v
       for v in ${!append_vars[*]}; do
         echo "$v=" >>$context_path-$context_type.new || fail
@@ -2070,26 +2089,6 @@ build_context_trunk_dna() {
       write_vars_to_context $ddv || fail
     done
 
-  end_function
-  handle_return
-}
-
-load_parent_context() {
-  local path=$1
-  begin_function
-    if [[ "$path" == /*/*/* ]]; then
-      load_parent_context ${path%/*}
-    fi
-    local root_path=$path/.root
-    if [[ -e $root_path ]]; then
-      log_debug "Appending parent trunk context ${path#/*/*/}"
-      echo "$NL# FROM $root_path" >>$context_path-$context_type.new || fail
-      if [[ -d $root_path ]]; then
-        load_dna_contents $root_path || fail
-      elif [[ -f $root_path ]]; then
-        cat $root_path >>$context_path-$context_type.new || fail
-      fi
-    fi
   end_function
   handle_return
 }
