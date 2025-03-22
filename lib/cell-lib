@@ -2007,7 +2007,7 @@ build_context_reactors() {
   handle_return
 }
 
-build_context_dna() {
+build_context_trunk_dna() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
 
@@ -2015,7 +2015,7 @@ build_context_dna() {
     local -A append_vars
 
     if [[ -e $context_path-$context_type ]]; then
-      log_fatal "Internal error: Trunk context already exists. Should have been deleted before calling this function."
+      log_fatal "Internal error: $context_type context already exists. Should have been deleted before calling this function."
       fail1
     fi
 
@@ -2023,6 +2023,11 @@ build_context_dna() {
 
       auto_loads=()
 
+      if [[ "$cell_path" == */*/* ]]; then
+        load_parent_context ${cell_path%/*} || fail
+      fi
+
+      echo "# This section was generated from $dna_path" >>$context_path.new || fail
       prefix= load_dna_contents $dna_path || fail
 
       write_vars_to_context auto_loads || fail
@@ -2039,7 +2044,7 @@ build_context_dna() {
 
       mv $context_path-$context_type.new $context_path-$context_type.new2 || fail
       echo "#!/usr/env bash
-# This file is generated from $dna_path$NL" >$context_path-$context_type.new || fail
+# This file is generated$NL" >$context_path-$context_type.new || fail
       local v
       for v in ${!append_vars[*]}; do
         echo "$v=" >>$context_path-$context_type.new || fail
@@ -2075,9 +2080,10 @@ load_parent_context() {
     if [[ "$path" == /*/*/* ]]; then
       load_parent_context ${path%/*}
     fi
-    local root_path=$path/.dna/root
+    local root_path=$path/.root
     if [[ -e $root_path ]]; then
       log_debug "Appending parent trunk context ${path#/*/*/}"
+      echo "# This section was generated from $root_path" >>$context_path.new || fail
       if [[ -d $root_path ]]; then
         load_dna_contents $root_path || fail
       elif [[ -f $root_path ]]; then
@@ -2101,11 +2107,7 @@ build_context_trunk() {
 
     local derive_tables=() derived_dim_vars=()
 
-    if [[ "$cell_path" == */*/* ]]; then
-      load_parent_context ${cell_path%/*} || fail
-    fi
-
-    build_context_dna || fail
+    build_context_trunk_dna || fail
 
     if [[ ! -d $status_path ]]; then
       mkdir -p $status_path || fail
@@ -3619,7 +3621,7 @@ plant_seed_internal() {
   local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
   begin_function
 
-    log_debug "Planting seed from $from to $to" || fail
+    log_verbose "Planting seed from $from to $to" || fail
 
     if [[ ! -d $to ]]; then
 
@@ -3637,43 +3639,34 @@ plant_seed_internal() {
       begin_for x in ${contents[*]}; doo
         x_part=${x##*/}
         target=$to/$x_part
-        if [[ ! -e $target || $x_part == .mock ]]; then
-          if [[ -f $x || $x_part == .dna ]]; then
-            safe_link $(realpath $x) $to/ || fail
-          elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
-            safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
-          elif [[ $x_part == .* ]]; then
-            : # ignore this
-          elif [[ $x_part == *:* ]]; then
-            local new_dim=${x_part%%:*}
-            if [[ ! "$dim_found" ]]; then
-              dim_found=${x_part%%:*}
-            elif [[ $dim_found != $new_dim ]]; then
-              log_fatal "Seed has two different dims defined, which is not allowed: $dim_found and $new_dim in $from"
-              fail1
-            fi
-          elif [[ -L $x ]]; then
-            cp -a $x $to/ || fail
-          elif [[ -d $x ]]; then
-            mkdir $target || fail
-            if [[ $deep == t ]]; then
-              plant_seed_internal $x $target || fail
+        if [[ -d $x ]]; then
+          if [[ ! -e $target ]]; then
+            if [[ $x_part == .dna || $x_part == .root ]]; then
+              safe_link $(realpath $x) $to/ || fail
+            elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
+              safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
+            elif [[ $x_part == *:* ]]; then
+              if [[ $plant_branches == t ]]; then
+                log_warn "Branch planting disabled for now."
+              fi
+              #local new_dim=${x_part%%:*}
+              #if [[ ! "$dim_found" ]]; then
+              #  dim_found=${x_part%%:*}
+              #elif [[ $dim_found != $new_dim ]]; then
+              #  log_fatal "Seed has two different dims defined, which is not allowed: $dim_found and $new_dim in $from"
+              #  fail1
+              #fi
+            elif [[ $x_part != .* ]]; then
+              mkdir $target || fail
             fi
           fi
+          if [[ $x_part != .* && -d $target && $deep == t ]]; then
+            plant_seed_internal $x $target || fail
+          fi
+        elif [[ ! -e $target && $x_part != .* ]]; then
+          cp -a $x $to/ || fail
         fi
       end_for
-
-      if [[ "$dim_found" && $plant_branches == t ]]; then
-        build_context $to || fail
-
-        # recursive
-        parent_path=$to \
-        seed_path=$from \
-        par=f fork=f \
-        function=plant_member \
-        for_each_member $dim_found || fail
-
-      fi
 
     fi
   end_function
