@@ -64,6 +64,14 @@ pause() {
   read -p "Press enter. "
 }
 
+sum1() {
+  awk '{ s+=$1 } END { print s }'
+}
+
+sum2() {
+  awk 'k != "" && k != $1 { print k, t; t=0 } { k=$1; t+=$2 } END { print k, t }'
+}
+
 find_dna_work_cells() {
   local dir=$1 possibility only_one=${only_one:-f}
   local possibilities=$(find $dir/* -name ".*" -prune -o '(' -type l -print ')')
