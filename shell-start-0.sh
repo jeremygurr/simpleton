@@ -272,7 +272,7 @@ forge_add_subs() {
   begin_function
     local file files short_path short_file
     get_short_path ${base#/seed/*/} 
-    files=$(find -H $from -mindepth 1 -type f -o -type l)
+    files=$(find -H $from -mindepth 1 -type f -o -type l | sort -g)
     for file in $files; do
       colorize_path file short_file
       short_file=${short_file#$base/}
@@ -309,7 +309,7 @@ forge_add_roots() {
     if [[ -d $path/.root ]]; then
       local file files short_path short_file
       get_short_path ${path#/seed/*/}/.root
-      files=$(find -H $path/.root -mindepth 1 -type f -o -type l)
+      files=$(find -H $path/.root -mindepth 1 -type f -o -type l | sort -g)
       for file in $files; do
         colorize_path file short_file
         short_file=${short_file##*/.root/}
@@ -394,7 +394,7 @@ forge() {
         
         forge_add_roots ${current_selection%/*} || fail
         local file files short_path short_file
-        files=$(find1 $current_selection/.dna)
+        files=$(find1 $current_selection/.dna | sort -g)
         for file in $files; do
           colorize_path file short_file
           short_file=${short_file##*/}
