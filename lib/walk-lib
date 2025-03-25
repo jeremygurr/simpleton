@@ -17,8 +17,7 @@ walk_split_choice() {
 }
 
 walk_menu() {
-  local choice key code message prompt=${prompt:-Choose:} too_many=f
-  filter_mode=${filter_mode:-f}
+  local choice key code message prompt=${prompt:-Choose:}
 
   for choice in "${choices[@]}"; do
     walk_split_choice
@@ -28,50 +27,28 @@ walk_menu() {
     echo "$key  $message"
   done
 
-  if [[ $too_many == t ]]; then
-    echo "Warning: too many options found. If you want to select an option with a / label, then use the / command to filter down the options first."
-  fi
-
   local input
 
   response=
   if [[ "$walk_filter" ]]; then
     echo "${CYAN}Current filter:${RESET} $walk_filter"
   fi
-  if [[ $filter_mode == t ]]; then
-    prompt="Filtering results (press enter or space to accept filter): "
-    read -sp "$prompt" -n1 input || return 1
-    if [[ $clear_screen == t ]]; then
-      echo -n "$CLEAR_SCREEN$prompt"
+  read -sp "$prompt" -n1 input || return 1
+  if [[ $clear_screen == t ]]; then
+    echo -n "$CLEAR_SCREEN$prompt"
+  fi
+  for choice in "${choices[@]}" "${hidden_choices[@]}"; do
+    walk_split_choice
+    if [[ $key == $input || $key == enter && $input == '' ]]; then
+      response=$code
+      #walk_filter=
+      break
     fi
-    if [[ "$input" == $'\x7f' ]]; then
-      walk_filter=${walk_filter%?}
-      echo "$walk_filter"
-    elif [[ "$input" ]]; then
-      walk_filter+=$input
-      echo "$walk_filter"
-    else
-      response=accept
-      echo "Accept filter"
-    fi
+  done
+  if [[ "$response" ]]; then
+    echo "${message%% *}"
   else
-    read -sp "$prompt" -n1 input || return 1
-    if [[ $clear_screen == t ]]; then
-      echo -n "$CLEAR_SCREEN$prompt"
-    fi
-    for choice in "${choices[@]}" "${hidden_choices[@]}"; do
-      walk_split_choice
-      if [[ $key == $input || $key == enter && $input == '' ]]; then
-        response=$code
-        walk_filter=
-        break
-      fi
-    done
-    if [[ "$response" ]]; then
-      echo "${message%% *}"
-    else
-      echo
-    fi
+    echo
   fi
 
 }
@@ -113,8 +90,8 @@ walk_add_dirs() {
       if [[ "${walk_filter:-}" && "${d##*/}$extra" != *"$walk_filter"* ]]; then
         continue
       fi
-      (( i++ ))
       walk_add_choice "$i" "${d#./}" "${d##*/}$extra"
+      (( i++ ))
     done
   fi
 }
@@ -130,7 +107,7 @@ walk_execute() {
     local current_selection=$1 \
       hidden_choices choices \
       choice path i real_stack=() \
-      filter_mode=f walk_filter= \
+      walk_filter= \
       prompt=${prompt:-Choose: } \
       clear_screen=${clear_screen:-t} \
 
@@ -150,40 +127,41 @@ walk_execute() {
         "/ filter"
         )
       choices=()
-      i=0
+      local i=1
       adjust_choices || fail
 
       walk_menu || break
-      if [[ $filter_mode == f ]]; then
-        if [[ "$response" == help ]]; then
-          echo "Press one of the characters in the menu to select one of the choices, enter or space to accept the choice, or q to quit/abort this command."
-          echo "You can also use / to enter filter mode and narrow down results."
-          echo "Using / again after a filter is applied will remove the filter."
-        elif [[ "$response" == quit ]]; then
-          return 1
-        elif [[ "$response" == accept ]]; then
-          break
-        elif [[ "$response" == filter ]]; then
-          if [[ "$walk_filter" ]]; then
-            echo "Removed filter."
-            walk_filter=
-          else
-            filter_mode=t
-          fi
-        else
-          local invalid_response=f
-          handle_walk_responses || fail
-          if [[ $invalid_response == t ]]; then
-            echo "Invalid selection, try again."
-            continue
-          fi
-          if [[ $response == accept ]]; then
-            break
-          fi
+      if [[ "$response" == help ]]; then
+        echo "Press one of the characters in the menu to select one of the choices, enter or space to accept the choice, or q to quit/abort this command."
+        echo "You can also use / to enter a filter to narrow down results."
+        echo "Using / again after a filter is applied will remove the filter."
+        if [[ "${hidden_choices:-}" ]]; then
+          echo "${NL}Hidden commands:"
+          local h
+          for h in "${hidden_choices[@]}"; do
+            echo "  $h"
+          done | column -t
         fi
-      else # filter_mode == t
-        if [[ "$response" == accept ]]; then
-          filter_mode=f
+      elif [[ "$response" == quit ]]; then
+        return 1
+      elif [[ "$response" == accept ]]; then
+        break
+      elif [[ "$response" == filter ]]; then
+        if [[ "$walk_filter" ]]; then
+          echo "Removed filter."
+          walk_filter=
+        else
+          read -p "New filter: " walk_filter
+        fi
+      else
+        local invalid_response=f
+        handle_walk_responses || fail
+        if [[ $invalid_response == t ]]; then
+          echo "Invalid selection, try again."
+          continue
+        fi
+        if [[ $response == accept ]]; then
+          break
         fi
       fi
 

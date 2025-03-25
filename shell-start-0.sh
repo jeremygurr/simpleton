@@ -97,8 +97,10 @@ walk() {
     local back_stack=()
 
     show_selection() {
-      local extra= branches=() branch member current_selection=$current_selection
-      echo "$HIGHLIGHT$hbar_equals$NL$(short_path $current_selection)$RESET"
+      local extra= branches=() branch member \
+        current_selection=$current_selection short_path
+      get_short_path $current_selection
+      echo "$HIGHLIGHT$hbar_equals$NL$short_path$RESET"
 
       while [[ $current_selection == *:* && $current_selection == /*/*/* ]]; do
         if [[ -f $current_selection/.member ]]; then
@@ -173,12 +175,12 @@ walk() {
         local work_cells= work_cell pw possibility
         find_dna_work_cells $current_selection || return 1
         for pw in $work_cells; do
-          (( i++ ))
           possibility=${pw%,,,*}
           possibility=${possibility#$current_selection/}
           work_cell=${pw#*,,,}
           local short_cell=${work_cell#/work/*/}
           walk_add_choice "$i" "${work_cell%/*}" "$possibility -> ${short_cell}"
+          (( i++ ))
         done
       fi
       return 0
@@ -210,6 +212,239 @@ walk() {
   end_function
   handle_return
 
+}
+
+forge_add_subs() {
+  local base=$1 from=$2
+  begin_function
+    local file files short_path short_file
+    get_short_path $base short_path
+    files=$(find -H $from -mindepth 1 -type f -o -type l)
+    for file in $files; do
+      short_file=${file#$base/}
+      if [[ -L $file ]]; then
+        if [[ -e $file/.dna ]]; then
+          if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
+            continue
+          fi
+          walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
+          (( i++ ))
+        else
+          forge_add_subs $base $file
+        fi
+      elif [[ -f $file ]]; then
+        if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
+          continue
+        fi
+        walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
+        (( i++ ))
+      fi
+    done
+  end_function
+  handle_return
+}
+ 
+forge_add_roots() {
+  local path=$1
+  begin_function
+
+    if [[ $path == /*/*/* ]]; then
+      forge_add_roots ${path%/*}
+    fi
+
+    if [[ -d $path/.root ]]; then
+      local file files short_path short_file
+      get_short_path $path short_path
+      files=$(find -H $path/.root -mindepth 1 -type f -o -type l)
+      for file in $files; do
+        short_file=${file##*/.root/}
+        if [[ -L $file ]]; then
+          if [[ -e $file/.dna ]]; then
+            if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
+              continue
+            fi
+            walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
+            (( i++ ))
+          else
+            forge_add_subs $path/.root $file
+          fi
+        elif [[ -f $file ]]; then
+          if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
+            continue
+          fi
+          walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
+          (( i++ ))
+        fi
+      done
+    fi
+
+  end_function
+  handle_return
+}
+
+forge() {
+  begin_function
+
+    walk_init || fail
+    local back_stack=() current_action=edit
+
+    show_selection() {
+      local extra= branches=() branch member \
+        current_selection=$current_selection short_path
+      get_short_path $current_selection
+      echo "$HIGHLIGHT$hbar_equals$NL$short_path$RESET"
+
+      while [[ $current_selection == *:* && $current_selection == /*/*/* ]]; do
+        if [[ -f $current_selection/.member ]]; then
+          member=" $(<$current_selection/.member)"
+          if (( ${#member} > 60 )); then
+            member="${member:0:60}..."
+          fi
+        else
+          member=
+        fi
+        branch=${current_selection##*/}
+        current_selection=${current_selection%/*}
+        if [[ $branch == *:* ]]; then
+          branches+=( "$branch$member" )
+        fi
+      done
+
+      local i
+      for (( i = ${#branches[*]} - 1; i >= 0; i-- )); do
+        branch=${branches[$i]}
+        echo "$branch"
+      done
+    }
+
+    adjust_choices() {
+      if [[ -d $current_selection/.. ]]; then
+        hidden=t walk_add_choice "." "$current_selection/.." ".."
+      fi
+
+      if [[ "${back_stack:-}" ]]; then
+        hidden=t walk_add_choice "b" "*back*" "go back to previous directory"
+      fi
+
+      hidden=f walk_add_choice "a" "action" "Choose action"
+
+      local path
+      if [[ -d $current_selection/.dna ]]; then
+        if [[ $current_selection == *:* ]]; then
+          path=${current_selection%%:*}
+          path=${path%/*}
+          walk_add_choice "t" "$path" "trunk"
+        fi
+        
+        forge_add_roots ${current_selection%/*} || fail
+        local file files short_path short_file
+        files=$(find1 $current_selection/.dna)
+        for file in $files; do
+          short_file=${file##*/}
+          if [[ -f $file || -L $file || -d $file ]]; then
+            get_short_path $current_selection
+            if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
+              continue
+            fi
+            walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
+            (( i++ ))
+          fi
+        done
+
+      fi
+
+      walk_add_dirs $current_selection
+      return 0
+    }
+
+    handle_walk_responses() {
+      if [[ "$response" == "*back*" ]]; then
+        current_selection=${back_stack[-1]}
+        unset back_stack[-1]
+      elif [[ "$response" == action ]]; then
+        local choice
+        while true; do
+          echo "a add"
+          echo "d delete"
+          echo "e edit"
+          echo "i info"
+          echo "g go"
+          echo "m move to a different dir"
+          read -n1 -p "Choose action: " choice
+        done
+        case "$choice" in
+          a)
+            echo "add"
+            action=add
+            break
+          ;;
+          d)
+            echo "delete"
+            action=delete
+            break
+          ;;
+          e)
+            echo "edit"
+            action=edit
+            break
+          ;;
+          i)
+            echo "info"
+            action=info
+            break
+          ;;
+          g)
+            echo "go"
+            action=go
+            break
+          ;;
+          m)
+            echo "move"
+            action=move
+            break
+          ;;
+          *)
+            echo "Invalid action"
+          ;; 
+        esac
+      elif [[ "$response" == *" "* ]]; then
+        read action target <<<$response
+        case $action in
+          go)
+            back_stack+=( $current_selection )
+            cd $target || return 1
+          ;;
+          *)
+            echo "ERROR: unknown action: $action." >&2
+            return 1
+          ;; 
+        esac
+      elif [[ -d "$response" ]]; then
+        current_selection=$response
+        walk_filter=
+      fi
+    }
+
+    local result= current_selection=$PWD
+    if [[ $current_selection != /seed/* ]]; then
+      current_selection=/seed${current_selection#/work}
+      while [[ ! -d $current_selection && $current_selection == /*/*/* ]]; do
+        current_selection=${current_selection%/*}
+      done
+      if [[ ! -d $current_selection ]]; then
+        echo "Current folder is invalid" >&2
+        return 1
+      fi
+    fi
+
+    prompt="Choose (press enter to stop here): " walk_execute $current_selection || fail
+
+    if [[ -d "$result" ]]; then
+      cd $(realpath $result) || fail
+    fi
+
+  end_function
+  handle_return
 }
 
 # saves existing dir before changing to the given dir
@@ -772,8 +1007,8 @@ prompt_error_string() {
   (( rc > 0 )) && echo -n "err=$rc "
 }
 
-short_path() {
-  local p=$PWD
+get_short_path() {
+  local p=$1
   local o=$p
   if [[ "$p" == */*/*/*/* ]]; then
     p=${p#/work/*/}
@@ -783,7 +1018,13 @@ short_path() {
     p=${p%*/*/*/*/*}
     p=${o#$p/}
   fi
-  echo -n "$p "
+  short_path=$p
+}
+
+show_short_path() {
+  local p=$PWD
+  get_short_path $p
+  echo -n "$short_path "
 }
 
 pid_path() {
@@ -811,7 +1052,7 @@ big_prompt() {
   fi
 
   export PS1="
-| $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$DIM_CYAN\$(cell_info)$PURPLE\$(parse_git_branch 2>/dev/null)$YELLOW\$(short_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
+| $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$DIM_CYAN\$(cell_info)$PURPLE\$(parse_git_branch 2>/dev/null)$YELLOW\$(show_short_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
 | $ "
   export PS2='> '
   export PS4='+ '
@@ -823,7 +1064,7 @@ medium_prompt() {
   fi
 
   export PS1="
-| $GREEN\$prompt_name $DIM_RED\$(prompt_error_string)$DIM_CYAN\$(cell_info)$PURPLE\$(parse_git_branch 2>/dev/null)$YELLOW\$(short_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
+| $GREEN\$prompt_name $DIM_RED\$(prompt_error_string)$DIM_CYAN\$(cell_info)$PURPLE\$(parse_git_branch 2>/dev/null)$YELLOW\$(show_short_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
 | $ "
   export PS2='> '
   export PS4='+ '
