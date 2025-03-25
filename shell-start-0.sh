@@ -290,10 +290,14 @@ forge_add_subs() {
       if [[ -d $file
          && ( ! -L $file || ! -d $file/.dna ) 
          ]]; then
-        if [[ ${file##*/} == .dna || ${file##*/} == .root ]]; then
-          base=$file
+        if [[ ! -L $file || $link_expansion == t ]]; then
+          if [[ ${file##*/} == .dna || ${file##*/} == .root ]]; then
+            base=$file
+          fi
+          forge_add_subs $base $file
+        else
+          walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
         fi
-        forge_add_subs $base $file
       elif [[ -f $file || -L $file ]]; then
         if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
           continue
@@ -347,7 +351,9 @@ forge() {
   begin_function
 
     walk_init || fail
-    local back_stack=() current_action=edit
+    local back_stack=() \
+      current_action=edit \
+      link_expansion=f \
 
     show_selection() {
       local extra= branches=() branch member \
@@ -387,7 +393,8 @@ forge() {
         hidden=t walk_add_choice "b" "*back*" "go back to previous directory"
       fi
 
-      hidden=t walk_add_choice "a" "action" "- Change action"
+      hidden=t walk_add_choice "a" "*action*" "- Change action"
+      hidden=t walk_add_choice "x" "*expand*" "- Toggle link expansion"
 
       local path
       if [[ -d $current_selection/.dna ]]; then
@@ -411,7 +418,13 @@ forge() {
       if [[ "$response" == "*back*" ]]; then
         current_selection=${back_stack[-1]}
         unset back_stack[-1]
-      elif [[ "$response" == action ]]; then
+      elif [[ "$response" == "*expand*" ]]; then
+        if [[ $link_expansion == f ]]; then
+          link_expansion=t
+        else
+          link_expansion=f
+        fi
+      elif [[ "$response" == *action* ]]; then
         local choice
         while true; do
 
