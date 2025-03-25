@@ -229,6 +229,17 @@ walk() {
 
 }
 
+# Edit a file in a cell
+# if a dna file is edited, this will automatically clear the context files so they can be regenerated
+edit() {
+  local file=$1
+  $EDITOR "$file"
+  if [[ $file == */.dna/* ]]; then
+    local cell=${file%%/.dna/*}
+    rm $cell/.cyto/context* &>/dev/null
+  fi
+}
+
 # inputs:
 #   $1     var name of full path to file
 #   $2     var name of colorized output var
@@ -473,6 +484,9 @@ forge() {
       elif [[ "$response" == *" "* ]]; then
         read action target <<<$response
         case $action in
+          edit)
+            edit "$target" || return 1
+          ;;
           go)
             back_stack+=( $current_selection )
             cd $target || return 1
