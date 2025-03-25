@@ -89,6 +89,21 @@ find_dna_work_cells() {
   return 0
 }
 
+get_short_path() {
+  local p=$1
+  local o=$p
+  if [[ "$p" == */*/*/*/* ]]; then
+    p=${p#/work/*/}
+    p=${p#/seed/*/}
+    o=$p
+  fi
+  if [[ "$p" == */*/*/*/* ]]; then
+    p=${p%*/*/*/*/*}
+    p=${o#$p/}
+  fi
+  short_path=$p
+}
+
 walk() {
 
   begin_function
@@ -218,7 +233,7 @@ forge_add_subs() {
   local base=$1 from=$2
   begin_function
     local file files short_path short_file
-    get_short_path $base short_path
+    get_short_path ${base#/seed/*/} 
     files=$(find -H $from -mindepth 1 -type f -o -type l)
     for file in $files; do
       short_file=${file#$base/}
@@ -254,7 +269,7 @@ forge_add_roots() {
 
     if [[ -d $path/.root ]]; then
       local file files short_path short_file
-      get_short_path $path short_path
+      get_short_path ${path#/seed/*/} 
       files=$(find -H $path/.root -mindepth 1 -type f -o -type l)
       for file in $files; do
         short_file=${file##*/.root/}
@@ -291,7 +306,7 @@ forge() {
     show_selection() {
       local extra= branches=() branch member \
         current_selection=$current_selection short_path
-      get_short_path $current_selection
+      get_short_path ${current_selection#/seed/*/}
       echo "$HIGHLIGHT$hbar_equals$NL$short_path$RESET"
 
       while [[ $current_selection == *:* && $current_selection == /*/*/* ]]; do
@@ -326,7 +341,7 @@ forge() {
         hidden=t walk_add_choice "b" "*back*" "go back to previous directory"
       fi
 
-      hidden=f walk_add_choice "a" "action" "Choose action"
+      hidden=f walk_add_choice "a" "action" "Change action"
 
       local path
       if [[ -d $current_selection/.dna ]]; then
@@ -342,7 +357,7 @@ forge() {
         for file in $files; do
           short_file=${file##*/}
           if [[ -f $file || -L $file || -d $file ]]; then
-            get_short_path $current_selection
+            get_short_path ${current_selection#/seed/*/}
             if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
               continue
             fi
@@ -370,6 +385,7 @@ forge() {
           echo "i info"
           echo "g go"
           echo "m move to a different dir"
+          echo "s show contents of file"
           read -n1 -p "Choose action: " choice
         done
         case "$choice" in
@@ -401,6 +417,11 @@ forge() {
           m)
             echo "move"
             action=move
+            break
+          ;;
+          s)
+            echo "show"
+            action=show
             break
           ;;
           *)
@@ -437,7 +458,9 @@ forge() {
       fi
     fi
 
-    prompt="Choose (press enter to stop here): " walk_execute $current_selection || fail
+    prompt="Choose (press enter to stop here): " \
+      clear_screen=f \
+      walk_execute $current_selection || fail
 
     if [[ -d "$result" ]]; then
       cd $(realpath $result) || fail
@@ -1005,20 +1028,6 @@ cell() {
 prompt_error_string() {
   local rc=$?
   (( rc > 0 )) && echo -n "err=$rc "
-}
-
-get_short_path() {
-  local p=$1
-  local o=$p
-  if [[ "$p" == */*/*/*/* ]]; then
-    p=${p#/work/*/}
-    o=$p
-  fi
-  if [[ "$p" == */*/*/*/* ]]; then
-    p=${p%*/*/*/*/*}
-    p=${o#$p/}
-  fi
-  short_path=$p
 }
 
 show_short_path() {

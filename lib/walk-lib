@@ -1,52 +1,68 @@
 #!/bin/bash
 
-[[ ${walk_lib_loaded:-f} == t ]] && return 0
+#[[ ${walk_lib_loaded:-f} == t ]] && return 0
 walk_lib_loaded=t
 
-walk_split_choice() {
-  local remainder
-  key=${choice%% *}
-  code=${choice#$key }
-  code=${code%% *}
-  remainder=${choice##$key $code }
-  if [[ "$remainder" != "$choice" ]]; then
-    message=$remainder
-  else
-    message=$code
-  fi
+walk_get_choice() {
+  local i=$1
+  key=${choices[$i]}
+  response=${choices[$((i+1))]}
+  message=${choices[$((i+2))]}
+}
+
+walk_get_hidden_choice() {
+  local i=$1
+  key=${hidden_choices[$i]}
+  response=${hidden_choices[$((i+1))]}
+  message=${hidden_choices[$((i+2))]}
 }
 
 walk_menu() {
-  local choice key code message prompt=${prompt:-Choose:}
 
-  for choice in "${choices[@]}"; do
-    walk_split_choice
+  local prompt=${prompt:-Choose:} \
+    i choice key message 
+
+  for (( i = 0; i < ${#choices[*]}; i+=3 )); do
+    walk_get_choice $i
     if [[ "$key" != ? ]]; then
       key=/
     fi
     echo "$key  $message"
   done
 
-  local input
+  local input found=f
 
-  response=
   if [[ "$walk_filter" ]]; then
     echo "${CYAN}Current filter:${RESET} $walk_filter"
   fi
   read -sp "$prompt" -n1 input || return 1
+
   if [[ $clear_screen == t ]]; then
     echo -n "$CLEAR_SCREEN$prompt"
   fi
-  for choice in "${choices[@]}" "${hidden_choices[@]}"; do
-    walk_split_choice
+
+  for (( i = 0; i < ${#choices[*]}; i+=3 )); do
+    walk_get_choice $i
     if [[ $key == $input || $key == enter && $input == '' ]]; then
-      response=$code
       #walk_filter=
+      found=t
       break
     fi
   done
-  if [[ "$response" ]]; then
-    echo "${message%% *}"
+
+  if [[ $found == f ]]; then
+    for (( i = 0; i < ${#hidden_choices[*]}; i+=3 )); do
+      walk_get_hidden_choice $i
+      if [[ $key == $input || $key == enter && $input == '' ]]; then
+        #walk_filter=
+        found=t
+        break
+      fi
+    done
+  fi
+
+  if [[ $found == t ]]; then
+    echo "$message"
   else
     echo
   fi
@@ -54,17 +70,11 @@ walk_menu() {
 }
  
 walk_add_choice() {
-  local hidden=${hidden:-f} key=$1 
-  shift 1
-  local remaining=$*
-  local code=${remaining%% *}
-  if [[ ! "${code_set[$code]:-}" ]]; then
-    if [[ $hidden == f ]]; then
-      choices+=( "$key $remaining" )
-    else
-      hidden_choices+=( "$key $remaining" )
-    fi
-    code_set[$code]=1
+  local hidden=${hidden:-f} key=$1 response=$2 message=$3
+  if [[ $hidden == f ]]; then
+    choices+=( "$key" "$response" "$message" )
+  else
+    hidden_choices+=( "$key" "$response" "$message" )
   fi
 }
 
@@ -111,7 +121,6 @@ walk_execute() {
       prompt=${prompt:-Choose: } \
       clear_screen=${clear_screen:-t} \
 
-    local -A code_set
     if [[ $clear_screen == t ]]; then
       echo -n "$CLEAR_SCREEN"
     fi
@@ -119,7 +128,6 @@ walk_execute() {
 
       show_selection || fail
 
-      code_set=()
       hidden_choices=(
         "enter accept"
         "q quit"
@@ -138,8 +146,9 @@ walk_execute() {
         if [[ "${hidden_choices:-}" ]]; then
           echo "${NL}Hidden commands:"
           local h
-          for h in "${hidden_choices[@]}"; do
-            echo "  $h"
+          for (( i = 0; i < ${#hidden_choices[*]}; i+=3 )); do
+            walk_get_hidden_choice $i
+            echo "  $key $message"
           done | column -t
         fi
       elif [[ "$response" == quit ]]; then
