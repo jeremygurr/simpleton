@@ -229,15 +229,53 @@ walk() {
 
 }
 
+# inputs:
+#   $1     var name of full path to file
+#   $2     var name of colorized output var
+colorize_path() {
+  local -n _in=$1 _out=$2
+  local remaining=$_in
+  _out=
+  if [[ $colorize == t ]]; then
+    local part color reset
+    while [[ "$remaining" == /*/*/* ]]; do
+      part=${remaining##*/}
+
+      color= reset=
+      if [[ -L "$remaining" ]]; then
+        color=$CYAN
+        reset=$RESET
+      fi
+
+      if [[ "${_out:-}" ]]; then
+        _out="$color$part$reset/$_out"
+      else
+        _out="$color$part$reset"
+      fi
+
+      remaining=${remaining%/*}
+    done
+
+    if [[ "${_out:-}" ]]; then
+      _out="$remaining/$_out"
+    else
+      _out="$remaining"
+    fi
+
+  else
+    _out=$_in
+  fi
+}
+
 forge_add_subs() {
   local base=$1 from=$2
   begin_function
-    debug_start
     local file files short_path short_file
     get_short_path ${base#/seed/*/} 
     files=$(find -H $from -mindepth 1 -type f -o -type l)
     for file in $files; do
-      short_file=${file#$base/}
+      colorize_path file short_file
+      short_file=${short_file#$base/}
       if [[ -L $file ]]; then
         if [[ -e $file/.dna ]]; then
           if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
@@ -273,7 +311,8 @@ forge_add_roots() {
       get_short_path ${path#/seed/*/}/.root
       files=$(find -H $path/.root -mindepth 1 -type f -o -type l)
       for file in $files; do
-        short_file=${file##*/.root/}
+        colorize_path file short_file
+        short_file=${short_file##*/.root/}
         if [[ -L $file ]]; then
           if [[ -e $file/.dna ]]; then
             if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
@@ -299,6 +338,7 @@ forge_add_roots() {
 }
 
 forge() {
+  local colorize=${colorize:-t}
   begin_function
 
     walk_init || fail
@@ -342,7 +382,7 @@ forge() {
         hidden=t walk_add_choice "b" "*back*" "go back to previous directory"
       fi
 
-      hidden=f walk_add_choice "a" "action" "Change action"
+      hidden=f walk_add_choice "a" "action" "- Change action"
 
       local path
       if [[ -d $current_selection/.dna ]]; then
@@ -356,7 +396,8 @@ forge() {
         local file files short_path short_file
         files=$(find1 $current_selection/.dna)
         for file in $files; do
-          short_file=${file##*/}
+          colorize_path file short_file
+          short_file=${short_file##*/}
           if [[ -f $file || -L $file || -d $file ]]; then
             get_short_path ${current_selection#/seed/*/}
             if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
