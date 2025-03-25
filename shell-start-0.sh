@@ -194,8 +194,7 @@ walk() {
           possibility=${possibility#$current_selection/}
           work_cell=${pw#*,,,}
           local short_cell=${work_cell#/work/*/}
-          walk_add_choice "$i" "${work_cell%/*}" "$possibility -> ${short_cell}"
-          (( i++ ))
+          walk_add_choice_i "${work_cell%/*}" "$possibility -> ${short_cell}"
         done
       fi
       return 0
@@ -281,28 +280,25 @@ colorize_path() {
 forge_add_subs() {
   local base=$1 from=$2
   begin_function
+
     local file files short_path short_file
     get_short_path ${base#/seed/*/} 
-    files=$(find -H $from -mindepth 1 -type f -o -type l | sort -g)
+    files=$(find1 $from | sort -g)
     for file in $files; do
       colorize_path file short_file
       short_file=${short_file#$base/}
-      if [[ -L $file ]]; then
-        if [[ -e $file/.dna ]]; then
-          if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
-            continue
-          fi
-          walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
-          (( i++ ))
-        else
-          forge_add_subs $base $file
+      if [[ -d $file
+         && ( ! -L $file || ! -d $file/.dna ) 
+         ]]; then
+        if [[ ${file##*/} == .dna || ${file##*/} == .root ]]; then
+          base=$file
         fi
-      elif [[ -f $file ]]; then
+        forge_add_subs $base $file
+      elif [[ -f $file || -L $file ]]; then
         if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
           continue
         fi
-        walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
-        (( i++ ))
+        walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
       fi
     done
   end_function
@@ -329,8 +325,7 @@ forge_add_roots() {
             if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
               continue
             fi
-            walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
-            (( i++ ))
+            walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
           else
             forge_add_subs $path/.root $file
           fi
@@ -338,8 +333,7 @@ forge_add_roots() {
           if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
             continue
           fi
-          walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
-          (( i++ ))
+          walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
         fi
       done
     fi
@@ -393,7 +387,7 @@ forge() {
         hidden=t walk_add_choice "b" "*back*" "go back to previous directory"
       fi
 
-      hidden=f walk_add_choice "a" "action" "- Change action"
+      hidden=t walk_add_choice "a" "action" "- Change action"
 
       local path
       if [[ -d $current_selection/.dna ]]; then
@@ -402,26 +396,14 @@ forge() {
           path=${path%/*}
           walk_add_choice "t" "$path" "trunk"
         fi
-        
-        forge_add_roots ${current_selection%/*} || fail
-        local file files short_path short_file
-        files=$(find1 $current_selection/.dna | sort -g)
-        for file in $files; do
-          colorize_path file short_file
-          short_file=${short_file##*/}
-          if [[ -f $file || -L $file || -d $file ]]; then
-            get_short_path ${current_selection#/seed/*/}
-            if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
-              continue
-            fi
-            walk_add_choice "$i" "$current_action $file" "$short_path $current_action $short_file"
-            (( i++ ))
-          fi
-        done
-
       fi
 
+      forge_add_roots ${current_selection%/*} || fail
+      forge_add_subs $current_selection $current_selection || fail
+
+      display_prefix='. ' \
       walk_add_dirs $current_selection
+
       return 0
     }
 
@@ -432,55 +414,75 @@ forge() {
       elif [[ "$response" == action ]]; then
         local choice
         while true; do
+
           echo "a add"
+          echo "c copy to target dir"
           echo "d delete"
           echo "e edit"
           echo "i info"
           echo "g go"
-          echo "m move to a different dir"
+          echo "l link to target dir"
+          echo "m move to target dir"
           echo "s show contents of file"
-          read -n1 -p "Choose action: " choice
+          echo "t set target of following copy, link, or move actions"
+
+          read -n1 -sp "Choose action: " choice
+          case "$choice" in
+            a)
+              echo "add"
+              current_action=add
+              break
+            ;;
+            c)
+              echo "copy"
+              current_action=copy
+              break
+            ;;
+            d)
+              echo "delete"
+              current_action=delete
+              break
+            ;;
+            e)
+              echo "edit"
+              current_action=edit
+              break
+            ;;
+            i)
+              echo "info"
+              current_action=info
+              break
+            ;;
+            g)
+              echo "go"
+              current_action=go
+              break
+            ;;
+            l)
+              echo "link"
+              current_action=link
+              break
+            ;;
+            m)
+              echo "move"
+              current_action=move
+              break
+            ;;
+            s)
+              echo "show"
+              current_action=show
+              break
+            ;;
+            t)
+              echo "to $current_selection"
+              action_target=$current_selection
+              break
+            ;;
+            *)
+              echo "Invalid action"
+            ;; 
+          esac
         done
-        case "$choice" in
-          a)
-            echo "add"
-            action=add
-            break
-          ;;
-          d)
-            echo "delete"
-            action=delete
-            break
-          ;;
-          e)
-            echo "edit"
-            action=edit
-            break
-          ;;
-          i)
-            echo "info"
-            action=info
-            break
-          ;;
-          g)
-            echo "go"
-            action=go
-            break
-          ;;
-          m)
-            echo "move"
-            action=move
-            break
-          ;;
-          s)
-            echo "show"
-            action=show
-            break
-          ;;
-          *)
-            echo "Invalid action"
-          ;; 
-        esac
       elif [[ "$response" == *" "* ]]; then
         read action target <<<$response
         case $action in
@@ -497,7 +499,7 @@ forge() {
           ;; 
         esac
       elif [[ -d "$response" ]]; then
-        current_selection=$response
+        current_selection=$(unrealpath $response)
         walk_filter=
       fi
     }

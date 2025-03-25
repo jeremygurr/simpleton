@@ -17,18 +17,25 @@ walk_get_hidden_choice() {
   message=${hidden_choices[$((i+2))]}
 }
 
-walk_menu() {
-
-  local prompt=${prompt:-Choose:} \
-    i choice key message 
-
+walk_menu_output() {
   for (( i = 0; i < ${#choices[*]}; i+=3 )); do
     walk_get_choice $i
     if [[ "$key" != ? ]]; then
       key=/
     fi
     echo "$key $message"
-  done | column -tl $column_alignment
+  done
+}
+
+walk_menu() {
+
+  local prompt=${prompt:-Choose:} \
+    i choice key message output
+
+  output=$(walk_menu_output) 
+  if [[ "$output" ]]; then
+    echo "$output" | column -tl $column_alignment
+  fi
 
   local input found=f
 
@@ -78,8 +85,13 @@ walk_add_choice() {
   fi
 }
 
+walk_add_choice_i() {
+  walk_add_choice "$i" "$1" "$2"
+  (( i++ ))
+}
+
 walk_add_dirs() {
-  local dirs d extra current_selection=$1
+  local dirs d extra current_selection=$1 display_prefix=${display_prefix:-}
   dirs=$(find -L $current_selection -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
   if [[ "$dirs" ]]; then
     for d in $dirs; do
@@ -100,7 +112,7 @@ walk_add_dirs() {
       if [[ "${walk_filter:-}" && "${d##*/}$extra" != *"$walk_filter"* ]]; then
         continue
       fi
-      walk_add_choice "$i" "${d#./}" "${d##*/}$extra"
+      walk_add_choice "$i" "${d#./}" "$display_prefix${d##*/}$extra"
       (( i++ ))
     done
   fi
