@@ -436,8 +436,8 @@ forge() {
           echo "g go"
           echo "l link to target dir"
           echo "m move to target dir"
-          echo "s show contents of file"
           echo "t set target of following copy, link, or move actions"
+          echo "v view file"
 
           read -n1 -sp "Choose action: " choice
           case "$choice" in
@@ -481,14 +481,18 @@ forge() {
               current_action=move
               break
             ;;
-            s)
-              echo "show"
-              current_action=show
-              break
-            ;;
             t)
               echo "to $current_selection"
               action_target=$current_selection
+              break
+            ;;
+            v)
+              echo "view"
+              current_action=view
+              break
+            ;;
+            q)
+              echo "abort"
               break
             ;;
             *)
@@ -505,6 +509,13 @@ forge() {
           go)
             back_stack+=( $current_selection )
             cd $target || return 1
+          ;;
+          view)
+            echo "Viewing $target"
+            echo "$HIGHLIGHT$hbar_equals$RESET"
+            cat "$target"
+            echo "$HIGHLIGHT$hbar_equals$RESET"
+            pause
           ;;
           *)
             echo "ERROR: unknown action: $action." >&2
