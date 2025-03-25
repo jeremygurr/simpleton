@@ -232,6 +232,7 @@ walk() {
 forge_add_subs() {
   local base=$1 from=$2
   begin_function
+    debug_start
     local file files short_path short_file
     get_short_path ${base#/seed/*/} 
     files=$(find -H $from -mindepth 1 -type f -o -type l)
@@ -269,7 +270,7 @@ forge_add_roots() {
 
     if [[ -d $path/.root ]]; then
       local file files short_path short_file
-      get_short_path ${path#/seed/*/} 
+      get_short_path ${path#/seed/*/}/.root
       files=$(find -H $path/.root -mindepth 1 -type f -o -type l)
       for file in $files; do
         short_file=${file##*/.root/}
@@ -460,6 +461,7 @@ forge() {
 
     prompt="Choose (press enter to stop here): " \
       clear_screen=f \
+      column_alignment=3 \
       walk_execute $current_selection || fail
 
     if [[ -d "$result" ]]; then
