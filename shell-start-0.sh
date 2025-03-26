@@ -506,6 +506,10 @@ forge() {
       elif [[ "$response" == *" "* ]]; then
         read action target <<<$response
         case $action in
+          delete)
+            rm -rf "$target"
+            recursive=t remove_empty_parents ${target%/*}
+          ;;
           edit)
             edit "$target" || return 1
           ;;
