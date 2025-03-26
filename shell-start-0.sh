@@ -289,7 +289,16 @@ forge_add_subs() {
       short_file=${short_file#$base/}
 
       if [[ ! "${walk_filter:-}" || "$short_path $short_file" == *"$walk_filter"* ]]; then
-        walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
+        if [[ -d $file ]]; then
+          short_file+=/
+        fi
+
+        local p=$i
+        if (( ${#i} > 1 )); then
+          p=/
+        fi
+
+        walk_add_choice_i "$current_action $file" "$short_path $p $current_action $short_file"
       fi
 
       if [[ -d $file
@@ -303,8 +312,6 @@ forge_add_subs() {
             forge_add_subs $base $file
           fi
         fi
-
-        short_file+=/
 
       fi
 
@@ -377,6 +384,7 @@ forge() {
       fi
 
       hidden=t walk_add_choice "a" "*action*" "- Change action"
+      hidden=t walk_add_choice "r" "*real*" "- Go to real (not linked) path of the current directory"
       hidden=t walk_add_choice "x" "*expand*" "- Toggle link expansion"
 
       local path
@@ -407,6 +415,9 @@ forge() {
         else
           link_expansion=f
         fi
+      elif [[ "$response" == "*real*" ]]; then
+        back_stack+=( $current_selection )
+        current_selection=$(realpath $current_selection)
       elif [[ "$response" == *action* ]]; then
         local choice
         while true; do
@@ -419,6 +430,8 @@ forge() {
           echo "g go"
           echo "l link to target dir"
           echo "m move to target dir"
+          echo "q cancel action change"
+          echo "r rename"
           echo "t set target of following copy, link, or move actions"
           echo "v view file"
 
@@ -464,6 +477,15 @@ forge() {
               current_action=move
               break
             ;;
+            q)
+              echo "abort"
+              break
+            ;;
+            r)
+              echo "rename"
+              current_action=rename
+              break
+            ;;
             t)
               echo "to $current_selection"
               action_target=$current_selection
@@ -472,10 +494,6 @@ forge() {
             v)
               echo "view"
               current_action=view
-              break
-            ;;
-            q)
-              echo "abort"
               break
             ;;
             *)
@@ -496,6 +514,13 @@ forge() {
           go)
             back_stack+=( $current_selection )
             cd $target || return 1
+          ;;
+          rename)
+            local new_name=
+            read -p "New name: (leave empty to cancel) " new_name 
+            if [[ "$new_name" ]]; then
+              mv $target ${target%/*}/$new_name
+            fi
           ;;
           view)
             echo "Viewing $target"
@@ -533,7 +558,7 @@ forge() {
 
     prompt="Choose (press enter to stop here): " \
       clear_screen=f \
-      column_alignment=3 \
+      column_alignment=4 \
       walk_execute $current_selection || fail
 
     if [[ -d "$result" ]]; then
