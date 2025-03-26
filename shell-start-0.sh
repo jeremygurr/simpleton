@@ -381,17 +381,22 @@ forge() {
 
       hidden=t walk_add_choice "a" "*action*" "- Change action"
       hidden=t walk_add_choice "b" "*back*" "- Go back to previous directory"
+      hidden=t walk_add_choice "d" "*new-dir*" "- Create a new directory here"
+      hidden=t walk_add_choice "f" "*new-file*" "- Create a new file here"
+      hidden=t walk_add_choice "j" "*jump*" "- Go to other jump point"
+      hidden=t walk_add_choice "J" "*jump-set*" "- Set current jump point to this location"
       hidden=t walk_add_choice "r" "*real*" "- Go to real (not linked) path of the current directory"
+      hidden=t walk_add_choice "t" "*target*" "- Set target for move/copy/link commands"
       hidden=t walk_add_choice "x" "*expand*" "- Toggle link expansion"
 
       local path
-      if [[ -d $current_selection/.dna ]]; then
-        if [[ $current_selection == *:* ]]; then
-          path=${current_selection%%:*}
-          path=${path%/*}
-          walk_add_choice "t" "$path" "trunk"
-        fi
-      fi
+      #if [[ -d $current_selection/.dna ]]; then
+      #  if [[ $current_selection == *:* ]]; then
+      #    path=${current_selection%%:*}
+      #    path=${path%/*}
+      #    walk_add_choice "t" "$path" "trunk"
+      #  fi
+      #fi
 
       forge_add_roots ${current_selection%/*} || fail
       forge_add_subs $current_selection || fail
@@ -406,39 +411,56 @@ forge() {
       if [[ "$response" == "*back*" ]]; then
         current_selection=${back_stack[-1]}
         unset back_stack[-1]
+      elif [[ "$response" == "*new-dir*" ]]; then
+        local new_name
+        read -p "Name of new directory: " new_name
+        if [[ "${new_name:-}" ]]; then
+          mkdir "$current_selection/$new_name"
+        fi
+      elif [[ "$response" == "*new-file*" ]]; then
+        local new_name
+        read -p "Name of new file: " new_name
+        if [[ "${new_name:-}" ]]; then
+          edit "$current_selection/$new_name"
+        fi
       elif [[ "$response" == "*expand*" ]]; then
         if [[ $link_expansion == f ]]; then
           link_expansion=t
         else
           link_expansion=f
         fi
+      elif [[ "$response" == "*jump*" ]]; then
+        if [[ "${walk_jump_other:-}" ]]; then
+          current_selection=$walk_jump_other
+        fi
+        local o=$walk_jump_other
+        walk_jump_other=$walk_jump_current
+        walk_jump_current=$o
+      elif [[ "$response" == "*jump-set*" ]]; then
+        walk_jump_current=$current_selection
       elif [[ "$response" == "*real*" ]]; then
         back_stack+=( $current_selection )
         current_selection=$(realpath $current_selection)
+      elif [[ "$response" == "*target*" ]]; then
+        echo "Setting target of copy/move/link commands to $current_selection"
+        action_target=$current_selection
       elif [[ "$response" == *action* ]]; then
         local choice
         while true; do
 
-          echo "a add to"
-          echo "c copy to target dir"
+          echo "c copy to target dir (use t command to set destination)"
           echo "d delete"
           echo "e edit"
           echo "i info"
           echo "g go"
-          echo "l link to target dir"
-          echo "m move to target dir"
+          echo "l link to target dir (use t command to set destination)"
+          echo "m move to target dir (use t command to set destination)"
           echo "q cancel action change"
           echo "r rename"
-          echo "t set target of following copy, link, or move actions"
           echo "v view file"
 
           read -n1 -sp "Choose action: " choice
           case "$choice" in
-            a)
-              echo "add"
-              current_action=add
-              break
-            ;;
             c)
               echo "copy"
               current_action=copy
@@ -483,11 +505,6 @@ forge() {
               current_action=rename
               break
             ;;
-            t)
-              echo "to $current_selection"
-              action_target=$current_selection
-              break
-            ;;
             v)
               echo "view"
               current_action=view
@@ -514,6 +531,7 @@ forge() {
               target=${target%/*}
             fi
             current_selection=$target || return 1
+            walk_filter=
           ;;
           rename)
             local new_name=
@@ -547,7 +565,9 @@ forge() {
       fi
     }
 
-    local result= current_selection=$PWD
+    local result= current_selection=$PWD \
+      walk_jump_current=$PWD walk_jump_other=$PWD
+
     if [[ $current_selection != /seed/* ]]; then
       current_selection=/seed${current_selection#/work}
       while [[ ! -d $current_selection && $current_selection == /*/*/* ]]; do
