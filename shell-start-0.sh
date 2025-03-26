@@ -448,7 +448,8 @@ forge() {
         local choice
         while true; do
 
-          echo "c copy to target dir (use t command to set destination)"
+          echo "c copy item to target dir (use t command to set destination)"
+          echo "C copy contents of item to target dir (use t command to set destination)"
           echo "d delete"
           echo "e edit"
           echo "i info"
@@ -464,6 +465,11 @@ forge() {
             c)
               echo "copy"
               current_action=copy
+              break
+            ;;
+            C)
+              echo "copy-contents"
+              current_action=copy-contents
               break
             ;;
             d)
@@ -518,6 +524,24 @@ forge() {
       elif [[ "$response" == *" "* ]]; then
         read action target <<<$response
         case $action in
+          copy)
+            if [[ "${action_target:-}" ]]; then
+              echo rsync -av $target $action_target/
+              #pause
+              rsync -av $target $action_target/
+            else
+              echo "No target has been set. Go to the target dir and use the 't' command to set the target."
+            fi
+          ;;
+          copy-contents)
+            if [[ "${action_target:-}" ]]; then
+              echo rsync -av $target/ $action_target/
+              #pause
+              rsync -av $target/ $action_target/
+            else
+              echo "No target has been set. Go to the target dir and use the 't' command to set the target."
+            fi
+          ;;
           delete)
             rm -rf "$target"
             #recursive=t remove_empty_parents ${target%/*}
