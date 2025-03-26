@@ -479,7 +479,7 @@ get_command_load_data_branch() {
     local cell_path=
 
     begin_for cell_path in $subs; doo
-      if [[ -d $cell_path/.dna ]]; then
+      if [[ -f $cell_path/output.tab ]]; then
         get_command_load_data_leaf || fail
       else
         get_command_load_data_branch || fail
@@ -493,32 +493,20 @@ get_command_load_data_branch() {
 get_command_load_data_leaf() {
   begin_function
 
-    if [[ -f $cell_path/output.tab ]]; then
+    local short_cell
+    get_short_cell
+    log_verbose "Loading leaf data for $short_cell"
+    local context_type= output_data output_fields
+    load_dna_item $cell_path/output.tab || fail
 
-      local short_cell
-      get_short_cell
-      log_verbose "Loading leaf data for $short_cell"
-      local context_type= output_data output_fields
-      load_dna_item $cell_path/output.tab || fail
-
-      if (( ${#table_fields[*]} == 0 )); then
-        table_fields=( ${output_fields[*]} )
-      elif [[ "${table_fields[*]}" != "${output_fields[*]}" ]]; then
-        log_fatal "Fields are different across sub cells. This should not be possible. Try clean updating."
-        fail1
-      fi
-
-      table_data+=( "${output_data[@]}" )
-
+    if (( ${#table_fields[*]} == 0 )); then
+      table_fields=( ${output_fields[*]} )
+    elif [[ "${table_fields[*]}" != "${output_fields[*]}" ]]; then
+      log_fatal "Fields are different across sub cells. This should not be possible. Try clean updating."
+      fail1
     fi
 
-    if [[ $execute_inner != n && "${inner:-}" ]]; then
-      local i_path inners
-      inners=$(find1 $inner_path -type d -not -name '.*' | sort -g) || fail
-      begin_for i_path in $inners; doo
-        parent_cell=$cell_path cell_path=$i_path get_command_load_data || fail
-      end_for
-    fi
+    table_data+=( "${output_data[@]}" )
 
   end_function
   handle_return
