@@ -296,6 +296,9 @@ forge_add_subs() {
           fi
           forge_add_subs $base $file
         else
+          if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
+            continue
+          fi
           walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
         fi
       elif [[ -f $file || -L $file ]]; then
@@ -352,7 +355,7 @@ forge() {
 
     walk_init || fail
     local back_stack=() \
-      current_action=edit \
+      current_action=view \
       link_expansion=f \
 
     show_selection() {
