@@ -92,7 +92,7 @@ find_dna_work_cells() {
 get_short_path() {
   local p=$1
   local o=$p
-  if [[ "$p" == */*/*/*/* ]]; then
+  if [[ "$p" == */*/*/* ]]; then
     p=${p#/work/*/}
     p=${p#/seed/*/}
     o=$p
@@ -278,35 +278,36 @@ colorize_path() {
 }
 
 forge_add_subs() {
-  local base=$1 from=$2
+  local base=$1 from=${2:-$1}
   begin_function
 
     local file files short_path short_file
-    get_short_path ${base#/seed/*/} 
+    get_short_path $base
     files=$(find1 $from | sort -g)
     for file in $files; do
       colorize_path file short_file
       short_file=${short_file#$base/}
+
+      if [[ ! "${walk_filter:-}" || "$short_path $short_file" == *"$walk_filter"* ]]; then
+        walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
+      fi
+
       if [[ -d $file
          && ( ! -L $file || ! -d $file/.dna ) 
          ]]; then
+
         if [[ ! -L $file || $link_expansion == t ]]; then
           if [[ ${file##*/} == .dna || ${file##*/} == .root ]]; then
-            base=$file
+            forge_add_subs $file
+          else
+            forge_add_subs $base $file
           fi
-          forge_add_subs $base $file
-        else
-          if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
-            continue
-          fi
-          walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
         fi
-      elif [[ -f $file || -L $file ]]; then
-        if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
-          continue
-        fi
-        walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
+
+        short_file+=/
+
       fi
+
     done
   end_function
   handle_return
@@ -321,28 +322,7 @@ forge_add_roots() {
     fi
 
     if [[ -d $path/.root ]]; then
-      local file files short_path short_file
-      get_short_path ${path#/seed/*/}/.root
-      files=$(find -H $path/.root -mindepth 1 -type f -o -type l | sort -g)
-      for file in $files; do
-        colorize_path file short_file
-        short_file=${short_file##*/.root/}
-        if [[ -L $file ]]; then
-          if [[ -e $file/.dna ]]; then
-            if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
-              continue
-            fi
-            walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
-          else
-            forge_add_subs $path/.root $file
-          fi
-        elif [[ -f $file ]]; then
-          if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
-            continue
-          fi
-          walk_add_choice_i "$current_action $file" "$short_path $current_action $short_file"
-        fi
-      done
+      forge_add_subs $path/.root
     fi
 
   end_function
@@ -409,10 +389,10 @@ forge() {
       fi
 
       forge_add_roots ${current_selection%/*} || fail
-      forge_add_subs $current_selection $current_selection || fail
+      forge_add_subs $current_selection || fail
 
-      display_prefix='. ' \
-      walk_add_dirs $current_selection
+      #display_prefix='. ' \
+      #walk_add_dirs $current_selection
 
       return 0
     }
@@ -508,7 +488,7 @@ forge() {
         case $action in
           delete)
             rm -rf "$target"
-            recursive=t remove_empty_parents ${target%/*}
+            #recursive=t remove_empty_parents ${target%/*}
           ;;
           edit)
             edit "$target" || return 1
@@ -520,7 +500,11 @@ forge() {
           view)
             echo "Viewing $target"
             echo "$HIGHLIGHT$hbar_equals$RESET"
-            cat "$target"
+            if [[ -f $target ]]; then
+              cat "$target"
+            else
+              ls -la "$target"
+            fi
             echo "$HIGHLIGHT$hbar_equals$RESET"
             pause
           ;;
