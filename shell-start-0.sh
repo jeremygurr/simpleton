@@ -379,11 +379,8 @@ forge() {
         hidden=t walk_add_choice "." "$current_selection/.." ".."
       fi
 
-      if [[ "${back_stack:-}" ]]; then
-        hidden=t walk_add_choice "b" "*back*" "go back to previous directory"
-      fi
-
       hidden=t walk_add_choice "a" "*action*" "- Change action"
+      hidden=t walk_add_choice "b" "*back*" "- Go back to previous directory"
       hidden=t walk_add_choice "r" "*real*" "- Go to real (not linked) path of the current directory"
       hidden=t walk_add_choice "x" "*expand*" "- Toggle link expansion"
 
@@ -422,7 +419,7 @@ forge() {
         local choice
         while true; do
 
-          echo "a add"
+          echo "a add to"
           echo "c copy to target dir"
           echo "d delete"
           echo "e edit"
@@ -513,7 +510,10 @@ forge() {
           ;;
           go)
             back_stack+=( $current_selection )
-            cd $target || return 1
+            if [[ -f $target ]]; then
+              target=${target%/*}
+            fi
+            current_selection=$target || return 1
           ;;
           rename)
             local new_name=
@@ -529,6 +529,9 @@ forge() {
               cat "$target"
             else
               ls -la "$target"
+              if [[ -L "$target" ]]; then
+                ls -la "$target/"
+              fi
             fi
             echo "$HIGHLIGHT$hbar_equals$RESET"
             pause
