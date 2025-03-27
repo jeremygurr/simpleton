@@ -106,7 +106,7 @@ get_short_path() {
 
 walk() {
 
-  begin_function
+  begin_function_grip
 
     walk_init || fail
     local back_stack=()
@@ -279,7 +279,7 @@ colorize_path() {
 
 forge_add_subs() {
   local base=$1 from=${2:-$1}
-  begin_function
+  begin_function_grip
 
     local file files short_path short_file
     get_short_path $base
@@ -322,7 +322,7 @@ forge_add_subs() {
  
 forge_add_roots() {
   local path=$1
-  begin_function
+  begin_function_grip
 
     if [[ $path == /*/*/* ]]; then
       forge_add_roots ${path%/*}
