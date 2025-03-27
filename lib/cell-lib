@@ -943,26 +943,32 @@ prep_dims() {
         dims_var=${plural_array[$index]}
 
         local -n \
-          dim=$dim_var dims=$dims_var \
           ddim=d_$dim_var ddims=d_$dims_var \
           sdim=s_$dim_var sdims=s_$dims_var \
           pdim=p_$dim_var pdims=p_$dims_var \
 
-        # We need to support pulling from simple dim here
-        # so that we can use environment vars, and not just command line
-        # parameters. This does create potential for bugs with vars
-        # bleeding through to dims (especially generic vars like value)
-        sdim=${sdim:-${pdim:-${dim:-}}} \
-        sdims=${sdims:-${pdims:-${dims:-}}} \
+        # We do not support pulling from simple dim here
+        # If we want to set an dim in env vars, it must be set with p_dim form
+        sdim=${sdim:-${pdim:-}}
+
+        if [[ ! "${sdims:-}" ]]; then
+          if [[ "${pdims:-}" ]]; then
+            # Multiple members that have spaces inside are not supported
+            # Only single member dims can be used if the value requires spaces or special characters
+            sdims=( $pdims )
+          else
+            sdims=()
+          fi
+        fi
 
         # from here on out only sdims and ddims should be used
         # sdims may contain shortcuts, ddims are always expanded (never shortcuts)
-        unset $dim_var $dims_var p_$dim_var p_$dims_var
+        unset p_$dim_var p_$dims_var
 
         [[ "${sdim:-}" == $empty_member ]] && sdim=
-        [[ "${sdims:-}" == $empty_member ]] && sdims=
+        [[ "${sdims:-}" == $empty_member ]] && sdims=()
         [[ "${ddim:-}" == $empty_member ]] && ddim=
-        [[ "${ddims:-}" == $empty_member ]] && ddims=
+        [[ "${ddims:-}" == $empty_member ]] && ddims=()
 
         if [[ ! "${ddims:-}" && ! "${ddim:-}" \
            && ! "${sdims:-}" && ! "${sdim:-}" \
@@ -1048,6 +1054,7 @@ expand_dim_members() {
 # collapses singular and plural dims into plural dims
 # should only be used after prep_dims, which means 
 #   all dims should be stored in sdim/sdims or ddim/ddims
+#   plural dims should always be arrays, not space separated
 # ddim is expanded form of sdim, and takes priority over sdim
 # this function will generate ddim/ddims where they are not already set based on sdim/sdims
 # this function guaranteeds ddims will be set for all known dims
@@ -1072,9 +1079,7 @@ expand_dims() {
 
         local members single=t
         if [[ "${sdims:-}" ]]; then
-          # won't support special characters (e.g. spaces) inside of members when used like this
-          # use singular form instead and only a single member
-          members=( $sdims )
+          members=( "${sdims[@]}" )
           single=f
         else
           members=( "$sdim" )
