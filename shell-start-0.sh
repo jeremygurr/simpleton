@@ -243,7 +243,7 @@ edit() {
 #   $1     var name of full path to file
 #   $2     var name of colorized output var
 colorize_path() {
-  local -n _in=$1 _out=$2
+  local -n _in=$1 _out=${2:-$1}
   local remaining=$_in
   _out=
   if [[ $colorize == t ]]; then
@@ -281,8 +281,9 @@ forge_add_subs() {
   local base=$1 from=${2:-$1}
   begin_function_grip
 
-    local file files short_path short_file
-    get_short_path $base
+    local file files short_path short_file colored_base
+    colorize_path base colored_base
+    get_short_path $colored_base
     files=$(find1 $from | sort -g)
     for file in $files; do
       colorize_path file short_file
@@ -342,7 +343,7 @@ forge() {
 
     walk_init || fail
     local back_stack=() \
-      current_action=view \
+      current_action=go \
       link_expansion=f \
 
     show_selection() {
@@ -376,7 +377,7 @@ forge() {
 
     adjust_choices() {
       if [[ -d $current_selection/.. ]]; then
-        hidden=t walk_add_choice "." "$current_selection/.." ".."
+        hidden=t walk_add_choice "." "$current_selection/.." "cd .."
       fi
 
       hidden=t walk_add_choice "a" "*action*" "- Change action"
@@ -451,6 +452,7 @@ forge() {
           echo "c copy item to target dir (use t command to set destination)"
           echo "C copy contents of item to target dir (use t command to set destination)"
           echo "d delete"
+          echo "D duplicate"
           echo "e edit"
           echo "i info"
           echo "g go"
@@ -475,6 +477,11 @@ forge() {
             d)
               echo "delete"
               current_action=delete
+              break
+            ;;
+            D)
+              echo "duplicate"
+              current_action=duplicate
               break
             ;;
             e)
@@ -545,6 +552,19 @@ forge() {
           delete)
             rm -rf "$target"
             #recursive=t remove_empty_parents ${target%/*}
+          ;;
+          duplicate)
+            local new_name=
+            read -p "New name: (leave empty to cancel) " new_name 
+            if [[ "$new_name" ]]; then
+              if [[ -d $target ]]; then
+                echo rsync -av $target/ ${target%/*}/$new_name/
+                rsync -av $target/ ${target%/*}/$new_name/
+              else
+                echo rsync -av $target ${target%/*}/$new_name
+                rsync -av $target ${target%/*}/$new_name
+              fi
+            fi
           ;;
           edit)
             edit "$target" || return 1
