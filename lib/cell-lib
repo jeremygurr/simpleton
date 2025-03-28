@@ -2441,6 +2441,102 @@ seed_coordinates() {
   handle_return
 }
 
+attempt_derive_get_derived_from() {
+  if [[ "${derived_from:-}" ]]; then
+    local one_row_complete=f
+    for derived_from_row in "${derived_from[@]}"; do
+      if [[ ! "$from_dim" || " $derived_from_row " == *" $from_dim "* ]]; then
+        complete_row=t
+        for derived_from_dim in $derived_from_row; do
+          local -n derive_from_dim_value=d_$derived_from_dim
+          if [[ ! "${derive_from_dim_value:-}" ]]; then
+            complete_row=f
+            break
+          fi
+        done
+        if [[ $complete_row == t ]];then
+          one_row_complete=t
+          resolved_dependencies+=( "$derived_from_row" )
+        fi
+      fi
+    done
+    if [[ $one_row_complete == f ]]; then
+      derived_from_incomplete=t
+    fi
+  fi
+}
+
+attempt_derive_check_derive_table() {
+  local resolved_row resolved_dim
+  for resolved_row in "${resolved_dependencies[@]}"; do
+    found=t
+    for resolved_dim in $resolved_row; do
+      if [[ " ${fields[*]} " != *" $resolved_dim "* ]]; then
+        found=f
+        break
+      fi
+    done
+    if [[ $found == t ]]; then
+      break
+    fi
+  done
+}
+
+attempt_derive_from_function() {
+  if function_exists ${dim_type}_${dim}_derive; then
+    #log_debug "Trying derive function ${dim_type}_${dim}_derive"
+    ${dim_type}_${dim}_derive || return 1
+    can_derive=t
+  fi
+  return 0
+}
+
+attempt_derive_from_table() {
+  if [[ ! "${values:-}" && "${derived_from:-}" ]]; then
+    local -A old_values new_values intersected
+    if [[ "$old_values_string" ]]; then
+      string_to_set old_values_string old_values
+    fi
+    local derive_table
+    local -n derive_tables=${dim}_derive_tables
+    for derive_table in ${derive_tables[*]}; do
+
+      local found=f
+      local -n fields=${derive_table}_fields
+
+      attempt_derive_check_derive_table
+
+      if [[ $found == f ]]; then
+        # we don't need to check this table since it doesn't use enough set dependent dims
+        continue
+      fi
+
+      can_derive=t
+
+      out_field=$dim \
+      out_set=new_values \
+      execute_derive_table || return 1
+
+      if [[ ! "${new_values[*]:-}" ]]; then
+        log_debug "No derived members found in derive table $derive_table which are valid for this row"
+        values=()
+        abort
+      fi
+
+      if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
+        intersect old_values new_values intersected
+        copy_set intersected old_values
+      else
+        copy_set new_values old_values
+      fi
+
+    done; maybe_break
+    keys_to_array old_values values
+
+  fi
+  return 0
+}
+
 # inputs:
 #   dim             dimension to derive
 #   from_dim        optional, will only look for ways to derive 'dim' from 'from_dim'
@@ -2462,94 +2558,16 @@ attempt_derive() {
       complete_row derived_from_incomplete=f \
       resolved_dependencies=()
 
-    if [[ "${derived_from:-}" ]]; then
-      local one_row_complete=f
-      for derived_from_row in "${derived_from[@]}"; do
-        if [[ ! "$from_dim" || " $derived_from_row " == *" $from_dim "* ]]; then
-          complete_row=t
-          for derived_from_dim in $derived_from_row; do
-            local -n derive_from_dim_value=d_$derived_from_dim
-            if [[ ! "${derive_from_dim_value:-}" ]]; then
-              complete_row=f
-              break
-            fi
-          done
-          if [[ $complete_row == t ]];then
-            one_row_complete=t
-            resolved_dependencies+=( "$derived_from_row" )
-          fi
-        fi
-      done
-      if [[ $one_row_complete == f ]]; then
-        derived_from_incomplete=t
-      fi
-    fi
+    attempt_derive_get_derived_from
 
     if [[ $derived_from_incomplete == t ]]; then
       #log_debug "Can't derive $dim because it has unresolved dependencies"
       abort
     fi
 
-    if function_exists ${dim_type}_${dim}_derive; then
-      #log_debug "Trying derive function ${dim_type}_${dim}_derive"
-      ${dim_type}_${dim}_derive || fail
-      can_derive=t
-    fi
+    attempt_derive_from_function || fail
+    attempt_derive_from_table || fail
 
-    if [[ ! "${values:-}" && "${derived_from:-}" ]]; then
-      local -A old_values new_values intersected
-      if [[ "$old_values_string" ]]; then
-        string_to_set old_values_string old_values
-      fi
-      local derive_table
-      local -n derive_tables=${dim}_derive_tables
-      for derive_table in ${derive_tables[*]}; do
-
-        local found=f
-        local -n fields=${derive_table}_fields
-
-        local resolved_row resolved_dim
-        for resolved_row in "${resolved_dependencies[@]}"; do
-          found=t
-          for resolved_dim in $resolved_row; do
-            if [[ " ${fields[*]} " != *" $resolved_dim "* ]]; then
-              found=f
-              break
-            fi
-          done
-          if [[ $found == t ]]; then
-            break
-          fi
-        done
-
-        if [[ $found == f ]]; then
-          # we don't need to check this table since it doesn't use enough set dependent dims
-          continue
-        fi
-
-        can_derive=t
-
-        out_field=$dim \
-        out_set=new_values \
-        execute_derive_table || fail
-
-        if [[ ! "${new_values[*]:-}" ]]; then
-          log_debug "No derived members found in derive table $derive_table which are valid for this row"
-          values=()
-          abort
-        fi
-
-        if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
-          intersect old_values new_values intersected
-          copy_set intersected old_values
-        else
-          copy_set new_values old_values
-        fi
-
-      done; maybe_break
-      keys_to_array old_values values
-
-    fi
   end_function
   handle_return
 }
