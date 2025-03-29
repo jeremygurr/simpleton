@@ -232,11 +232,12 @@ walk() {
 # if a dna file is edited, this will automatically clear the context files so they can be regenerated
 edit() {
   local file=$1
-  $EDITOR "$file"
+  $EDITOR "$file" || return 1
   if [[ $file == */.dna/* ]]; then
     local cell=${file%%/.dna/*}
     rm $cell/.cyto/context* &>/dev/null
   fi
+  return 0
 }
 
 # inputs:
