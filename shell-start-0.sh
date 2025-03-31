@@ -568,14 +568,14 @@ forge() {
             fi
           ;;
           edit)
-            edit "$target" || return 1
+            edit "$target"
           ;;
           go)
             back_stack+=( $current_selection )
             if [[ -f $target ]]; then
               target=${target%/*}
             fi
-            current_selection=$target || return 1
+            current_selection=$target
             walk_filter=
           ;;
           rename)

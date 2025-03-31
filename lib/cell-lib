@@ -5405,3 +5405,54 @@ get_trunk_cell() {
   debug_return_vars=trunk_cell
 }
 
+# inputs:
+#   debug_log    (optional)
+#   result_file
+#   $1           headers and url to query
+http_get() {
+  local parameters="$*" timeout=${timeout:-60}
+  begin_function
+
+    local curl_command="curl -Lkvgs -m $timeout -w '%{stderr}TIMINGS
+     time_namelookup=%{time_namelookup}
+     time_connect=%{time_connect}
+     time_appconnect=%{time_appconnect}
+     time_pretransfer=%{time_pretransfer}
+     time_redirect=%{time_redirect}
+     time_starttransfer=%{time_starttransfer}
+     time_total=%{time_total}
+    ' $parameters"
+    echo "$curl_command" >$debug_log
+    if [[ -e $result_file ]]; then
+      rm $result_file || fail
+    fi
+
+    err_to_file=${debug_log:-} \
+    out_to_file=$result_file \
+    log_and_run "$curl_command" || fail
+
+    if log_level_at_least verbose; then
+      local timings=$(awk 'BEGIN { flow=0 } flow == 1 { print } /TIMINGS/ { flow=1 }' $debug_log)
+      log_verbose "curl timings:$NL$timings"
+    fi
+
+    local response_line response_code response_message response_code_message response_error
+    response_line=$(grep -E '^< HTTP/[^ ]+ ' $debug_log | tail -n1)
+    response_code_description=${response_line#* * }
+    response_code=${response_code_description%% *}
+
+    response_error=$(jq -r .error $result_file 2>/dev/null) || true
+    if [[ "$response_code" != 200 ]]; then
+      if [[ "$response_error" ]]; then
+        log_fatal "curl failed: $response_error"
+      elif [[ "$response_code_message" ]]; then
+        log_fatal "curl failed: $response_code_message"
+      else
+        log_fatal "curl failed for unknown reason. Check $debug_log or $result_file for more details."
+      fi
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
