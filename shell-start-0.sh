@@ -106,7 +106,7 @@ get_short_path() {
 
 walk() {
 
-  begin_function_grip
+  begin_function
 
     walk_init || fail
     local back_stack=()
@@ -221,6 +221,104 @@ walk() {
 
     if [[ -d "$result" ]]; then
       cd $(realpath $result) || fail
+    fi
+
+  end_function
+  handle_return
+
+}
+
+# used internally by jwalk
+jwalk_update_type() {
+  local query=$current_selection
+  if [[ ! "$query" ]]; then
+    query=.
+  fi
+  #current_type=$(jq -r "$query | type" "$json_file" 2>/dev/null)
+  current_type=$(jq -r "$query | type" "$json_file")
+  if [[ ! "$current_type" ]]; then
+    current_type=unknown
+  fi
+}
+
+# walk through json file
+jwalk() {
+
+  local json_file=${1:-}
+  begin_function
+
+    if [[ ! "${json_file:-}" || ! -e "$json_file" ]]; then
+      echo "usage: jwalk {json file}" >&2
+      fail1
+    fi
+
+    walk_init || fail
+    local back_stack=()
+
+    show_selection() {
+      local current_selection=$current_selection 
+      echo "$HIGHLIGHT$hbar_equals$NL$current_selection ($current_type)$RESET"
+      if [[ "$current_type" != object && "$current_type" != array ]]; then
+        jq -r "$current_selection" "$json_file"
+      fi
+    }
+
+    adjust_choices() {
+      if (( ${#back_stack[*]} > 0 )); then
+        hidden=f walk_add_choice "b" "*back*" "back"
+      fi
+
+      local query
+      if [[ "$current_selection" ]]; then
+        query="$current_selection | keys | .[]"
+      else
+        query='keys | .[]'
+      fi
+
+      local values= value OIFS=$IFS
+      IFS=$'\n' values=( $(jq -r "$query" $json_file 2>/dev/null) )
+      IFS=$OIFS
+
+      for value in "${values[@]}"; do
+        walk_add_choice_i "$value"
+      done
+
+      if [[ "$current_type" == object || "$current_type" == array ]]; then
+        hidden=f walk_add_choice "r" "*remain*" "View full object at this location"
+      fi
+
+      return 0
+    }
+
+    handle_walk_responses() {
+      if [[ "$response" == "*back*" ]]; then
+        current_selection=${back_stack[-1]}
+        jwalk_update_type
+        unset back_stack[-1]
+      elif [[ "$response" == "*remain*" ]]; then
+        jq -r "$current_selection" "$json_file"
+      elif [[ "$response" =~ ^[0-9]+$ ]]; then
+        back_stack+=( "$current_selection" )
+        current_selection+="[$response]"
+        jwalk_update_type
+      elif [[ "$response" ]]; then
+        back_stack+=( "$current_selection" )
+        current_selection+=".$response"
+        jwalk_update_type
+      else
+        invalid_response=t
+      fi
+      walk_filter=
+    }
+
+    local result= current_selection= current_type
+    jwalk_update_type
+
+    prompt="Choose (press enter to stop here): " walk_execute "$current_selection" || fail
+
+    if [[ "$result" ]]; then
+      echo "Use this command to see the selected data:"
+      echo "jq -r '$result' $json_file"
     fi
 
   end_function
