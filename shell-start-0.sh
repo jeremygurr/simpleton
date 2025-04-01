@@ -305,7 +305,7 @@ jwalk() {
       done
 
       if [[ "$current_type" == object || "$current_type" == array ]]; then
-        hidden=f walk_add_choice "r" "*remain*" "View full object at this location"
+        hidden=f walk_add_choice "f" "*full*" "View full object at this location"
       fi
 
       return 0
@@ -316,7 +316,7 @@ jwalk() {
         current_selection=${back_stack[-1]}
         jwalk_update_type
         unset back_stack[-1]
-      elif [[ "$response" == "*remain*" ]]; then
+      elif [[ "$response" == "*full*" ]]; then
         jq -r "$current_selection" "$json_file"
       elif [[ "$response" =~ ^[0-9]+$ ]]; then
         back_stack+=( "$current_selection" )
