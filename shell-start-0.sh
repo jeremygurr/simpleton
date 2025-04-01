@@ -268,19 +268,40 @@ jwalk() {
         hidden=f walk_add_choice "b" "*back*" "back"
       fi
 
-      local query
+      local query type_query
       if [[ "$current_selection" ]]; then
-        query="$current_selection | keys | .[]"
+        query="$current_selection | keys_unsorted | .[]"
+        type_query="$current_selection | .[] | type"
       else
-        query='keys | .[]'
+        query='keys_unsorted | .[]'
+        type_query=".[] | type"
       fi
 
-      local values= value OIFS=$IFS
-      IFS=$'\n' values=( $(jq -r "$query" $json_file 2>/dev/null) )
+      local values= value OIFS=$IFS types= type message=
+      IFS=$'\n' 
+      values=( $(jq -r "$query" "$json_file" 2>/dev/null) )
+      types=( $(jq -r "$type_query" "$json_file" 2>/dev/null) )
       IFS=$OIFS
 
-      for value in "${values[@]}"; do
-        walk_add_choice_i "$value"
+      local i
+      for (( i = 0; i < ${#values[*]}; i++ )); do
+        value=${values[$i]}
+        type=${types[$i]}
+        message=
+        if [[ "$type" != object && "$type" != array ]]; then
+          if [[ $value =~ ^[0-9]+$ ]]; then
+            query="$current_selection[$value]"
+          else
+            query="$current_selection.$value"
+          fi
+          message="$value ($(jq -r "$query" "$json_file" 2>/dev/null))"
+        fi
+        if [[ ! "$message" ]]; then
+          message=$value
+        fi
+        if [[ ! "${walk_filter:-}" || "$message" == *"$walk_filter"* ]]; then
+          walk_add_choice_i "$value" "$message"
+        fi
       done
 
       if [[ "$current_type" == object || "$current_type" == array ]]; then
