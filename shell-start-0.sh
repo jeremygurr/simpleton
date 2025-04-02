@@ -816,7 +816,7 @@ new() {
 
   local new_work_path=$name
   if [[ $name != /* ]]; then
-    local parent_module=${old_work_path##/*/*/}
+    local parent_module=${old_work_path#/*/*/}
     parent_module=${old_work_path%$parent_module}
     new_work_path=$parent_module$name
   fi
@@ -841,7 +841,7 @@ new() {
     up_name=${up_name//\//-}
 
     local target=$old_seed_path/.dna/up/$up_name
-    if [[ -e $target ]]; then
+    if [[ -e $target || -L $target ]]; then
       rm $target
     fi
 
@@ -849,8 +849,12 @@ new() {
   fi
 
   if [[ -e $new_work_path ]]; then
-    echo "ERROR: new work path already exists: $new_work_path" >&2
-    return 1
+    if [[ $clean == t ]]; then
+      rm -rf $new_work_path || return 1
+    else
+      echo "ERROR: new work path already exists: $new_work_path" >&2
+      return 1
+    fi
   fi
 
   local closest=$new_work_path
