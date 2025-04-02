@@ -749,7 +749,12 @@ forge() {
       walk_execute $current_selection || fail
 
     if [[ -d "$result" ]]; then
-      cd $(realpath $result) || fail
+      local target=$(realpath $result)
+      target=/work/${target#/seed/}
+      while [[ ! -d $target ]]; do
+        target=${target%/*}
+      done
+      cd $target || fail
     fi
 
   end_function
