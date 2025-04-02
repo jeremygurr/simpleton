@@ -763,15 +763,23 @@ forge() {
 
 # create a new cell
 new() {
-  local type=${1:-clone} name=${2:-}
+  local type name clean=f
+
+  if [[ "${1:-}" == clean ]]; then
+    clean=t
+    shift
+  fi
+
+  type=${1:-} name=${2:-}
 
   show_usage() {
-    echo "Usage: new {type} {name of new cell}" >&2
+    echo "Usage: new [clean] {type} {name of new cell}" >&2
     echo "  will create a new cell based cell of the current directory." >&2
     echo "  if type=clone, will do a simple clone of the parent cell." >&2
     echo "  if type=up, will clone the cell and add the child cell as the upstream of the parent." >&2
     echo "  if type=down, will clone the cell and add the parent cell as the upstream of the child." >&2
     echo "  name is the cell path of the new cell being created. Could include full work path, or just path inside of the module." >&2
+    echo "  if clean is specified, will delete any existing cell of the same name." >&2
   }
 
   case $type in
@@ -817,8 +825,12 @@ new() {
     old_seed_path=/seed/${old_work_path#/work/} \
 
   if [[ -e $new_seed_path ]]; then
-    echo "Seed already exists at $new_seed_path." >&2
-    return 1
+    if [[ $clean == t ]]; then
+      rm -rf $new_seed_path || return 1
+    else
+      echo "Seed already exists at $new_seed_path" >&2
+      return 1
+    fi
   fi
 
   mkdir -p $new_seed_path/.dna || return 1
@@ -827,7 +839,13 @@ new() {
   if [[ $type == up ]]; then
     local up_name=${new_seed_path#/*/*/}
     up_name=${up_name//\//-}
-    ln -s $new_work_path $old_seed_path/up/$up_name || return 1
+
+    local target=$old_seed_path/.dna/up/$up_name
+    if [[ -e $target ]]; then
+      rm $target
+    fi
+
+    ln -s $new_work_path $target || return 1
   fi
 
   if [[ -e $new_work_path ]]; then
@@ -852,10 +870,16 @@ new() {
     done
     local up_name=${old_seed_path#/*/*/}
     up_name=${up_name//\//-}
-    ln -s $old_work_path $new_seed_path/up/$up_name || return 1
+
+    local target=$new_seed_path/.dna/up/$up_name
+    if [[ -e $target ]]; then
+      rm $target
+    fi
+
+    ln -s $old_work_path $target || return 1
   fi
 
-  return 0
+  forge
 }
 
 # saves existing dir before changing to the given dir
