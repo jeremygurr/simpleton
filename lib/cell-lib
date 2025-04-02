@@ -746,19 +746,19 @@ get_plural() {
 }
 
 # inputs:
-#   coord_type
+#   table                  variable name containing the table, without _fields or _data
 #   row_index              defaults to 0
 #   target_dim_var_type    one of: sdims ddims sdim ddim
-# will load nothing if the given row_index doesn't exist in the coordinate table
-convert_coords_to_dims() {
-  local coord_type=${coord_type} row_index=${row_index:-0} target_dim_var_type=$target_dim_var_type
+# will load nothing if the given row_index doesn't exist in the given table
+convert_table_to_dims() {
+  local table=$table row_index=${row_index:-0} target_dim_var_type=$target_dim_var_type
   begin_function
 
     local field fields field_index values=() count field_count data_offset
 
-    local -n c_fields=${coord_type}_coordinate_fields \
-             c_data=${coord_type}_coordinate_data \
-             c_fields_count=${coord_type}_coordinate_fields_count \
+    local -n c_fields=${table}_fields \
+             c_data=${table}_data \
+             c_fields_count=${table}_fields_count \
 
     local c_data_count=0
     if [[ -v c_data ]]; then
@@ -3262,11 +3262,16 @@ calc_coordinates_refine_multi() {
   begin_function_lo
     front_load=6 progress_bar_start $coordinate_rows
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
-      target_dim_var_type=sdims convert_coords_to_dims || fail
+
+      target_dim_var_type=sdims \
+      table=${coord_type}_coordinate \
+      convert_table_to_dims || fail
+
       expand_dims $known_dims || fail
       calc_coordinates_next_known_dim || fail
       progress_bar_next
       log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
+
     end_for
     progress_bar_stop
   end_function
@@ -3429,7 +3434,10 @@ build_context_leaf() {
       log_fatal "Could not resolve all branch dims in build_context_leaf"
       fail1
     fi
-    target_dim_var_type=ddim convert_coords_to_dims || fail
+
+    target_dim_var_type=ddim \
+    table=${coord_type}_coordinate \
+    convert_table_to_dims || fail
 
     write_vars_to_context \
       branch_coordinate_data \
@@ -3977,14 +3985,12 @@ calc_coords_leaf() {
   begin_function
     local coord_type=leaf
     if [[ ! "${leaf_coordinate_count:-}" ]]; then
-      #  already happened in switch_context
-      #if (( branch_coordinate_count > 0 )); then
-      #  target_dim_var_type=ddim convert_coords_to_dims || fail
-      #fi
       calc_coordinates || fail
     fi
     if (( leaf_coordinate_rows == 1 )); then
-      target_dim_var_type=ddim convert_coords_to_dims || fail
+      target_dim_var_type=ddim \
+      table=${coord_type}_coordinate \
+      convert_table_to_dims || fail
     fi
   end_function
   handle_return
@@ -3998,7 +4004,9 @@ calc_coords_sub() {
       calc_coordinates || fail
     fi
     if (( sub_coordinate_rows == 1 )); then
-      target_dim_var_type=ddim convert_coords_to_dims || fail
+      target_dim_var_type=ddim \
+      table=${coord_type}_coordinate \
+      convert_table_to_dims || fail
     fi
   end_function
   handle_return
@@ -4165,7 +4173,9 @@ switch_context() {
         source $context_path || fail
         calc_anchor_dims || fail
         if [[ $cell_is_leaf == t ]]; then
-          coord_type=branch target_dim_var_type=ddim convert_coords_to_dims || fail
+          target_dim_var_type=ddim \
+          table=branch_coordinate \
+          convert_table_to_dims || fail
         fi
 
         local problem_found=f
