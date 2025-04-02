@@ -756,6 +756,103 @@ forge() {
   handle_return
 }
 
+# create a new cell
+new() {
+  local type=${1:-clone} name=${2:-}
+
+  show_usage() {
+    echo "Usage: new {type} {name of new cell}" >&2
+    echo "  will create a new cell based cell of the current directory." >&2
+    echo "  if type=clone, will do a simple clone of the parent cell." >&2
+    echo "  if type=up, will clone the cell and add the child cell as the upstream of the parent." >&2
+    echo "  if type=down, will clone the cell and add the parent cell as the upstream of the child." >&2
+    echo "  name is the cell path of the new cell being created. Could include full work path, or just path inside of the module." >&2
+  }
+
+  case $type in
+    c|clone)
+      type=clone
+    ;;
+    u|up)
+      type=up
+    ;;
+    d|down)
+      type=down
+    ;;
+    \?*|-h|--help)
+      show_usage
+      return 1
+    ;;
+    *)
+      echo "Unknown clone type: $type" >&2
+      return 1
+    ;;
+  esac
+
+  if [[ ! "$name" ]]; then
+    show_usage
+    return 1
+  fi
+
+  local old_work_path=$PWD
+
+  if [[ ! -e $old_work_path/.dna ]]; then
+    echo "This command must be run within the parent cell to be cloned" >&2
+    return 1
+  fi
+
+  local new_work_path=$name
+  if [[ $name != /* ]]; then
+    local parent_module=${old_work_path##/*/*/}
+    parent_module=${old_work_path%$parent_module}
+    new_work_path=$parent_module$name
+  fi
+
+  local new_seed_path=/seed/${new_work_path#/work/} \
+    old_seed_path=/seed/${old_work_path#/work/} \
+
+  if [[ -e $new_seed_path ]]; then
+    echo "Seed already exists at $new_seed_path." >&2
+    return 1
+  fi
+
+  mkdir -p $new_seed_path/.dna || return 1
+  rsync -a $old_seed_path/.dna/ $new_seed_path/.dna/ || return 1
+
+  if [[ $type == up ]]; then
+    local up_name=${new_seed_path#/*/*/}
+    up_name=${up_name//\//-}
+    ln -s $new_work_path $old_seed_path/up/$up_name || return 1
+  fi
+
+  if [[ -e $new_work_path ]]; then
+    echo "ERROR: new work path already exists: $new_work_path" >&2
+    return 1
+  fi
+
+  local closest=$new_work_path
+  while [[ ! -d $closest ]]; do
+    closest=${closest%/*}
+  done
+
+  cd $closest || return 1
+  plant || return 1
+
+  cd $new_work_path || return 1
+
+  if [[ $type == down ]]; then
+    local u
+    for u in $(find1 $new_seed_path/up); do
+      rm -rf $u || return 1
+    done
+    local up_name=${old_seed_path#/*/*/}
+    up_name=${up_name//\//-}
+    ln -s $old_work_path $new_seed_path/up/$up_name || return 1
+  fi
+
+  return 0
+}
+
 # saves existing dir before changing to the given dir
 cd() {
   local target=${1:-} old=$PWD
