@@ -414,7 +414,11 @@ forge_add_subs() {
           short_file+=/
         fi
 
-        walk_add_choice "$walk_index" "$current_action $file" "$short_path $walk_index $current_action $short_file"
+        local wi=$walk_index
+        if [[ $wi != ? ]]; then
+          wi=/
+        fi
+        walk_add_choice "$walk_index" "$current_action $file" "$short_path $wi $current_action $short_file"
         (( walk_index++ ))
       fi
 
