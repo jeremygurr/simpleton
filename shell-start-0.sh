@@ -463,8 +463,9 @@ forge() {
 
     walk_init || fail
     local back_stack=() \
-      current_action=go \
+      current_action=edit \
       link_expansion=f \
+      add_roots=f \
 
     show_selection() {
       local extra= branches=() branch member \
@@ -507,6 +508,7 @@ forge() {
       hidden=t walk_add_choice "j" "*jump*" "- Go to other jump point"
       hidden=t walk_add_choice "J" "*jump-set*" "- Set current jump point to this location"
       hidden=t walk_add_choice "r" "*real*" "- Go to real (not linked) path of the current directory"
+      hidden=t walk_add_choice "R" "*roots*" "- Toggle whether to include roots"
       hidden=t walk_add_choice "t" "*target*" "- Set target for move/copy/link commands"
       hidden=t walk_add_choice "x" "*expand*" "- Toggle link expansion"
 
@@ -519,7 +521,9 @@ forge() {
       #  fi
       #fi
 
-      forge_add_roots ${current_selection%/*} || fail
+      if [[ $add_roots == t ]]; then
+        forge_add_roots ${current_selection%/*} || fail
+      fi
       forge_add_subs $current_selection || fail
 
       #display_prefix='. ' \
@@ -562,6 +566,12 @@ forge() {
       elif [[ "$response" == "*real*" ]]; then
         back_stack+=( $current_selection )
         current_selection=$(realpath $current_selection)
+      elif [[ "$response" == "*roots*" ]]; then
+        if [[ $add_roots == t ]]; then
+          add_roots=f
+        else
+          add_roots=t
+        fi
       elif [[ "$response" == "*target*" ]]; then
         echo "Setting target of copy/move/link commands to $current_selection"
         action_target=$current_selection

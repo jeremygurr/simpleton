@@ -1625,6 +1625,133 @@ rcp() {
   RSYNC_RSH="$shell" rsync -a --append --inplace --partial --progress "$@"
 }
 
+# usage: convert_time_to_timestamp {time}
+#   time can be something like this:
+#   -10m
+#   now
+#   -30h@d      30 hours ago rounded to the previous day
+#   2 weeks ago
+#   25 Dec      the next time 25 Dec happens
+#   2025/1/5 08:34:20
+# output:
+#   timestamp
+convert_time_to_timestamp() {
+  local time=$1
+  local rounding_unit=s rounding_multiple=1 offset=0
+  if [[ "$time" =~ @([0-9]*)([smhdwMy])$ ]]; then
+    local o=${BASH_REMATCH[1]} u=${BASH_REMATCH[2]}
+    if [[ "$o" ]]; then
+      rounding_multiple=$o
+    fi
+    rounding_unit=$u
+    time=${time%${BASH_REMATCH[0]}}
+  fi
+
+  if [[ "$time" =~ ^-([0-9]+)([smhdwMy])$ ]]; then
+    local o=${BASH_REMATCH[1]} u=${BASH_REMATCH[2]}
+    case $u in
+      s)
+        time="now - $o seconds"
+      ;;
+      m)
+        time="now - $o minutes"
+      ;;
+      h)
+        time="now - $o hours"
+      ;;
+      d)
+        time="now - $o days"
+      ;;
+      w)
+        time="now - $o weeks"
+      ;;
+      M)
+        time="now - $o months"
+      ;;
+      y)
+        time="now - $o years"
+      ;;
+      *)
+        log_fatal "Invalid time unit: $u in $time"
+        return 1
+      ;;
+    esac
+  fi
+
+  if [[ "$time" =~ ^[0-9]+$ ]]; then
+    timestamp=$time
+  else
+    local d
+    d=$(date -d "$time" +%s) || {
+      log_fatal "Invalid time format: $time"
+      return 1
+    }
+    timestamp=$d
+  fi
+
+  if [[ $rounding_unit != s || $rounding_multiple != 1 ]]; then
+    local y M d h m s
+    read y M d h m s < <(date -d @$timestamp +'%Y %m %d %H %M %S')
+    case $rounding_unit in
+      s)
+        (( s = s / $rounding_multiple * $rounding_multiple ))
+      ;;
+      m)
+        if (( rounding_multiple > 1 )); then
+          (( m = m / $rounding_multiple * $rounding_multiple ))
+        fi
+        s=0
+      ;;
+      h)
+        if (( rounding_multiple > 1 )); then
+          (( h = h / $rounding_multiple * $rounding_multiple ))
+        fi
+        s=0
+        m=0
+      ;;
+      h)
+        if (( rounding_multiple > 1 )); then
+          (( h = h / $rounding_multiple * $rounding_multiple ))
+        fi
+        s=0
+        m=0
+      ;;
+      d)
+        if (( rounding_multiple > 1 )); then
+          (( d = d / $rounding_multiple * $rounding_multiple ))
+        fi
+        s=0
+        m=0
+        h=0
+      ;;
+      M)
+        if (( rounding_multiple > 1 )); then
+          (( M = M / $rounding_multiple * $rounding_multiple ))
+        fi
+        s=0
+        m=0
+        h=0
+        d=1
+      ;;
+      y)
+        if (( rounding_multiple > 1 )); then
+          (( y = y / $rounding_multiple * $rounding_multiple ))
+        fi
+        s=0
+        m=0
+        h=0
+        d=1
+        M=1
+      ;;
+      *)
+        log_fatal "Internal error in time conversion. Bad rounding unit: $rounding_unit"
+        return 1
+      ;;
+    esac
+    timestamp=$(date -d "$y/$M/$d $h:$m:$s" +%s) || return 1
+  fi
+}
+
 # calculate the difference between two timestamps
 # input: 
 #   $1      start time
