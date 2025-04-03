@@ -884,7 +884,7 @@ new() {
       rm $target
     fi
 
-    ln -s $old_work_path $target || return 1
+    ln -s /work/${old_seed_path#/seed/} $target || return 1
   fi
 
   forge
