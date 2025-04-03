@@ -824,6 +824,10 @@ new() {
   local new_seed_path=/seed/${new_work_path#/work/} \
     old_seed_path=/seed/${old_work_path#/work/} \
 
+  while [[ ! -e $old_seed_path ]]; do
+    old_seed_path=${old_seed_path%/*}
+  done
+
   if [[ -e $new_seed_path ]]; then
     if [[ $clean == t ]]; then
       rm -rf $new_seed_path || return 1
@@ -869,7 +873,7 @@ new() {
 
   if [[ $type == down ]]; then
     local u
-    for u in $(find1 $new_seed_path/up); do
+    for u in $(find1 $new_seed_path/.dna/up); do
       rm -rf $u || return 1
     done
     local up_name=${old_seed_path#/*/*/}
