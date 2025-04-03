@@ -1096,13 +1096,17 @@ expand_dims() {
           fi
         fi
 
-        ddims=( "${new_values[@]}" )
-        unset ddim sdim sdims
+        if (( ${#new_values[*]} == 1 )); then
+          ddim=${new_values}
+          unset ddims sdim sdims
+        else
+          ddims=( "${new_values[@]}" )
+          unset ddim sdim sdims
+        fi
 
       elif [[ ! "${ddims:-}" ]]; then
         if [[ "${ddim:-}" ]]; then
-          ddims=( "$ddim" )
-          unset ddim sdim sdims
+          unset ddims sdim sdims
         else
           unset ddims ddim sdim sdims
         fi
@@ -1187,11 +1191,44 @@ init_dims() {
   handle_return
 }
 
+cleanup_derived_from() {
+  begin_function
+
+    local dim_var
+    for dim_var in ${all_dims[*]}; do
+
+      local -n dim_type=${dim_var}_dim_type
+      local -n derived_from=${dim_type}_${dim_var}_derived_from
+
+      if [[ "${derived_from:-}" ]]; then
+        local row dim new_derived_from=() row_complete
+        for row in "${derived_from[@]}"; do
+          row_complete=t
+          for dim in $row; do
+            if [[ " ${all_dims[*]} " != *" $dim "* ]]; then
+              row_complete=f
+              break
+            fi
+          done
+          if [[ $row_complete == t ]]; then
+            new_derived_from+=( "$row" )
+          fi
+        done
+        derived_from=( "${new_derived_from[@]}" )
+      fi
+
+    done
+
+  end_function
+  handle_return
+}
+
 setup_dims() {
   begin_function
 
     all_dims=()
     prep_dims trunk_dims sub_dims control_props data_props || fail
+    cleanup_derived_from || fail
     load_child_dims || fail
     if [[ $cell_is_leaf == t ]]; then
       expand_dims ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} || fail
@@ -2777,10 +2814,16 @@ calc_coordinates_next_unknown_dim() {
               ddims=( "${values[@]}" )
             fi
 
-            log_debug "Resolved $dim with $phase: ${ddims[*]:0:30}"
             remove_word_from_string unknown_dims $dim
 
-            local member ms=( "${ddims[@]}" )
+            local member ms
+            if [[ "${ddims:-}" ]]; then
+              ms=( "${ddims[@]}" )
+            else
+              ms=( "$ddim" )
+            fi
+
+            log_debug "Resolved $dim with $phase: ${ms[*]:0:30}"
 
             if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
               log_fatal "Too many dim members for single coordinate row: ${ms[*]}"
