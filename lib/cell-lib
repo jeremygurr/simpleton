@@ -47,6 +47,8 @@ cell_lib_init() {
 
   command_aliases=()
   command_alias_command=()
+
+  trace_dims=${trace_dims:-${trace_dim:-}}
 }
 
 # allocates a unique file optionally based on a given name in the cell tmp_path
@@ -2533,11 +2535,29 @@ attempt_derive_check_derive_table() {
   done
 }
 
+# inputs
+#   dim    dim to output
+#   var    var name containing value of dim
+#   $1     message to output
+show_trace_dim_message() {
+  local var=$var dim=$dim message="$1"
+  get_var_value $var
+  local show_val=$value
+  if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $var "* ]]; then
+    show_val='****'
+  fi
+  echo " ${DIM_DEBUG_COLOR}debug_id=$fork_debug_id $dim=$show_val$RESET $message" >&$fd_original_err
+}
+
 attempt_derive_from_function() {
   if function_exists ${dim_type}_${dim}_derive; then
     #log_debug "Trying derive function ${dim_type}_${dim}_derive"
     ${dim_type}_${dim}_derive || return 1
     can_derive=t
+    if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
+      var=values \
+      show_trace_dim_message "Derived from derive function: ${dim_type}_${dim}_derive"
+    fi
   fi
   return 0
 }
@@ -2581,8 +2601,15 @@ attempt_derive_from_table() {
         copy_set new_values old_values
       fi
 
+      break
+
     done
     keys_to_array old_values values
+
+    if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
+      var=values \
+      show_trace_dim_message "Derived from derive table: $derive_table"
+    fi
 
   fi
   return 0
@@ -2670,11 +2697,28 @@ attempt_default() {
 
     if function_exists ${dim_type}_${dim}_default; then
       ${dim_type}_${dim}_default || fail
+
+      if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
+        var=values \
+        show_trace_dim_message "Default value taken from default function: ${dim_type}_${dim}_default"
+      fi
+
     fi
 
     if [[ ! "${values:-}" ]] && function_exists ${dim_type}_${dim}_expand; then
       value= ${dim_type}_${dim}_expand || fail
       already_expanded=t
+
+      if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
+        if [[ -v ${dim_type}_${dim}_default ]]; then
+          var=values \
+          show_trace_dim_message "Default value taken from default value: ${dim_type}_${dim}_default"
+        else
+          var=values \
+          show_trace_dim_message "Default value taken from expand function: ${dim_type}_${dim}_expand"
+        fi
+      fi
+
     fi
 
     if [[ "${values:-}" == ask ]]; then
@@ -2691,6 +2735,7 @@ attempt_default() {
       already_expanded=t
 
     fi
+
 
   end_function
   handle_return
@@ -2789,6 +2834,11 @@ calc_coordinates_next_unknown_dim() {
           log_show_vars='dim phase unknown_dims'
           fence
           log_debug "Finding values for $dim in phase $phase"
+
+          if [[ " $trace_dims " == *" $dim "* ]]; then
+            var= \
+            show_trace_dim_message "Value is unknown"
+          fi
 
           local values= already_expanded=f
           if [[ $phase == derive ]]; then
@@ -3069,6 +3119,12 @@ calc_coordinates_next_known_dim_member() {
     fi
 
     if [[ $is_valid == t ]]; then
+
+      if [[ " $trace_dims " == *" $dim "* && "$member" ]]; then
+        var=member \
+        show_trace_dim_message "Value is known"
+      fi
+
       conflict=
       if [[ ${is_cross_dim:-f} == t ]]; then
         set_cross_dims || fail
