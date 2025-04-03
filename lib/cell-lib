@@ -808,6 +808,120 @@ convert_table_to_dims() {
   handle_return
 }
 
+# input: dim_var value
+# output: values 
+expand_dim() {
+  begin_function_lo
+
+    local -n dim_type=${dim_var}_dim_type
+    values=
+    if [[ "${value:-}" && "$value" != \? ]]; then
+
+      if ! function_exists ${dim_type}_${dim_var}_expand; then
+        log_fatal "Internal error: Missing ${dim_type}_${dim_var}_expand function, which should have been created by make_context method"
+        fail1
+      fi
+
+      local problem
+      ${dim_type}_${dim_var}_expand || fail
+      if [[ "${problem:-}" ]]; then
+        log_fatal "$problem"
+        fail1
+      fi
+
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1           array var name which contains the members
+#   dim_var      dim being expanded
+# outputs:
+#   new_values   array of expanded members
+expand_dim_members() {
+  local -n _members=$1
+  local members=( "${_members[@]}" )
+  local value values
+  new_values=()
+  for value in "${members[@]}"; do
+    expand_dim || return 1
+    if [[ "$values" ]]; then
+      new_values+=( "${values[@]}" )
+    fi
+  done
+}
+
+# inputs:
+#   $*      list of dims to expand
+# expands aliases for the known dims array
+# collapses singular and plural dims into plural dims
+# should only be used after prep_dims, which means 
+#   all dims should be stored in sdim/sdims or ddim/ddims
+#   plural dims should always be arrays, not space separated
+# ddim is expanded form of sdim, and takes priority over sdim
+# this function will generate ddim/ddims where they are not already set based on sdim/sdims
+# this function guaranteeds ddims will be set for all known dims
+# ddims will be an array after this function
+expand_dims() {
+  local to_expand=$*
+  begin_function_lo
+
+    local dim_var plural dim_type
+    for dim_var in $to_expand; do
+
+      local dims_var
+      get_plural $dim_var dims_var
+      local -n \
+        sdim=s_$dim_var sdims=s_$dims_var \
+        ddim=d_$dim_var ddims=d_$dims_var \
+
+      if [[ ! "${ddim:-}" && ! "${ddims:-}" && \
+            ( "${sdim:-}" || "${sdims:-}" ) ]]; then
+
+        #log_debug "Expanding dim $dim_var"
+
+        local members single=t
+        if [[ "${sdims:-}" ]]; then
+          members=( "${sdims[@]}" )
+          single=f
+        else
+          members=( "$sdim" )
+        fi
+
+        local value new_values
+        expand_dim_members members || fail
+
+        if [[ $single == t ]]; then
+          if (( ${#new_values[*]} > 1 )); then
+            log_fatal "Too many values for $dim_var: ${new_values[*]}"
+            fail1
+          fi
+        fi
+
+        if (( ${#new_values[*]} == 1 )); then
+          ddim=${new_values}
+          unset ddims sdim sdims
+        else
+          ddims=( "${new_values[@]}" )
+          unset ddim sdim sdims
+        fi
+
+      elif [[ ! "${ddims:-}" ]]; then
+        if [[ "${ddim:-}" ]]; then
+          unset ddims sdim sdims
+        else
+          unset ddims ddim sdim sdims
+        fi
+      fi
+
+    done
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   derive_table            name of var of derive table
 #   out_field               which field to read from the table
@@ -882,11 +996,11 @@ execute_derive_table() {
           local -n dim=d_$field
 
           if [[ $validate_rows == t ]]; then
+
             if [[ "${dim:-}" ]]; then
               if [[ "$dim" != "$value" && "$value" != all && "$dim" != all ]]; then
                 #log_debug "Row doesn't match because dim $field = $dim but table shows $value"
                 everything_matches=f
-                break
               fi
             else # dim not set
               if [[ $strict_matching == t && "$value" && "$value" != all ]]; then
@@ -895,6 +1009,19 @@ execute_derive_table() {
                 break
               fi
             fi
+
+            if [[ $everything_matches == f ]]; then
+              local values
+              dim_var=$field expand_dim || fail
+              if array_contains values $dim; then
+                everything_matches=t
+              fi
+            fi
+
+            if [[ $everything_matches == f ]]; then
+              break
+            fi
+
           fi
 
         fi
@@ -997,123 +1124,6 @@ prep_dims() {
         all_dims+=( $dim_var )
 
       done
-    done
-
-  end_function
-  handle_return
-}
-
-# input: dim_var value
-# output: values 
-expand_dim() {
-  begin_function_lo
-
-    local -n dim_type=${dim_var}_dim_type
-    values=
-    if [[ "${value:-}" && "$value" != \? ]]; then
-
-      if ! function_exists ${dim_type}_${dim_var}_expand; then
-        log_fatal "Internal error: Missing ${dim_type}_${dim_var}_expand function, which should have been created by make_context method"
-        fail1
-      fi
-
-      local problem
-      ${dim_type}_${dim_var}_expand || fail
-      if [[ "${problem:-}" ]]; then
-        log_fatal "$problem"
-        fail1
-      fi
-
-    fi
-
-  end_function
-  handle_return
-}
-
-# inputs:
-#   $1           array var name which contains the members
-#   dim_var      dim being expanded
-# outputs:
-#   new_values   array of expanded members
-expand_dim_members() {
-  local -n _members=$1
-  begin_function_lo
-    local members=( "${_members[@]}" )
-    local value values
-    new_values=()
-    for value in "${members[@]}"; do
-      expand_dim || fail
-      if [[ "$values" ]]; then
-        new_values+=( "${values[@]}" )
-      fi
-    done
-  end_function
-  handle_return
-}
-
-# inputs:
-#   $*      list of dims to expand
-# expands aliases for the known dims array
-# collapses singular and plural dims into plural dims
-# should only be used after prep_dims, which means 
-#   all dims should be stored in sdim/sdims or ddim/ddims
-#   plural dims should always be arrays, not space separated
-# ddim is expanded form of sdim, and takes priority over sdim
-# this function will generate ddim/ddims where they are not already set based on sdim/sdims
-# this function guaranteeds ddims will be set for all known dims
-# ddims will be an array after this function
-expand_dims() {
-  local to_expand=$*
-  begin_function_lo
-
-    local dim_var plural dim_type
-    for dim_var in $to_expand; do
-
-      local dims_var
-      get_plural $dim_var dims_var
-      local -n \
-        sdim=s_$dim_var sdims=s_$dims_var \
-        ddim=d_$dim_var ddims=d_$dims_var \
-
-      if [[ ! "${ddim:-}" && ! "${ddims:-}" && \
-            ( "${sdim:-}" || "${sdims:-}" ) ]]; then
-
-        #log_debug "Expanding dim $dim_var"
-
-        local members single=t
-        if [[ "${sdims:-}" ]]; then
-          members=( "${sdims[@]}" )
-          single=f
-        else
-          members=( "$sdim" )
-        fi
-
-        local value new_values
-        expand_dim_members members || fail
-
-        if [[ $single == t ]]; then
-          if (( ${#new_values[*]} > 1 )); then
-            log_fatal "Too many values for $dim_var: ${new_values[*]}"
-            fail1
-          fi
-        fi
-
-        if (( ${#new_values[*]} == 1 )); then
-          ddim=${new_values}
-          unset ddims sdim sdims
-        else
-          ddims=( "${new_values[@]}" )
-          unset ddim sdim sdims
-        fi
-
-      elif [[ ! "${ddims:-}" ]]; then
-        if [[ "${ddim:-}" ]]; then
-          unset ddims sdim sdims
-        else
-          unset ddims ddim sdim sdims
-        fi
-      fi
-
     done
 
   end_function
