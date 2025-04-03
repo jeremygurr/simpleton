@@ -872,10 +872,16 @@ new() {
   cd $new_work_path || return 1
 
   if [[ $type == down ]]; then
-    local u
-    for u in $(find1 $new_seed_path/.dna/up); do
-      rm -rf $u || return 1
-    done
+    if [[ -d $new_seed_path/.dna/up ]]; then
+      local u ups
+      ups=$(find1 $new_seed_path/.dna/up) || return 1
+      for u in $ups; do
+        rm -rf $u || return 1
+      done
+    else
+      mkdir $new_seed_path/.dna/up || return 1
+    fi
+
     local up_name=${old_seed_path#/*/*/}
     up_name=${up_name//\//-}
 
