@@ -1422,6 +1422,20 @@ out_exec() {
   eval "${p[@]}"
 }
 
+# searches for anything which links to a given file/folder
+find_links() {
+  local from=$1 start_at=${start_at:-$PWD}
+  local links=( $(find "$start_at" -mindepth 1 -type l 2>/dev/null) ) || return 1
+  for link in "${links[@]}"; do
+    target=$(readlink $link)
+    if [[ "$target" == "$from" \
+       || "$target" == "$from"/* \
+       ]]; then
+       echo $link
+    fi
+  done
+}
+
 # moves a file or folder and updates all links pointing to it
 relink() {
   local from=$1 to=$2 start_at=${start_at:-$PWD}

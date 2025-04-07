@@ -513,16 +513,6 @@ build_context_expand_handle_default() {
       code+="
     ;;"
 
-    elif [[ $is_optional == t ]]; then
-      code+="
-    '')
-      values=( \"$empty_member\" )
-    ;;"
-#    elif (( update_risk == 0 )); then
-#      code+="
-#    '')
-#      values=( all )
-#    ;;"
     else
 
       code+="
@@ -596,14 +586,6 @@ build_context_expand2() {
 
     local members=() aliases=() \
       has_explicit_member_list=f fun \
-      is_optional=f \
-
-    if [[ -v ${dim_type}_${dim}_is_optional ]]; then
-      local -n is_optional_var=${dim_type}_${dim}_is_optional
-      if [[ $is_optional_var == t ]]; then
-        is_optional=t
-      fi
-    fi
 
     local member_type_var=${dim_type}_${dim}_member_type
     local -n member_type=$member_type_var
@@ -1140,6 +1122,12 @@ prep_dims() {
 
         all_dims+=( $dim_var )
 
+        local -n is_optional=${dim_type}_${dim_var}_is_optional
+        if [[ ${is_optional:-} == t && " $optional_vars " != *" $dim_var "* ]]; then
+          optional_vars+=" $dim_var"
+          optional_vars=${optional_vars# }
+        fi
+
       done
     done
 
@@ -1542,6 +1530,7 @@ init_context() {
     max_attempts=1 \
     max_pause=60000 \
     min_pause=250 \
+    optional_dims= \
     out_file= \
     out_form_choices='raw simple table json kv' \
     out_path= \
@@ -2529,7 +2518,7 @@ attempt_derive_get_derived_from() {
         complete_row=t
         for derived_from_dim in $derived_from_row; do
           local -n derive_from_dim_value=d_$derived_from_dim
-          if [[ ! "${derive_from_dim_value:-}" ]]; then
+          if [[ ! "${derive_from_dim_value:-}" || $derive_from_dim_value == $empty_member ]]; then
             complete_row=f
             break
           fi
@@ -2758,14 +2747,12 @@ attempt_default() {
 
     if [[ ! "${values:-}" ]]; then
 
-      local -n is_optional_var=${dim_type}_${dim}_is_optional
-      if [[ -v is_optional_var && $is_optional_var == t ]]; then
+      if [[ " $optional_dims " == *" $dim "* ]]; then
         values=( $empty_member )
       fi
       already_expanded=t
 
     fi
-
 
   end_function
   handle_return
@@ -2774,7 +2761,7 @@ attempt_default() {
 calc_coordinates_row_end() {
   begin_function_grip
 
-    if [[ "${optional_dims:-}" ]]; then
+    if [[ "$optional_dims" ]]; then
       local unknown_dim new_unknown_dims=
       for unknown_dim in $unknown_dims; do
         if [[ " $optional_dims " != *" $unknown_dim "* ]]; then
@@ -2862,7 +2849,7 @@ calc_coordinates_next_unknown_dim() {
           get_plural $dim dims
 
           log_show_vars='dim phase unknown_dims'
-          fence
+          fence_grip
           log_debug "Finding values for $dim in phase $phase"
 
           local values= already_expanded=f
@@ -2956,13 +2943,8 @@ calc_coords_validate_member() {
 
     log_debug "Validating $dim == $member"
     local -n dim_type=${dim}_dim_type
-    if [[ "${dim_type:-}" ]]; then
-      local -n is_optional=${dim_type}_${dim}_is_optional
-    else
-      local is_optional=t
-    fi
 
-    if [[ ${is_optional:-f} == t && ( ! "$member" || $member == $empty_member ) ]]; then
+    if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
       abort
     fi
 
@@ -3437,7 +3419,6 @@ xlr8_get_dim_fields() {
       dim_fields+="
         ${dim_type}_${dim}_aliases
         ${dim_type}_${dim}_members
-        ${dim_type}_${dim}_is_optional
         "
     done
   end_function
@@ -5592,13 +5573,13 @@ http_get() {
   begin_function
 
     local curl_command="curl -Lkvgs -m $timeout -w '%{stderr}TIMINGS
-     time_namelookup=%{time_namelookup}
-     time_connect=%{time_connect}
-     time_appconnect=%{time_appconnect}
-     time_pretransfer=%{time_pretransfer}
-     time_redirect=%{time_redirect}
-     time_starttransfer=%{time_starttransfer}
-     time_total=%{time_total}
+      time_namelookup=%{time_namelookup}
+      time_connect=%{time_connect}
+      time_appconnect=%{time_appconnect}
+      time_pretransfer=%{time_pretransfer}
+      time_redirect=%{time_redirect}
+      time_starttransfer=%{time_starttransfer}
+      time_total=%{time_total}
     ' $parameters"
     echo "$curl_command" >$debug_log
     if [[ -e $result_file ]]; then
