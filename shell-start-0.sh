@@ -324,7 +324,11 @@ jwalk() {
         jwalk_update_type
       elif [[ "$response" ]]; then
         back_stack+=( "$current_selection" )
-        current_selection+=".$response"
+        if [[ "$response" =~ ^[a-zA-Z0-9_]+$ ]]; then
+          current_selection+=".$response"
+        else
+          current_selection+="[\"$response\"]"
+        fi
         jwalk_update_type
       else
         invalid_response=t
