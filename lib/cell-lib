@@ -2879,7 +2879,7 @@ calc_coordinates_next_unknown_dim() {
 
               log_show_vars='dim phase member unknown_dims'
               fence
-              log_debug "Processing $dim=$member"
+              log_debug "Processing $dim = $member"
 
               local is_valid=t
 
@@ -2920,8 +2920,9 @@ calc_coords_validate_member() {
   local dim=$1 member=$2 log_show_vars='dim member'
   begin_function_lo
     is_valid=t
+    conflicting_values=()
 
-    log_debug "Validating $dim == $member"
+    log_debug "Validating $dim = $member"
     local -n dim_type=${dim}_dim_type
 
     if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
@@ -2934,7 +2935,8 @@ calc_coords_validate_member() {
       if [[ ! "${values[0]:-}" ]]; then
         #log_debug "Failed to derive dim $dim when can_derive == t, skipping row"
         is_valid=f
-      elif ! array_contains values "$member"; then
+      elif ! array_contains values "$member" && ! array_contains values all; then
+        conflicting_values=( "${values[@]}" )
         is_valid=f
       fi
       abort
@@ -2956,7 +2958,8 @@ calc_coords_validate_member() {
           is_valid=f
         else
           local -n rd_member=d_$rd
-          if [[ "${rd_member:-}" ]] && ! array_contains values "$rd_member"; then
+          if [[ "${rd_member:-}" ]] && ! array_contains values "$rd_member" && ! array_contains values all; then
+            conflicting_values=( "${values[@]}" )
             is_valid=f
           fi
         fi
@@ -3098,8 +3101,8 @@ calc_coordinates_next_dim_member() {
     localize
     local -n member=d_$dim
     member=$m
-    log_debug "Processing $member"
-    local validated_dims=${validated_dims:-}
+    log_debug "Processing $dim = $member"
+    local validated_dims=${validated_dims:-} conflicting_values=()
 
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
       # recursive
@@ -3121,7 +3124,11 @@ calc_coordinates_next_dim_member() {
         log_debug "Row skipped because of cross dim conflict"
       fi
     else
-      log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
+      local extra=
+      if [[ "$conflicting_values" ]]; then
+        extra=" != ${conflicting_values[*]}"
+      fi
+      log_debug "Dim member doesn't fit row contraints: $dim: $member$extra, skipping row"
     fi
   end_function
   handle_return
@@ -3172,7 +3179,7 @@ calc_coordinates_next_dim() {
           local is_cross_dim=f
         fi
 
-        log_debug "Dim known: $dim"
+        #log_debug "Dim known: $dim"
         calc_coordinates_next_dim_member || fail
 
         abort
