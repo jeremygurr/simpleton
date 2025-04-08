@@ -1045,7 +1045,7 @@ execute_derive_table() {
       (( data_index += field_count ))
     done
 
-    log_return_vars=$out_var
+    debug_return_vars=$out_var
   end_function
   handle_return
 }
@@ -2391,36 +2391,6 @@ setup_coord_fields() {
   handle_return
 }
 
-# internal function
-seed_coordinates_handle_row() {
-  log_show_vars=row_index
-  begin_function_grip
-    localize
-    local is_valid
-    check_table_row
-    if [[ $is_valid == t ]]; then
-      for field_index in ${!seed_fields[*]}; do
-        seed_field=${seed_fields[$field_index]}
-        if [[ " ${all_dims[*]} " == *" $seed_field "* ]]; then
-          local -n member=d_$seed_field
-          (( seed_data_index = row_index * seed_field_count + field_index ))
-          member=${seed_data[$seed_data_index]}
-        fi
-      done
-
-      if [[ $fill_in_the_blanks == t ]]; then
-        local known_dims=${all_dims[*]} unknown_dims= dim
-        needs_validation=f \
-        calc_coordinates_next_known_dim || fail
-      else
-        ignore_missing=t calc_coordinates_add_row || fail
-      fi
-
-    fi
-  end_function
-  handle_return
-}
-
 load_implicit_dims() {
   begin_function_lo
     local d
@@ -2625,7 +2595,7 @@ attempt_derive_from_table() {
     done
     keys_to_array old_values values
 
-    if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
+    if [[ " $trace_dims " == *" $dim "* && "${values:-}" ]]; then
       var=values \
       show_trace_dim_message "Derived from derive table: $derive_table"
     fi
@@ -3033,6 +3003,7 @@ set_cross_dims() {
     local -n member=d_$dim
     if function_exists ${dim_type}_${dim}_cross_dim_expand; then
       # sets conflict={dim} if a conflict is found
+      # should set validated_dims for dims which are set
       ${dim_type}_${dim}_cross_dim_expand || fail
     else
       local derive_table=${dim_type}_${dim}_derive
@@ -3084,6 +3055,7 @@ set_cross_dims() {
                 else
                   log_debug "Cross dim set: $field=$value"
                   field_dim=$value
+                  validated_dims+=" $field_dim"
                 fi
               fi
             done
@@ -3118,7 +3090,7 @@ calc_coordinates_next_known_dim_member() {
     member=$m
     log_debug "Processing $dim=$member"
 
-    if [[ $needs_validation == t ]]; then
+    if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
       # recursive
       calc_coords_validate_member $dim "$member" || fail
     else
@@ -3132,6 +3104,7 @@ calc_coordinates_next_known_dim_member() {
         set_cross_dims || fail
       fi
       if [[ ! "$conflict" ]]; then
+        # recursive
         calc_coordinates_next_known_dim || fail
       else
         log_debug "Row skipped because of cross dim conflict"
@@ -3231,6 +3204,36 @@ calc_coordinates_next_known_dim() {
       calc_coordinates_next_unknown_dim || fail
     fi
 
+  end_function
+  handle_return
+}
+
+# internal function
+seed_coordinates_handle_row() {
+  log_show_vars=row_index
+  begin_function_grip
+    localize
+    local is_valid
+    check_table_row
+    if [[ $is_valid == t ]]; then
+      for field_index in ${!seed_fields[*]}; do
+        seed_field=${seed_fields[$field_index]}
+        if [[ " ${all_dims[*]} " == *" $seed_field "* ]]; then
+          local -n member=d_$seed_field
+          (( seed_data_index = row_index * seed_field_count + field_index ))
+          member=${seed_data[$seed_data_index]}
+        fi
+      done
+
+      if [[ $fill_in_the_blanks == t ]]; then
+        local known_dims=${all_dims[*]} unknown_dims= dim validated_dims=
+        needs_validation=f \
+        calc_coordinates_next_known_dim || fail
+      else
+        ignore_missing=t calc_coordinates_add_row || fail
+      fi
+
+    fi
   end_function
   handle_return
 }
@@ -3385,6 +3388,7 @@ calc_coordinates_slow() {
   begin_function
     local row_index=${row_index:-} \
       known_dims="${coordinate_fields[*]}" \
+      validated_dims= \
 
     local seed_table=to_${coord_type}_coords
     if [[ -v ${seed_table}_fields && $cell_is_leaf == f ]]; then
