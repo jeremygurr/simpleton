@@ -1138,6 +1138,13 @@ real() {
 
 # this unlinks a linked file by copying what it links to locally
 localize() {
+  local recursive=f
+  case ${1:-} in
+    -r)
+      recursive=t
+    ;;
+  esac
+
   for file; do
 
     local target=$(realpath $file)

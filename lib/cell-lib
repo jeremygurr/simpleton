@@ -1114,11 +1114,11 @@ prep_dims() {
         [[ "${ddim:-}" == $empty_member ]] && ddim=
         [[ "${ddims:-}" == $empty_member ]] && ddims=()
 
-        if [[ ! "${ddims:-}" && ! "${ddim:-}" \
-           && ! "${sdims:-}" && ! "${sdim:-}" \
-           && " ${all_if_blank:-} " == *" $dim_var "* ]]; then
-          sdims=all
-        fi
+        #if [[ ! "${ddims:-}" && ! "${ddim:-}" \
+        #   && ! "${sdims:-}" && ! "${sdim:-}" \
+        #   && " ${all_if_blank:-} " == *" $dim_var "* ]]; then
+        #  sdims=all
+        #fi
 
         all_dims+=( $dim_var )
 
@@ -2488,7 +2488,10 @@ attempt_derive_get_derived_from() {
         complete_row=t
         for derived_from_dim in $derived_from_row; do
           local -n derive_from_dim_value=d_$derived_from_dim
-          if [[ ! "${derive_from_dim_value:-}" || $derive_from_dim_value == $empty_member ]]; then
+          # Can't do this: 
+          # || $derive_from_dim_value == $empty_member 
+          # because we must allow optional vars to resolve before attempting to derive
+          if [[ ! "${derive_from_dim_value:-}" ]]; then
             complete_row=f
             break
           fi
@@ -2825,6 +2828,8 @@ calc_coordinates_next_unknown_dim() {
           local values= already_expanded=f
           if [[ $phase == derive ]]; then
             attempt_derive $dim || fail
+          elif [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+            values=all
           else
             attempt_default $dim || fail
           fi
@@ -3055,7 +3060,7 @@ set_cross_dims() {
                 else
                   log_debug "Cross dim set: $field=$value"
                   field_dim=$value
-                  validated_dims+=" $field_dim"
+                  validated_dims+=" $field"
                 fi
               fi
             done
@@ -3082,13 +3087,14 @@ set_cross_dims() {
   handle_return
 }
 
-calc_coordinates_next_known_dim_member() {
+calc_coordinates_next_dim_member() {
   log_show_vars='dim m'
   begin_function_grip
     localize
     local -n member=d_$dim
     member=$m
-    log_debug "Processing $dim=$member"
+    log_debug "Processing $member"
+    local validated_dims=${validated_dims:-}
 
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
       # recursive
@@ -3105,7 +3111,7 @@ calc_coordinates_next_known_dim_member() {
       fi
       if [[ ! "$conflict" ]]; then
         # recursive
-        calc_coordinates_next_known_dim || fail
+        calc_coordinates_next_dim || fail
       else
         log_debug "Row skipped because of cross dim conflict"
       fi
@@ -3118,9 +3124,9 @@ calc_coordinates_next_known_dim_member() {
 
 # calling this will produce and end at least one coordinate row 
 # inputs:
-#   known_dims (may be empty)
+#   check_dims (may be empty)
 #   coordinate_fields_plural
-calc_coordinates_next_known_dim() {
+calc_coordinates_next_dim() {
   begin_function_grip
 
     local coord_limit=${coord_limit:-0} total_coord_rows_added=${total_coord_rows_added:-0}
@@ -3132,16 +3138,16 @@ calc_coordinates_next_known_dim() {
     local dim dims \
       row_index=${row_index:-} \
       unknown_dims=${unknown_dims:-} \
-      known_dims=${known_dims:-} \
+      check_dims=${check_dims:-} \
       resolved_dims=${resolved_dims:-} \
       needs_validation=${needs_validation:-t} \
 
-    dim=${known_dims%% *}
-    known_dims=${known_dims##$dim*( )}
+    dim=${check_dims%% *}
+    check_dims=${check_dims##$dim*( )}
 
     if [[ "$dim" ]]; then
 
-      log_debug "Checking known dim $dim"
+      log_debug "Checking dim $dim"
       get_plural $dim dims
 
       eval "local -I d_$dim d_$dims"
@@ -3161,7 +3167,8 @@ calc_coordinates_next_known_dim() {
           local is_cross_dim=f
         fi
 
-        calc_coordinates_next_known_dim_member || fail
+        log_debug "Dim known: $dim"
+        calc_coordinates_next_dim_member || fail
 
         abort
 
@@ -3187,7 +3194,7 @@ calc_coordinates_next_known_dim() {
         # can't loop over named vars (local -n vars)
         # so we need to use a simple var and assign to the named one
         for m in "${ms[@]}"; do
-          calc_coordinates_next_known_dim_member || fail
+          calc_coordinates_next_dim_member || fail
         done; maybe_break
 
         # if none of the members are valid, we just skip the row
@@ -3195,12 +3202,12 @@ calc_coordinates_next_known_dim() {
         abort
 
       else # no members
-        log_debug "Adding $dim to unknown list"
+        log_debug "Dim unknown: $dim"
         unknown_dims+=" $dim"
-        calc_coordinates_next_known_dim || fail
+        calc_coordinates_next_dim || fail
       fi
 
-    else # known_dims is empty, need to proceed to unknowns
+    else # check_dims is empty, need to proceed to unknowns
       calc_coordinates_next_unknown_dim || fail
     fi
 
@@ -3226,9 +3233,9 @@ seed_coordinates_handle_row() {
       done
 
       if [[ $fill_in_the_blanks == t ]]; then
-        local known_dims=${all_dims[*]} unknown_dims= dim validated_dims=
+        local check_dims=${all_dims[*]} unknown_dims= dim validated_dims=
         needs_validation=f \
-        calc_coordinates_next_known_dim || fail
+        calc_coordinates_next_dim || fail
       else
         ignore_missing=t calc_coordinates_add_row || fail
       fi
@@ -3359,7 +3366,7 @@ xlr8() {
 }
 
 # inputs:
-#   known_dims
+#   check_dims
 #   coordinate_data
 #   coordinate_count
 #   coordinate_rows
@@ -3373,8 +3380,8 @@ calc_coordinates_refine_multi() {
       table=${coord_type}_coordinate \
       convert_table_to_dims || fail
 
-      expand_dims $known_dims || fail
-      calc_coordinates_next_known_dim || fail
+      expand_dims $check_dims || fail
+      calc_coordinates_next_dim || fail
       progress_bar_next
       log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
 
@@ -3387,7 +3394,7 @@ calc_coordinates_refine_multi() {
 calc_coordinates_slow() {
   begin_function
     local row_index=${row_index:-} \
-      known_dims="${coordinate_fields[*]}" \
+      check_dims="${coordinate_fields[*]}" \
       validated_dims= \
 
     local seed_table=to_${coord_type}_coords
@@ -3403,7 +3410,7 @@ calc_coordinates_slow() {
         # it is assumed that dims are already expanded before this point, and so ddims will be used
         log_debug "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
         front_load=6 progress_bar_start $coordinate_rows
-        calc_coordinates_next_known_dim || fail
+        calc_coordinates_next_dim || fail
         progress_bar_stop
       fi
 
@@ -4559,7 +4566,6 @@ fork_inside() {
     fi
 
     if [[ "${debug_log_level_filter:-}" ]]; then
-      zombie "reply_to_caller: debug_log_level_filter=$debug_log_level_filter"
       reply_to_caller "debug_log_level_filter=$debug_log_level_filter" || fail
     fi
 
