@@ -284,7 +284,73 @@ load_dna_tab() {
     NR > 1 { print $0 }
     END { print ")" }
     ' $full_path
-    )"
+    )" || fail
+
+    if [[ $name == *_derive ]]; then
+      add_derive_table $name || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+# this duplicates code from write_dna_vtab_to_context on purpose for performance reasons
+# inputs:
+#   $1     full path to vtab file. It is assumed existence check has already happened.
+#   $2     target var to store data in (includes prefix)
+load_dna_vtab() {
+
+  begin_function_lo
+    local full_path=$1 name=$2
+
+    local -n fields=${name}_fields data=${name}_data
+
+    fields=( $(awk '{ print $1 }' $full_path) ) || fail
+    local field_count=${#fields[*]}
+    eval "local array=( $(<$full_path) )" || fail
+
+    local row_offset col_offset data_index array_index current_field_index=0 \
+      col_count=$(( ${#array[*]} / field_count )) \
+
+    begin_for (( row_offset = 0; row_offset < ${#array[*]}; row_offset += col_count )); doo
+      if [[ "${array[$row_offset]}" != ${fields[$current_field_index]} ]]; then
+        log_fatal "Bad data in file $full_path around line $current_field_index"
+        fail1
+      fi
+
+      begin_for (( col_offset = 1; col_offset < col_count; col_offset++ )); doo
+        (( array_index = row_offset + col_offset )) || true
+        (( data_index = ( col_offset - 1 ) * field_count + current_field_index ))
+        data[$data_index]=${array[$array_index]}
+      end_for
+
+      (( current_field_index++ )) || true
+    end_for
+
+    if [[ $name == *_derive ]]; then
+      add_derive_table $name || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1     full path to vtab file. It is assumed existence check has already happened.
+#   $2     target var to store data in (includes prefix)
+write_dna_vtab_to_context() {
+
+  begin_function_lo
+    local full_path=$1 name=$2
+
+    load_dna_vtab $full_path $name
+    local array_assignment
+
+    make_array_assignment ${name}_fields || fail
+    write_to_context var array_assignment || fail
+
+    make_array_assignment ${name}_data || fail
+    write_to_context var array_assignment || fail
 
     if [[ $name == *_derive ]]; then
       add_derive_table $name || fail
@@ -310,7 +376,7 @@ write_dna_tab_to_context() {
     ' $full_path >>$context_path-$context_type.new || fail
 
     if [[ $name == *_derive ]]; then
-      load_dna_tab $full_path $name || fail
+      add_derive_table $name || fail
     fi
 
   end_function
@@ -401,6 +467,13 @@ load_dna_item() {
           write_dna_tab_to_context $var_full_path $var_name || fail
         else
           load_dna_tab $var_full_path $var_name || fail
+        fi
+      ;;
+      vtab)
+        if [[ "${context_type:-}" ]]; then
+          write_dna_vtab_to_context $var_full_path $var_name || fail
+        else
+          load_dna_vtab $var_full_path $var_name || fail
         fi
       ;;
       *)
@@ -680,7 +753,7 @@ build_context_expand() {
 # inputs:
 #   $1          full path of file to write to
 #   skip_dims   (optional) dims to skip
-write_coordinates_to_file() {
+write_coordinates_to_tab_file() {
   local coord_type=$coord_type target_file=$1 skip_dims=${skip_dims:-}
   begin_function
 
@@ -692,13 +765,15 @@ write_coordinates_to_file() {
     local value field_index data_offset row_index field
 
     local -n c_data=${coord_type}_coordinate_data \
-      c_rows=${coord_type}_coordinate_rows \
       c_fields=${coord_type}_coordinate_fields \
-      c_fields_count=${coord_type}_coordinate_fields_count \
-      c_count=${coord_type}_coordinate_count \
+
+    local c_fields_count=${#c_fields[*]} \
+      c_count=${#c_data[*]} \
+
+    local c_rows=$(( c_count / c_fields_count ))
 
     if [[ ! "{c_fields:-}" || c_rows -eq 0 ]]; then
-      log_fatal "There must be at least one ${coord_type} coord row to call write_coordinates_to_file"
+      log_fatal "There must be at least one ${coord_type} coord row to call write_coordinates_to_tab_file"
       fail1
     fi
 
@@ -726,6 +801,97 @@ write_coordinates_to_file() {
 
       echo "${line% }" >>$target_file || fail
     done
+
+  end_function
+  handle_return
+}
+
+# writes $coord_type coords to a file, skipping dims specified in skip_dims
+# also assumes that there is 1 or more sub coord rows
+# inputs:
+#   $1          full path of file to write to
+#   skip_dims   (optional) dims to skip
+write_coordinates_to_vtab_file() {
+  local coord_type=$coord_type target_file=$1 skip_dims=${skip_dims:-}
+  begin_function
+
+    if [[ -f $target_file ]]; then
+      log_fatal "Target file $target_file already exists. It must be deleted before calling this function."
+      fail1
+    fi
+
+    local value field_index data_offset row_index field
+
+    local -n c_data=${coord_type}_coordinate_data \
+      c_fields=${coord_type}_coordinate_fields \
+
+    local c_fields_count=${#c_fields[*]} \
+      c_count=${#c_data[*]} \
+
+    local c_rows=$(( c_count / c_fields_count ))
+
+    if [[ ! "{c_fields:-}" || c_rows -eq 0 ]]; then
+      log_fatal "There must be at least one ${coord_type} coord row to call write_coordinates_to_tab_file"
+      fail1
+    fi
+
+    local line
+
+    begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
+      field=${c_fields[$field_index]}
+      line=
+      if [[ " $skip_dims " != *" $field "* ]]; then
+        line+="$field "
+        for (( row_index = 0; row_index < c_rows; row_index++ )); do
+          (( data_offset = row_index * c_fields_count + field_index ))
+          value=${c_data[$data_offset]}
+          shell_quote_var value
+          line+="$value "
+        done
+      fi
+      echo "${line% }" >>$target_file || fail
+    end_for
+
+  end_function
+  handle_return
+}
+
+# Adds the branch coords (from existing dims) to the given table file
+append_coords_to_file() {
+  local from=$1 to=$2 coord_type=$coord_type fill_in_the_blanks=${fill_in_the_blanks:-f}
+  begin_function
+    log_verbose "Appending $coord_type coordinates to $to from $from"
+    local old_table type=${to##*.}
+
+    case $type in
+      tab)
+        load_dna_tab $from old_table || fail
+      ;;
+      vtab)
+        load_dna_vtab $from old_table || fail
+      ;;
+      *)
+        log_fatal "Invalid file type for append_coords_to_file: $type"
+        fail1
+      ;;
+    esac
+
+    seed_table=old_table \
+    add_implicit_dims=t \
+    seed_coordinates || fail
+
+    if [[ -e $to ]]; then
+      rm $to || fail
+    fi
+
+    case $type in
+      tab)
+        write_coordinates_to_tab_file $to || fail
+      ;;
+      vtab)
+        write_coordinates_to_vtab_file $to || fail
+      ;;
+    esac
 
   end_function
   handle_return
@@ -2431,10 +2597,11 @@ seed_coordinates() {
 
   begin_function
     local -n coordinate_data=${coord_type}_coordinate_data \
-      coordinate_count=${coord_type}_coordinate_count \
-      coordinate_rows=${coord_type}_coordinate_rows \
       coordinate_fields=${coord_type}_coordinate_fields \
-      coordinate_fields_count=${coord_type}_coordinate_fields_count \
+
+    local coordinate_fields_count=0 \
+      coordinate_count=0 \
+      coordinate_rows=0 \
 
     log_debug "Seeding $coord_type coordinates with seed table $seed_table"
     seed_coordinates_prep || fail
@@ -3470,16 +3637,13 @@ calc_coordinates() {
   begin_function
 
     localize
-    local -n coordinate_fields=${coord_type}_coordinate_fields
 
     local dim_var \
       new_coordinate_data=() \
       problem_message= \
 
     local -n coordinate_data=${coord_type}_coordinate_data \
-      coordinate_count=${coord_type}_coordinate_count \
-      coordinate_rows=${coord_type}_coordinate_rows \
-      coordinate_fields_count=${coord_type}_coordinate_fields_count \
+      coordinate_fields=${coord_type}_coordinate_fields \
 
     if [[ $clear_existing_coords == t ]]; then
       coordinate_data=() \
@@ -3487,6 +3651,13 @@ calc_coordinates() {
       coordinate_rows=0 \
 
       setup_coord_fields || fail
+    else
+      
+      local coordinate_fields_count=${#coordinate_fields[*]} \
+        coordinate_count=${#coordinate_data[*]} \
+
+      local coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
+
     fi
 
     unknown_dims= resolved_dims=
@@ -3574,10 +3745,7 @@ build_context_leaf() {
 
     write_vars_to_context \
       branch_coordinate_data \
-      branch_coordinate_count \
-      branch_coordinate_rows \
       branch_coordinate_fields \
-      branch_coordinate_fields_count \
       || fail
 
     if [[ -e $context_path-$context_type.new ]]; then
@@ -3945,19 +4113,13 @@ plant_seed() {
 init_coord() {
   local coord_type=$1
   local -n \
-    coordinate_count=${coord_type}_coordinate_count \
     coordinate_data=${coord_type}_coordinate_data \
     coordinate_fields=${coord_type}_coordinate_fields \
-    coordinate_fields_count=${coord_type}_coordinate_fields_count \
-    coordinate_rows=${coord_type}_coordinate_rows \
     seed_table_fields=to_${coord_type}_coords_fields \
     seed_table_data=to_${coord_type}_coords_data \
 
-  coordinate_count= \
   coordinate_data=() \
   coordinate_fields=() \
-  coordinate_fields_count= \
-  coordinate_rows= \
   seed_table_fields=() \
   seed_table_data=() \
 
@@ -4106,7 +4268,7 @@ get_required_freshness() {
 calc_coords_branch() {
   begin_function
     local coord_type=branch
-    if [[ ! "${branch_coordinate_count:-}" ]]; then
+    if [[ ! "${branch_coordinate_fields:-}" ]]; then
       calc_coordinates || fail
     fi
   end_function
@@ -4116,15 +4278,26 @@ calc_coords_branch() {
 # should only be executed on leaf cells
 calc_coords_leaf() {
   begin_function
+
     local coord_type=leaf
-    if [[ ! "${leaf_coordinate_count:-}" ]]; then
+    if [[ ! "${leaf_coordinate_fields:-}" ]]; then
       calc_coordinates || fail
     fi
-    if (( leaf_coordinate_rows == 1 )); then
-      target_dim_var_type=ddim \
-      table=${coord_type}_coordinate \
-      convert_table_to_dims || fail
+
+    local leaf_coordinate_field_count=${#leaf_coordinate_fields[*]}
+    local leaf_coordinate_data_count=${#leaf_coordinate_data[*]}
+    if (( leaf_coordinate_field_count > 0 && leaf_coordinate_data_count > 0 )); then
+
+      local leaf_coordinate_rows=$(( leaf_coordinate_data_count / leaf_coordinate_field_count ))
+
+      if (( leaf_coordinate_rows == 1 )); then
+        target_dim_var_type=ddim \
+        table=${coord_type}_coordinate \
+        convert_table_to_dims || fail
+      fi
+
     fi
+
   end_function
   handle_return
 }
@@ -4132,15 +4305,26 @@ calc_coords_leaf() {
 # should only be executed on leaf cells
 calc_coords_sub() {
   begin_function
+
     local coord_type=sub
-    if [[ ! "${sub_coordinate_count:-}" ]]; then
+    if [[ ! "${sub_coordinate_fields:-}" ]]; then
       calc_coordinates || fail
     fi
-    if (( sub_coordinate_rows == 1 )); then
-      target_dim_var_type=ddim \
-      table=${coord_type}_coordinate \
-      convert_table_to_dims || fail
+
+    local sub_coordinate_field_count=${#sub_coordinate_fields[*]}
+    local sub_coordinate_data_count=${#sub_coordinate_data[*]}
+    if (( sub_coordinate_field_count > 0 && sub_coordinate_data_count > 0 )); then
+
+      local sub_coordinate_rows=$(( sub_coordinate_data_count / sub_coordinate_field_count ))
+
+      if (( sub_coordinate_rows == 1 )); then
+        target_dim_var_type=ddim \
+        table=${coord_type}_coordinate \
+        convert_table_to_dims || fail
+      fi
+
     fi
+
   end_function
   handle_return
 }

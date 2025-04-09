@@ -38,26 +38,6 @@ write_output_row() {
   handle_return
 }
 
-# Adds the branch coords (from existing dims) to the given table file
-append_coords_to_file() {
-  local from=$1 to=$2 coord_type=$coord_type fill_in_the_blanks=${fill_in_the_blanks:-f}
-  begin_function
-    log_verbose "Appending $coord_type coordinates to $to from $from"
-    local old_table
-    load_dna_tab $from old_table || fail
-
-    seed_table=old_table \
-    add_implicit_dims=t \
-    seed_coordinates || fail
-
-    if [[ -e $to ]]; then
-      rm $to || fail
-    fi
-    write_coordinates_to_file $to || fail
-  end_function
-  handle_return
-}
-
 # inputs: 
 #   upstream
 prep_upstream() {
@@ -1355,9 +1335,13 @@ update_self() {
         update_handle_color || fail
       fi
 
-      if [[ -f $out_path/raw.tab ]]; then
-        coord_type=tree append_coords_to_file $out_path/raw.tab $out_path/output.tab || fail
-      fi
+      local raws raw_path part
+      raws=( $(find1 $out_path -name 'raw-*') ) || fail
+      for raw_path in ${raws[*]}; do
+        part=${raw_path##*/}
+        part=${part#raw-}
+        coord_type=tree append_coords_to_file $raw_path $out_path/$part || fail
+      done
 
     else # mocking
 
