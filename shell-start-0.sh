@@ -324,7 +324,7 @@ jwalk() {
         jwalk_update_type
       elif [[ "$response" ]]; then
         back_stack+=( "$current_selection" )
-        if [[ "$response" =~ ^[a-zA-Z0-9_]+$ ]]; then
+        if [[ "$response" =~ ^[a-zA-Z_]+$ ]]; then
           current_selection+=".$response"
         else
           current_selection+="[\"$response\"]"
