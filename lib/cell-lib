@@ -2747,7 +2747,7 @@ calc_coordinates_row_end() {
 
     if [[ "$optional_dims" ]]; then
       local unknown_dim new_unknown_dims=
-      for unknown_dim in $unknown_dims; do
+      for unknown_dim in ${unknown_dims[*]:-}; do
         if [[ " $optional_dims " != *" $unknown_dim "* ]]; then
           new_unknown_dims+="$unknown_dim "
         fi
@@ -2755,9 +2755,9 @@ calc_coordinates_row_end() {
       unknown_dims=${new_unknown_dims% }
     fi
 
-    if [[ "$unknown_dims" ]]; then
-      log_debug "Skipped row because of unresolvable dims: ${unknown_dims##*( )}"
-      problem_message="Could not resolve dims: ${unknown_dims##*( )}"
+    if [[ "${unknown_dims:-}" ]]; then
+      log_debug "Skipped row because of unresolvable dims: ${unknown_dims[*]}"
+      problem_message="Could not resolve dims: ${unknown_dims[*]}"
       progress_bar_nudge x
     else
       ignore_missing=t \
@@ -2815,7 +2815,7 @@ calc_coordinates_next_unknown_dim() {
   local log_show_vars=unknown_dims
   begin_function_grip
     local dim dims \
-      phase unknown_dims=${unknown_dims:-} \
+      phase unknown_dims=( ${unknown_dims:-} ) \
       resolved_dims=${resolved_dims:-} \
       row_ended=f \
 
@@ -2824,10 +2824,12 @@ calc_coordinates_next_unknown_dim() {
       abort
     fi
 
-    if [[ "$unknown_dims" ]]; then
-      log_debug "Attempting to resolve unknowns: ${unknown_dims# }"
+    local dim_index
+    if [[ "${unknown_dims:-}" ]]; then
+      log_debug "Attempting to resolve unknowns: ${unknown_dims[*]}"
       for phase in derive default; do
-        for dim in $unknown_dims; do
+        for (( dim_index = 0; dim_index < ${#unknown_dims[*]}; dim_index++ )); do
+          dim=${unknown_dims[$dim_index]}
 
           local -n dim_type=${dim}_dim_type
           get_plural $dim dims
@@ -2863,7 +2865,7 @@ calc_coordinates_next_unknown_dim() {
               ddims=( "${values[@]}" )
             fi
 
-            remove_word_from_string unknown_dims $dim
+            local new_unknown_dims=( ${unknown_dims[*]:$((dim_index+1))} ${unknown_dims[*]:0:$dim_index} )
 
             local member ms
             if [[ "${ddims:-}" ]]; then
@@ -2897,6 +2899,7 @@ calc_coordinates_next_unknown_dim() {
               fi
 
               if [[ $is_valid == t ]]; then
+                unknown_dims="${new_unknown_dims[*]}" \
                 calc_coordinates_next_unknown_dim || fail
               else
                 log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
@@ -3555,8 +3558,7 @@ build_context_leaf() {
       rm $context_path-$context_type.new || fail
     fi
 
-    local unknown_dims=() \
-      coord_type=branch \
+    local coord_type=branch
 
     calc_coordinates || fail
     fence
