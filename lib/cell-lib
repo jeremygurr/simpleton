@@ -3142,7 +3142,11 @@ calc_coordinates_next_unknown_dim_found() {
 
     fi
 
-    log_debug "Resolved $dim with $phase: ${ms[*]:0:30}"
+    if [[ "${ms:-}" ]]; then
+      log_debug "Resolved $dim with $phase: ${ms[*]:0:30}"
+    else
+      log_debug "Failed to find any matching values for $dim in $phase phase"
+    fi
 
     if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
       log_fatal "Too many dim members for single coordinate row: ${ms[*]}"
@@ -3210,7 +3214,12 @@ calc_coordinates_next_unknown_dim() {
           if [[ $phase == derive ]]; then
             attempt_derive $dim || fail
           elif [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+            local new_values=()
             values=all
+            dim_var=$dim \
+            expand_dim_members values
+            values=( "${new_values[@]}" )
+            already_expanded=t
           else
             attempt_default $dim || fail
           fi
@@ -3383,7 +3392,7 @@ calc_coordinates_next_dim_member() {
       fi
     else
       local extra=
-      if [[ "$conflicting_values" ]]; then
+      if [[ "${conflicting_values:-}" ]]; then
         extra=" != ${conflicting_values[*]}"
       fi
       log_debug "Dim member doesn't fit row contraints: $dim: $member$extra, skipping row"
