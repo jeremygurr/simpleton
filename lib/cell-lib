@@ -3152,48 +3152,22 @@ calc_coordinates_next_unknown_dim_found() {
     local -n is_cross_dim=${dim_type}_${dim}_is_cross_dim
 
     unset ddims
-    for member in "${ms[@]}"; do
-      ddim=$member
-
-      log_show_vars='dim phase member unknown_dims'
-      fence_grip
-      log_debug "Processing $dim = $member"
-
-      local is_valid=t
+    local m
+    for m in "${ms[@]}"; do
 
       # don't need to validate if in derive phase, since it's already proven valid by the derive
       #   process itself
-      if [[ $phase == default && $needs_validation == t ]]; then
-        # recursive
-        calc_coords_validate_member $dim "$member" || fail
+      local needs_validation=f
+      if [[ $phase == default ]]; then
+        needs_validation=t
       fi
 
-      if [[ $is_valid == t ]]; then
-
-        conflict=
-        if [[ ${is_cross_dim:-f} == t ]]; then
-
-          set_cross_dims || fail
-
-          local d
-          for d in $validated_dims; do
-            remove_array_element new_unknown_dims $d
-          done
-
-        fi
-
-        if [[ ! "$conflict" ]]; then
-          unknown_dims="${new_unknown_dims[*]}" \
-          calc_coordinates_next_unknown_dim || fail
-        else
-          log_debug "Row skipped because of cross dim conflict"
-        fi
-
-      else
-        log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
-      fi
+      # recursive
+      phase=unknown \
+      calc_coordinates_next_dim_member || fail
 
     done; maybe_break
+
     row_ended=t
     unset ddim
 
@@ -3358,14 +3332,19 @@ member_conflicts() {
   handle_return
 }
 
+# inputs:
+#   dim
+#   m       member value
+#   phase   unknown or known.  
 calc_coordinates_next_dim_member() {
+  local phase=$phase
   log_show_vars='dim m'
   begin_function_grip
     localize
     local -n member=d_$dim
     member=$m
     log_debug "Processing $dim = $member"
-    local validated_dims=${validated_dims:-} conflicting_values=()
+    local validated_dims=${validated_dims:-} conflicting_values=() is_valid
 
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
       # recursive
@@ -3382,13 +3361,23 @@ calc_coordinates_next_dim_member() {
 
         local d
         for d in $validated_dims; do
-          remove_word_from_string check_dims $d
+          if [[ $phase == unknown ]]; then
+            remove_array_element new_unknown_dims $d
+          else
+            remove_word_from_string check_dims $d
+          fi
         done
 
       fi
+
       if [[ ! "$conflict" ]]; then
         # recursive
-        calc_coordinates_next_dim || fail
+        if [[ $phase == known ]]; then
+          calc_coordinates_next_dim || fail
+        else
+          unknown_dims="${new_unknown_dims[*]}" \
+          calc_coordinates_next_unknown_dim || fail
+        fi
       else
         log_debug "Row skipped because of cross dim conflict"
       fi
@@ -3399,6 +3388,7 @@ calc_coordinates_next_dim_member() {
       fi
       log_debug "Dim member doesn't fit row contraints: $dim: $member$extra, skipping row"
     fi
+
   end_function
   handle_return
 }
@@ -3435,12 +3425,9 @@ calc_coordinates_next_dim() {
       local -n member=d_$dim \
         members=d_$dims
 
-      if [[ "${member:-}" ]]; then
+      if [[ "${member:-}" || "${members:-}" ]]; then
         
-        local is_valid=t m=$member
-        resolved_dims+=" $dim"
-        unset -n members member
-
+        local m
         local -n dim_type=${dim}_dim_type
         if [[ "${dim_type:-}" ]]; then
           local -n is_cross_dim=${dim_type}_${dim}_is_cross_dim
@@ -3448,35 +3435,29 @@ calc_coordinates_next_dim() {
           local is_cross_dim=f
         fi
 
-        #log_debug "Dim known: $dim"
-        calc_coordinates_next_dim_member || fail
-
-        abort
-
-      elif [[ "${members:-}" ]]; then
-
-        local is_valid=t m ms=( "${members[@]}" )
         resolved_dims+=" $dim"
+
+        if [[ "${member:-}" ]]; then
+          m=$member
+        else
+          local ms=( "${members[@]}" )
+          if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
+            log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
+            fail1
+          fi
+        fi
+
         unset members
         unset -n members member
 
-        local -n dim_type=${dim}_dim_type
-        if [[ "${dim_type:-}" ]]; then
-          local -n is_cross_dim=${dim_type}_${dim}_is_cross_dim
-        else
-          local is_cross_dim=f
-        fi
-
-        if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
-          log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
-          fail1
-        fi
-
-        # can't loop over named vars (local -n vars)
-        # so we need to use a simple var and assign to the named one
-        for m in "${ms[@]}"; do
+        local phase=known
+        if [[ "${m:-}" ]]; then
           calc_coordinates_next_dim_member || fail
-        done; maybe_break
+        else
+          for m in "${ms[@]}"; do
+            calc_coordinates_next_dim_member || fail
+          done; maybe_break
+        fi
 
         # if none of the members are valid, we just skip the row
         # if any are valid, they will have added their own rows already
