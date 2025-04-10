@@ -1172,7 +1172,7 @@ execute_derive_table() {
 
         if [[ $field == $out_field ]]; then
 
-          if [[ ${#choices[*]} -gt 0 && ! "${choices[$value]:-}" ]]; then
+          if [[ "$value" != all && ${#choices[*]} -gt 0 && ! "${choices[$value]:-}" ]]; then
             # don't need to check this row if value isn't in the list of choices
             everything_matches=f
             break
@@ -3085,6 +3085,7 @@ set_cross_dims() {
 }
 
 calc_coordinates_next_unknown_dim_found() {
+  local needs_narrowing=${needs_narrowing:-t}
   begin_function_grip
 
     resolved_dims+=" $dim"
@@ -3112,7 +3113,7 @@ calc_coordinates_next_unknown_dim_found() {
       ms=( "$ddim" )
     fi
 
-    if (( ${#ms[*]} > 3 )); then
+    if [[ $needs_narrowing == t ]] && (( ${#ms[*]} > 3 )); then
 
       local derive_table 
       local -A old_values new_values intersected
@@ -3158,6 +3159,11 @@ calc_coordinates_next_unknown_dim_found() {
     unset ddims
     local m
     for m in "${ms[@]}"; do
+
+      if [[ "$m" == all ]]; then
+        log_fatal "Internal error: a member should never be 'all' at this point."
+        fail1
+      fi
 
       # don't need to validate if in derive phase, since it's already proven valid by the derive
       #   process itself
@@ -3210,9 +3216,10 @@ calc_coordinates_next_unknown_dim() {
           fence_grip
           log_debug "Finding values for $dim in phase $phase"
 
-          local values= already_expanded=f
+          local values= already_expanded=f needs_narrowing=t
           if [[ $phase == derive ]]; then
             attempt_derive $dim || fail
+            needs_narrowing=f
           elif [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
             local new_values=()
             values=all
