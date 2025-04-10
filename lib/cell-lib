@@ -1094,6 +1094,7 @@ expand_dims() {
 
 # inputs:
 #   derive_table            name of var of derive table
+#   in_set                  optional, contains possible values of the dim to choose from
 #   out_field               which field to read from the table
 #   out_set                 which var to write set of valid members to (optional)
 #   out_arr                 which var to write array of valid members to
@@ -1114,10 +1115,12 @@ execute_derive_table() {
     local out_var=${out_set:-$out_arr} \
           out_set=${out_set:-internal_set} \
           out_arr=${out_arr:-} \
+          in_set=${in_set:-} \
 
     local -n derive_fields=${derive_table}_fields \
              derive_data=${derive_table}_data \
-             dim_set=${out_set} \
+             dim_set=$out_set \
+             choices=$in_set \
 
     if [[ "$out_arr" ]]; then
       local -n dim_arr=${out_arr}
@@ -1152,6 +1155,11 @@ execute_derive_table() {
         fence_grip
 
         if [[ $field == $out_field ]]; then
+
+          if [[ -v choices && ! "${choices[$value]}" ]]; then
+            # don't need to check this row if value isn't in the list of choices
+            break
+          fi
 
           if [[ "$value" ]]; then
             row_result=$value
@@ -2974,6 +2982,206 @@ calc_coordinates_dedup() {
   handle_return
 }
 
+# input: dim_type dim
+set_cross_dims() {
+  begin_function_grip
+    local -n member=d_$dim
+    if function_exists ${dim_type}_${dim}_cross_dim_expand; then
+      # sets conflict={dim} if a conflict is found
+      # should set validated_dims for dims which are set
+      ${dim_type}_${dim}_cross_dim_expand || fail
+    else
+      local derive_table=${dim_type}_${dim}_derive
+      local -n derive_fields=${derive_table}_fields \
+               derive_data=${derive_table}_data \
+
+      if [[ -v derive_fields ]]; then
+
+        local field_count=${#derive_fields[*]} \
+          data_count=${#derive_data[*]} \
+          row_index data_index=0 column_index \
+          value= field \
+          found_match=f
+
+        local row_count=$((data_count / field_count))
+
+        for (( row_index = 0; row_index < row_count; row_index++ )); do
+
+          found_match=f
+          for (( column_index = 0; column_index < field_count; column_index++ )); do
+            field=${derive_fields[$column_index]}
+            if [[ $field == $dim ]]; then
+              (( data_index = row_index * field_count + column_index ))
+              value=${derive_data[$data_index]}
+              if [[ "$value" == "$member" ]]; then
+                found_match=t
+              fi
+              break
+            fi
+          done
+
+          if [[ $found_match == t ]]; then
+            for (( column_index = 0; column_index < field_count; column_index++ )); do
+              field=${derive_fields[$column_index]}
+              local fields
+              get_plural $field fields
+              if [[ $field != $dim ]]; then
+                (( data_index = row_index * field_count + column_index ))
+                value=${derive_data[$data_index]}
+                local -n field_dim=d_$field \
+                  field_dims=d_$fields
+                if dim=$field \
+                   single_member="${field_dim:-}" \
+                   multi_member=d_$fields \
+                   target_member="$value" \
+                   member_conflicts; then
+                  conflict=$field
+                  break
+                else
+                  log_debug "Cross dim set: $field=$value"
+                  field_dim=$value
+                  validated_dims+=" $field"
+                fi
+              fi
+            done
+
+            break
+          fi
+
+        done
+
+      else
+        log_warn "is_cross_dim was set, but there is no derive table to use."
+      fi
+    fi
+
+    if [[ "$conflict" ]]; then
+      local conflict_plural
+      get_plural $conflict conflict_plural
+      local -n conflict_member=d_$conflict \
+        conflict_members=d_$conflict_plural
+      log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
+    fi
+
+  end_function
+  handle_return
+}
+
+calc_coordinates_next_unknown_dim_found() {
+  begin_function_grip
+
+    resolved_dims+=" $dim"
+
+    local -n \
+      sdim=s_$dim \
+      sdims=s_$dims \
+      ddim=d_$dim \
+      ddims=d_$dims \
+
+    unset sdim ddim ddims sdims
+    if [[ $already_expanded == f ]]; then
+      sdims=( "${values[@]}" )
+      expand_dims $dim || fail
+    else
+      ddims=( "${values[@]}" )
+    fi
+
+    local new_unknown_dims=( ${unknown_dims[*]:$((dim_index+1))} ${unknown_dims[*]:0:$dim_index} )
+
+    local member ms
+    if [[ "${ddims:-}" ]]; then
+      ms=( "${ddims[@]}" )
+    else
+      ms=( "$ddim" )
+    fi
+
+    if (( ${#ms[*]} > 3 )); then
+
+      local derive_table 
+      local -A old_values new_values intersected
+      array_to_set ms old_values
+
+      debug_start
+
+      local -n derive_tables=${dim}_derive_tables
+      begin_for derive_table in ${derive_tables[*]:-}; doo
+
+        out_field=$dim \
+        out_set=new_values \
+        in_set=old_values \
+        execute_derive_table || fail
+
+        old_values=()
+        add_to_set new_values old_values
+        new_values=()
+
+      end_for
+
+      if (( ${#old_values[*]} < ${#ms[*]} )); thne
+        ms=( "${!old_values[@]}" )
+      fi
+
+    fi
+
+    log_debug "Resolved $dim with $phase: ${ms[*]:0:30}"
+
+    if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
+      log_fatal "Too many dim members for single coordinate row: ${ms[*]}"
+      fail1
+    fi
+
+    local -n is_cross_dim=${dim_type}_${dim}_is_cross_dim
+
+    unset ddims
+    for member in "${ms[@]}"; do
+      ddim=$member
+
+      log_show_vars='dim phase member unknown_dims'
+      fence_grip
+      log_debug "Processing $dim = $member"
+
+      local is_valid=t
+
+      # don't need to validate if in derive phase, since it's already proven valid by the derive
+      #   process itself
+      if [[ $phase == default && $needs_validation == t ]]; then
+        # recursive
+        calc_coords_validate_member $dim "$member" || fail
+      fi
+
+      if [[ $is_valid == t ]]; then
+
+        conflict=
+        if [[ ${is_cross_dim:-f} == t ]]; then
+
+          set_cross_dims || fail
+
+          local d
+          for d in $validated_dims; do
+            remove_array_element new_unknown_dims $d
+          done
+
+        fi
+
+        if [[ ! "$conflict" ]]; then
+          unknown_dims="${new_unknown_dims[*]}" \
+          calc_coordinates_next_unknown_dim || fail
+        else
+          log_debug "Row skipped because of cross dim conflict"
+        fi
+
+      else
+        log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
+      fi
+
+    done; maybe_break
+    row_ended=t
+    unset ddim
+
+  end_function
+  handle_return
+}
+
 # will end the coordinate row one way or another
 # inputs:
 #   unknown_dims
@@ -3015,68 +3223,8 @@ calc_coordinates_next_unknown_dim() {
           fi
 
           if [[ "${values:-}" ]]; then
-
-            resolved_dims+=" $dim"
-
-            local -n \
-              sdim=s_$dim \
-              sdims=s_$dims \
-              ddim=d_$dim \
-              ddims=d_$dims \
-
-            unset sdim ddim ddims sdims
-            if [[ $already_expanded == f ]]; then
-              sdims=( "${values[@]}" )
-              expand_dims $dim || fail
-            else
-              ddims=( "${values[@]}" )
-            fi
-
-            local new_unknown_dims=( ${unknown_dims[*]:$((dim_index+1))} ${unknown_dims[*]:0:$dim_index} )
-
-            local member ms
-            if [[ "${ddims:-}" ]]; then
-              ms=( "${ddims[@]}" )
-            else
-              ms=( "$ddim" )
-            fi
-
-            log_debug "Resolved $dim with $phase: ${ms[*]:0:30}"
-
-            if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
-              log_fatal "Too many dim members for single coordinate row: ${ms[*]}"
-              fail1
-            fi
-
-            unset ddims
-            for member in "${ms[@]}"; do
-              ddim=$member
-
-              log_show_vars='dim phase member unknown_dims'
-              fence
-              log_debug "Processing $dim = $member"
-
-              local is_valid=t
-
-              # don't need to validate if in derive phase, since it's already proven valid by the derive
-              #   process itself
-              if [[ $phase == default && $needs_validation == t ]]; then
-                # recursive
-                calc_coords_validate_member $dim "$member" || fail
-              fi
-
-              if [[ $is_valid == t ]]; then
-                unknown_dims="${new_unknown_dims[*]}" \
-                calc_coordinates_next_unknown_dim || fail
-              else
-                log_debug "Dim member doesn't fit row contraints: $dim = $member, skipping row"
-              fi
-
-            done; maybe_break
-            row_ended=t
-            unset ddim
+            calc_coordinates_next_unknown_dim_found || fail
             abort
-
           fi
 
         done; maybe_break
@@ -3186,91 +3334,6 @@ member_conflicts() {
   handle_return
 }
 
-# input: dim_type dim
-set_cross_dims() {
-  begin_function_grip
-    local -n member=d_$dim
-    if function_exists ${dim_type}_${dim}_cross_dim_expand; then
-      # sets conflict={dim} if a conflict is found
-      # should set validated_dims for dims which are set
-      ${dim_type}_${dim}_cross_dim_expand || fail
-    else
-      local derive_table=${dim_type}_${dim}_derive
-      local -n derive_fields=${derive_table}_fields \
-               derive_data=${derive_table}_data \
-
-      if [[ -v derive_fields ]]; then
-
-        local field_count=${#derive_fields[*]} \
-          data_count=${#derive_data[*]} \
-          row_index data_index=0 column_index \
-          value= field \
-          found_match=f
-
-        local row_count=$((data_count / field_count))
-
-        for (( row_index = 0; row_index < row_count; row_index++ )); do
-
-          found_match=f
-          for (( column_index = 0; column_index < field_count; column_index++ )); do
-            field=${derive_fields[$column_index]}
-            if [[ $field == $dim ]]; then
-              (( data_index = row_index * field_count + column_index ))
-              value=${derive_data[$data_index]}
-              if [[ "$value" == "$member" ]]; then
-                found_match=t
-              fi
-              break
-            fi
-          done
-
-          if [[ $found_match == t ]]; then
-            for (( column_index = 0; column_index < field_count; column_index++ )); do
-              field=${derive_fields[$column_index]}
-              local fields
-              get_plural $field fields
-              if [[ $field != $dim ]]; then
-                (( data_index = row_index * field_count + column_index ))
-                value=${derive_data[$data_index]}
-                local -n field_dim=d_$field \
-                  field_dims=d_$fields
-                if dim=$field \
-                   single_member="${field_dim:-}" \
-                   multi_member=d_$fields \
-                   target_member="$value" \
-                   member_conflicts; then
-                  conflict=$field
-                  break
-                else
-                  log_debug "Cross dim set: $field=$value"
-                  field_dim=$value
-                  validated_dims+=" $field"
-                fi
-              fi
-            done
-
-            break
-          fi
-
-        done
-
-      else
-        log_warn "is_cross_dim was set, but there is no derive table to use."
-      fi
-    fi
-
-    if [[ "$conflict" ]]; then
-      local conflict_plural
-      get_plural $conflict conflict_plural
-      local -n conflict_member=d_$conflict \
-        conflict_members=d_$conflict_plural
-      log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
-    fi
-
-  end_function
-  handle_return
-}
-
 calc_coordinates_next_dim_member() {
   log_show_vars='dim m'
   begin_function_grip
@@ -3292,6 +3355,12 @@ calc_coordinates_next_dim_member() {
       conflict=
       if [[ ${is_cross_dim:-f} == t ]]; then
         set_cross_dims || fail
+
+        local d
+        for d in $validated_dims; do
+          remove_word_from_string check_dims $d
+        done
+
       fi
       if [[ ! "$conflict" ]]; then
         # recursive
