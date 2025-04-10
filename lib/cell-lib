@@ -349,10 +349,15 @@ write_dna_vtab_to_context() {
     make_array_assignment ${name}_fields || fail
     write_to_context var array_assignment || fail
 
+    if [[ $name == *_derive ]]; then
+      eval "$array_assignment" || fail
+    fi
+
     make_array_assignment ${name}_data || fail
     write_to_context var array_assignment || fail
 
     if [[ $name == *_derive ]]; then
+      eval "$array_assignment" || fail
       add_derive_table $name || fail
     fi
 
@@ -369,13 +374,19 @@ write_dna_tab_to_context() {
     local full_path=$1 name=$2
 
     maybe_write_newline_to_context tab
-    awk '
-    NR == 1 { print "'$name'_fields=( " $0 " )"; print "'$name'_data=(" }
-    NR > 1 { print "  " $0 }
-    END { print ")" }
-    ' $full_path >>$context_path-$context_type.new || fail
+    local content
+    content=$(
+      awk '
+      NR == 1 { print "'$name'_fields=( " $0 " )"; print "'$name'_data=(" }
+      NR > 1 { print "  " $0 }
+      END { print ")" }
+      ' $full_path
+    ) || fail
+
+    echo "$content" >>$context_path-$context_type.new || fail
 
     if [[ $name == *_derive ]]; then
+      eval "$content" || fail
       add_derive_table $name || fail
     fi
 
@@ -1120,7 +1131,12 @@ execute_derive_table() {
     local -n derive_fields=${derive_table}_fields \
              derive_data=${derive_table}_data \
              dim_set=$out_set \
-             choices=$in_set \
+
+    if [[ "$in_set" ]]; then
+      local -n choices=${in_set:-}
+    else
+      local -A choices=()
+    fi
 
     if [[ "$out_arr" ]]; then
       local -n dim_arr=${out_arr}
@@ -1156,8 +1172,9 @@ execute_derive_table() {
 
         if [[ $field == $out_field ]]; then
 
-          if [[ -v choices && ! "${choices[$value]}" ]]; then
+          if [[ ! "${choices[$value]:-}" ]]; then
             # don't need to check this row if value isn't in the list of choices
+            everything_matches=f
             break
           fi
 
