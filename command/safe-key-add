@@ -4,8 +4,14 @@ safe_key_add_command() {
   begin_function
 
     local seed_path=${seed_path:-} \
-      user=${user:-} \
+      user=${user:-${USER:-}} \
       cell_path=${cell_path:-} \
+      pub_key_path=${pub_key_path:-} \
+
+    if [[ ! "${pub_key_path:-}" ]]; then
+      log_fatal "Must set pub_key_path equal to the path containing the public key to add"
+      fail1
+    fi
 
     if [[ ! "${seed_path:-}" ]]; then
       load_branch_info || fail
@@ -36,13 +42,22 @@ safe_key_add_command() {
       fail1
     fi
 
+    if [[ ! "${tmp_path:-}" ]]; then
+      log_fatal "Internal error: tmp_path has not been set"
+      fail1
+    fi
+
+    if [[ ! -e $tmp_path ]]; then
+      mkdir -p $tmp_path || fail
+    fi
+
     local mk_path=$tmp_path/mk
     defer "rm $mk_path"
     if [[ -f $key_path/$USER.key ]]; then
       extract_master_key $key_path/$USER.key $mk_path || fail
     else
       local others=( $key_path/* )
-      if [[ "$others" != *'*'* ]] then
+      if [[ "$others" != *'*'* ]]; then
         local o users
         for o in ${others[*]}; do
           o=${o##*/}
@@ -56,6 +71,20 @@ safe_key_add_command() {
 
       head -c12 /dev/urandom | base64 >$mk_path || fail
     fi
+
+    # convert public key to format openssl likes
+    ssh-keygen -f $pub_key_path -m PKCS8 -e >$tmp_folder/pub_key || {
+      log_fatal "Failed to convert public key."
+      fail1
+    }
+
+    # encrypt main key with new key
+      openssl pkeyutl -encrypt -pubin -inkey $tmp_folder/pub_key -in $mk_path -out $key_path/$user.key || {
+      log_fatal "Failed to encrypt main key."
+      fail1
+    }
+
+    log_info "Successfully added key for user $user to $key_path"
 
     command_successful=t
 
