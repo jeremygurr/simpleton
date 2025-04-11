@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+
+safe_encrypt_command() {
+  begin_function
+
+    local seed_path=${seed_path:-} \
+      user=${user:-${USER:-}} \
+      cell_path=${cell_path:-} \
+      user_private_key=${user_private_key:-~/.ssh/id_rsa} \
+      from_file=${from_file:-} \
+      to_file=${to_file:-} \
+
+    if [[ ! "${from_file:-}" ]]; then
+      log_fatal "from_file not specified. It must contain the path to the file to encrypt."
+      fail1
+    fi
+
+    if [[ ! "${to_file:-}" ]]; then
+      to_file=$from_file.safe
+    fi
+
+    if [[ ! "${seed_path:-}" ]]; then
+      load_branch_info || fail
+      find_seed_path $cell_path || fail
+    else
+      cell_path=/work${seed_path#/seed}
+    fi
+
+    if [[ ! "${seed_path:-}" || ! -e $seed_path ]]; then
+      log_fatal "Couldn't find seed path. You must either run this command in a work cell, or in a seed cell"
+      fail1
+    fi
+
+    local key_path=$seed_path
+    while [[ $key_path == /*/*/* && ! -d $key_path/.key ]]; do
+      key_path=${key_path%/*}
+    done
+
+    if [[ ! -d $key_path/.key ]]; then
+      log_fatal "No key path was found. Use 'cell safe key add' to create the first key."
+      fail1
+    else
+      key_path=$key_path/.key
+    fi
+
+    if [[ ! -f $key_path/$user.key ]]; then
+      local others=( $key_path/* )
+      local o users
+      for o in ${others[*]}; do
+        o=${o##*/}
+        users+="${o%.key} "
+      done
+      if [[ "$users" ]]; then
+        log_fatal "No key found for user $user. Ask someone who has access to add your key. These users have access: $users"
+      else
+        log_fatal "No keys were found. Use 'cell safe key add' to create the first key."
+      fi
+      fail1
+    fi
+
+    if [[ ! "${tmp_path:-}" ]]; then
+      log_fatal "Internal error: tmp_path has not been set"
+      fail1
+    fi
+
+    if [[ ! -e $tmp_path ]]; then
+      mkdir -p $tmp_path || fail
+    fi
+
+    local mk_path=$tmp_path/mk
+    defer "rm $mk_path"
+    extract_master_key $key_path/$user.key $mk_path || fail
+
+    master_key=$mk_path \
+    simple_encrypt $from_file $to_file ||fail
+
+    log_info "Successfully encrypted file $from_file to $to_file"
+
+    command_successful=t
+
+  end_function
+
+  handle_return
+}
+
