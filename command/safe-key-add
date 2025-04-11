@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+
+safe_key_add_command() {
+  begin_function
+
+    local seed_path=${seed_path:-} \
+      user=${user:-} \
+      cell_path=${cell_path:-} \
+
+    if [[ ! "${seed_path:-}" ]]; then
+      load_branch_info || fail
+      find_seed_path $cell_path || fail
+    else
+      cell_path=/work${seed_path#/seed}
+    fi
+
+    if [[ ! "${seed_path:-}" || ! -e $seed_path ]]; then
+      log_fatal "Couldn't find seed path. You must either run this command in a work cell, or in a seed cell"
+      fail1
+    fi
+
+    local key_path=$seed_path
+    while [[ $key_path == /*/*/* && ! -d $key_path/.key ]]; do
+      key_path=${key_path%/*}
+    done
+
+    if [[ ! -d $key_path/.key ]]; then
+      key_path=$seed_path/.key
+      mkdir $key_path || fail
+    else
+      key_path=$key_path/.key
+    fi
+
+    if [[ -f $key_path/$user.key ]]; then
+      log_fatal "A key already exists for this user: $user"
+      fail1
+    fi
+
+    local mk_path=$tmp_path/mk
+    defer "rm $mk_path"
+    if [[ -f $key_path/$USER.key ]]; then
+      extract_master_key $key_path/$USER.key $mk_path || fail
+    else
+      local others=( $key_path/* )
+      if [[ "$others" != *'*'* ]] then
+        local o users
+        for o in ${others[*]}; do
+          o=${o##*/}
+          users+="${o%.key} "
+        done
+        log_fatal "A master key already exists, but you don't have permission. Ask one of these users to give permission: ${users% }"
+        fail1
+      fi
+
+      log_info "No other keys exist, creating a new master key"
+
+      head -c12 /dev/urandom | base64 >$mk_path || fail
+    fi
+
+    command_successful=t
+
+  end_function
+
+  handle_return
+}
+
