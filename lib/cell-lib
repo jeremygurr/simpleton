@@ -4106,7 +4106,9 @@ for_each_member() {
 }
 
 plant_seed_internal() {
-  local from=$1 to=$2 contents x x_part deep=${deep:-t} plant_branches=${plant_branches:-f}
+  local from=$1 to=$2 contents x x_part deep=${deep:-t} \
+    cell_is_leaf=${cell_is_leaf:-t}
+
   begin_function
 
     if [[ ! -d $to ]]; then
@@ -4123,7 +4125,7 @@ plant_seed_internal() {
     else
 
       contents=( $(find1 $from | sort -g) ) || fail
-      local dim_found= target
+      local target
       begin_for x in ${contents[*]}; doo
         x_part=${x##*/}
         target=$to/$x_part
@@ -4134,16 +4136,21 @@ plant_seed_internal() {
             elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
               safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
             elif [[ $x_part == *:* ]]; then
-              if [[ $plant_branches == t ]]; then
-                log_warn "Branch planting disabled for now."
+              local dim_part=${x_part%%:*} \
+                mem_part=${x_part#*:}
+
+              local values
+              coord_type=branch \
+              fetch_values_from_coordinates $dim_part || fail
+
+              local value_count=${#values[*]}
+
+              # Hashed members currently not supported
+              # Not too hard to implement, but isn't likely to be needed
+              if (( value_count == 1 )) && [[ "$values" == "$mem_part" ]]; then
+                plant_seed_internal $x $to || fail
               fi
-              #local new_dim=${x_part%%:*}
-              #if [[ ! "$dim_found" ]]; then
-              #  dim_found=${x_part%%:*}
-              #elif [[ $dim_found != $new_dim ]]; then
-              #  log_fatal "Seed has two different dims defined, which is not allowed: $dim_found and $new_dim in $from"
-              #  fail1
-              #fi
+
             elif [[ $x_part != .* ]]; then
               mkdir $target || fail
             fi
@@ -4151,7 +4158,7 @@ plant_seed_internal() {
           if [[ $x_part != .* && -d $target && $deep == t ]]; then
             plant_seed_internal $x $target || fail
           fi
-        elif [[ ! -e $target && $x_part != .* ]]; then
+        elif [[ $cell_is_leaf == t && ! -e $target && $x_part != .* ]]; then
           cp -a $x $to/ || fail
         fi
       end_for
@@ -4164,7 +4171,7 @@ plant_seed_internal() {
 # inputs: $1  work path to the cell
 plant_seed() {
   local seed_path from=$1 to=${2:-$1} \
-    deep=${deep:-t} plant_branches=${plant_branches:-f} \
+    deep=${deep:-t} \
     ignore_nonexistent=${ignore_nonexistent:-f}
 
   begin_function
@@ -5143,6 +5150,10 @@ plant_member() {
         echo -n "$member" >$new_path/.member || fail
       fi
 
+      local cell_is_leaf=t
+      if [[ ${child_dims:-} ]] && (( ${#child_dims[*]} > 1 )); then
+        cell_is_leaf=f
+      fi
       plant_seed $member_path $new_path || fail
 
       #if [[ -e $parent_path/.mock ]]; then
