@@ -43,6 +43,9 @@ alias dim='cell dim'
 alias up='cell up'
 alias ?='cell . ?'
 alias ??='cell . ??'
+alias safe='cell safe'
+alias w=walk
+alias f=forge
 
 alias sp='source /etc/profile'
 alias ls='ls --color=auto'
@@ -54,7 +57,6 @@ alias uu='builtin cd ../..'
 alias uuu='builtin cd ../../..'
 alias vi=vim
 alias vis='vim /etc/profile.d/shell-start-0.sh'
-alias w=walk
 
 # used by /etc/profile, this avoids a warning
 BB_ASH_VERSION=
@@ -1208,7 +1210,7 @@ alias f2='find . -maxdepth 2 -not -path "*/.git*"'
 alias f3='find . -maxdepth 3 -not -path "*/.git*"'
 alias f4='find . -maxdepth 4 -not -path "*/.git*"'
 
-f() {
+fq() {
   local return_code=0
   if [ "$*" ]; then
     find . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -name "$@" 2>/dev/null | ifout || return_code=1
