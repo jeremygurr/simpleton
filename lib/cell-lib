@@ -5508,6 +5508,90 @@ decrypt_file() {
   handle_return
 }
 
+get_key_path() {
+
+  key_path=$seed_path
+  while [[ $key_path == /*/*/* && ! -d $key_path/.key ]]; do
+    key_path=${key_path%/*}
+  done
+
+  if [[ ! -d $key_path/.key ]]; then
+    log_fatal "No key path was found. Use 'cell safe key add' to create the first key."
+    return 1
+  else
+    key_path=$key_path/.key
+  fi
+
+}
+
+validate_user_key() {
+  if [[ ! -f $key_path/$user.key ]]; then
+    local others=( $key_path/* )
+    local o users
+    for o in ${others[*]}; do
+      o=${o##*/}
+      users+="${o%.key} "
+    done
+    if [[ "$users" ]]; then
+      log_fatal "No key found for user $user. Ask someone who has access to add your key. These users have access: $users"
+    else
+      log_fatal "No keys were found. Use 'cell safe key add' to create the first key."
+    fi
+    return 1
+  fi
+}
+
+extract_master_key() {
+  local from=$1 to=$2 user_private_key=$user_private_key
+  if ! openssl pkeyutl -decrypt -inkey $user_private_key -in $from -out $to; then
+    log_fatal "Failed to decrypt master key." 
+    return 1
+  fi
+}
+
+make_master_key() {
+  begin_function
+    local pub_key=$pub_key master_key=$master_key target=$target tmp_folder=$tmp_folder
+
+    defer "rm $tmp_folder/pub_key"
+
+    # convert public key to format openssl likes
+    ssh-keygen -f $pub_key -m PKCS8 -e >$tmp_folder/pub_key || {
+      log_fatal "Failed to convert public key."
+      fail1
+    }
+
+    # encrypt main key with new key
+      openssl pkeyutl -encrypt -pubin -inkey $tmp_folder/pub_key -in $master_key -out $target || {
+      log_fatal "Failed to encrypt main key."
+      fail1
+    }
+  end_function
+  handle_return
+}
+
+simple_encrypt() {
+  local master_key=$master_key from_file=$1 to_file=$2
+  begin_function
+    if ! openssl enc -aes256 -pbkdf2 -in $from_file -out $to_file -pass file:$master_key; then
+      log_fatal "Failed to encrypt the file."
+      fail1
+    fi
+  end_function
+  handle_return
+}
+
+simple_decrypt() {
+  local master_key=$master_key from_file=$1 to_file=$2
+  begin_function
+    if ! openssl enc -aes256 -pbkdf2 -in $from_file -out $to_file -d -pass file:$master_key; then 
+      log_fatal "Failed to decrypt the file."
+      fail1
+    fi
+  end_function
+  handle_return
+}
+
 # inputs: from to tmp_path current_cell
 # will write output to file at $to
 decrypt_file_with_shared_key() {
