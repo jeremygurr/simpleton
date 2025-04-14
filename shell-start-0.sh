@@ -1210,6 +1210,19 @@ alias f2='find . -maxdepth 2 -not -path "*/.git*"'
 alias f3='find . -maxdepth 3 -not -path "*/.git*"'
 alias f4='find . -maxdepth 4 -not -path "*/.git*"'
 
+fql() {
+  local return_code=0
+  if [ "$*" ]; then
+    find -L . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -name "$@" 2>/dev/null | ifout || return_code=1
+  elif [ "${depth:-}" ]; then
+    find -L . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -maxdepth $depth 2>/dev/null | ifout || return_code=1
+  else
+    find -L . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' 2>/dev/null | ifout || return_code=1
+  fi
+
+  return $return_code
+}
+
 fq() {
   local return_code=0
   if [ "$*" ]; then
