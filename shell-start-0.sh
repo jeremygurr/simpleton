@@ -236,8 +236,8 @@ jwalk_update_type() {
   if [[ ! "$query" ]]; then
     query=.
   fi
-  #current_type=$(jq -r "$query | type" "$json_file" 2>/dev/null)
-  current_type=$(jq -r "$query | type" "$json_file")
+  #current_type=$(jq -sr "$query | type" "$json_file" 2>/dev/null)
+  current_type=$(jq -sr "$query | type" "$json_file")
   if [[ ! "$current_type" ]]; then
     current_type=unknown
   fi
@@ -261,7 +261,7 @@ jwalk() {
       local current_selection=$current_selection 
       echo "$HIGHLIGHT$hbar_equals$NL$current_selection ($current_type)$RESET"
       if [[ "$current_type" != object && "$current_type" != array ]]; then
-        jq -r "$current_selection" "$json_file"
+        jq -sr "$current_selection" "$json_file"
       fi
     }
 
@@ -281,8 +281,8 @@ jwalk() {
 
       local values= value OIFS=$IFS types= type message=
       IFS=$'\n' 
-      values=( $(jq -r "$query" "$json_file" 2>/dev/null) )
-      types=( $(jq -r "$type_query" "$json_file" 2>/dev/null) )
+      values=( $(jq -sr "$query" "$json_file" 2>/dev/null) )
+      types=( $(jq -sr "$type_query" "$json_file" 2>/dev/null) )
       IFS=$OIFS
 
       local i
@@ -296,7 +296,7 @@ jwalk() {
           else
             query="$current_selection.$value"
           fi
-          message="$value ($(jq -r "$query" "$json_file" 2>/dev/null))"
+          message="$value ($(jq -sr "$query" "$json_file" 2>/dev/null))"
         fi
         if [[ ! "$message" ]]; then
           message=$value
@@ -319,13 +319,19 @@ jwalk() {
         jwalk_update_type
         unset back_stack[-1]
       elif [[ "$response" == "*full*" ]]; then
-        jq -r "$current_selection" "$json_file"
+        jq -sr "$current_selection" "$json_file"
       elif [[ "$response" =~ ^[0-9]+$ ]]; then
         back_stack+=( "$current_selection" )
+        if [[ ! "$current_selection" ]]; then
+          current_selection=.
+        fi
         current_selection+="[$response]"
         jwalk_update_type
       elif [[ "$response" ]]; then
         back_stack+=( "$current_selection" )
+        if [[ ! "$current_selection" ]]; then
+          current_selection=.
+        fi
         if [[ "$response" =~ ^[a-zA-Z_]+$ ]]; then
           current_selection+=".$response"
         else
@@ -345,7 +351,7 @@ jwalk() {
 
     if [[ "$result" ]]; then
       echo "Use this command to see the selected data:"
-      echo "jq -r '$result' $json_file"
+      echo "jq -sr '$result' $json_file"
     fi
 
   end_function
