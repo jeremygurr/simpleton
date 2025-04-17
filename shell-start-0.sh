@@ -74,6 +74,35 @@ sum2() {
   awk 'k != "" && k != $1 { print k, t; t=0 } { k=$1; t+=$2 } END { print k, t }'
 }
 
+migrate() {
+  local name=$1
+  if [[ ! -d .dna || $PWD != /work/* ]]; then
+    echo "This command must be run within a cell (work not seed)" >&2
+    return 1
+  fi
+
+  local dna_path=$PWD/.dna
+  case "$name" in
+    dim)
+      local dim_type
+      for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
+        if [[ -d $dna_path/$dim_type ]]; then
+          echo "Converting dims for $dim_type"
+          local files
+          files=$(find1 $dna_path/$dim_type -printf "%f\n" | sed 's/^\([0-9]\+-\)\?\(.*\)$/\2/' | sort -g)
+          files=( $files )
+          echo "${files[*]}" >$dna_path/$dim_type.var || return 1
+          rm -fr $dna_path/$dim_type || return 1
+        fi
+      done
+    ;;
+    *)
+      echo "Unknown migration command: $name" >&2
+      return 1
+    ;;
+  esac
+}
+
 find_dna_work_cells() {
   local dir=$1 possibility only_one=${only_one:-f}
   local possibilities=$(find $dir/* -name ".*" -prune -o '(' -type l -print ')')

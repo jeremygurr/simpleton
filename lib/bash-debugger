@@ -98,35 +98,28 @@ shell_quote_var() {
 }
 
 is_array() {
-  local -n array=$1
-  if [[ ! -v array[*] ]]; then
+  local -n _array=$1
+  if [[ ! -v _array[*] ]]; then
     return 1
   fi
-  [[ ${array@a} == a ]]
+  [[ ${_array@a} == a ]]
 }
 
 # duplicated from bash-lib
 # variable should be checked to see if it is set first
 is_set() {
   local -n _set=$1
-  local rc
-  set +u
-  [[ ${_set@a} == A ]]; rc=$?
-  set -u
-  return $rc
+  if [[ ! -v _set[*] ]]; then
+    return 1
+  fi
+  [[ ${_set@a} == A ]]
 }
 
 # duplicated from bash-lib
 get_var_value() {
   local -n _var=$1 _val=${2:-value} || return 1
   _val='(unbound)'
-  if is_array _var; then
-    if [[ "${_var:-}" ]] && (( ${#_var[*]} > 20 )); then
-      _val="( ${_var[*]:0:20} ... )"
-    else
-      _val="( ${_var[*]:-} )"
-    fi
-  elif is_set _var; then
+  if is_set _var; then
     local c=0 k v
     _val="( "
     for k in "${!_var[@]}"; do
@@ -143,6 +136,12 @@ get_var_value() {
       fi
     done
     _val+=")"
+  elif is_array _var; then
+    if [[ "${_var:-}" ]] && (( ${#_var[*]} > 20 )); then
+      _val="( ${_var[*]:0:20} ... )"
+    else
+      _val="( ${_var[*]:-} )"
+    fi
   elif [[ -v _var ]]; then
     _val=$_var
     newlines=preserved quotes=single shell_quote_var _val
