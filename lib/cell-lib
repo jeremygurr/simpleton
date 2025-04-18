@@ -1227,17 +1227,24 @@ prep_dims() {
 
       get_plural $dim_var dims_var
 
+      # p_dims are what the user sets when putting parameters on the commandline (without the p_), or explicitly set in environemnt (with the p_)
+      # i_dims are set in the dna and are a permanent feature of the cell and can't be overridden by the user
+      # s_dims are taken from p and i dims, and may contain members which are aliases or groups of other dims
+      # d_dims are the final form of dim, after the s_dims have been expanded
       local -n \
         ddim=d_$dim_var ddims=d_$dims_var \
         sdim=s_$dim_var sdims=s_$dims_var \
         pdim=p_$dim_var pdims=p_$dims_var \
+        idim=i_$dim_var idims=i_$dims_var \
 
       # We do not support pulling from simple dim here
       # If we want to set an dim in env vars, it must be set with p_dim form
-      sdim=${sdim:-${pdim:-}}
+      sdim=${sdim:-${idim:-${pdim:-}}}
 
       if [[ ! "${sdims:-}" ]]; then
-        if [[ "${pdims:-}" ]]; then
+        if [[ "${idims:-}" ]]; then
+          sdims=( "${idims[@]}" )
+        elif [[ "${pdims:-}" ]]; then
           # Multiple members that have spaces inside are not supported
           # Only single member dims can be used if the value requires spaces or special characters
           sdims=( $pdims )
@@ -1248,18 +1255,12 @@ prep_dims() {
 
       # from here on out only sdims and ddims should be used
       # sdims may contain shortcuts, ddims are always expanded (never shortcuts)
-      unset p_$dim_var p_$dims_var
+      unset p_$dim_var p_$dims_var i_$dim_var i_$dims_var
 
       [[ "${sdim:-}" == $empty_member ]] && sdim=
       [[ "${sdims:-}" == $empty_member ]] && sdims=()
       [[ "${ddim:-}" == $empty_member ]] && ddim=
       [[ "${ddims:-}" == $empty_member ]] && ddims=()
-
-      #if [[ ! "${ddims:-}" && ! "${ddim:-}" \
-      #   && ! "${sdims:-}" && ! "${sdim:-}" \
-      #   && " ${all_if_blank:-} " == *" $dim_var "* ]]; then
-      #  sdims=all
-      #fi
 
       local -n is_optional=dim_${dim_var}_is_optional
       if [[ ${is_optional:-} == t && " $optional_dims " != *" $dim_var "* ]]; then
@@ -2268,6 +2269,9 @@ build_context_trunk() {
 
     build_context_trunk_dna || fail
 
+    coord_type=seed_branch \
+    calc_coordinates || fail
+
     if [[ ! -d $status_path ]]; then
       mkdir -p $status_path || fail
     fi
@@ -2475,7 +2479,7 @@ calc_coordinates_add_row() {
 setup_coord_fields() {
   begin_function
     case $coord_type in
-      branch)
+      seed_branch|branch)
         coordinate_fields=( ${trunk_dims[*]:-} )
       ;;
       leaf)
@@ -2484,7 +2488,7 @@ setup_coord_fields() {
       sub)
         coordinate_fields=( ${sub_dims[*]:-} )
       ;;
-      tree)
+      seed_tree|tree)
         coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
       ;;
       *)
@@ -3642,23 +3646,20 @@ calc_coordinates() {
     local dim_var \
       new_coordinate_data=() \
       problem_message= \
+      coordinate_fields_count=0 \
+      coordinate_count=0 \
+      coordinate_rows=0 \
 
     local -n coordinate_data=${coord_type}_coordinate_data \
       coordinate_fields=${coord_type}_coordinate_fields \
 
     if [[ $clear_existing_coords == t ]]; then
-      coordinate_data=() \
-      coordinate_count=0 \
-      coordinate_rows=0 \
-
+      coordinate_data=()
       setup_coord_fields || fail
     else
-      
-      local coordinate_fields_count=${#coordinate_fields[*]} \
-        coordinate_count=${#coordinate_data[*]} \
-
-      local coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-
+      coordinate_fields_count=${#coordinate_fields[*]}
+      coordinate_count=${#coordinate_data[*]}
+      coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
     fi
 
     unknown_dims= resolved_dims=
