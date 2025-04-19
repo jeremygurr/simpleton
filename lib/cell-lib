@@ -237,11 +237,13 @@ add_derive_table() {
     name=${derive_path##*/}
     name=${name%.*tab}
 
-    derive_table_path[$name]=$derive_path
+    local -n dtp=dim_${name}_derive_table_path
+    dtp=$derive_path
 
     local field
     for field in $fields; do
-      dim_derive_tables[$field]+="$name "
+      local -n ddt=dim_${field}_derive_tables
+      ddt+="$name "
     done
 
   end_function
@@ -935,22 +937,16 @@ convert_table_to_dims() {
 expand_dim() {
   begin_function_lo
 
-    local -n dim_type=${dim_var}_dim_type
-    if [[ ! -v dim_type ]]; then
-      log_fatal "Internal error: Missing ${dim_var}_dim_type"
-      fail1
-    fi
-
     values=
     if [[ "${value:-}" && "$value" != \? ]]; then
 
-      if ! function_exists ${dim_type}_${dim_var}_expand; then
-        log_fatal "Internal error: Missing ${dim_type}_${dim_var}_expand function, which should have been created by make_context method"
+      if ! function_exists dim_${dim_var}_expand; then
+        log_fatal "Internal error: Missing dim_${dim_var}_expand function, which should have been created by make_context method"
         fail1
       fi
 
       local problem
-      ${dim_type}_${dim_var}_expand || fail
+      dim_${dim_var}_expand || fail
       if [[ "${problem:-}" ]]; then
         log_fatal "$problem"
         fail1
@@ -2269,7 +2265,8 @@ build_context_trunk() {
 
     build_context_trunk_dna || fail
 
-    coord_type=seed_branch \
+    coord_type=branch \
+    target_form=seed \
     calc_coordinates || fail
 
     if [[ ! -d $status_path ]]; then
@@ -2479,7 +2476,7 @@ calc_coordinates_add_row() {
 setup_coord_fields() {
   begin_function
     case $coord_type in
-      seed_branch|branch)
+      branch)
         coordinate_fields=( ${trunk_dims[*]:-} )
       ;;
       leaf)
@@ -2488,7 +2485,7 @@ setup_coord_fields() {
       sub)
         coordinate_fields=( ${sub_dims[*]:-} )
       ;;
-      seed_tree|tree)
+      tree)
         coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
       ;;
       *)
@@ -2496,6 +2493,21 @@ setup_coord_fields() {
         fail1
       ;;
     esac
+
+    if [[ $target_form == seed ]]; then
+
+      local new_fields=() dim
+
+      for dim in ${coordinate_fields[*]}; do
+        local -n member_type=dim_${dim}_member_type
+        if [[ $member_type == static ]]; then
+          new_fields+=( $dim )
+        fi
+      done
+
+      coordinate_fields=( ${new_fields[*]} )
+
+    fi
 
     coordinate_fields_count=${#coordinate_fields[*]}
   end_function
@@ -2652,16 +2664,16 @@ show_trace_dim_message() {
 }
 
 attempt_derive_from_function() {
-  if function_exists ${dim_type}_${dim}_derive; then
+  if function_exists dim_${dim}_derive; then
     #log_debug "Trying derive function ${dim_type}_${dim}_derive"
 
     # This should be set to t in the derive function if requirements are met
     can_derive=f
 
-    ${dim_type}_${dim}_derive || return 1
+    dim_${dim}_derive || return 1
     if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
       var=values \
-      show_trace_dim_message "Derived from derive function: ${dim_type}_${dim}_derive"
+      show_trace_dim_message "Derived from derive function: dim_${dim}_derive"
     fi
   fi
   return 0
@@ -2674,8 +2686,8 @@ attempt_derive_from_table() {
       string_to_set old_values_string old_values
     fi
     local derive_table
-    local -n derive_tables=${dim}_derive_tables
-    for derive_table in ${derive_tables[*]}; do
+    local -n dim_derive_tables=dim_${dim}_derive_tables
+    for derive_table in ${dim_derive_tables[*]}; do
 
       local found=f
       local -n fields=${derive_table}_fields
@@ -2732,8 +2744,7 @@ attempt_derive() {
     stop_after_first_match=${stop_after_first_match:-f} \
 
   begin_function_grip
-    local -n dim_type=${dim}_dim_type
-    local -n derived_from=${dim_type}_${dim}_derived_from
+    local -n derived_from=dim_${dim}_derived_from
     values=()
     can_derive=f
 
@@ -2998,6 +3009,7 @@ calc_coordinates_next_unknown_dim_found() {
   begin_function_grip
 
     resolved_dims+=" $dim"
+    progress_bar_next
 
     local -n \
       sdim=s_$dim \
@@ -3030,8 +3042,8 @@ calc_coordinates_next_unknown_dim_found() {
 
       log_debug "Narrowing down possibilities"
 
-      local -n derive_tables=${dim}_derive_tables
-      begin_for derive_table in ${derive_tables[*]:-}; doo
+      local -n dim_derive_tables=dim_${dim}_derive_tables
+      begin_for derive_table in ${dim_derive_tables[*]:-}; doo
 
         out_field=$dim \
         out_set=new_values \
@@ -3168,12 +3180,9 @@ calc_coords_validate_member() {
 
     # all needs to be permitted here in the case of a dim that doesn't have explicit members
     #   but where the user needs to communicate that all are acceptable based on derivation of others?
-    #if [[ "$member" == all ]]; then
-    #  log_fatal "Internal error: $dim should not be set to all at this point. It should have already been expanded."
-    #  fail1
-    #fi
-
-    local -n dim_type=${dim}_dim_type
+    if [[ "$member" == all ]]; then
+      abort
+    fi
 
     if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
       abort
@@ -3275,7 +3284,6 @@ calc_coordinates_next_dim_member() {
     local validated_dims=${validated_dims:-} conflicting_values=() is_valid
 
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
-      # recursive
       calc_coords_validate_member $dim "$member" || fail
       fence_grip
     else
@@ -3356,17 +3364,36 @@ calc_coordinates_next_dim() {
       local -n member=d_$dim \
         members=d_$dims
 
+      if [[ $target_form == seed ]]; then
+
+        local -n idim=i_$dim \
+          idims=i_$dims \
+
+        member=${idim:-} members=${idims:-}
+        if [[ ! "$member" && ! "$members" ]]; then
+
+          dim_var=$dim \
+          value=all \
+          expand_dim $dim || fail
+
+          members=( "${values[@]}" )
+
+        fi
+
+      fi
+
       if [[ "${member:-}" || "${members:-}" ]]; then
         
         local m
-        local -n dim_type=${dim}_dim_type
+        local -n dim_type=dim_${dim}_type
         if [[ "${dim_type:-}" ]]; then
-          local -n is_cross_dim=${dim_type}_${dim}_is_cross_dim
+          local -n is_cross_dim=dim_${dim}_is_cross_dim
         else
           local is_cross_dim=f
         fi
 
         resolved_dims+=" $dim"
+        progress_bar_next
 
         if [[ "${member:-}" ]]; then
           m=$member
@@ -3566,7 +3593,7 @@ xlr8() {
 #   coordinate_fields_count
 calc_coordinates_refine_multi() {
   begin_function_lo
-    front_load=6 progress_bar_start $coordinate_rows
+    front_load=6 progress_bar_start $(( coordinate_rows * coordinate_fields_count ))
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
 
       target_dim_var_type=sdims \
@@ -3590,7 +3617,7 @@ calc_coordinates_slow() {
       check_dims="${coordinate_fields[*]}" \
       validated_dims= \
 
-    local seed_table=to_${coord_type}_coords
+    local seed_table=${seed_table:-to_${coord_type}_coords}
     if [[ -v ${seed_table}_fields && $cell_is_leaf == f ]]; then
       seed_coordinates || fail
       fence
@@ -3602,7 +3629,7 @@ calc_coordinates_slow() {
       else
         # it is assumed that dims are already expanded before this point, and so ddims will be used
         log_debug "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-        front_load=6 progress_bar_start $coordinate_rows
+        front_load=6 progress_bar_start $coordinate_fields_count
         calc_coordinates_next_dim || fail
         progress_bar_stop
       fi
@@ -3633,12 +3660,15 @@ xlr8_get_dim_fields() {
 #   coord_type
 #   source       set to dims to load coordinates from existing dims
 #                set to coords to using existing coordinates and attempt to fill in blanks
+#   target_form  seed / tree whether to produce seed coords or not
+#                seed coords don't take into account user provided dims, but
+#                will calculate all possible dims to be filtered later
 #   all ddims of that type OR existing coords
 # assumes ddims are in array form (not space separated)
 # assumes all checks were done previously to determine if this is needed
 calc_coordinates() {
   local clear_existing_coords=${clear_existing_coords:-t} coord_type=$coord_type \
-    coord_limit=${coord_limit:-}
+    coord_limit=${coord_limit:-} target_form=${target_form:-tree}
   begin_function
 
     localize
@@ -3649,19 +3679,24 @@ calc_coordinates() {
       coordinate_fields_count=0 \
       coordinate_count=0 \
       coordinate_rows=0 \
+      coord_prefix= \
 
-    local -n coordinate_data=${coord_type}_coordinate_data \
-      coordinate_fields=${coord_type}_coordinate_fields \
+    if [[ $target_form == seed ]]; then
+      coord_prefix=seed_
+    fi
+
+    local -n coordinate_data=$coord_prefix${coord_type}_coordinate_data \
+      coordinate_fields=$coord_prefix${coord_type}_coordinate_fields \
 
     if [[ $clear_existing_coords == t ]]; then
       coordinate_data=()
       setup_coord_fields || fail
     else
-      coordinate_fields_count=${#coordinate_fields[*]}
       coordinate_count=${#coordinate_data[*]}
       coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
     fi
 
+    coordinate_fields_count=${#coordinate_fields[*]}
     unknown_dims= resolved_dims=
 
     if [[ ! "${coordinate_fields:-}" ]]; then
