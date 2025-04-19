@@ -226,6 +226,52 @@ load_arr_to_code() {
   handle_return
 }
 
+
+# Will load the given derive table if not already loaded
+load_derive_table() {
+
+  local -n derive_table_data=derive_table_${name}_data
+
+  if [[ -v derive_table_data && ${#derive_table_data} -gt 0 ]]; then
+
+    local -n dtp=dim_${name}_derive_table_path \
+      derive_table_fields=derive_table_${name}_fields \
+
+    load_dna_tab $dtp derive_table_$name || return 1
+
+    local row_index field_index row_count field_count data_count data_offset field value
+    field_count=${#derive_table_fields[*]}
+    data_count=${#derive_table_data[*]}
+    (( row_count = data_count / field_count ))
+
+    for (( row_index = 0; row_index < row_count; row_index++ )); do
+      for (( field_index = 0; field_index < field_count; field_index++ )); do
+        (( data_offset = row_index * c_fields_count + field_index ))
+        field=${derive_table_fields[$field_index]}
+        value=${derive_table_data[$data_offset]}
+        if [[ "$value" ]]; then
+          local -n index=derive_table_${name}_index_${field}
+          if [[ ! -v index ]]; then
+            declare -gA index=()
+          fi
+          index[$value]+="$row_index "
+        fi
+      done
+    done
+
+    for (( field_index = 0; field_index < field_count; field_index++ )); do
+      field=${derive_table_fields[$field_index]}
+      local -n index=derive_table_${name}_index_${field}
+      if (( ${#index[*]} == row_count )); then
+        local -n cross_dim_tables=dim_${field}_cross_dim_tables
+        cross_dim_tables+="$name "
+      fi
+    done
+
+  fi
+
+}
+
 # inputs:
 #   $1   path to derive table
 add_derive_table() {
@@ -236,6 +282,9 @@ add_derive_table() {
     fields=$(head -n1 $derive_path)
     name=${derive_path##*/}
     name=${name%.*tab}
+
+    local -n derive_table_fields=derive_table_${name}_fields
+    derive_table_fields=$fields
 
     local -n dtp=dim_${name}_derive_table_path
     dtp=$derive_path
@@ -935,9 +984,15 @@ convert_table_to_dims() {
 # input: dim_var value
 # output: values 
 expand_dim() {
+  local out_var=${out_var:-}
   begin_function_lo
 
-    values=
+    if [[ "$out_var" ]]; then
+      local -n values=$out_var
+    else
+      values=
+    fi
+
     if [[ "${value:-}" && "$value" != \? ]]; then
 
       if ! function_exists dim_${dim_var}_expand; then
@@ -1046,60 +1101,42 @@ expand_dims() {
 }
 
 # inputs:
+#   value_found
 #   derive_table            name of var of derive table
-#   in_set                  optional, contains possible values of the dim to choose from
-#   out_field               which field to read from the table
-#   out_set                 which var to write set of valid members to (optional)
-#   out_arr                 which var to write array of valid members to
+#   values                  previously determined values, may be empty if value_found == f
+#   value_set               each valid value
+#   dim                     which field to read from the table
 #   stop_after_first_match  optional
 #   validate_rows           optional
 #   ignore_dims             space separated list of dims to not check
 # outputs:
-#   out_set        the var out_set points to will contain a set of all matches
-#   out_arr        the var out_arr points to will contain an array of all matches
-execute_derive_table() {
+#   value_set               the var out_set points to will contain a set of all matches
+#   values                  the var out_arr points to will contain an array of all matches
+extract_from_derive_table() {
   local stop_after_first_match=${stop_after_first_match:-f} \
     validate_rows=${validate_rows:-t} \
     ignore_dims=${ignore_dims:-} \
 
   begin_function_grip
       
-    local -A internal_set
-    local out_var=${out_set:-$out_arr} \
-          out_set=${out_set:-internal_set} \
-          out_arr=${out_arr:-} \
-          in_set=${in_set:-} \
+    local -n derive_fields=derive_table_${derive_table}_fields \
+             derive_data=derive_table_${derive_table}_data \
 
-    local -n derive_fields=${derive_table}_fields \
-             derive_data=${derive_table}_data \
-             dim_set=$out_set \
+    #if ! is_set value_set; then
+    #  log_fatal "Internal error: extract_from_derive_table was called with dim_set pointing to a variable that isn't an associative array."
+    #  fail1
+    #fi
 
-    if [[ "$in_set" ]]; then
-      local -n choices=${in_set:-}
-    else
-      local -A choices=()
-    fi
-
-    if [[ "$out_arr" ]]; then
-      local -n dim_arr=${out_arr}
-    fi
-
-    if ! is_set dim_set; then
-      log_fatal "Internal error: execute_derive_table was called with dim_set pointing to a variable that isn't an associative array."
-      fail1
-    fi
-
-    if [[ ! -v derive_fields ]]; then
-      log_fatal "Interal error: Missing ${derive_table}_fields"
-      fail1
-    fi
+    #if [[ ! -v derive_fields ]]; then
+    #  log_fatal "Interal error: Missing ${derive_table}_fields"
+    #  fail1
+    #fi
 
     local field_count=${#derive_fields[*]} \
       data_count=${#derive_data[*]} \
       strict_matching=${strict_matching:-f} \
       maybe data_index=0 column_index \
       value= row_result field everything_matches \
-      out_field=$out_field \
       invalid=f \
 
     while (( data_index < data_count )); do
@@ -1112,9 +1149,9 @@ execute_derive_table() {
         log_show_vars='field value'
         fence_grip
 
-        if [[ $field == $out_field ]]; then
+        if [[ $field == $dim ]]; then
 
-          if [[ "$value" != all && ${#choices[*]} -gt 0 && ! "${choices[$value]:-}" ]]; then
+          if [[ "$value" != all && ${#value_set[*]} -gt 0 && ! "${value_set[$value]:-}" ]]; then
             # don't need to check this row if value isn't in the list of choices
             everything_matches=f
             break
@@ -1130,37 +1167,34 @@ execute_derive_table() {
             break
           fi
 
-        elif [[ " $ignore_dims " != *" $field "* ]]; then
+        elif [[ " $ignore_dims " != *" $field "* && $validate_rows == t ]]; then
 
-          if [[ $validate_rows == t ]]; then
+          local -n ddim=d_$field
 
-            local -n dim=d_$field
-
-            if [[ "${dim:-}" ]]; then
-              if [[ "$dim" != "$value" && "$value" != all && "$dim" != all ]]; then
-                #log_debug "Row doesn't match because dim $field = $dim but table shows $value"
-                everything_matches=f
-              fi
-            else # dim not set
-              if [[ $strict_matching == t && "$value" && "$value" != all ]]; then
-                #log_debug "Row doesn't match because $field is not set"
-                everything_matches=f
-                break
-              fi
+          if [[ "${ddim:-}" ]]; then
+            if [[ "$ddim" != "$value" && "$value" != all && "$ddim" != all ]]; then
+              #log_debug "Row doesn't match because dim $field = $ddim but table shows $value"
+              everything_matches=f
             fi
-
-            if [[ $everything_matches == f && -v all_dims[$field] ]]; then
-              local values
-              dim_var=$field expand_dim || fail
-              if array_contains values $dim; then
-                everything_matches=t
-              fi
-            fi
-
-            if [[ $everything_matches == f ]]; then
+          else # ddim not set
+            if [[ $strict_matching == t && "$value" && "$value" != all ]]; then
+              #log_debug "Row doesn't match because $field is not set"
+              everything_matches=f
               break
             fi
+          fi
 
+          if [[ $everything_matches == f && -v all_dims[$field] ]]; then
+            local expanded_values
+            out_var=expanded_values \
+            dim_var=$field expand_dim || fail
+            if array_contains expanded_values $ddim; then
+              everything_matches=t
+            fi
+          fi
+
+          if [[ $everything_matches == f ]]; then
+            break
           fi
 
         fi
@@ -1204,7 +1238,7 @@ fetch_values_from_coordinates() {
     out_field=$dim_var \
     out_arr=values \
     derive_table=${coord_type}_coordinate \
-    execute_derive_table || fail
+    extract_from_derive_table || fail
     if [[ "${values[*]:-}" ]]; then
       log_debug "$dim_var fetched from coordinates: ${values[*]}"
     else
@@ -2239,13 +2273,37 @@ build_context_trunk_dna() {
       fail1
     fi
 
-    write_vars_to_context derive_tables || fail
-
     local ddv
     for ddv in ${derived_dim_vars[*]}; do
       write_vars_to_context $ddv || fail
     done
 
+  end_function
+  handle_return
+}
+
+build_context_gather_derive_tables_single() {
+  local start_path=$1 lib_dim_path
+
+  if [[ $start_path == /*/*/* ]]; then
+    build_context_gather_derive_tables_single ${start_path%/*}
+  fi
+
+  lib_dt_path=$start_path/.lib/derive-tables
+  if [[ -d $lib_dt_path ]]; then
+    local dt
+    for dt in $(find $lib_dt_path -type f -not -name '.*' -name '*.*tab' | sort -g); do
+      add_derive_table $dt || fail
+    done
+  fi
+
+}
+
+build_context_gather_derive_tables() {
+  begin_function_lo
+    local derive_tables=()
+    build_context_gather_derive_tables_single $cell_path || fail
+    write_vars_to_context derive_tables || fail
   end_function
   handle_return
 }
@@ -2261,9 +2319,9 @@ build_context_trunk() {
       rm $context_path-$context_type.new || fail
     fi
 
-    local derive_tables=() derived_dim_vars=()
-
     build_context_trunk_dna || fail
+
+    build_context_gather_derive_tables || fail
 
     coord_type=branch \
     target_form=seed \
@@ -2327,8 +2385,8 @@ seed_coordinates_prep() {
     if [[ $seed_table == auto ]]; then
       local derive_table biggest_table= biggest_size=0
       for derive_table in ${derive_tables[*]}; do
-        local -n derive_fields=${derive_table}_fields \
-                 derive_data=${derive_table}_data \
+        local -n derive_fields=derive_table_${derive_table}_fields \
+                 derive_data=derive_table_${derive_table}_data \
 
         local size=${#derive_data[*]}
         if (( size > biggest_size )); then
@@ -2605,34 +2663,6 @@ seed_coordinates() {
   handle_return
 }
 
-attempt_derive_get_derived_from() {
-  if [[ "${derived_from:-}" ]]; then
-    local one_row_complete=f
-    for derived_from_row in "${derived_from[@]}"; do
-      if [[ ! "$from_dim" || " $derived_from_row " == *" $from_dim "* ]]; then
-        complete_row=t
-        for derived_from_dim in $derived_from_row; do
-          local -n derive_from_dim_value=d_$derived_from_dim
-          # Can't do this: 
-          # || $derive_from_dim_value == $empty_member 
-          # because we must allow optional vars to resolve before attempting to derive
-          if [[ ! "${derive_from_dim_value:-}" ]]; then
-            complete_row=f
-            break
-          fi
-        done
-        if [[ $complete_row == t ]];then
-          one_row_complete=t
-          resolved_dependencies+=( "$derived_from_row" )
-        fi
-      fi
-    done
-    if [[ $one_row_complete == f ]]; then
-      derived_from_incomplete=t
-    fi
-  fi
-}
-
 attempt_derive_check_derive_table() {
   local resolved_row resolved_dim
   for resolved_row in "${resolved_dependencies[@]}"; do
@@ -2679,66 +2709,136 @@ attempt_derive_from_function() {
   return 0
 }
 
-attempt_derive_from_table() {
-  if [[ ! "${values:-}" && "${derived_from:-}" ]]; then
-    local -A old_values new_values intersected
-    if [[ "$old_values_string" ]]; then
-      string_to_set old_values_string old_values
-    fi
-    local derive_table
-    local -n dim_derive_tables=dim_${dim}_derive_tables
-    for derive_table in ${dim_derive_tables[*]}; do
+# inputs:
+#   value_found
+#   dim
+#   derive_table
+# outputs:
+#   values
+#   value_found
+# DEPRECATED, use extract_from_derive_table instead
+#  attempt_derive_from_table() {
+#  
+#    local derive_table=$1
+#    begin_function_lo
+#  
+#      local found=f
+#      local -n fields=derive_table_${derive_table}_fields
+#  
+#      #  this should have already been checked before this function was called
+#      #attempt_derive_check_derive_table
+#  
+#      can_derive=t
+#  
+#      out_field=$dim \
+#      out_set=new_values \
+#      extract_from_derive_table || return 1
+#  
+#      if [[ ! "${new_values[*]:-}" ]]; then
+#        log_debug "No derived members found in derive table $derive_table which are valid for this row"
+#        values=()
+#        abort
+#      fi
+#  
+#      if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
+#        intersect old_values new_values intersected
+#        copy_set intersected old_values
+#      else
+#        copy_set new_values old_values
+#      fi
+#  
+#    end_function
+#    handle_return
+#  
+#  }
 
-      local found=f
-      local -n fields=${derive_table}_fields
+# inputs:
+#   dim
+#   from_dim
+#   value_found
+# outputs:
+#   value_found
+#   values
+attempt_derive_shallow() {
+  begin_function_lo
 
-      attempt_derive_check_derive_table
+    local one_row_complete=f \
+      derived_from_row derived_from_dim \
+      complete_row derived_from_incomplete=f \
 
-      if [[ $found == f ]]; then
-        # we don't need to check this table since it doesn't use enough set dependent dims
-        continue
+    for derived_from_row in "${derived_from[@]}"; do
+      if [[ ! "$from_dim" || " $derived_from_row " == *" $from_dim "* ]]; then
+
+        complete_row=t
+        local row_array=( $derived_from_row ) i
+
+        for (( i = 1; i < ${#row_array[*]}; i++ )); do
+          derived_from_dim=${row_array[$i]}
+          local -n derive_from_dim_value=d_$derived_from_dim
+          if [[ ! "${derive_from_dim_value:-}" ]]; then
+            complete_row=f
+            break
+          fi
+        done
+
+        if [[ $complete_row == t ]];then
+
+          one_row_complete=t
+          resolved_dependencies+=( "$derived_from_row" )
+
+          local action=${row_array[0]}
+
+          if [[ ! "$action" =~ ^[a-zA-Z0-9_-]+\.(tab|fun)$ ]]; then
+            log_fatal "Invalid action format for derived_from of dim $dim. First field of a derived_from must be the derive table or function to execute. For example: 'ez.tab' or 'derive_ez.fun'"
+            fail1
+          fi
+
+          local action_type=${action##*.} \
+            action_name=${action_name%.*} \
+
+          case $action_type in
+            tab)
+              derive_table=$action_name \
+              extract_from_derive_table || fail
+            ;;
+            fun)
+              function_name=$action_name \
+              attempt_derive_from_function || fail
+            ;;
+            *)
+              log_fatal "Unknown derive action: $action_type"
+              fail1
+            ;;
+          esac
+        fi
+
       fi
-
-      can_derive=t
-
-      out_field=$dim \
-      out_set=new_values \
-      execute_derive_table || return 1
-
-      if [[ ! "${new_values[*]:-}" ]]; then
-        log_debug "No derived members found in derive table $derive_table which are valid for this row"
-        values=()
-        abort
-      fi
-
-      if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
-        intersect old_values new_values intersected
-        copy_set intersected old_values
-      else
-        copy_set new_values old_values
-      fi
-
-      break
-
     done
-    keys_to_array old_values values
 
-    if [[ " $trace_dims " == *" $dim "* && "${values:-}" ]]; then
-      var=values \
-      show_trace_dim_message "Derived from derive table: $derive_table"
+    if [[ $one_row_complete == f ]]; then
+      derived_from_incomplete=t
     fi
 
-  fi
-  return 0
+  end_function
+  handle_return
+}
+
+attempt_derive_deep() {
+  begin_function_lo
+  end_function
+  handle_return
 }
 
 # inputs:
 #   dim             dimension to derive
 #   from_dim        optional, will only look for ways to derive 'dim' from 'from_dim'
+#   value_found
 # output:
 #   values          array of members
 #   can_derive      whether a derive function or derive table exists for the given dim
+#   value_found
 attempt_derive() {
+
   local dim=$1 from_dim=${from_dim:-} \
     old_values_string=${old_values_string:-} \
     stop_after_first_match=${stop_after_first_match:-f} \
@@ -2748,19 +2848,25 @@ attempt_derive() {
     values=()
     can_derive=f
 
-    local derived_from_row derived_from_dim \
-      complete_row derived_from_incomplete=f \
-      resolved_dependencies=()
+    local resolved_dependencies=()
+    local -A value_set=()
 
-    attempt_derive_get_derived_from
-
-    if [[ $derived_from_incomplete == t ]]; then
-      #log_debug "Can't derive $dim because it has unresolved dependencies"
-      abort
+    if [[ "${derived_from:-}" ]]; then
+      attempt_derive_shallow || fail
+      if [[ ! "$values" && $can_derive == t ]]; then
+        attempt_derive_deep || fail
+      fi
     fi
 
-    attempt_derive_from_function || fail
-    attempt_derive_from_table || fail
+    if (( ${#value_set[*]} > 0 )); then
+      local new_values=() v
+      for v in "${values[@]}"; do
+        if [[ -v value_set[$v] ]]; then
+          new_values+=( "$v" )
+        fi
+      done
+      values=( "${new_values[@]}" )
+    fi
 
   end_function
   handle_return
@@ -2920,84 +3026,69 @@ calc_coordinates_dedup() {
   handle_return
 }
 
-# input: dim_type dim
-set_cross_dims() {
-  begin_function_grip
-    local -n member=d_$dim
-    if function_exists ${dim_type}_${dim}_cross_dim_expand; then
-      # sets conflict={dim} if a conflict is found
-      # should set validated_dims for dims which are set
-      ${dim_type}_${dim}_cross_dim_expand || fail
-    else
-      local derive_table=${dim_type}_${dim}_derive
-      local -n derive_fields=${derive_table}_fields \
-               derive_data=${derive_table}_data \
+# inputs:
+#   derive_table
+#   dim
+set_cross_dims_single() {
 
-      if [[ -v derive_fields ]]; then
+  local -n derive_fields=derive_table_${derive_table}_fields \
+           derive_data=derive_table_${derive_table}_data \
 
-        local field_count=${#derive_fields[*]} \
-          data_count=${#derive_data[*]} \
-          row_index data_index=0 column_index \
-          value= field \
-          found_match=f
+  local field_count=${#derive_fields[*]} \
+    data_count=${#derive_data[*]} \
+    row_index data_index=0 column_index \
+    value= field \
 
-        local row_count=$((data_count / field_count))
+  local row_count=$((data_count / field_count))
 
-        for (( row_index = 0; row_index < row_count; row_index++ )); do
+  local -n dt_index=derive_table_${derive_table}_index_${dim}
+  row_index=${dt_index[$member]}
 
-          found_match=f
-          for (( column_index = 0; column_index < field_count; column_index++ )); do
-            field=${derive_fields[$column_index]}
-            if [[ $field == $dim ]]; then
-              (( data_index = row_index * field_count + column_index ))
-              value=${derive_data[$data_index]}
-              if [[ "$value" == "$member" ]]; then
-                found_match=t
-              fi
-              break
-            fi
-          done
-
-          if [[ $found_match == t ]]; then
-            for (( column_index = 0; column_index < field_count; column_index++ )); do
-              field=${derive_fields[$column_index]}
-              local fields
-              get_plural $field fields
-              if [[ $field != $dim ]]; then
-                (( data_index = row_index * field_count + column_index ))
-                value=${derive_data[$data_index]}
-                local -n field_dim=d_$field
-                if dim=$field \
-                   single_member="${field_dim:-}" \
-                   multi_member=d_$fields \
-                   target_member="$value" \
-                   member_conflicts; then
-                  conflict=$field
-                  break
-                else
-                  log_debug "Cross dim set: $field=$value"
-                  field_dim=$value
-                  validated_dims+=" $field"
-                fi
-              fi
-            done
-
-            break
-          fi
-
-        done
-
+  for (( column_index = 0; column_index < field_count; column_index++ )); do
+    field=${derive_fields[$column_index]}
+    local fields
+    get_plural $field fields
+    if [[ $field != $dim ]]; then
+      (( data_index = row_index * field_count + column_index ))
+      value=${derive_data[$data_index]}
+      local -n field_dim=d_$field
+      if dim=$field \
+         single_member="${field_dim:-}" \
+         multi_member=d_$fields \
+         target_member="$value" \
+         member_conflicts; then
+        conflict=$field
+        break
       else
-        log_warn "is_cross_dim was set, but there is no derive table to use."
+        log_debug "Cross dim set: $field=$value"
+        field_dim=$value
+        validated_dims+=" $field"
       fi
     fi
+  done
 
-    if [[ "$conflict" ]]; then
-      local conflict_plural
-      get_plural $conflict conflict_plural
-      local -n conflict_member=d_$conflict \
-        conflict_members=d_$conflict_plural
-      log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
+}
+
+# input: dim
+set_cross_dims() {
+  begin_function_grip
+
+    local -n member=d_$dim cross_dim_tables=dim_${dim}_cross_dim_tables
+    local derive_table
+
+    if [[ -v cross_dim_tables ]]; then
+      for derive_table in $cross_dim_tables; do
+        set_cross_dims_single
+      done
+
+      if [[ "$conflict" ]]; then
+        local conflict_plural
+        get_plural $conflict conflict_plural
+        local -n conflict_member=d_$conflict \
+          conflict_members=d_$conflict_plural
+        log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
+      fi
+
     fi
 
   end_function
@@ -3048,7 +3139,7 @@ calc_coordinates_next_unknown_dim_found() {
         out_field=$dim \
         out_set=new_values \
         in_set=old_values \
-        execute_derive_table || fail
+        extract_from_derive_table || fail
 
         fence_grip
 
@@ -3075,7 +3166,7 @@ calc_coordinates_next_unknown_dim_found() {
       fail1
     fi
 
-    local -n is_cross_dim=${dim_type}_${dim}_is_cross_dim
+    local -n cross_dim_tables=dim_${dim}_cross_dim_tables
 
     unset ddims
     local m
@@ -3137,7 +3228,7 @@ calc_coordinates_next_unknown_dim() {
           fence_grip
           log_debug "Finding values for $dim in phase $phase"
 
-          local values= already_expanded=f needs_narrowing=t
+          local values= already_expanded=f needs_narrowing=t value_found=f
           if [[ $phase == derive ]]; then
             attempt_derive $dim || fail
             needs_narrowing=f
@@ -3188,7 +3279,7 @@ calc_coords_validate_member() {
       abort
     fi
 
-    local values=() can_derive
+    local values=() can_derive value_found=f
     attempt_derive $dim || fail
     if [[ $can_derive == t ]]; then
       if [[ ! "${values[0]:-}" ]]; then
@@ -3208,7 +3299,7 @@ calc_coords_validate_member() {
       if [[ $rd == $dim ]]; then
         continue
       fi
-
+      local value_found=f
       stop_after_first_match=t \
       from_dim=$dim attempt_derive $rd || fail
 
@@ -3293,7 +3384,7 @@ calc_coordinates_next_dim_member() {
     if [[ $is_valid == t ]]; then
 
       conflict=
-      if [[ ${is_cross_dim:-f} == t ]]; then
+      if [[ "${cross_dim_tables:-}" ]]; then
         set_cross_dims || fail
 
         local d
@@ -3386,11 +3477,6 @@ calc_coordinates_next_dim() {
         
         local m
         local -n dim_type=dim_${dim}_type
-        if [[ "${dim_type:-}" ]]; then
-          local -n is_cross_dim=dim_${dim}_is_cross_dim
-        else
-          local is_cross_dim=f
-        fi
 
         resolved_dims+=" $dim"
         progress_bar_next
