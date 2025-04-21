@@ -1031,7 +1031,10 @@ convert_table_to_dims() {
   handle_return
 }
 
-# input: dim_var value
+# input: 
+#   dim
+#   $1       name of input var
+#   $2       name of output var
 # output: values 
 expand_dim() {
   local in_var=$1 out_var=$2
@@ -1039,13 +1042,13 @@ expand_dim() {
 
     if [[ "${!in_var:-}" && "${!in_var}" != \? ]]; then
 
-      if ! function_exists dim_${dim_var}_expand; then
-        log_fatal "Internal error: Missing dim_${dim_var}_expand function, which should have been created by make_context method"
+      if ! function_exists dim_${dim}_expand; then
+        log_fatal "Internal error: Missing dim_${dim}_expand function, which should have been created by make_context method"
         fail1
       fi
 
       local problem
-      dim_${dim_var}_expand $in_var $out_var || fail
+      dim_${dim}_expand $in_var $out_var || fail
       if [[ "${problem:-}" ]]; then
         log_fatal "$problem"
         fail1
@@ -1068,7 +1071,8 @@ expand_dim_members() {
   local value values
   new_values=()
   for value in "${members[@]}"; do
-    expand_dim || return 1
+    dim=$dim_var \
+    expand_dim value values || return 1
     if [[ "$values" ]]; then
       new_values+=( "${values[@]}" )
     fi
@@ -1221,7 +1225,7 @@ extract_from_derive_table_check_row() {
 
         if [[ $everything_matches == f && -v all_dims[$field] ]]; then
           local expanded_values
-          dim_var=$field expand_dim value expanded_values || fail
+          dim=$field expand_dim value expanded_values || fail
           if array_contains expanded_values $ddim; then
             everything_matches=t
           fi
@@ -3610,9 +3614,8 @@ calc_coordinates_next_dim() {
         member=${idim:-} members=${idims:-}
         if [[ ! "$member" && ! "$members" ]]; then
 
-          dim_var=$dim \
-          value=all \
-          expand_dim $dim || fail
+          local value=all
+          expand_dim value values || fail
 
           members=( "${values[@]}" )
 
