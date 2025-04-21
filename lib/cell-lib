@@ -236,7 +236,8 @@ load_derive_table() {
 
   if [[ -v derive_table_data && ${#derive_table_data} -gt 0 ]]; then
 
-    local -n dtp=dim_${name}_derive_table_path \
+    log_verbose "Loading derive table $name"
+    local -n dtp=derive_table_${name}_path \
       derive_table_fields=derive_table_${name}_fields \
 
     load_dna_tab $dtp derive_table_$name || fail
@@ -2072,11 +2073,11 @@ build_dim_info_single() {
     if [[ -v derived_from ]]; then
       local upstream_dim upstream_dim_row
       begin_for upstream_dim_row in "${derived_from[@]}"; doo
-        begin_for upstream_dim in $upstream_dim_row; doo
+        begin_for upstream_dim in ${upstream_dim_row#* }; doo
           local -n upstream_dim_type=dim_${upstream_dim}_type
           if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_dim] ]]; then
             all_dims[$upstream_dim]=1
-            downstream_dim_row="$dim $upstream_dim_row" \
+            downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
             build_dim_info_single $upstream_dim || fail
           fi
@@ -2815,16 +2816,17 @@ show_trace_dim_message() {
 }
 
 attempt_derive_from_function() {
-  if function_exists dim_${dim}_derive; then
-    #log_debug "Trying derive function ${dim_type}_${dim}_derive"
+  local function_name=$function_name
+  if function_exists dim_${dim}_$function_name; then
+    #log_debug "Trying derive function ${dim_type}_${dim}_$function_name"
 
     # This should be set to t in the derive function if requirements are met
     can_derive=f
 
-    dim_${dim}_derive || return 1
+    dim_${dim}_$function_name || return 1
     if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
       var=values \
-      show_trace_dim_message "Derived from derive function: dim_${dim}_derive"
+      show_trace_dim_message "Derived from derive function: dim_${dim}_$function_name"
     fi
   fi
   return 0
@@ -2987,11 +2989,17 @@ attempt_derive() {
   local dim=$1 from_dim=${from_dim:-} \
     old_values_string=${old_values_string:-} \
     stop_after_first_match=${stop_after_first_match:-f} \
+    deriving=${deriving:-} \
 
   begin_function_grip
     local -n derived_from=dim_${dim}_derived_from
     values=()
     can_derive=f
+
+    if [[ " $deriving " == *" $dim "* ]]; then
+      abort
+    fi
+    deriving+="$dim "
 
     local resolved_dependencies=()
     local -A value_set=()
@@ -2999,7 +3007,7 @@ attempt_derive() {
     if [[ "${derived_from:-}" ]]; then
       deep=f \
       attempt_derive2 || fail
-      if [[ $value_found == f && $can_derive == t ]]; then
+      if [[ $value_found == f ]]; then
         deep=t \
         attempt_derive2 || fail
       fi
@@ -3259,6 +3267,11 @@ calc_coordinates_next_unknown_dim_found() {
       ddim=d_$dim \
       ddims=d_$dims \
 
+    local -n derive_tables_loaded=dim_${dim}_derive_tables_loaded
+    if [[ "${derive_tables_loaded:-}" != t ]]; then
+      load_related_derive_tables $dim || fail
+    fi
+
     unset sdim ddim ddims sdims
     if [[ $already_expanded == f ]]; then
       sdims=( "${values[@]}" )
@@ -3381,6 +3394,7 @@ calc_coordinates_next_unknown_dim() {
 
           local values= already_expanded=f needs_narrowing=t value_found=f
           if [[ $phase == derive ]]; then
+            deriving= \
             attempt_derive $dim || fail
             needs_narrowing=f
           elif [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
@@ -3431,6 +3445,7 @@ calc_coords_validate_member() {
     fi
 
     local values=() can_derive value_found=f
+    deriving= \
     attempt_derive $dim || fail
     if [[ $can_derive == t ]]; then
       if [[ ! "${values[0]:-}" ]]; then
@@ -3452,6 +3467,7 @@ calc_coords_validate_member() {
       fi
       local value_found=f
       stop_after_first_match=t \
+      deriving= \
       from_dim=$dim attempt_derive $rd || fail
 
       if [[ $can_derive == t ]]; then
@@ -3574,6 +3590,26 @@ calc_coordinates_next_dim_member() {
   handle_return
 }
 
+# input:
+#   $1   name of dim
+# output:
+#   derive_tables_loaded
+load_related_derive_tables() {
+  local dim=$1
+  begin_function_lo
+    local -n dts=dim_${dim}_derive_tables
+    local dt
+    for dt in $dts; do
+      local -n dtd=derive_table_${dt}_data
+      if [[ ! -v dtd ]]; then
+        load_derive_table $dt || fail
+      fi
+    done
+    derive_tables_loaded=t
+  end_function
+  handle_return
+}
+
 # calling this will produce and end at least one coordinate row 
 # inputs:
 #   check_dims (may be empty)
@@ -3639,6 +3675,11 @@ calc_coordinates_next_dim() {
             log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
             fail1
           fi
+        fi
+
+        local -n derive_tables_loaded=dim_${dim}_derive_tables_loaded
+        if [[ "${derive_tables_loaded:-}" != t ]]; then
+          load_related_derive_tables $dim || fail
         fi
 
         unset members
