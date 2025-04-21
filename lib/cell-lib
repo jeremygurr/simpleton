@@ -674,6 +674,37 @@ build_context_expand_members_unknown() {
 }"
 }
 
+build_context_expand_members_derive() {
+  begin_function_lo
+
+    code+="
+    all)
+      local -n dim_derive_tables=dim_${dim}_derive_tables
+      local dt_name=\${dim_derive_tables%% *}
+      local -n index=derive_table_\${dt_name}_index_$dim
+      _out=()
+      local m
+      for m in \"\${!index[@]}\"; do
+        _out+=( \"\$m\" )
+      done
+    ;;
+    *)
+      local -n dim_derive_tables=dim_${dim}_derive_tables
+      local dt_name=\${dim_derive_tables%% *}
+      local -n index=derive_table_\${dt_name}_index_$dim
+      if [[ -v index[\$_in] ]]; then
+        _out=( \"\$_in\" )
+      else
+        problem=\"Invalid $dim: \$_in\"
+      fi
+    ;;
+  esac
+}"
+
+  end_function
+  handle_return
+}
+
 build_context_expand_members_known() {
   begin_function_lo
     local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
@@ -713,7 +744,7 @@ build_context_expand_members_known() {
 build_context_expand() {
   begin_function_grip
 
-    local has_explicit_member_list=f fun
+    local has_explicit_member_list=f has_derive_table=f fun
 
     local -n member_type=dim_${dim}_member_type
 
@@ -729,21 +760,25 @@ build_context_expand() {
       esac
     fi
 
-    local -n members=dim_${dim}_members
+    local -n members=dim_${dim}_members \
+      dim_derive_tables=dim_${dim}_derive_tables \
+
     if [[ -v members ]] && (( ${#members[*]} > 0 )); then
       has_explicit_member_list=t
+    elif [[ "${dim_derive_tables:-}" ]]; then
+      has_derive_table=t
     fi
 
-    local -n aliases=dim_${dim}_aliases
-
     if [[ ! "${member_type:-}" ]]; then
-      if [[ $has_explicit_member_list == t ]]; then
+      if [[ $has_explicit_member_list == t || $has_derive_table == t ]]; then
         member_type=static
       else
         member_type=dynamic
       fi
       write_vars_to_context dim_${dim}_member_type || fail
     fi
+
+    local -n aliases=dim_${dim}_aliases
 
     code="
 dim_${dim}_expand() {
@@ -757,10 +792,12 @@ dim_${dim}_expand() {
       build_context_expand_handle_aliases || fail
     fi
 
-    if [[ $has_explicit_member_list == f ]]; then
-      build_context_expand_members_unknown || fail
-    else
+    if [[ $has_explicit_member_list == t ]]; then
       build_context_expand_members_known || fail
+    elif [[ $has_derive_table == t ]]; then
+      build_context_expand_members_derive || fail
+    else
+      build_context_expand_members_unknown || fail
     fi
 
     write_to_context fun code || fail
@@ -2043,6 +2080,11 @@ build_dim_info_single() {
       end_for
     fi
 
+    local -n ddt=dim_${dim}_derive_tables
+    if [[ -v ddt ]]; then
+      write_vars_to_context dim_${dim}_derive_tables || fail
+    fi
+
   end_function
   handle_return
 }
@@ -2357,9 +2399,16 @@ build_context_gather_derive_tables_single() {
 
   lib_dt_path=$start_path/.lib/derive-tables
   if [[ -d $lib_dt_path ]]; then
-    local dt
-    for dt in $(find $lib_dt_path -type f -not -name '.*' -name '*.*tab' | sort -g); do
+    local dt from_written=f
+    for dt in $(find -L $lib_dt_path -type f -not -name '.*' -name '*.*tab' | sort -g); do
+
+      if [[ $from_written == f ]]; then
+        echo "$NL# FROM $lib_dt_path" >>$context_path-$context_type.new || fail
+        from_written=t
+      fi
+
       add_derive_table $dt || fail
+
     done
   fi
 
@@ -2368,17 +2417,9 @@ build_context_gather_derive_tables_single() {
 build_context_gather_derive_tables() {
   begin_function_lo
 
-    local derive_tables=()
+    derive_tables=()
     build_context_gather_derive_tables_single $cell_path || fail
     write_vars_to_context derive_tables || fail
-
-    local d
-    for d in ${!all_dims[*]}; do
-      local -n ddt=dim_${d}_derive_tables
-      if [[ -v ddt ]]; then
-        write_vars_to_context dim_${d}_derive_tables || fail
-      fi
-    done
 
   end_function
   handle_return
@@ -2395,9 +2436,9 @@ build_context_trunk() {
       rm $context_path-$context_type.new || fail
     fi
 
-    build_context_trunk_dna || fail
-
     build_context_gather_derive_tables || fail
+
+    build_context_trunk_dna || fail
 
     coord_type=branch \
     target_form=seed \
