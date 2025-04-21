@@ -288,13 +288,18 @@ add_derive_table() {
     if [[ ! "$name" ]]; then
       name=${derive_path##*/}
       name=${name%.*tab}
+      name=${name//-/_}
     fi
 
-    local -n derive_table_fields=derive_table_${name}_fields
-    derive_table_fields=$fields
+    derive_tables+=( $name )
 
-    local -n dtp=dim_${name}_derive_table_path
+    local -n derive_table_fields=derive_table_${name}_fields
+    derive_table_fields=( $fields )
+
+    local -n dtp=derive_table_${name}_path
     dtp=$derive_path
+
+    write_vars_to_context derive_table_${name}_fields derive_table_${name}_path || fail
 
     local field
     for field in $fields; do
@@ -1238,7 +1243,7 @@ extract_from_derive_table() {
       maybe data_index=0 column_index \
       value= row_result field everything_matches \
       invalid=f \
-      best_row_indexes= \
+      best_row_indexes=() \
       row_index \
 
     local best_row_index_count=$(( data_count / field_count ))
@@ -1247,7 +1252,7 @@ extract_from_derive_table() {
     maybe_break
 
     while (( data_index < data_count )); do
-      row_index=(( data_index / field_count ))
+      (( row_index = data_index / field_count ))
       if [[ "$best_row_indexes" && " $best_row_indexes " != *" $row_index "* ]]; then
         # Skip row since it doesn't match
         continue
@@ -2356,9 +2361,19 @@ build_context_gather_derive_tables_single() {
 
 build_context_gather_derive_tables() {
   begin_function_lo
+
     local derive_tables=()
     build_context_gather_derive_tables_single $cell_path || fail
     write_vars_to_context derive_tables || fail
+
+    local d
+    for d in ${!all_dims[*]}; do
+      local -n ddt=dim_${d}_derive_tables
+      if [[ -v ddt ]]; then
+        write_vars_to_context dim_${d}_derive_tables || fail
+      fi
+    done
+
   end_function
   handle_return
 }
