@@ -2908,6 +2908,12 @@ attempt_derive2() {
 
         for (( i = 1; i < ${#row_array[*]}; i++ )); do
           derived_from_dim=${row_array[$i]}
+
+          if [[ " $deriving " == *" $derived_from_dim "* ]]; then
+            complete_row=f
+            break
+          fi
+
           local -n derive_from_dim_value=d_$derived_from_dim
           if [[ ! "${derive_from_dim_value:-}" ]]; then
 
@@ -3212,8 +3218,8 @@ set_cross_dims_single() {
   local row_count=$((data_count / field_count))
 
   local -n dt_index=derive_table_${derive_table}_index_${dim}
-  row_index=${dt_index[$member]}
-  if [[ "$row_index" == *" "* ]]; then
+  row_index=( ${dt_index[$member]} )
+  if (( ${#row_index[*]} > 1 )); then
     log_fatal "Too many rows found in derive table matching cross dim: $row_index"
     fail1
   fi
@@ -3234,9 +3240,11 @@ set_cross_dims_single() {
         conflict=$field
         break
       else
-        log_debug "Cross dim set: $field=$value"
-        field_dim=$value
-        validated_dims+=" $field"
+        if [[ "$value" != all ]]; then
+          log_debug "Cross dim set: $field=$value"
+          field_dim=$value
+          validated_dims+=" $field"
+        fi
       fi
     fi
   done
@@ -3247,22 +3255,19 @@ set_cross_dims_single() {
 set_cross_dims() {
   begin_function_grip
 
-    local -n member=d_$dim cross_dim_tables=dim_${dim}_cross_dim_tables
+    local -n member=d_$dim 
     local derive_table
 
-    if [[ -v cross_dim_tables ]]; then
-      for derive_table in $cross_dim_tables; do
-        set_cross_dims_single
-      done
+    for derive_table in $cross_dim_tables; do
+      set_cross_dims_single
+    done
 
-      if [[ "$conflict" ]]; then
-        local conflict_plural
-        get_plural $conflict conflict_plural
-        local -n conflict_member=d_$conflict \
-          conflict_members=d_$conflict_plural
-        log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
-      fi
-
+    if [[ "$conflict" ]]; then
+      local conflict_plural
+      get_plural $conflict conflict_plural
+      local -n conflict_member=d_$conflict \
+        conflict_members=d_$conflict_plural
+      log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
     fi
 
   end_function
@@ -3443,7 +3448,7 @@ calc_coordinates_next_unknown_dim() {
 
 calc_coords_validate_member() {
   local dim=$1 member=$2 log_show_vars='dim member'
-  begin_function_lo
+  begin_function_grip
     is_valid=t
     conflicting_values=()
 
@@ -3462,6 +3467,8 @@ calc_coords_validate_member() {
     local values=() can_derive value_found=f
     deriving= \
     attempt_derive $dim || fail
+    fence_grip
+
     if [[ $can_derive == t ]]; then
       if [[ ! "${values[0]:-}" ]]; then
         #log_debug "Failed to derive dim $dim when can_derive == t, skipping row"
@@ -3566,7 +3573,7 @@ calc_coordinates_next_dim_member() {
     if [[ $is_valid == t ]]; then
 
       conflict=
-      if [[ "${cross_dim_tables:-}" ]]; then
+      if [[ -v cross_dim_tables ]]; then
         set_cross_dims || fail
 
         local d
@@ -3692,7 +3699,9 @@ calc_coordinates_next_dim() {
           fi
         fi
 
-        local -n derive_tables_loaded=dim_${dim}_derive_tables_loaded
+        local -n derive_tables_loaded=dim_${dim}_derive_tables_loaded \
+          cross_dim_tables=dim_${dim}_cross_dim_tables \
+
         if [[ "${derive_tables_loaded:-}" != t ]]; then
           load_related_derive_tables $dim || fail
         fi
