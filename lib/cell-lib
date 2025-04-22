@@ -2139,7 +2139,7 @@ get_dim_path() {
 
     local shorts=( $lib_dim_path/$dim-* )
     if (( ${#shorts[*]} > 1 )); then
-      log_fatal "Too many matching dims: ${shorts[*]}, choose one specifically"
+      log_fatal "Too many matching dims: ${shorts[*]}, choose one specifically using the longer dim form"
       return 1
     fi
 
@@ -2222,12 +2222,83 @@ build_dim_info_single() {
   handle_return
 }
 
+# assumes that dim_derived_from for the given dim already exists
+# inputs:
+#   dim_derived_from
+add_derived_to_support_dims() {
+  local derived_from long_dim short_dim row OIFS=$IFS
+  IFS=$NL
+  derived_from=( $dim_derived_from )
+  IFS=$OIFS
+  for row in "${derived_from[@]}"; do
+    local is_first=t
+    for long_dim in $row; do
+
+      if [[ $is_first == t ]]; then
+        # skip the action part
+        is_first=f
+        continue
+      fi
+
+      if ! array_contains trunk_dims $long_dim \
+        && ! array_contains support_dims $long_dim; then
+
+        downstream_dim_row= \
+        build_dim_info_single $long_dim || fail
+
+        support_dims+=( $long_dim )
+
+        short_dim=${long_dim%%-*}
+        local -n dim_derived_from=dim_${short_dim}_derived_from
+        if [[ -v dim_derived_from ]]; then
+          add_derived_to_support_dims || fail
+        fi
+
+      fi
+
+    done
+  done
+}
+
+build_context_support_dims() {
+  begin_function
+
+    debug_start
+
+    local dim 
+    support_dims=()
+    begin_for dim in ${trunk_dims[*]}; doo
+      local -n dim_derived_from=dim_${dim}_derived_from
+      if [[ -v dim_derived_from ]]; then
+        add_derived_to_support_dims || fail
+      fi
+    end_for
+
+    write_vars_to_context support_dims || fail
+
+  end_function
+  handle_return
+}
+
 build_dim_info() {
   begin_function
 
     local long_dim dim_type
     localize_dims=
     localize_reverse_dims=
+
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
+
+      fence_grip
+      local -n dim_array=${dim_type}
+
+      begin_for long_dim in ${dim_array[*]}; doo
+        downstream_dim_row= \
+        build_dim_info_single $long_dim || fail
+      end_for
+
+    end_for
+    fence_grip
 
     build_context_support_dims || fail
 
@@ -2251,19 +2322,6 @@ build_dim_info() {
       done
 
     done
-
-    begin_for dim_type in trunk_dims support_dims sub_dims control_props data_props; doo
-
-      fence_grip
-      local -n dim_array=${dim_type}
-
-      begin_for long_dim in ${dim_array[*]}; doo
-        downstream_dim_row= \
-        build_dim_info_single $long_dim || fail
-      end_for
-
-    end_for
-    fence_grip
 
     write_vars_to_context \
       localize_dims localize_reverse_dims \
@@ -2421,45 +2479,6 @@ load_parent_context() {
         cat $root_path >>$context_path-$context_type.new || fail
       fi
     fi
-  end_function
-  handle_return
-}
-
-# assumes that dim_derived_from for the given dim already exists
-add_derived_to_support_dims() {
-  local parent_dim=$1
-  local derived_from dim row OIFS=$IFS
-  IFS=$NL
-  derived_from=( $dim_derived_from )
-  IFS=$OIFS
-  for row in "${derived_from[@]}"; do
-    for dim in $row; do
-      if ! array_contains trunk_dims $dim \
-        && ! array_contains support_dims $dim; then
-        support_dims+=( $dim )
-        local -n dim_derived_from=dim_${dim}_derived_from
-        if [[ -v $dim_derived_from ]]; then
-          add_derived_to_support_dims $dim || fail
-        fi
-      fi
-    done
-  done
-}
-
-build_context_support_dims() {
-  begin_function
-
-    debug_start
-
-    local dim 
-    support_dims=()
-    begin_for dim in ${trunk_dims[*]}; doo
-      local -n dim_derived_from=dim_${dim}_derived_from
-      if [[ -v $dim_derived_from ]]; then
-        add_derived_to_support_dims $dim || fail
-      fi
-    end_for
-    write_vars_to_context support_dims || fail
   end_function
   handle_return
 }
