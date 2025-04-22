@@ -2116,7 +2116,16 @@ log_debug_debug() {
   echo "${CYAN}debug_debug: $*$RESET" >&$fd_original_err
 }
 
+debug_always() {
+  debug_skip_breakpoints=f debug_start
+}
+
 debug_start() {
+  if [[ "${debug_skip_breakpoints:-}" == t ]]; then
+    return 0
+  fi
+  debug_skip_breakpoints=t
+
   local unignore_this_function=${unignore_this_function:-t}
 
   if [[ ${debug_debug:-f} == t ]]; then
@@ -2265,32 +2274,45 @@ debug_setup() {
     fi
   fi
 
-  debug=${debug:-f}
-  if [[ $debug != f \
-     && $debug != \? \
-     || "${debug_search:-}" \
+  debug=${debug:-}
+
+  if [[ "$debug" ]]; then
+    case "$debug" in
+      t)
+        debug_immediate=t
+      ;;
+      f)
+        debug_skip_breakpoints=t
+      ;;
+      *:*)
+        debug_line=$debug
+      ;;
+      =*)
+        debug_search=${debug#=}
+      ;;
+      \?)
+        debug_id_out=t
+      ;;
+      *)
+        if [[ "$debug" =~ ^[0-9\.]+$ ]]; then
+          debug_id=$debug
+        else
+          debug_quick_function=$debug
+          debug_function_old=$debug_quick_function
+        fi
+      ;;
+    esac
+    debug=
+  fi
+
+  if [[ "${debug_search:-}" \
      || "${debug_search_deep:-}" \
-     || "${debug_id:-}" && ! "${debug_at_log_id:-}" \
+     || "${debug_id:-}" \
      || "${debug_var:-}" \
      || "${debug_function:-}" \
      || "${debug_quick_function:-}" \
+     || "${debug_immediate:-}" == t \
      || "${debug_line:-}" ]]; then
-
-    if [[ "$debug" && $debug != t && $debug != f ]]; then
-      if [[ "$debug" == *:* ]]; then
-        debug_line=$debug
-      elif [[ "$debug" =~ ^[0-9\.]+$ ]]; then
-        debug_id=$debug
-      elif [[ "$debug" == =* ]]; then
-        debug_search=${debug#=}
-      elif [[ "$debug" == \? ]]; then
-        debug_id_out=t
-      else
-        debug_quick_function=$debug
-        debug_function_old=$debug_quick_function
-      fi
-      debug=f
-    fi
 
     if [[ "${debug_search:-}" == =* ]]; then
       debug_search=${debug_search#=}
@@ -2344,10 +2366,6 @@ debug_setup() {
     fi
 
     debug_search_old=${debug_search_old:-${debug_search:-}}
-
-    if [[ $debug != t ]]; then
-      debug_immediate=f
-    fi
 
     if [[ ! "${debug_id:-}" ]]; then
       debug_start

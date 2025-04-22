@@ -2163,6 +2163,11 @@ build_dim_info_single() {
     local dims dim_path= \
       dim=${long_dim%%-*} \
 
+    if [[ ! "$dim" =~ ^[a-zA-Z0-9_]+$ ]]; then
+      log_fatal "Invalid dim name: $dim. Dims must consist of alphanumeric characters or underscores."
+      fail1
+    fi
+
     if [[ "$downstream_dim_row" ]]; then
       local -n derived_to=dim_${dim}_derived_to
       derived_to+=( "$downstream_dim_row" )
@@ -2292,7 +2297,7 @@ build_dim_info() {
       fence_grip
       local -n dim_array=${dim_type}
 
-      begin_for long_dim in ${dim_array[*]}; doo
+      begin_for long_dim in "${dim_array[@]}"; doo
         downstream_dim_row= \
         build_dim_info_single $long_dim || fail
       end_for
@@ -2309,8 +2314,9 @@ build_dim_info() {
 
       short_dims=()
 
-      for long_dim in ${dim_array[*]}; do
+      for long_dim in "${dim_array[@]}"; do
 
+        debug_start
         local dim=${long_dim%%-*} dims
         get_plural $dim dims
         short_dims+=( $dim )
@@ -4460,7 +4466,6 @@ resolve_dim() {
     local -n ddim=d_$dim ddims=d_$dims
     if [[ "${ddim:-}" || "${ddims:-}" ]]; then
       log_fatal "Internal error: Already resolved: $dim. Whatever code called this needs to check first."
-      debug_start
       fail1
     fi
 
@@ -5404,6 +5409,7 @@ after_fork() {
       if [[ ${debugging:-f} == t ]]; then
         [[ "${debug_debug:-f}" == t ]] && echo "debugging=$debugging, so starting debugging after fork" >&$fd_original_err
 
+        debug=t \
         debug_immediate=f \
         first_run=f \
         debugging=f \
