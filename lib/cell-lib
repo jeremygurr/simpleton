@@ -234,7 +234,7 @@ load_derive_table() {
 
   local -n derive_table_data=derive_table_${name}_data
 
-  if [[ -v derive_table_data && ${#derive_table_data} -gt 0 ]]; then
+  if [[ ! -v derive_table_data ]]; then
 
     log_verbose "Loading derive table $name"
     local -n dtp=derive_table_${name}_path \
@@ -249,13 +249,13 @@ load_derive_table() {
 
     for (( row_index = 0; row_index < row_count; row_index++ )); do
       for (( field_index = 0; field_index < field_count; field_index++ )); do
-        (( data_offset = row_index * c_fields_count + field_index ))
+        (( data_offset = row_index * field_count + field_index ))
         field=${derive_table_fields[$field_index]}
         value=${derive_table_data[$data_offset]}
         if [[ "$value" ]]; then
           local -n index=derive_table_${name}_index_${field}
           if [[ ! -v index ]]; then
-            declare -gA index=()
+            eval "declare -gA derive_table_${name}_index_${field}=()"
           fi
           index[$value]+="$row_index "
         fi
@@ -1160,8 +1160,9 @@ extract_from_derive_table_find_row_indexes() {
       local -n ddim=d_$field
       if [[ -v ddim ]]; then
         local -n dt_index=derive_table_${derive_table}_index_${field}
-        if [[ -v dt_index[$ddim] ]]; then
-          row_indexes=( ${dt_index[$ddim]} )
+        debug_start
+        if [[ -v dt_index["$ddim"] ]]; then
+          row_indexes=( ${dt_index["$ddim"]} )
           row_index_count=${#row_indexes[*]}
           if (( row_index_count < best_row_index_count )); then
             best_row_index_count=$row_index_count
@@ -1259,6 +1260,7 @@ extract_from_derive_table() {
   local stop_after_first_match=${stop_after_first_match:-f} \
     validate_rows=${validate_rows:-t} \
     ignore_dims=${ignore_dims:-} \
+    derive_table=$derive_table \
 
   begin_function_grip
       
@@ -1267,6 +1269,11 @@ extract_from_derive_table() {
 
     if [[ ! -v derive_data ]]; then
       load_derive_table $derive_table || fail
+    fi
+
+    if [[ ! -v derive_data ]]; then
+      log_fatal "Couldn't load derive table $derive_table"
+      fail1
     fi
 
     #if ! is_set value_set; then
@@ -2947,7 +2954,12 @@ attempt_derive2() {
           fi
 
           local action_type=${action##*.} \
-            action_name=${action_name%.*} \
+            action_name=${action%.*} \
+
+          if [[ ! "$action_name" || "$action_name" == "$action" ]]; then
+            log_fatal "Invalid action name: $action_name found in derived_from of dim $dim"
+            fail1
+          fi
 
           case $action_type in
             tab)
@@ -2991,6 +3003,7 @@ attempt_derive() {
     stop_after_first_match=${stop_after_first_match:-f} \
     deriving=${deriving:-} \
 
+  log_show_vars='dim from_dim'
   begin_function_grip
     local -n derived_from=dim_${dim}_derived_from
     values=()
