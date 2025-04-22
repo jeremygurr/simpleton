@@ -1422,6 +1422,38 @@ extract_from_derive_table() {
   handle_return
 }
 
+fetch_column_from_table() {
+
+  local table_var=$table_var field=$field
+  local -n table_data=${table_var}_data \
+    table_fields=${table_var}_fields \
+
+  local field_count=${#table_fields[*]} \
+    data_count=${#table_data[*]} \
+    data_index \
+    value= field \
+    found=f \
+
+  for (( data_index = 0; data_index < field_count; data_index++ )); do
+    if [[ ${table_fields[$data_index]} == $field ]]; then
+      found=t
+      break
+    fi
+  done
+
+  if [[ $found == f ]]; then
+    log_fatal "Internal error: Table $table_var doesn't contain field $field"
+    return 1
+  fi
+
+  for (( ; data_index < data_count; data_index += field_count )); do
+    values+=( "${table_data[$data_index]}" )
+  done
+
+  return 0
+
+}
+
 # inputs:
 #   $1          name of dim to fetch
 #   coord_type
@@ -1430,12 +1462,11 @@ extract_from_derive_table() {
 fetch_values_from_coordinates() {
   local dim_var=$1 coord_type=$coord_type
   begin_function
-    values=() # must not be set to empty string here
-    validate_rows=f \
-    out_field=$dim_var \
-    out_arr=values \
-    derive_table=${coord_type}_coordinate \
-    extract_from_derive_table || fail
+    debug_start
+    values=()
+    table_var=${coord_type}_coordinate \
+    field=$dim_var \
+    fetch_column_from_table || fail
     if [[ "${values[*]:-}" ]]; then
       log_debug "$dim_var fetched from coordinates: ${values[*]}"
     else
@@ -1524,8 +1555,8 @@ load_child_dims() {
         done
 
         for anchor_dim in $anchor_dims; do
-          if [[ " ${trunk_dims[*]} " != *" $anchor_dim "* ]]; then
-            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims[*]}"
+          if [[ " ${trunk_dims[*]} ${support_dims[*]} " != *" $anchor_dim "* ]]; then
+            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims[*]} ${support_dims[*]}"
             fail1
           fi
         done
@@ -2198,7 +2229,9 @@ build_dim_info() {
     localize_dims=
     localize_reverse_dims=
 
-    for dim_type in trunk_dims sub_dims control_props data_props; do
+    build_context_support_dims || fail
+
+    for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
 
       local -n short_dims=${dim_type}_short \
         dim_array=${dim_type} \
@@ -2219,7 +2252,7 @@ build_dim_info() {
 
     done
 
-    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
+    begin_for dim_type in trunk_dims support_dims sub_dims control_props data_props; doo
 
       fence_grip
       local -n dim_array=${dim_type}
@@ -2392,21 +2425,21 @@ load_parent_context() {
   handle_return
 }
 
-# assumes that derived_from for the given dim already exists
+# assumes that dim_derived_from for the given dim already exists
 add_derived_to_support_dims() {
   local parent_dim=$1
-  local derived_from=${dim_derived_from[$dim]} \
-    derived_dim dim row OIFS=$IFS
+  local derived_from dim row OIFS=$IFS
   IFS=$NL
-  derived_from=( $derived_from )
+  derived_from=( $dim_derived_from )
   IFS=$OIFS
   for row in "${derived_from[@]}"; do
     for dim in $row; do
       if ! array_contains trunk_dims $dim \
         && ! array_contains support_dims $dim; then
         support_dims+=( $dim )
-        if [[ -v ${dim_derived_from[$dim]} ]]; then
-          add_derived_to_support_dims $dim
+        local -n dim_derived_from=dim_${dim}_derived_from
+        if [[ -v $dim_derived_from ]]; then
+          add_derived_to_support_dims $dim || fail
         fi
       fi
     done
@@ -2415,10 +2448,14 @@ add_derived_to_support_dims() {
 
 build_context_support_dims() {
   begin_function
+
+    debug_start
+
     local dim 
     support_dims=()
     begin_for dim in ${trunk_dims[*]}; doo
-      if [[ -v ${dim_derived_from[$dim]} ]]; then
+      local -n dim_derived_from=dim_${dim}_derived_from
+      if [[ -v $dim_derived_from ]]; then
         add_derived_to_support_dims $dim || fail
       fi
     end_for
@@ -4067,9 +4104,10 @@ calc_coordinates() {
       coordinate_rows=0 \
       coord_prefix= \
 
-    if [[ $target_form == seed ]]; then
-      coord_prefix=seed_
-    fi
+    #  we want the name to be the same to make refining easier
+    #if [[ $target_form == seed ]]; then
+    #  coord_prefix=seed_
+    #fi
 
     local -n coordinate_data=$coord_prefix${coord_type}_coordinate_data \
       coordinate_fields=$coord_prefix${coord_type}_coordinate_fields \
@@ -4136,12 +4174,21 @@ calc_coordinates() {
       fail1
     fi
 
+    # refine is used to determine if coords need to be calculated
+    local -n refined=${coord_type}_coordinate_refined
+    if [[ $target_form == seed ]]; then
+      refined=f
+    else
+      refined=t
+    fi
+
     log_debug "$coordinate_rows $coord_type coordinate rows found" 
 
   end_function
   handle_return
 }
 
+# Doesn't do anything at the moment
 # only run if the cell is actually a leaf
 build_context_leaf() {
   begin_function
@@ -4152,34 +4199,6 @@ build_context_leaf() {
       rm $context_path-$context_type.new || fail
     fi
 
-
-    # ----------------------------------------------------------------------------------------------------
-    #  MERGE IN
-    # ----------------------------------------------------------------------------------------------------
-    local coord_type=branch
-
-    calc_coordinates || fail
-    fence
-    # ----------------------------------------------------------------------------------------------------
-    #  MERGE IN
-    # ----------------------------------------------------------------------------------------------------
-
-
-    # TODO how to resolve leaf dims?
-    if [[ "${unknown_dims:-}" ]]; then
-      log_fatal "Could not resolve all branch dims in build_context_leaf"
-      fail1
-    fi
-
-    target_dim_var_type=ddim \
-    table=${coord_type}_coordinate \
-    convert_table_to_dims || fail
-
-    write_vars_to_context \
-      branch_coordinate_data \
-      branch_coordinate_fields \
-      || fail
-
     if [[ -e $context_path-$context_type.new ]]; then
       mv $context_path-$context_type.new $context_path-$context_type || fail
     fi
@@ -4188,6 +4207,7 @@ build_context_leaf() {
   handle_return
 }
 
+# not sure this makes sense
 calc_anchor_dims() {
   begin_function
     # all anchors and non-branch dim calculations are dynamic per command execution
@@ -4241,7 +4261,9 @@ build_context() {
     fi
     fence
 
-    calc_anchor_dims || fail
+    #  doesn't make sense?
+    #calc_anchor_dims || fail
+
     setup_dims || fail
     if [[ ! -f $context_path-branch ]]; then
       build_context_branch || fail
@@ -4270,13 +4292,14 @@ build_context() {
 
     fi
 
-    if [[ $cell_is_leaf == t ]]; then
-      if [[ ! -f $context_path-leaf ]]; then
-        build_context_leaf || fail
-      else
-        source $context_path-leaf || fail
-      fi
-    fi
+    #  unused at the moment
+    #if [[ $cell_is_leaf == t ]]; then
+    #  if [[ ! -f $context_path-leaf ]]; then
+    #    build_context_leaf || fail
+    #  else
+    #    source $context_path-leaf || fail
+    #  fi
+    #fi
 
     if [[ -e $context_path.new ]]; then
       rm $context_path.new || fail
@@ -4296,6 +4319,19 @@ build_context() {
 
     if [[ -e $context_path.new ]]; then
       mv $context_path.new $context_path || fail
+    fi
+
+    if [[ ! -f $context_path-check ]]; then
+      context_type=check \
+      write_vars_to_context \
+        out_file \
+        out_path \
+        cell_is_leaf \
+        check_op_var \
+        data_props \
+        default_freshness \
+        || fail
+      mv $context_path-check.new $context_path-check || fail
     fi
 
   end_function
@@ -4462,12 +4498,14 @@ for_each_member_multi() {
 #   function=function to execute for each member
 #   fork=whether the process should be forked before executing 
 #     the function. (optional)
+#   get_members_from
 for_each_member() {
   local dim=$1 \
     function=$function leave_loop=${leave_loop:-0} \
     fork=${fork:-t} \
     par=${par:-t} \
     cell_path=${cell_path:-} \
+    get_members_from=${get_members_from:-coords}
 
   local log_vars='fork par' \
     log_show_vars='dim function'
@@ -4476,10 +4514,6 @@ for_each_member() {
     local dims values=() member_count=0
     get_plural $dim dims
 
-
-    # ----------------------------------------------------------------------------------------------------
-    #  MERGE IN
-    # ----------------------------------------------------------------------------------------------------
     case $get_members_from in
       coords)
         coord_type=branch \
@@ -4502,10 +4536,6 @@ for_each_member() {
     esac
 
     member_count=${#values[*]}
-    # ----------------------------------------------------------------------------------------------------
-    #  MERGE IN
-    # ----------------------------------------------------------------------------------------------------
-
 
     local -n member=d_$dim members=d_$dims
 
@@ -4831,7 +4861,7 @@ get_required_freshness() {
 calc_coords_branch() {
   begin_function
     local coord_type=branch
-    if [[ ! "${branch_coordinate_fields:-}" ]]; then
+    if [[ "${branch_coordinate_refined:-}" != t ]]; then
       calc_coordinates || fail
     fi
   end_function
@@ -4843,7 +4873,7 @@ calc_coords_leaf() {
   begin_function
 
     local coord_type=leaf
-    if [[ ! "${leaf_coordinate_fields:-}" ]]; then
+    if [[ "${leaf_coordinate_refined:-}" != t ]]; then
       calc_coordinates || fail
     fi
 
@@ -4870,7 +4900,7 @@ calc_coords_sub() {
   begin_function
 
     local coord_type=sub
-    if [[ ! "${sub_coordinate_fields:-}" ]]; then
+    if [[ "${sub_coordinate_refined:-}" != t ]]; then
       calc_coordinates || fail
     fi
 
@@ -4894,6 +4924,12 @@ calc_coords_sub() {
 
 load_post_context_dynamic_vars() {
   begin_function
+
+    if [[ $cell_is_leaf == t ]]; then
+      target_dim_var_type=ddim \
+      table=branch_coordinate \
+      convert_table_to_dims || fail
+    fi
 
     get_required_freshness || fail
 
@@ -5053,11 +5089,6 @@ switch_context() {
 
         source $context_path || fail
         calc_anchor_dims || fail
-        if [[ $cell_is_leaf == t ]]; then
-          target_dim_var_type=ddim \
-          table=branch_coordinate \
-          convert_table_to_dims || fail
-        fi
 
         local problem_found=f
         broken_link_check || fail
@@ -5075,19 +5106,6 @@ switch_context() {
       fi
 
       load_post_context_dynamic_vars || fail
-
-      if [[ ! -f $context_path-check ]]; then
-        context_type=check \
-        write_vars_to_context \
-          out_file \
-          out_path \
-          cell_is_leaf \
-          check_op_var \
-          data_props \
-          default_freshness \
-          || fail
-        mv $context_path-check.new $context_path-check || fail
-      fi
 
       last_context_loaded=$cell_path
 
