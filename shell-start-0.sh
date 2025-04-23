@@ -90,8 +90,7 @@ migrate() {
           echo "Converting dims for $dim_type"
           local files
           files=$(find1 $dna_path/$dim_type -printf "%f\n" | sed 's/^\([0-9]\+-\)\?\(.*\)$/\2/' | sort -g)
-          files=( $files )
-          echo "${files[*]}" >$dna_path/$dim_type.var || return 1
+          echo "$files" >$dna_path/$dim_type.arr || return 1
           rm -fr $dna_path/$dim_type || return 1
         fi
       done
