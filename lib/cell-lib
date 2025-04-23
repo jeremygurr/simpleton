@@ -3046,6 +3046,7 @@ attempt_derive2() {
 
         complete_row=t
         local row_array=( $derived_from_row ) i
+        log_debug "Attempting to derive $dim from: ${row_array[*]:1}"
 
         for (( i = 1; i < ${#row_array[*]}; i++ )); do
           derived_from_dim=${row_array[$i]}
@@ -3060,6 +3061,7 @@ attempt_derive2() {
 
             if [[ $deep == t ]]; then
 
+              # recursive
               from_dim= \
               attempt_derive $derived_from_dim || fail
 
@@ -3141,6 +3143,9 @@ attempt_derive2() {
 #   dim             dimension to derive
 #   from_dim        optional, will only look for ways to derive 'dim' from 'from_dim'
 #   value_found
+#   deriving        list of dims we are in the process of deriving, to avoid infinite loops
+#   skip_dims       should be set to blank when starting. Is use to avoid failing to derive the same
+#                   dim multiple times.
 # output:
 #   values          array of members
 #   can_derive      whether a derive function or derive table exists for the given dim
@@ -3158,7 +3163,7 @@ attempt_derive() {
     values=()
     can_derive=f
 
-    if [[ " $deriving " == *" $dim "* ]]; then
+    if [[ " $deriving " == *" $dim "* || " $skip_dims " == *" $dim "* ]]; then
       abort
     fi
     deriving+="$dim "
@@ -3172,6 +3177,8 @@ attempt_derive() {
     fi
 
     if (( ${#value_set[*]} > 0 )); then
+      log_debug "Derive of $dim successful"
+
       local new_values=() v
       for v in "${values[@]}"; do
         if [[ -v value_set[$v] ]]; then
@@ -3179,6 +3186,9 @@ attempt_derive() {
         fi
       done
       values=( "${new_values[@]}" )
+    else
+      log_debug "Derive of $dim failed"
+      skip_dims+="$dim "
     fi
 
   end_function
@@ -3554,6 +3564,7 @@ calc_coordinates_next_unknown_dim() {
           local values= already_expanded=f needs_narrowing=t value_found=f
           if [[ $phase == derive ]]; then
             deriving= \
+            skip_dims= \
             attempt_derive $dim || fail
             needs_narrowing=f
           elif [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
@@ -3605,6 +3616,7 @@ calc_coords_validate_member() {
 
     local values=() can_derive value_found=f
     deriving= \
+    skip_dims= \
     attempt_derive $dim || fail
 
     log_show_vars='dim member'
@@ -3631,6 +3643,7 @@ calc_coords_validate_member() {
       local value_found=f
       stop_after_first_match=t \
       deriving= \
+      skip_dims= \
       from_dim=$dim attempt_derive $rd || fail
 
       if [[ $can_derive == t ]]; then
