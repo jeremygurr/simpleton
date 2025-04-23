@@ -716,8 +716,8 @@ build_context_expand_members_derive() {
     *)
       local -n dt=dim_${dim}_card_table
       if [[ ! -v dt ]]; then
-        log_fatal 'No members defined for $dim'
-        fail1
+        problem='No members defined for $dim'
+        return 0
       fi
     ;;&
     all)
@@ -4067,13 +4067,23 @@ xlr8() {
 calc_coordinates_refine_multi() {
   begin_function_lo
     front_load=6 progress_bar_start $(( coordinate_rows * coordinate_fields_count ))
+
+    local target_dim_var_type
+    if [[ $seed_already_expanded == f ]]; then
+      target_dim_var_type=sdims
+    else
+      target_dim_var_type=ddim
+    fi
+
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
 
-      target_dim_var_type=sdims \
       table=${coord_type}_coordinate \
       convert_table_to_dims || fail
 
-      expand_dims $check_dims || fail
+      if [[ $seed_already_expanded == f ]]; then
+        expand_dims $check_dims || fail
+      fi
+
       calc_coordinates_next_dim || fail
       progress_bar_next
       log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
@@ -4090,25 +4100,19 @@ calc_coordinates_slow() {
       check_dims="${coordinate_fields[*]}" \
       validated_dims= \
 
-    local seed_table=${seed_table:-to_${coord_type}_coords}
-    if [[ -v ${seed_table}_fields && $cell_is_leaf == f ]]; then
-      seed_coordinates || fail
-      fence
+    local total_coord_rows_added=0
+    if (( coordinate_rows > 0 )); then
+      log_debug "Refining existing $coord_type dim coordinates"
+      calc_coordinates_refine_multi || fail
     else
-      local total_coord_rows_added=0
-      if (( coordinate_rows > 0 )); then
-        log_debug "Refining existing $coord_type dim coordinates"
-        calc_coordinates_refine_multi || fail
-      else
-        # it is assumed that dims are already expanded before this point, and so ddims will be used
-        log_debug "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-        front_load=6 progress_bar_start $coordinate_fields_count
-        calc_coordinates_next_dim || fail
-        progress_bar_stop
-      fi
-
-      coordinate_data=( "${new_coordinate_data[@]}" )
+      # it is assumed that dims are already expanded before this point, and so ddims will be used
+      log_debug "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+      front_load=6 progress_bar_start $coordinate_fields_count
+      calc_coordinates_next_dim || fail
+      progress_bar_stop
     fi
+
+    coordinate_data=( "${new_coordinate_data[@]}" )
 
   end_function
   handle_return
@@ -4140,8 +4144,12 @@ xlr8_get_dim_fields() {
 # assumes ddims are in array form (not space separated)
 # assumes all checks were done previously to determine if this is needed
 calc_coordinates() {
-  local clear_existing_coords=${clear_existing_coords:-t} coord_type=$coord_type \
-    coord_limit=${coord_limit:-} target_form=${target_form:-tree}
+  local clear_existing_coords=${clear_existing_coords:-t} \
+    coord_type=$coord_type \
+    coord_limit=${coord_limit:-} \
+    target_form=${target_form:-tree} \
+    seed_already_expanded=${seed_already_expanded:-f} \
+
   begin_function
 
     localize
@@ -4163,14 +4171,18 @@ calc_coordinates() {
       coordinate_fields=$coord_prefix${coord_type}_coordinate_fields \
 
     if [[ $clear_existing_coords == t ]]; then
-      coordinate_data=()
-      setup_coord_fields || fail
-    else
-      coordinate_count=${#coordinate_data[*]}
-      coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
+      if [[ -f $context_path-$coord_type-coords ]]; then
+        source $context_path-$coord_type-coords || fail
+        seed_already_expanded=t
+      else
+        coordinate_data=()
+        setup_coord_fields || fail
+      fi
     fi
 
     coordinate_fields_count=${#coordinate_fields[*]}
+    coordinate_count=${#coordinate_data[*]}
+    coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
     unknown_dims= resolved_dims=
 
     if [[ ! "${coordinate_fields:-}" ]]; then
@@ -4322,9 +4334,9 @@ build_context() {
     fi
     fence_grip
 
-    if [[ ! -f $context_path-coords ]]; then
+    if [[ ! -f $context_path-branch-coords ]]; then
 
-      local parent_coord_path=${cell_path%/*}/.cyto/context-coords \
+      local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords \
         clear_existing_coords=t \
 
       if [[ -f $parent_coord_path ]]; then
@@ -4339,7 +4351,7 @@ build_context() {
       fence
 
       coord_type=branch \
-      write_coordinates_to_shell_file $context_path-coords || fail
+      write_coordinates_to_shell_file $context_path-branch-coords || fail
 
     fi
 
