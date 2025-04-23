@@ -2206,9 +2206,10 @@ build_dim_info_single() {
 
     local -n derived_from=dim_${dim}_derived_from
     if [[ -v derived_from ]]; then
-      local upstream_dim upstream_dim_row
+      local upstream_long_dim upstream_dim upstream_dim_row
       begin_for upstream_dim_row in "${derived_from[@]}"; doo
-        begin_for upstream_dim in ${upstream_dim_row#* }; doo
+        begin_for upstream_long_dim in ${upstream_dim_row#* }; doo
+          upstream_dim=${upstream_long_dim%%-*}
           local -n upstream_dim_type=dim_${upstream_dim}_type
           if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_dim] ]]; then
             all_dims[$upstream_dim]=1
@@ -2270,7 +2271,7 @@ add_derived_to_support_dims() {
 build_context_support_dims() {
   begin_function
 
-    local dim 
+    local dim dim_type=trunk_dims
     support_dims=()
     begin_for dim in "${trunk_dims[@]}"; doo
       local -n dim_derived_from=dim_${dim}_derived_from
@@ -3038,7 +3039,7 @@ attempt_derive2() {
   begin_function_lo
 
     local one_row_complete=f \
-      derived_from_row derived_from_dim \
+      derived_from_row derived_from_dim derived_from_long_dim \
       complete_row derived_from_incomplete=f \
 
     for derived_from_row in "${derived_from[@]}"; do
@@ -3049,7 +3050,8 @@ attempt_derive2() {
         log_debug "Attempting to derive $dim from: ${row_array[*]:1}"
 
         for (( i = 1; i < ${#row_array[*]}; i++ )); do
-          derived_from_dim=${row_array[$i]}
+          derived_from_long_dim=${row_array[$i]}
+          derived_from_dim=${derived_from_long_dim%%-*}
 
           if [[ " $deriving " == *" $derived_from_dim "* ]]; then
             complete_row=f
@@ -3365,36 +3367,41 @@ set_cross_dims_single() {
   local row_count=$((data_count / field_count))
 
   local -n dt_index=derive_table_${derive_table}_index_${dim}
-  row_index=( ${dt_index[$member]} )
-  if (( ${#row_index[*]} > 1 )); then
-    log_fatal "Too many rows found in derive table matching cross dim: $row_index"
-    fail1
-  fi
+  if [[ -v dt_index["$member"] ]]; then
+    row_index=( ${dt_index["$member"]} )
+    if (( ${#row_index[*]} > 1 )); then
+      log_fatal "Too many rows found in derive table matching cross dim: $row_index"
+      fail1
+    fi
 
-  for (( column_index = 0; column_index < field_count; column_index++ )); do
-    field=${derive_fields[$column_index]}
-    local fields
-    get_plural $field fields
-    if [[ $field != $dim ]]; then
-      (( data_index = row_index * field_count + column_index ))
-      value=${derive_data[$data_index]}
-      local -n field_dim=d_$field
-      if dim=$field \
-         single_member="${field_dim:-}" \
-         multi_member=d_$fields \
-         target_member="$value" \
-         member_conflicts; then
-        conflict=$field
-        break
-      else
-        if [[ "$value" != all ]]; then
-          log_debug "Cross dim set: $field=$value"
-          field_dim=$value
-          validated_dims+=" $field"
+    for (( column_index = 0; column_index < field_count; column_index++ )); do
+      field=${derive_fields[$column_index]}
+      local fields
+      get_plural $field fields
+      if [[ $field != $dim ]]; then
+        (( data_index = row_index * field_count + column_index ))
+        value=${derive_data[$data_index]}
+        local -n field_dim=d_$field
+        if dim=$field \
+           single_member="${field_dim:-}" \
+           multi_member=d_$fields \
+           target_member="$value" \
+           member_conflicts; then
+          conflict=$field
+          break
+        else
+          if [[ "$value" != all ]]; then
+            log_debug "Cross dim set: $field=$value"
+            field_dim=$value
+            validated_dims+=" $field"
+          fi
         fi
       fi
-    fi
-  done
+    done
+  else
+    log_debug "Member ($member) doesn't exist in derive table ($derive_table)"
+    conflict='(missing from table)'
+  fi
 
 }
 
@@ -3411,10 +3418,14 @@ set_cross_dims() {
 
     if [[ "$conflict" ]]; then
       local conflict_plural
-      get_plural $conflict conflict_plural
-      local -n conflict_member=d_$conflict \
-        conflict_members=d_$conflict_plural
-      log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
+      if [[ "$conflict" =~ ^[a-zA-Z0-9_]+$ ]]; then
+        get_plural $conflict conflict_plural
+        local -n conflict_member=d_$conflict \
+          conflict_members=d_$conflict_plural
+        log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
+      else
+        log_debug "Conflict found for cross-dim $dim = $member $conflict"
+      fi
     fi
 
   end_function
