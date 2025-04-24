@@ -1794,10 +1794,10 @@ load_child_dims() {
 
     if [[ ! "${child_dims:-}" ]]; then
       child_dims=()
-      local trunk_dim_count=${#trunk_dims[*]}
+      local trunk_dim_count=${#trunk_dims_short[*]}
       if [[ ! "${anchor_dims:-}" ]]; then
         for (( i = branch_dim_count; i < trunk_dim_count; i++ )); do
-          child_dims+=( ${trunk_dims[$i]} )
+          child_dims+=( ${trunk_dims_short[$i]} )
         done
       else
         local anchor_dim branch_dim leftovers=" $anchor_dims "
@@ -1807,8 +1807,8 @@ load_child_dims() {
         done
 
         for anchor_dim in $anchor_dims; do
-          if [[ " ${trunk_dims[*]} ${support_dims[*]} " != *" $anchor_dim "* ]]; then
-            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims[*]} ${support_dims[*]}"
+          if [[ " ${trunk_dims_short[*]} ${support_dims_short[*]} " != *" $anchor_dim "* ]]; then
+            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims_short[*]} ${support_dims_short[*]}"
             fail1
           fi
         done
@@ -1836,7 +1836,7 @@ load_child_dims() {
 }
 
 init_dims() {
-  local types=${*:-trunk_dims sub_dims} \
+  local types=${*:-trunk_dims_short sub_dims_short} \
     new_value=${new_value:-} vars=${vars:-ddim}
   begin_function
     for dim_type in $types; do
@@ -1865,10 +1865,10 @@ setup_dims() {
     prep_dims || fail
     load_child_dims || fail
     if [[ $cell_is_leaf == t ]]; then
-      expand_dims ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} || fail
+      expand_dims ${sub_dims_short[*]:-} ${control_props_short[*]:-} ${data_props_short[*]:-} || fail
       load_implicit_dims || fail
     else
-      expand_dims ${trunk_dims[*]:-} ${support_dims[*]:-} || fail
+      expand_dims ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} || fail
     fi
 
   end_function
@@ -1998,8 +1998,10 @@ init_context() {
     check_op_var=f \
     child_dims=() \
     control_props=() \
+    control_props_short=() \
     current_pause=250 \
     data_props=() \
+    data_props_short=() \
     default_anchor_dims= \
     default_freshness= \
     default_strategies=crl \
@@ -2024,7 +2026,11 @@ init_context() {
     reuse_existing_out=t \
     shuffle_chance=100 \
     sub_dims=() \
+    sub_dims_short=() \
+    support_dims=() \
+    support_dims_short=() \
     trunk_dims=() \
+    trunk_dims_short=() \
     up=() \
     update_cost=1 \
     update_risk=3 \
@@ -2524,9 +2530,10 @@ add_derived_to_support_dims() {
 build_context_support_dims() {
   begin_function
 
-    local dim dim_type=trunk_dims
+    local long_dim dim dim_type=trunk_dims
     support_dims=()
-    begin_for dim in "${trunk_dims[@]}"; doo
+    begin_for long_dim in "${trunk_dims[@]}"; doo
+      dim=${long_dim%%-*}
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
         add_derived_to_support_dims || fail
@@ -2587,7 +2594,6 @@ build_dim_info() {
 
       begin_for long_dim in "${dim_array[@]}"; doo
         if [[ $long_dim == _* ]]; then
-          debug_start
           build_dim_info_expand_group $long_dim || fail
         else
           new_dim_array+=( $long_dim )
@@ -2610,6 +2616,7 @@ build_dim_info() {
     end_for
 
     build_context_support_dims || fail
+    fence
 
     for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
 
@@ -2825,7 +2832,7 @@ build_context_trunk_dna() {
       fi
 
       if [[ ! "${default_anchor_dims:-}" ]]; then
-        default_anchor_dims="${trunk_dims[*]:-}"
+        default_anchor_dims="${trunk_dims_short[*]:-}"
         write_vars_to_context default_anchor_dims || fail
       fi
 
@@ -3157,7 +3164,7 @@ load_implicit_dims() {
     implicit_dims=()
     if [[ -e $out_path/output.tab ]]; then
       for d in $(head -n1 $out_path/output.tab); do
-        if [[ ! " ${trunk_dims[*]} ${sub_dims[*]} " == *" $d "* ]]; then
+        if [[ ! " ${trunk_dims_short[*]} ${sub_dims_short[*]} " == *" $d "* ]]; then
           implicit_dims+=( $d )
           all_dims[$d]=1
         fi
@@ -4365,8 +4372,8 @@ calc_coordinates() {
         coordinate_fields_count
       "
       local dim_fields
-      local dim_type=trunk_dims
-      xlr8_get_dim_fields ${trunk_dims[*]}
+      local dim_type=trunk_dims_short
+      xlr8_get_dim_fields ${trunk_dims_short[*]}
       xlr8 load_coordinates $coord_fields $dim_fields $fields $dt_fields || fail
     else
       calc_coordinates_slow || fail
