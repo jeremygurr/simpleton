@@ -813,7 +813,7 @@ build_context_expand() {
     local -n aliases=dim_${dim}_aliases
 
     code="dim_${dim}_expand() {
-  local -n _in=${1:-value} _out=${2:-values}
+  local -n _in=\${1:-value} _out=\${2:-values}
   problem=
   case \"\$_in\" in"
 
@@ -1272,6 +1272,7 @@ extract_from_derive_table_find_row_indexes() {
 extract_from_derive_table_check_row() {
   begin_function_grip
 
+    local field value column_index
     for (( column_index = 0; column_index < field_count; column_index++ )); do
 
       field=${derive_fields[$column_index]}
@@ -1380,8 +1381,8 @@ extract_from_derive_table() {
     local field_count=${#derive_fields[*]} \
       data_count=${#derive_data[*]} \
       strict_matching=${strict_matching:-f} \
-      maybe data_index column_index \
-      value= row_result field everything_matches \
+      maybe data_index \
+      value= row_result everything_matches \
       invalid=f \
       best_row_indexes=() \
       row_index \
@@ -1395,7 +1396,7 @@ extract_from_derive_table() {
 
       (( row_index = data_index / field_count ))
 
-      if [[ "$best_row_indexes" && " $best_row_indexes " != *" $row_index "* ]]; then
+      if [[ "$best_row_indexes" && " ${best_row_indexes[*]} " != *" $row_index "* ]]; then
         # Skip row since it doesn't match
         continue
       fi
@@ -1620,21 +1621,25 @@ attempt_derive() {
     fi
 
     if (( ${#value_set[*]} > 0 )); then
-      log_debug "Derive of $dim successful"
 
       local new_values=() v
       for v in "${values[@]}"; do
-        if [[ -v value_set[$v] ]]; then
+        if [[ -v value_set["$v"] ]]; then
           new_values+=( "$v" )
+          unset value_set["$v"]
         fi
       done
       values=( "${new_values[@]}" )
       value_found=t
+
+      log_debug "Derive of $dim successful: ${values[*]}"
+
     elif [[ ! "${values:-}" ]]; then
       log_debug "Derive of $dim failed"
       skip_dims+="$dim "
     else
       value_found=t
+      log_debug "Derive of $dim successful: ${values[*]}"
     fi
 
   end_function
@@ -1642,7 +1647,7 @@ attempt_derive() {
 }
 
 fetch_values_from_coordinates2() {
-  begin_function_lo
+  begin_function_grip
     
     local -n table_data=${coord_type}_coordinate_data
     local data_count=${#table_data[*]} \
@@ -1656,6 +1661,8 @@ fetch_values_from_coordinates2() {
       table=${coord_type}_coordinate \
       target_dim_var_type=ddim \
       convert_table_to_dims || fail
+
+      fence_grip
 
       value_found=f
       skip_dims= \
@@ -1684,7 +1691,6 @@ fetch_values_from_coordinates2() {
 fetch_values_from_coordinates() {
   local dim_var=$1 coord_type=$coord_type
   begin_function
-    debug_start
     values=()
     local table_var=${coord_type}_coordinate
     local -n table_fields=${table_var}_fields
