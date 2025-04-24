@@ -1255,7 +1255,7 @@ extract_from_derive_table_find_row_indexes() {
             best_row_indexes=( ${row_indexes[*]} )
             if (( best_row_index_count <= 1 )); then
               # don't need to keep looking
-              abort
+              break
             fi
           fi
         else
@@ -1334,6 +1334,7 @@ extract_from_derive_table_check_row() {
   end_function
   handle_return
 }
+
 # inputs:
 #   value_found
 #   derive_table            name of var of derive table
@@ -1458,6 +1459,224 @@ fetch_column_from_table() {
 }
 
 # inputs:
+#   dim
+#   from_dim
+#   value_found
+#   deep
+# outputs:
+#   value_found
+#   values
+attempt_derive2() {
+  local deep=$deep
+  begin_function_lo
+
+    local one_row_complete=f \
+      derived_from_row derived_from_dim derived_from_long_dim \
+      complete_row derived_from_incomplete=f \
+      maybe_resolved
+
+    for derived_from_row in "${derived_from[@]}"; do
+      if [[ ! "$from_dim" || " $derived_from_row " == *" $from_dim "* ]]; then
+
+        complete_row=t
+        local row_array=( $derived_from_row ) i
+        log_debug "Attempting to derive $dim from: ${row_array[*]:1}"
+
+        maybe_resolved=
+        for (( i = 1; i < ${#row_array[*]}; i++ )); do
+          derived_from_long_dim=${row_array[$i]}
+          derived_from_dim=${derived_from_long_dim%%-*}
+          maybe_resolved+="$derived_from_dim "
+
+          if [[ " $deriving " == *" $derived_from_dim "* ]]; then
+            complete_row=f
+            break
+          fi
+
+          local -n derive_from_dim_value=d_$derived_from_dim
+          if [[ ! "${derive_from_dim_value:-}" ]]; then
+
+            if [[ $deep == t ]]; then
+
+              # recursive
+              from_dim= \
+              attempt_derive $derived_from_dim || fail
+
+              if [[ $value_found == f ]]; then
+                complete_row=f
+                break
+              fi
+
+              if (( "${#values[*]}" > 1 )); then
+                local plural
+                get_plural $derived_from_dim
+                local -n ddims=d_$plural
+                ddims=( "${values[@]}" )
+              else
+                derive_from_dim_value=$values
+              fi
+
+              values=()
+              value_found=f
+
+            else
+
+              complete_row=f
+              break
+
+            fi
+
+          fi
+        done
+
+        if [[ $complete_row == t ]];then
+
+          one_row_complete=t
+          resolved_dependencies+=( $maybe_resolved )
+
+          local action=${row_array[0]}
+
+          if [[ ! "$action" =~ ^[a-zA-Z0-9_-]+\.(tab|fun)$ ]]; then
+            log_fatal "Invalid action format for derived_from of dim $dim. First field of a derived_from must be the derive table or function to execute. For example: 'ez.tab' or 'derive_ez.fun'"
+            fail1
+          fi
+
+          local action_type=${action##*.} \
+            action_name=${action%.*} \
+
+          if [[ ! "$action_name" || "$action_name" == "$action" ]]; then
+            log_fatal "Invalid action name: $action_name found in derived_from of dim $dim"
+            fail1
+          fi
+
+          case $action_type in
+            tab)
+              derive_table=$action_name \
+              extract_from_derive_table || fail
+            ;;
+            fun)
+              function_name=$action_name \
+              attempt_derive_from_function || fail
+            ;;
+            *)
+              log_fatal "Unknown derive action: $action_type"
+              fail1
+            ;;
+          esac
+
+          if [[ "${values:-}" ]]; then
+            break
+          fi
+
+        fi
+
+      fi
+    done
+
+    if [[ $one_row_complete == f ]]; then
+      derived_from_incomplete=t
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   dim             dimension to derive
+#   from_dim        optional, will only look for ways to derive 'dim' from 'from_dim'
+#   value_found
+#   deriving        list of dims we are in the process of deriving, to avoid infinite loops
+#   skip_dims       should be set to blank when starting. Is use to avoid failing to derive the same
+#                   dim multiple times.
+# output:
+#   values          array of members
+#   can_derive      whether a derive function or derive table exists for the given dim
+#   value_found
+attempt_derive() {
+
+  local dim=$1 from_dim=${from_dim:-} \
+    old_values_string=${old_values_string:-} \
+    stop_after_first_match=${stop_after_first_match:-f} \
+    deriving=${deriving:-} \
+
+  log_show_vars='dim from_dim'
+  begin_function_grip
+    local -n derived_from=dim_${dim}_derived_from
+    values=()
+    can_derive=f
+    value_found=${value_found:-f}
+
+    if [[ " $deriving " == *" $dim "* || " $skip_dims " == *" $dim "* ]]; then
+      abort
+    fi
+    deriving+="$dim "
+
+    local resolved_dependencies=()
+    local -A value_set=()
+
+    if [[ "${derived_from:-}" ]]; then
+      deep=t \
+      attempt_derive2 || fail
+    fi
+
+    if (( ${#value_set[*]} > 0 )); then
+      log_debug "Derive of $dim successful"
+
+      local new_values=() v
+      for v in "${values[@]}"; do
+        if [[ -v value_set[$v] ]]; then
+          new_values+=( "$v" )
+        fi
+      done
+      values=( "${new_values[@]}" )
+      value_found=t
+    elif [[ ! "${values:-}" ]]; then
+      log_debug "Derive of $dim failed"
+      skip_dims+="$dim "
+    else
+      value_found=t
+    fi
+
+  end_function
+  handle_return
+}
+
+fetch_values_from_coordinates2() {
+  begin_function_lo
+    
+    local -n table_data=${coord_type}_coordinate_data
+    local data_count=${#table_data[*]} \
+      field_count=${#table_fields[*]} \
+      new_values=() \
+      value_found \
+
+    local row_count=$(( data_count / field_count ))
+    for (( row_index = 0; row_index < row_count; row_index++ )); do
+      
+      table=${coord_type}_coordinate \
+      target_dim_var_type=ddim \
+      convert_table_to_dims || fail
+
+      value_found=f
+      skip_dims= \
+      attempt_derive $dim_var || fail
+
+      if [[ $value_found == t ]]; then
+        new_values+=( "${values[@]}" )
+      else
+        log_fatal "Could not extract dim $dim_var from ${coord_type}_coordinate table at row $row_index"
+        fail1
+      fi
+      
+    done
+
+    values=( "${new_values[@]}" )
+
+  end_function
+  handle_return
+}
+
+# inputs:
 #   $1          name of dim to fetch
 #   coord_type
 # outputs:
@@ -1467,9 +1686,16 @@ fetch_values_from_coordinates() {
   begin_function
     debug_start
     values=()
-    table_var=${coord_type}_coordinate \
-    field=$dim_var \
-    fetch_column_from_table || fail
+    local table_var=${coord_type}_coordinate
+    local -n table_fields=${table_var}_fields
+
+    if [[ " ${table_fields[*]} " == *" $dim_var "* ]]; then
+      field=$dim_var \
+      fetch_column_from_table || fail
+    else
+      fetch_values_from_coordinates2 || fail
+    fi
+
     if [[ "${values[*]:-}" ]]; then
       log_debug "$dim_var fetched from coordinates: ${values[*]}"
     else
@@ -3033,177 +3259,6 @@ attempt_derive_from_function() {
 #  
 #  }
 
-# inputs:
-#   dim
-#   from_dim
-#   value_found
-#   deep
-# outputs:
-#   value_found
-#   values
-attempt_derive2() {
-  local deep=$deep
-  begin_function_lo
-
-    local one_row_complete=f \
-      derived_from_row derived_from_dim derived_from_long_dim \
-      complete_row derived_from_incomplete=f \
-
-    for derived_from_row in "${derived_from[@]}"; do
-      if [[ ! "$from_dim" || " $derived_from_row " == *" $from_dim "* ]]; then
-
-        complete_row=t
-        local row_array=( $derived_from_row ) i
-        log_debug "Attempting to derive $dim from: ${row_array[*]:1}"
-
-        for (( i = 1; i < ${#row_array[*]}; i++ )); do
-          derived_from_long_dim=${row_array[$i]}
-          derived_from_dim=${derived_from_long_dim%%-*}
-
-          if [[ " $deriving " == *" $derived_from_dim "* ]]; then
-            complete_row=f
-            break
-          fi
-
-          local -n derive_from_dim_value=d_$derived_from_dim
-          if [[ ! "${derive_from_dim_value:-}" ]]; then
-
-            if [[ $deep == t ]]; then
-
-              # recursive
-              from_dim= \
-              attempt_derive $derived_from_dim || fail
-
-              if [[ $value_found == f ]]; then
-                complete_row=f
-                break
-              fi
-
-              if (( "${#values[*]}" > 1 )); then
-                local plural
-                get_plural $derived_from_dim
-                local -n ddims=d_$plural
-                ddims=( "${values[@]}" )
-              else
-                derive_from_dim_value=$values
-              fi
-
-              values=()
-              value_found=f
-
-            else
-
-              complete_row=f
-              break
-
-            fi
-
-          fi
-        done
-
-        if [[ $complete_row == t ]];then
-
-          one_row_complete=t
-          resolved_dependencies+=( "$derived_from_row" )
-
-          local action=${row_array[0]}
-
-          if [[ ! "$action" =~ ^[a-zA-Z0-9_-]+\.(tab|fun)$ ]]; then
-            log_fatal "Invalid action format for derived_from of dim $dim. First field of a derived_from must be the derive table or function to execute. For example: 'ez.tab' or 'derive_ez.fun'"
-            fail1
-          fi
-
-          local action_type=${action##*.} \
-            action_name=${action%.*} \
-
-          if [[ ! "$action_name" || "$action_name" == "$action" ]]; then
-            log_fatal "Invalid action name: $action_name found in derived_from of dim $dim"
-            fail1
-          fi
-
-          case $action_type in
-            tab)
-              derive_table=$action_name \
-              extract_from_derive_table || fail
-            ;;
-            fun)
-              function_name=$action_name \
-              attempt_derive_from_function || fail
-            ;;
-            *)
-              log_fatal "Unknown derive action: $action_type"
-              fail1
-            ;;
-          esac
-        fi
-
-      fi
-    done
-
-    if [[ $one_row_complete == f ]]; then
-      derived_from_incomplete=t
-    fi
-
-  end_function
-  handle_return
-}
-
-# inputs:
-#   dim             dimension to derive
-#   from_dim        optional, will only look for ways to derive 'dim' from 'from_dim'
-#   value_found
-#   deriving        list of dims we are in the process of deriving, to avoid infinite loops
-#   skip_dims       should be set to blank when starting. Is use to avoid failing to derive the same
-#                   dim multiple times.
-# output:
-#   values          array of members
-#   can_derive      whether a derive function or derive table exists for the given dim
-#   value_found
-attempt_derive() {
-
-  local dim=$1 from_dim=${from_dim:-} \
-    old_values_string=${old_values_string:-} \
-    stop_after_first_match=${stop_after_first_match:-f} \
-    deriving=${deriving:-} \
-
-  log_show_vars='dim from_dim'
-  begin_function_grip
-    local -n derived_from=dim_${dim}_derived_from
-    values=()
-    can_derive=f
-
-    if [[ " $deriving " == *" $dim "* || " $skip_dims " == *" $dim "* ]]; then
-      abort
-    fi
-    deriving+="$dim "
-
-    local resolved_dependencies=()
-    local -A value_set=()
-
-    if [[ "${derived_from:-}" ]]; then
-      deep=t \
-      attempt_derive2 || fail
-    fi
-
-    if (( ${#value_set[*]} > 0 )); then
-      log_debug "Derive of $dim successful"
-
-      local new_values=() v
-      for v in "${values[@]}"; do
-        if [[ -v value_set[$v] ]]; then
-          new_values+=( "$v" )
-        fi
-      done
-      values=( "${new_values[@]}" )
-    else
-      log_debug "Derive of $dim failed"
-      skip_dims+="$dim "
-    fi
-
-  end_function
-  handle_return
-}
-
 # input:
 #   dim
 #   dim_type
@@ -3579,7 +3634,7 @@ calc_coordinates_next_unknown_dim() {
           fence_grip
           log_debug "Finding values for $dim in phase $phase"
 
-          local values= already_expanded=f needs_narrowing=t value_found=f
+          local values=() already_expanded=f needs_narrowing=t value_found=f
           if [[ $phase == derive ]]; then
             deriving= \
             skip_dims= \
