@@ -4581,40 +4581,16 @@ parallel_loop() {
   handle_return
 }
 
-# will find all valid values of the given dim, using derived or default configuration
-# assumes that the given dim is not already resolved
-resolve_dim() {
-  local dim=$1 log_show_vars=dim
-  begin_function_grip
-    local dims
-    get_plural $dim dims
-
-    # This code should not be needed once all calling code has been modified to check first
-    local -n ddim=d_$dim ddims=d_$dims
-    if [[ "${ddim:-}" || "${ddims:-}" ]]; then
-      log_fatal "Internal error: Already resolved: $dim. Whatever code called this needs to check first."
-      fail1
-    fi
-
-    log_debug "Attempting to resolve $dim"
-
-
-  end_function
-  handle_return
-}
-
 for_each_member_single() {
-  local -I member members dim command_history
+  local -I dim command_history
+  local -n ddim=d_$dim
+  local member=$ddim
   log_debug "Current iteration value=$member"
   $function || return 1
 }
 
 for_each_member_multi() {
   begin_function_lo
-
-    if [[ "$values" != *"$NL"* ]]; then
-      sort_array values
-    fi
 
     member_count=${#values[*]}
 
@@ -4628,8 +4604,9 @@ for_each_member_multi() {
 
     unset dim_members dims_members
     loop_over_var=values \
-      head="local -I member members dim command_history
-        local d_$dim=\"\$member\" d_$dims
+      head="local -I dim command_history
+        local d_$dim=\"\$value\" d_$dims
+        local member=\$d_$dim
         unset value values
         " \
       body=$function \
@@ -4685,26 +4662,13 @@ for_each_member() {
 
     member_count=${#values[*]}
 
-    local -n member=d_$dim members=d_$dims
-
-    if [[ "${member:-}" ]]; then
+    if (( member_count == 0 )); then
+      log_fatal "Failed to resolve required dim: $dim. Either specify the value directly, or specify a dim that this can be derived from. See cell help for more info (cell . ??)"
+      fail1
+    elif (( member_count == 1 )); then
       for_each_member_single || fail
-    elif [[ "${members:-}" ]]; then
-      for_each_member_multi || fail
     else
-
-      validate=f \
-      resolve_dim $dim || fail
-
-      if [[ "${member:-}" ]]; then
-        for_each_member_single || fail
-      elif [[ "${members:-}" ]]; then
-        for_each_member_multi || fail
-      else
-        log_fatal "Failed to resolve required dim: $dim. Either specify the value directly, or specify a dim that this can be derived from. See cell help for more info (cell . ??)"
-        fail1
-      fi
-
+      for_each_member_multi || fail
     fi
 
   end_function
