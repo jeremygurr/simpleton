@@ -1646,6 +1646,34 @@ attempt_derive() {
   handle_return
 }
 
+alias localize='[[ "${localize_dims:-}" ]] && eval "local -I $localize_dims"'
+
+fetch_values_from_coordinates2_row() {
+  begin_function_lo
+
+    localize
+
+    table=${coord_type}_coordinate \
+    target_dim_var_type=ddim \
+    convert_table_to_dims || fail
+
+    fence_grip
+
+    value_found=f
+    skip_dims= \
+    attempt_derive $dim_var || fail
+
+    if [[ $value_found == t ]]; then
+      new_values+=( "${values[@]}" )
+    else
+      log_fatal "Could not extract dim $dim_var from ${coord_type}_coordinate table at row $row_index"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
 fetch_values_from_coordinates2() {
   begin_function_grip
     
@@ -1657,24 +1685,7 @@ fetch_values_from_coordinates2() {
 
     local row_count=$(( data_count / field_count ))
     for (( row_index = 0; row_index < row_count; row_index++ )); do
-      
-      table=${coord_type}_coordinate \
-      target_dim_var_type=ddim \
-      convert_table_to_dims || fail
-
-      fence_grip
-
-      value_found=f
-      skip_dims= \
-      attempt_derive $dim_var || fail
-
-      if [[ $value_found == t ]]; then
-        new_values+=( "${values[@]}" )
-      else
-        log_fatal "Could not extract dim $dim_var from ${coord_type}_coordinate table at row $row_index"
-        fail1
-      fi
-      
+      fetch_values_from_coordinates2_row || fail
     done
 
     values=( "${new_values[@]}" )
@@ -1700,6 +1711,10 @@ fetch_values_from_coordinates() {
       fetch_column_from_table || fail
     else
       fetch_values_from_coordinates2 || fail
+    fi
+
+    if [[ "$values" != *"$NL"* ]]; then
+      sort_array values
     fi
 
     if [[ "${values[*]:-}" ]]; then
@@ -1943,8 +1958,6 @@ init_command_vars() {
     command_modifies_context=f \
     command_modifies_upstream=f
 }
-
-alias localize='[[ "${localize_dims:-}" ]] && eval "local -I $localize_dims"'
 
 init_context() {
   begin_function
@@ -2511,9 +2524,7 @@ build_context_support_dims() {
       fi
     end_for
 
-    local s=${support_dims[*]}
-    s=${s// /$NL}
-    support_dims=( $(echo "$s" | sort) )
+    sort_array support_dims
 
     log_debug "Calculated support_dims: ${support_dims[*]}"
     write_vars_to_context support_dims || fail
@@ -4658,9 +4669,6 @@ for_each_member() {
       coords)
         coord_type=branch \
         fetch_values_from_coordinates $dim || fail
-        if [[ "$values" != *"$NL"* ]]; then
-          sort_array values
-        fi
       ;;
       existing_dims)
         local -n dims_members=d_$dims dim_members=d_$dim
