@@ -2810,6 +2810,7 @@ calc_coordinates_add_row() {
 
 setup_coord_fields() {
   begin_function
+
     case $coord_type in
       branch)
         coordinate_fields=( ${trunk_dims[*]:-} )
@@ -2829,22 +2830,24 @@ setup_coord_fields() {
       ;;
     esac
 
-    if [[ $target_form == seed ]]; then
+    #  Not sure if this is correct
+    #if [[ $target_form == seed ]]; then
 
-      local new_fields=() dim
+    #  local new_fields=() dim
 
-      for dim in ${coordinate_fields[*]}; do
-        local -n member_type=dim_${dim}_member_type
-        if [[ $member_type == static ]]; then
-          new_fields+=( $dim )
-        fi
-      done
+    #  for dim in ${coordinate_fields[*]}; do
+    #    local -n member_type=dim_${dim}_member_type
+    #    if [[ $member_type == static ]]; then
+    #      new_fields+=( $dim )
+    #    fi
+    #  done
 
-      coordinate_fields=( ${new_fields[*]} )
+    #  coordinate_fields=( ${new_fields[*]} )
 
-    fi
+    #fi
 
     coordinate_fields_count=${#coordinate_fields[*]}
+
   end_function
   handle_return
 }
@@ -3689,7 +3692,7 @@ member_conflicts() {
   begin_function
 
   if [[ "$single_member" ]]; then
-    if [[ "$single_member" != "$target_member" ]]; then
+    if [[ "$single_member" != "$target_member" && "$target_member" != all && "$single_member" != all ]]; then
       return 0
     fi
   elif [[ "$multi_member" ]]; then
@@ -3700,7 +3703,7 @@ member_conflicts() {
       dim_var=$dim expand_dim_members $multi_member || return 0
 
       for v in "${new_values[@]}"; do
-        if [[ "$v" == "$target_member" ]]; then
+        if [[ "$v" == "$target_member" || "$target_member" == all || "$v" == all ]]; then
           found=t
           break
         fi
@@ -3841,20 +3844,11 @@ calc_coordinates_next_dim() {
       fi
 
       if [[ $target_form == seed ]]; then
-
-        local -n idim=i_$dim \
-          idims=i_$dims \
-
-        member=${idim:-} members=${idims:-}
         if [[ ! "$member" && ! "$members" ]]; then
-
           local value=all
           expand_dim value values || fail
-
           members=( "${values[@]}" )
-
         fi
-
       fi
 
       if [[ "${member:-}" || "${members:-}" ]]; then
@@ -4096,11 +4090,31 @@ calc_coordinates_refine_multi() {
   handle_return
 }
 
+prep_seed_dims() {
+  local dim dims
+  for dim in ${!all_dims[*]}; do
+
+    get_plural $dim dims
+
+    local -n \
+      ddim=d_$dim ddims=d_$dims \
+      idim=i_$dim idims=i_$dims \
+
+    ddim=${idim:-}
+    ddims=${idims:-}
+
+  done
+}
+
 calc_coordinates_slow() {
   begin_function
     local row_index=${row_index:-} \
       check_dims="${coordinate_fields[*]}" \
       validated_dims= \
+
+    if [[ $target_form == seed ]]; then
+      prep_seed_dims || fail
+    fi
 
     local total_coord_rows_added=0
     if (( coordinate_rows > 0 )); then
@@ -4125,6 +4139,7 @@ xlr8_get_dim_fields() {
   begin_function
     local field
     dim_fields=
+
     for dim in $*; do
       dim_fields+="
         ${dim_type}_${dim}_aliases
