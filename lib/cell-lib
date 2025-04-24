@@ -108,7 +108,7 @@ write_vars_to_context() {
   local context_type=$context_type vars_to_write=$*
   begin_function_lo
     local var val quoted_val
-    begin_for var in $vars_to_write; doo
+    for var in $vars_to_write; do
       local -n val=$var
       if is_set val; then
         set_to_string val quoted_val
@@ -120,7 +120,7 @@ write_vars_to_context() {
       fi
       local content="$var=$quoted_val"
       write_to_context var content || fail
-    end_for
+    done; maybe_break
   end_function
   handle_return
 }
@@ -387,20 +387,20 @@ load_dna_vtab() {
     local row_offset col_offset data_index array_index current_field_index=0 \
       col_count=$(( ${#array[*]} / field_count )) \
 
-    begin_for (( row_offset = 0; row_offset < ${#array[*]}; row_offset += col_count )); doo
+    for (( row_offset = 0; row_offset < ${#array[*]}; row_offset += col_count )); do
       if [[ "${array[$row_offset]}" != ${fields[$current_field_index]} ]]; then
         log_fatal "Bad data in file $full_path around line $current_field_index"
         fail1
       fi
 
-      begin_for (( col_offset = 1; col_offset < col_count; col_offset++ )); doo
+      for (( col_offset = 1; col_offset < col_count; col_offset++ )); do
         (( array_index = row_offset + col_offset )) || true
         (( data_index = ( col_offset - 1 ) * field_count + current_field_index ))
         data[$data_index]=${array[$array_index]}
-      end_for
+      done
 
       (( current_field_index++ )) || true
-    end_for
+    done; maybe_break
 
   end_function
   handle_return
@@ -614,7 +614,7 @@ build_context_expand_find_members() {
     local branch other_found=f member_paths
     member_paths=$(find1 $seed_path -name "$dim:*" -type d | sort -g) || fail
 
-    begin_for branch in $member_paths; doo
+    for branch in $member_paths; do
       m=${branch##*/*:}
       if [[ $m == all ]]; then
         log_fatal "Should not have an all as a dim member: $branch"
@@ -628,7 +628,7 @@ build_context_expand_find_members() {
         fi
         members+=( "$m" )
       fi
-    end_for
+    done; maybe_break
 
     if [[ "$member_paths" && $other_found == f ]]; then
       has_explicit_member_list=t
@@ -925,12 +925,12 @@ write_coordinates_to_tab_file() {
 
     local line=
 
-    begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
+    for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
       field=${c_fields[$field_index]}
       if [[ " $skip_dims " != *" $field "* ]]; then
         line+="$field "
       fi
-    end_for
+    done
     echo "${line% }" >>$target_file || fail
 
     for (( row_index = 0; row_index < c_rows; row_index++ )); do
@@ -983,7 +983,7 @@ write_coordinates_to_vtab_file() {
 
     local line
 
-    begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
+    for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
       field=${c_fields[$field_index]}
       line=
       if [[ " $skip_dims " != *" $field "* ]]; then
@@ -996,7 +996,7 @@ write_coordinates_to_vtab_file() {
         done
       fi
       echo "${line% }" >>$target_file || fail
-    end_for
+    done; maybe_break
 
   end_function
   handle_return
@@ -1081,7 +1081,7 @@ convert_table_to_dims() {
 
     if (( c_data_count >= c_fields_count * (row_index + 1) )); then
 
-      begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
+      for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
         field=${c_fields[$field_index]}
         get_plural $field fields
 
@@ -1111,7 +1111,7 @@ convert_table_to_dims() {
           ;;
         esac
 
-      end_for
+      done; maybe_break
 
     fi
 
@@ -1839,10 +1839,10 @@ init_dims() {
   local types=${*:-trunk_dims sub_dims} \
     new_value=${new_value:-} vars=${vars:-ddim}
   begin_function
-    begin_for dim_type in $types; doo
+    for dim_type in $types; do
       log_debug "Setting $dim_type ${vars// / s and }s to '$new_value'"
       local -n dims=$dim_type
-      begin_for dim in ${dims[*]:-}; doo
+      for dim in ${dims[*]:-}; do
         local plural
         get_plural $dim
         if [[ " $vars " == *" ddim "* ]]; then
@@ -1853,8 +1853,8 @@ init_dims() {
           local -n sdims=s_$plural sdim=s_$dim
           sdim= sdims=$new_value
         fi
-      end_for
-    end_for
+      done
+    done
   end_function
   handle_return
 }
@@ -1907,7 +1907,7 @@ find_seed_path() {
 
     # go through each seed folder and find matching dim
     local found_branch=t dim_folder
-    begin_while [[ $found_branch == t ]]; doo
+    while [[ $found_branch == t ]]; do
       
       found_branch=f
       dim_folder=$(find1 $s -name "*:*" -type d | head -n1) || fail
@@ -1935,7 +1935,7 @@ find_seed_path() {
 
       fi
 
-    end_while
+    done
 
   end_function
 
@@ -2077,7 +2077,7 @@ load_branch_info() {
     branch_hashes=() \
 
     local c=$cell_path p d m
-    begin_while [[ $c == *:* ]]; doo
+    while [[ $c == *:* ]]; do
       p=${c##*/}
       if [[ $p == *:* ]]; then
 
@@ -2104,7 +2104,7 @@ load_branch_info() {
 
       fi
       c=${c%/*}
-    end_while
+    done
 
     trunk_cell=$c
     branch_dim_count=${#branch_dims[*]}
@@ -2378,16 +2378,21 @@ load_dna_contents_update_cell() {
   handle_return
 }
 
+# inputs:
+#   $1        start_path
+#   long_dim
+# outputs:
+#   dim_path
 get_dim_path() {
 
-  local start_path=$1 lib_dim_path
+  local start_path=$1 lib_dim_path short_dim=${long_dim%%-*}
 
   lib_dim_path=$start_path/.lib/dim
   if [[ -d $lib_dim_path/$long_dim ]]; then
     dim_path=$lib_dim_path/$long_dim
   else
 
-    local shorts=( $lib_dim_path/$dim-* )
+    local shorts=( $lib_dim_path/$short_dim-* )
     if (( ${#shorts[*]} > 1 )); then
       log_fatal "Too many matching dims: ${shorts[*]}, choose one specifically using the longer dim form"
       return 1
@@ -2404,7 +2409,9 @@ get_dim_path() {
 }
 
 # inputs:
+#   $1                long_dim
 #   downstream_dim    optional
+# 
 build_dim_info_single() {
   local long_dim=$1 downstream_dim_row=${downstream_dim_row:-} \
     log_show_vars=long_dim
@@ -2462,7 +2469,7 @@ build_dim_info_single() {
             all_dims[$upstream_dim]=1
             downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
-            build_dim_info_single "$upstream_dim" || fail
+            build_dim_info_single "$upstream_long_dim" || fail
           fi
         end_for
       end_for
@@ -2535,6 +2542,35 @@ build_context_support_dims() {
   handle_return
 }
 
+build_dim_info_expand_group() {
+  local long_dim=$1
+  begin_function_lo
+
+    local dim_path=
+    get_dim_path $cell_path || fail
+
+    if [[ ! "$dim_path" ]]; then
+      log_fatal "Could not find dim $long_dim of $dim_type"
+      fail1
+    fi
+
+    local dim_folders dim_folder
+    dim_folders=$(find1 $dim_path | sort -g) || fail
+
+    for dim_folder in $dim_folders; do
+      local long_dim=${dim_folder##*/}
+      long_dim=${long_dim##+([0-9])-}
+      if [[ $long_dim == _* ]]; then
+        build_dim_info_expand_group $long_dim || fail
+      else
+        new_dim_array+=( $long_dim )
+      fi
+    done
+
+  end_function
+  handle_return
+}
+
 build_dim_info() {
   begin_function
 
@@ -2542,9 +2578,28 @@ build_dim_info() {
     localize_dims=
     localize_reverse_dims=
 
+    local -I trunk_dims sub_dims control_props data_props
+
     begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
 
-      fence_grip
+      local -n dim_array=${dim_type}
+      local new_dim_array=()
+
+      begin_for long_dim in "${dim_array[@]}"; doo
+        if [[ $long_dim == _* ]]; then
+          debug_start
+          build_dim_info_expand_group $long_dim || fail
+        else
+          new_dim_array+=( $long_dim )
+        fi
+      end_for
+
+      dim_array=( ${new_dim_array[*]} )
+
+    end_for
+
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
+
       local -n dim_array=${dim_type}
 
       begin_for long_dim in "${dim_array[@]}"; doo
@@ -2553,7 +2608,6 @@ build_dim_info() {
       end_for
 
     end_for
-    fence_grip
 
     build_context_support_dims || fail
 
@@ -4853,10 +4907,10 @@ load_repo_paths() {
       if [[ -d $repo/seed ]]; then
         local module modules
         modules=$(find1 $repo/seed -not -name '.*' -type d) || fail
-        begin_for module in $modules; doo
+        for module in $modules; do
           module=${module##*/}
           repo_paths[$module]=$repo
-        end_for
+        done
       fi
     end_for
   end_function
@@ -4923,7 +4977,7 @@ make_cyto_reactors() {
   begin_function
     mkdir $reactor_path || fail
     local reactor_name
-    begin_for reactor_name in ${reactors[*]}; doo
+    for reactor_name in ${reactors[*]}; do
       local dep_path=$reactor_path/$reactor_name \
         reactor_var=${reactor_name//-/_}
       local -n path=reactors_${reactor_var}_path
@@ -4936,7 +4990,7 @@ make_cyto_reactors() {
         fail1
       fi
       safe_link $path $dep_path || fail
-    end_for
+    done; maybe_break
   end_function
   handle_return
 }
@@ -5392,7 +5446,7 @@ validate_command_parameters() {
       parameter_required=parameter_required_$type \
 
     if [[ "${parameter_names:-}" ]]; then
-      begin_for (( index = 0; index < ${#parameter_names[*]}; index++ )); doo
+      for (( index = 0; index < ${#parameter_names[*]}; index++ )); do
         name=${parameter_names[$index]}
         required=${parameter_required[$index]}
         local -n parameter_var=$name
@@ -5406,7 +5460,7 @@ validate_command_parameters() {
             break
           done
         fi
-      end_for
+      done; maybe_break
     fi
   end_function
   handle_return
@@ -6471,9 +6525,9 @@ up_delegate() {
 
     local out_item
     out_items=$(find1 $cyto_up_path/chosen -not -name ".*") || fail
-    begin_for out_item in $out_items; doo
+    for out_item in $out_items; do
       safe_link $out_item $cell_path/ || fail
-    end_for
+    done; maybe_break
 
   end_function
   handle_return
@@ -6547,7 +6601,7 @@ execute_auto_loads() {
   local auto_loads=( "$@" )
   begin_function
     local table_name prefix i
-    begin_for item in "${auto_loads[@]}"; doo
+    for item in "${auto_loads[@]}"; do
       case $item in
 # OLD CODE, should remove if not used soon
 #        *.tab)
@@ -6566,7 +6620,7 @@ execute_auto_loads() {
           fail1
         ;;
       esac
-    end_for
+    done
   end_function
   handle_return
 }
