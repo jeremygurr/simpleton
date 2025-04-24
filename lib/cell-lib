@@ -226,6 +226,57 @@ load_arr_to_code() {
   handle_return
 }
 
+load_derive_table_make_index() {
+
+  debug_start
+
+  for (( field_index = 0; field_index < field_count; field_index++ )); do
+
+    field=${derive_table_fields[$field_index]}
+    local -n index=derive_table_${name}_index_${field}
+    if [[ ! -v index[*] ]]; then
+      eval "declare -gA derive_table_${name}_index_${field}=()"
+    fi
+
+    for (( row_index = 0; row_index < row_count; row_index++ )); do
+      (( data_offset = row_index * field_count + field_index ))
+      value=${derive_table_data[$data_offset]}
+      if [[ "$value" ]]; then
+        index[$value]+="$row_index "
+      fi
+    done
+
+  done
+
+}
+
+load_derive_table_card_and_cross() {
+
+  for (( field_index = 0; field_index < field_count; field_index++ )); do
+
+    field=${derive_table_fields[$field_index]}
+    local -n index=derive_table_${name}_index_${field}
+    local card=${#index[*]}
+    if (( card == row_count )); then
+      local -n cross_dim_tables=dim_${field}_cross_dim_tables
+      cross_dim_tables+="$name "
+    fi
+
+    local -n card_table=dim_${field}_card_table
+
+    if [[ -v card_table ]]; then
+      local -n old_index=derive_table_${card_table}_index_${field}
+      local old_card=${#old_index[*]}
+      if (( card > old_card )); then
+        card_table=$name
+      fi
+    else
+      card_table=$name
+    fi
+
+  done
+
+}
 
 # Will load the given derive table if not already loaded
 load_derive_table() {
@@ -247,49 +298,9 @@ load_derive_table() {
     data_count=${#derive_table_data[*]}
     (( row_count = data_count / field_count ))
 
-    for (( field_index = 0; field_index < field_count; field_index++ )); do
-
-      field=${derive_table_fields[$field_index]}
-      local -n index=derive_table_${name}_index_${field}
-      if [[ ! -v index[*] ]]; then
-        eval "declare -gA derive_table_${name}_index_${field}=()"
-      fi
-
-      for (( row_index = 0; row_index < row_count; row_index++ )); do
-        (( data_offset = row_index * field_count + field_index ))
-        value=${derive_table_data[$data_offset]}
-        if [[ "$value" ]]; then
-          index[$value]+="$row_index "
-        fi
-      done
-
-    done
-
+    load_derive_table_make_index
     fence_grip
-
-    for (( field_index = 0; field_index < field_count; field_index++ )); do
-
-      field=${derive_table_fields[$field_index]}
-      local -n index=derive_table_${name}_index_${field}
-      local card=${#index[*]}
-      if (( card == row_count )); then
-        local -n cross_dim_tables=dim_${field}_cross_dim_tables
-        cross_dim_tables+="$name "
-      fi
-
-      local -n card_table=dim_${field}_card_table
-
-      if [[ -v card_table ]]; then
-        local -n old_index=derive_table_${card_table}_index_${field}
-        local old_card=${#old_index[*]}
-        if (( card > old_card )); then
-          card_table=$name
-        fi
-      else
-        card_table=$name
-      fi
-
-    done
+    load_derive_table_card_and_cross
 
   fi
 
