@@ -1296,6 +1296,7 @@ extract_from_derive_table_find_row_indexes() {
         local -n dt_index=derive_table_${derive_table}_index_${field}
         if [[ -v dt_index[$ddim] ]]; then
           row_indexes=( ${dt_index[$ddim]} )
+          clear_set new_matching_rows
           array_to_set row_indexes new_matching_rows
           intersect_with_all matching_rows new_matching_rows matching_rows
         else
@@ -1602,8 +1603,9 @@ attempt_derive2() {
 
           case $action_type in
             tab)
+              local -A value_set
+              value_set[all]=1
               derive_table=$action_name \
-              local value_set=all
               extract_from_derive_table || fail
               set_to_array value_set values
             ;;
@@ -1665,33 +1667,18 @@ attempt_derive() {
     deriving+="$dim "
 
     local resolved_dependencies=()
-    local -A value_set=()
 
     if [[ "${derived_from:-}" ]]; then
       deep=t \
       attempt_derive2 || fail
     fi
 
-    if (( ${#value_set[*]} > 0 )); then
-
-      local new_values=() v
-      for v in "${values[@]}"; do
-        if [[ -v value_set["$v"] ]]; then
-          new_values+=( "$v" )
-          unset value_set["$v"]
-        fi
-      done
-      values=( "${new_values[@]}" )
-      value_found=t
-
-      log_debug "Derive of $dim successful: ${values[*]}"
-
-    elif [[ ! "${values:-}" ]]; then
+    if [[ ! "${values:-}" ]]; then
       log_debug "Derive of $dim failed"
       skip_dims+="$dim "
     else
       value_found=t
-      log_debug "Derive of $dim successful: ${values[*]}"
+      log_debug "Derive of $dim successful: ${values[*]:0:30}"
     fi
 
   end_function
