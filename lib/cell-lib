@@ -248,6 +248,11 @@ make_table_index() {
     field_count=${#table_fields[*]} \
     data_count=${#table_data[*]} \
 
+  if (( field_count == 0 )); then
+    log_warn "Internal warning: make_table_index called on a table with no fields."
+    return 0
+  fi
+
   (( row_count = data_count / field_count ))
 
   for (( field_index = 0; field_index < field_count; field_index++ )); do
@@ -1155,6 +1160,11 @@ convert_table_to_dims() {
 
     local -n c_fields=${table}_fields \
              c_data=${table}_data \
+
+    if [[ ! -v c_fields ]]; then
+      log_warn "Internal warning: convert_table_to_dims run on table with no fields"
+      abort
+    fi
 
     local c_fields_count=${#c_fields[*]} \
 
@@ -3044,9 +3054,11 @@ build_context_trunk() {
       rm $context_path-$context_type.new || fail
     fi
 
-    build_context_gather_derive_tables || fail
-
     build_context_trunk_dna || fail
+
+    if (( ${#all_dims[*]} > 0 )); then
+      build_context_gather_derive_tables || fail
+    fi
 
     if [[ ! -d $status_path ]]; then
       mkdir -p $status_path || fail
@@ -4638,34 +4650,36 @@ build_context() {
     fi
     fence
 
-    if [[ ! -f $context_path-branch-coords ]]; then
+    if [[ "${trunk_dims:-}" ]]; then
+      if [[ ! -f $context_path-branch-coords ]]; then
 
-      local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords \
-        seed_already_expanded=f \
-        clear_existing_coords=t \
+        local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords \
+          seed_already_expanded=f \
+          clear_existing_coords=t \
 
-      if [[ -f $parent_coord_path ]]; then
-        source $parent_coord_path || fail
-        seed_already_expanded=t
-        clear_existing_coords=f
+        if [[ -f $parent_coord_path ]]; then
+          source $parent_coord_path || fail
+          seed_already_expanded=t
+          clear_existing_coords=f
+        fi
+
+        coord_type=branch \
+        target_form=seed \
+        calc_coordinates || fail
+
+        fence
+
+        table=branch_coordinate \
+        make_table_index || fail
+
+        fence
+
+        coord_type=branch \
+        write_coordinates_to_shell_file $context_path-branch-coords || fail
+
+      else
+        source $context_path-branch-coords || fail
       fi
-
-      coord_type=branch \
-      target_form=seed \
-      calc_coordinates || fail
-
-      fence
-
-      table=branch_coordinate \
-      make_table_index || fail
-
-      fence
-
-      coord_type=branch \
-      write_coordinates_to_shell_file $context_path-branch-coords || fail
-
-    else
-      source $context_path-branch-coords || fail
     fi
 
     #  unused at the moment
@@ -5265,7 +5279,7 @@ calc_coords_sub() {
 load_post_context_dynamic_vars() {
   begin_function
 
-    if [[ $cell_is_leaf == t ]]; then
+    if [[ $cell_is_leaf == t && "${trunk_dims:-}" ]]; then
       target_dim_var_type=ddim \
       table=branch_coordinate \
       convert_table_to_dims || fail
