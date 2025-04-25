@@ -228,22 +228,38 @@ load_arr_to_code() {
 
 load_derive_table_make_index() {
 
-  debug_start
+  local values
 
   for (( field_index = 0; field_index < field_count; field_index++ )); do
 
     field=${derive_table_fields[$field_index]}
     local -n index=derive_table_${name}_index_${field}
+
     if [[ ! -v index[*] ]]; then
       eval "declare -gA derive_table_${name}_index_${field}=()"
     fi
 
     for (( row_index = 0; row_index < row_count; row_index++ )); do
+
+      fence_zombie
+
       (( data_offset = row_index * field_count + field_index ))
       value=${derive_table_data[$data_offset]}
-      if [[ "$value" ]]; then
+
+      if [[ -v all_dims[$field] ]]; then
+        values=()
+
+        dim=$field \
+        ignore_problems=t \
+        expand_dim || return 1
+
+        for value in "${values[@]}"; do
+          index[$value]+="$row_index "
+        done
+      else
         index[$value]+="$row_index "
       fi
+
     done
 
   done
@@ -256,6 +272,12 @@ load_derive_table_card_and_cross() {
 
     field=${derive_table_fields[$field_index]}
     local -n index=derive_table_${name}_index_${field}
+
+    if [[ ! -v index[*] ]]; then
+      log_warn "Internal error: index missing from derive_table ${name} field ${field}"
+      continue
+    fi
+
     local card=${#index[*]}
     if (( card == row_count )); then
       local -n cross_dim_tables=dim_${field}_cross_dim_tables
@@ -298,9 +320,9 @@ load_derive_table() {
     data_count=${#derive_table_data[*]}
     (( row_count = data_count / field_count ))
 
-    load_derive_table_make_index
+    load_derive_table_make_index || fail
     fence_grip
-    load_derive_table_card_and_cross
+    load_derive_table_card_and_cross || fail
 
   fi
 
@@ -1132,11 +1154,14 @@ convert_table_to_dims() {
 
 # input: 
 #   dim
-#   $1       name of input var
-#   $2       name of output var
+#   $1               name of input var
+#   $2               name of output var
+#   ignore_problems
 # output: values 
 expand_dim() {
-  local in_var=$1 out_var=$2
+  local in_var=${1:-value} out_var=${2:-values} \
+    ignore_problems=${ignore_problems:-f} \
+
   begin_function_lo
 
     if [[ "${!in_var:-}" && "${!in_var}" != \? ]]; then
@@ -1149,8 +1174,13 @@ expand_dim() {
       local problem
       dim_${dim}_expand $in_var $out_var || fail
       if [[ "${problem:-}" ]]; then
-        log_fatal "$problem"
-        fail1
+        if [[ $ignore_problems == t ]]; then
+          local -n out=$out_var in=$in_var
+          out=( "$in" )
+        else
+          log_fatal "$problem"
+          fail1
+        fi
       fi
 
     fi
@@ -1494,7 +1524,7 @@ attempt_derive2() {
 
         complete_row=t
         local row_array=( $derived_from_row ) i
-        log_debug "Attempting to derive $dim from: ${row_array[*]:1}"
+        log_debug "Attempting to derive $dim from ${row_array[*]:1} using ${row_array[0]}"
 
         maybe_resolved=
         for (( i = 1; i < ${#row_array[*]}; i++ )); do
@@ -1545,6 +1575,7 @@ attempt_derive2() {
 
         if [[ $complete_row == t ]];then
 
+          can_derive=t
           one_row_complete=t
           resolved_dependencies+=( $maybe_resolved )
 
@@ -1615,7 +1646,7 @@ attempt_derive() {
 
   log_show_vars='dim from_dim'
   begin_function_grip
-    local -n derived_from=dim_${dim}_derived_from
+    local -n derived_from=dim_${dim}_derived_from_short
     values=()
     can_derive=f
     value_found=${value_found:-f}
@@ -2461,6 +2492,32 @@ build_dim_info_single() {
 
     prefix=dim_${dim}_ \
     load_dna_contents $dim_path || fail
+
+    local -n derived_from=dim_${dim}_derived_from \
+      derived_from_short=dim_${dim}_derived_from_short \
+
+    local derived_from_row \
+      new_derived_from_row \
+      derived_long_dim \
+      derived_short_dim \
+      first \
+
+    derived_from_short=()
+    for derived_from_row in "${derived_from[@]}"; do
+      new_derived_from_row=
+      first=t
+      for derived_long_dim in $derived_from_row; do
+        if [[ $first == t ]]; then
+          derived_short_dim=$derived_long_dim
+          first=f
+        else
+          derived_short_dim=${derived_long_dim%%-*}
+        fi
+        new_derived_from_row+="$derived_short_dim "
+      done
+      derived_from_short+=( "${new_derived_from_row% }" )
+    done
+    write_vars_to_context dim_${dim}_derived_from_short || fail
 
     local -n is_secret=dim_${dim}_is_secret
     if [[ -v is_secret && $is_secret == t ]]; then
@@ -3808,7 +3865,8 @@ calc_coords_validate_member() {
       stop_after_first_match=t \
       deriving= \
       skip_dims= \
-      from_dim=$dim attempt_derive $rd || fail
+      from_dim=$dim \
+      attempt_derive $rd || fail
 
       if [[ $can_derive == t ]]; then
         if [[ ! "${values:-}" ]]; then
@@ -3910,11 +3968,13 @@ calc_coordinates_next_dim_member() {
 
       if [[ ! "$conflict" ]]; then
         # recursive
-        if [[ $phase == known ]]; then
+        if [[ $phase == known && "$check_dims" ]]; then
           calc_coordinates_next_dim || fail
-        else
+        elif [[ "${new_unknown_dims:-}" ]]; then
           unknown_dims="${new_unknown_dims[*]}" \
           calc_coordinates_next_unknown_dim || fail
+        else
+          calc_coordinates_row_end || fail
         fi
       else
         log_debug "Row skipped because of cross dim conflict"
