@@ -1284,29 +1284,28 @@ extract_from_derive_table_find_row_indexes() {
     row_index_count \
     column_index \
 
+  local -A new_matching_rows
+
   for (( column_index = 0; column_index < field_count; column_index++ )); do
     field=${derive_fields[$column_index]}
-    if [[ $field != $dim ]]; then
+    if [[ $field == $dim ]]; then
+      output_dim_index=$column_index
+    else
       local -n ddim=d_$field
-      if [[ -v ddim ]]; then
+      if [[ "${ddim:-}" ]]; then
         local -n dt_index=derive_table_${derive_table}_index_${field}
-        if [[ -v dt_index["$ddim"] ]]; then
-          row_indexes=( ${dt_index["$ddim"]} )
-          row_index_count=${#row_indexes[*]}
-          if (( row_index_count < best_row_index_count )); then
-            best_row_index_count=$row_index_count
-            best_row_indexes=( ${row_indexes[*]} )
-            if (( best_row_index_count <= 1 )); then
-              # don't need to keep looking
-              break
-            fi
-          fi
+        if [[ -v dt_index[$ddim] ]]; then
+          row_indexes=( ${dt_index[$ddim]} )
+          array_to_set row_indexes new_matching_rows
+          intersect_with_all matching_rows new_matching_rows matching_rows
         else
           # Accoridng to the index, no values exist in this table which match the known dim value
-          values=()
           value_set=()
           abort
         fi
+      else # ddim not defined for this field
+        can_derive=f
+        abort
       fi
     fi
   done
@@ -1379,23 +1378,16 @@ extract_from_derive_table_check_row() {
   handle_return
 }
 
+# if derive table is incomplete, will not change value_set
 # inputs:
-#   value_found
 #   derive_table            name of var of derive table
-#   values                  previously determined values, may be empty if value_found == f
 #   value_set               each valid value
 #   dim                     which field to read from the table
-#   stop_after_first_match  optional
-#   validate_rows           optional
-#   ignore_dims             space separated list of dims to not check
 # outputs:
 #   value_set               the var out_set points to will contain a set of all matches
-#   values                  the var out_arr points to will contain an array of all matches
+#   can_derive
 extract_from_derive_table() {
-  local stop_after_first_match=${stop_after_first_match:-f} \
-    validate_rows=${validate_rows:-t} \
-    ignore_dims=${ignore_dims:-} \
-    derive_table=$derive_table \
+  local derive_table=$derive_table
 
   begin_function_grip
       
@@ -1411,59 +1403,72 @@ extract_from_derive_table() {
       fail1
     fi
 
-    #if ! is_set value_set; then
-    #  log_fatal "Internal error: extract_from_derive_table was called with value_set pointing to a variable that isn't an associative array."
-    #  fail1
-    #fi
-
-    #if [[ ! -v derive_fields ]]; then
-    #  log_fatal "Interal error: Missing ${derive_table}_fields"
-    #  fail1
-    #fi
-
     local field_count=${#derive_fields[*]} \
       data_count=${#derive_data[*]} \
-      strict_matching=${strict_matching:-f} \
-      maybe data_index \
+      data_index \
       value= row_result everything_matches \
       invalid=f \
-      best_row_indexes=() \
       row_index \
+      output_dim_index \
 
-    local best_row_index_count=$(( data_count / field_count ))
+    local row_count=$(( data_count / field_count ))
 
+    debug_start
+
+    local -A matching_rows=() new_value_set=()
+    matching_rows[all]=1
+
+    can_derive=t
     extract_from_derive_table_find_row_indexes
     maybe_break
 
-    for (( data_index = 0; data_index < data_count; data_index += field_count )); do
+    if [[ -v matching_rows[all] ]]; then
+      for (( row_index = 0; row_index < row_count; row_index++ )); do
+        (( data_index = row_index * field_count + output_dim_index ))
+        value=${derive_data[$data_index]}
+        new_value_set[$value]=1
+      done
+    else
+      for row_index in ${!matching_rows[*]}; do
+        (( data_index = row_index * field_count + output_dim_index ))
+        value=${derive_data[$data_index]}
+        new_value_set[$value]=1
+      done
+    fi
 
-      (( row_index = data_index / field_count ))
+    intersect_with_all value_set new_value_set value_set
 
-      if [[ "$best_row_indexes" && " ${best_row_indexes[*]} " != *" $row_index "* ]]; then
-        # Skip row since it doesn't match
-        continue
-      fi
+    #if [[ "${best_row_indexes:-}" ]]; then
+    #  for (( data_index = 0; data_index < data_count; data_index += field_count )); do
 
-      everything_matches=t
+    #    (( row_index = data_index / field_count ))
 
-      extract_from_derive_table_check_row
+    #    if [[ "${best_row_indexes:-}" && " ${best_row_indexes[*]} " != *" $row_index "* ]]; then
+    #      # Skip row since it doesn't match
+    #      continue
+    #    fi
 
-      if [[ $everything_matches == t ]]; then
-        #log_debug "Matching row found"
-        if [[ ! -v value_set["$row_result"] ]]; then
-          value_set["$row_result"]=1
-          values+=( "$row_result" )
-          value_found=t
-        fi
-        if [[ $stop_after_first_match == t ]]; then
-          break
-        fi
-      else
-        #log_debug "No matching row found"
-        :
-      fi
+    #    everything_matches=t
 
-    done
+    #    extract_from_derive_table_check_row
+
+    #    if [[ $everything_matches == t ]]; then
+    #      #log_debug "Matching row found"
+    #      if [[ ! -v value_set["$row_result"] ]]; then
+    #        value_set["$row_result"]=1
+    #        values+=( "$row_result" )
+    #        value_found=t
+    #      fi
+    #      if [[ $stop_after_first_match == t ]]; then
+    #        break
+    #      fi
+    #    else
+    #      #log_debug "No matching row found"
+    #      :
+    #    fi
+
+    #  done
+    #fi
 
     debug_return_vars=values
   end_function
@@ -1510,6 +1515,7 @@ fetch_column_from_table() {
 # outputs:
 #   value_found
 #   values
+#   can_derive
 attempt_derive2() {
   local deep=$deep
   begin_function_lo
@@ -1597,7 +1603,9 @@ attempt_derive2() {
           case $action_type in
             tab)
               derive_table=$action_name \
+              local value_set=all
               extract_from_derive_table || fail
+              set_to_array value_set values
             ;;
             fun)
               function_name=$action_name \
@@ -3364,49 +3372,6 @@ attempt_derive_from_function() {
   return 0
 }
 
-# inputs:
-#   value_found
-#   dim
-#   derive_table
-# outputs:
-#   values
-#   value_found
-# DEPRECATED, use extract_from_derive_table instead
-#  attempt_derive_from_table() {
-#  
-#    local derive_table=$1
-#    begin_function_lo
-#  
-#      local found=f
-#      local -n fields=derive_table_${derive_table}_fields
-#  
-#      #  this should have already been checked before this function was called
-#      #attempt_derive_check_derive_table
-#  
-#      can_derive=t
-#  
-#      out_field=$dim \
-#      out_set=new_values \
-#      extract_from_derive_table || return 1
-#  
-#      if [[ ! "${new_values[*]:-}" ]]; then
-#        log_debug "No derived members found in derive table $derive_table which are valid for this row"
-#        values=()
-#        abort
-#      fi
-#  
-#      if [[ -v old_values[*] && " ${!old_values[*]} " != *" all "* ]]; then
-#        intersect old_values new_values intersected
-#        copy_set intersected old_values
-#      else
-#        copy_set new_values old_values
-#      fi
-#  
-#    end_function
-#    handle_return
-#  
-#  }
-
 # input:
 #   dim
 #   dim_type
@@ -3678,33 +3643,22 @@ calc_coordinates_next_unknown_dim_found() {
       ms=( "$ddim" )
     fi
 
-    if [[ $needs_narrowing == t ]] && (( ${#ms[*]} > 3 )); then
+    if [[ $needs_narrowing == t ]] && (( ${#ms[*]} > 5 )); then
 
       local derive_table 
-      local -A old_values new_values intersected
-      array_to_set ms old_values
+      local -A value_set
+      array_to_set ms value_set
 
       log_debug "Narrowing down possibilities"
 
       local -n dim_derive_tables=dim_${dim}_derive_tables
       begin_for derive_table in ${dim_derive_tables[*]:-}; doo
-
-        out_field=$dim \
-        out_set=new_values \
-        in_set=old_values \
         extract_from_derive_table || fail
-
         log_show_vars=dim
-        fence_grip
-
-        old_values=()
-        add_to_set new_values old_values
-        new_values=()
-
       end_for
 
-      if (( ${#old_values[*]} < ${#ms[*]} )); then
-        ms=( "${!old_values[@]}" )
+      if (( ${#value_set[*]} < ${#ms[*]} )); then
+        set_to_array value_set ms
       fi
 
     fi
@@ -3796,7 +3750,13 @@ calc_coordinates_next_unknown_dim() {
             values=( "${new_values[@]}" )
             already_expanded=t
           else
-            attempt_default $dim || fail
+            if [[ $target_form == seed ]]; then
+              local value=all
+              expand_dim value values || fail
+              already_expanded=t
+            else
+              attempt_default $dim || fail
+            fi
           fi
 
           if [[ "${values:-}" ]]; then
@@ -4049,14 +4009,6 @@ calc_coordinates_next_dim() {
 
       if [[ "${derive_tables_loaded:-}" != t ]]; then
         load_related_derive_tables $dim || fail
-      fi
-
-      if [[ $target_form == seed ]]; then
-        if [[ ! "$member" && ! "$members" ]]; then
-          local value=all
-          expand_dim value values || fail
-          members=( "${values[@]}" )
-        fi
       fi
 
       if [[ "${member:-}" || "${members:-}" ]]; then

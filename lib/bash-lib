@@ -380,34 +380,98 @@ sort_array() {
   IFS=$OIFS
 }
 
+# assumes _intersected is declared as an associative array (local -A ...) and already empty
 intersect() {
+  local old_values_var=$1 new_values_var=$2 intersected_var=$3 v
   local -n _old_values=$1 _new_values=$2 _intersected=$3
-  local v
-  for v in "${!_old_values[@]}"; do
-    if [[ -v _new_values[$v] ]]; then
-      _intersected[$v]=1
+  if [[ $old_values_var == $intersected_var ]]; then
+    for v in "${!_intersected[@]}"; do
+      if [[ ! -v _new_values[$v] ]]; then
+        unset _intersected[$v]
+      fi
+    done
+  elif [[ $new_values_var == $intersected_var ]]; then
+    for v in "${!_intersected[@]}"; do
+      if [[ ! -v _old_values[$v] ]]; then
+        unset _intersected[$v]
+      fi
+    done
+  else
+    for v in "${!_old_values[@]}"; do
+      if [[ -v _new_values[$v] ]]; then
+        _intersected[$v]=1
+      fi
+    done
+  fi
+  debug_return_vars=$intersected_var
+}
+
+# will use 'all' as a special member of either set, which means
+# all members of that set. Intersecting a set with all with another set
+# will return the second set.
+# assumes _intersected is declared as an associative array (local -A ...) and already empty
+# intersected may be the same var as one of the inputs
+intersect_with_all() {
+  local old_values_var=$1 new_values_var=$2 intersected_var=$3 v
+  local -n _old_values=$1 _new_values=$2 _intersected=$3
+  if [[ $old_values_var == $intersected_var ]]; then
+    if [[ -v _old_values[all] ]]; then
+      clear_set $intersected_var
+      add_to_set $new_values_var $intersected_var
+    elif [[ -v _new_values[all] ]]; then
+      : # intersected already holds correct values
+    else
+      for v in "${!_intersected[@]}"; do
+        if [[ ! -v _new_values[$v] ]]; then
+          unset _intersected[$v]
+        fi
+      done
     fi
-  done
+  elif [[ $new_values_var == $intersected_var ]]; then
+    if [[ -v _new_values[all] ]]; then
+      clear_set $intersected_var
+      add_to_set $old_values_var $intersected_var
+    elif [[ -v _old_values[all] ]]; then
+      : # intersected already holds correct values
+    else
+      for v in "${!_intersected[@]}"; do
+        if [[ ! -v _old_values[$v] ]]; then
+          unset _intersected[$v]
+        fi
+      done
+    fi
+  else
+    if [[ -v _old_values[all] ]]; then
+      add_to_set $new_values_var $intersected_var
+    elif [[ -v _new_values[all] ]]; then
+      add_to_set $old_values_var $intersected_var
+    else
+      for v in "${!_old_values[@]}"; do
+        if [[ -v _new_values[$v] ]]; then
+          _intersected[$v]=1
+        fi
+      done
+    fi
+  fi
   debug_return_vars=$3
 }
 
 clear_set() {
   local -n _x=$1
   _x=()
-  #local v
-  #for v in "${!_x[@]}"; do
-  #  unset _x[$v]
-  #done
 }
 
 # will NOT wipe out what's already in target var
 add_to_set() {
   local -n _from=$1 _to=$2
-  local v
-  for v in "${!_from[@]}"; do
-    _to[$v]=1
-  done
-  debug_return_vars=$2
+  local from_var=$1 to_var=$2
+  if [[ $from_var != $to_var ]]; then
+    local v
+    for v in "${!_from[@]}"; do
+      _to[$v]=1
+    done
+  fi
+  debug_return_vars=$to_var
 }
 
 # will NOT wipe out what's already in target var
@@ -538,7 +602,7 @@ copy_map() {
 # inputs:
 #   $1   var name which is a set (associative array) to read from
 #   $2   var name which is an array to write the keys of the set to
-keys_to_array() {
+set_to_array() {
   local -n key_set=$1 out_array=$2
   if [[ -v key_set[*] ]]; then
     if (( ${#key_set[*]} > 0 )); then
