@@ -960,7 +960,7 @@ write_coordinates_to_shell_file() {
       local k v
       for k in "${!table_index[@]}"; do
         v=${table_index[$k]}
-        echo "  ['$k']='$v'" >>$target_file || fail
+        echo "  ['$k']='${v% }'" >>$target_file || fail
       done
 
       echo ")$NL" >>$target_file || fail
@@ -1141,7 +1141,9 @@ get_plural() {
 #   target_dim_var_type    one of: sdims ddims sdim ddim
 # will load nothing if the given row_index doesn't exist in the given table
 convert_table_to_dims() {
-  local table=$table row_index=${row_index:-0} target_dim_var_type=$target_dim_var_type
+  local table=$table row_index=${row_index:-0} \
+    target_dim_var_type=$target_dim_var_type \
+
   begin_function
 
     local field fields field_index values=() count field_count data_offset
@@ -1758,7 +1760,7 @@ fetch_values_from_coordinates2_row() {
 fetch_values_from_coordinates2() {
   begin_function_grip
     
-    local -n table_data=${coord_type}_coordinate_data
+    local -n table_data=${table_var}_data
     local data_count=${#table_data[*]} \
       field_count=${#table_fields[*]} \
       new_values=() \
@@ -2184,8 +2186,9 @@ load_branch_info() {
         fi
         branch_members=( "$m" "${branch_members[@]}" )
 
-        local -n dim_var=d_$d
-        dim_var=$m
+        local -n ddim=d_$d idim=i_$d
+        ddim=$m
+        idim=$m
 
       fi
       c=${c%/*}
@@ -4243,6 +4246,57 @@ xlr8() {
   handle_return
 }
 
+calc_coordinates_refine_get_matching_rows() {
+  local -n derive_fields=${coord_type}_coordinate_fields
+  
+  local column_index \
+    field_count=${#derive_fields[*]} \
+    field \
+    fields \
+    members \
+
+  local -A new_matching_rows
+
+  for (( column_index = 0; column_index < field_count; column_index++ )); do
+
+    field=${derive_fields[$column_index]}
+    get_plural $field fields
+    local -n ddim=d_$field \
+      ddims=d_$fields \
+
+    if [[ "${ddim:-}" ]]; then
+      members=( "$ddim" )
+    elif [[ "${ddims:-}" ]]; then
+      members=( "${ddims[@]}" )
+    else
+      unset members
+    fi
+
+    if [[ -v members ]]; then
+
+      clear_set new_matching_rows
+
+      for member in "${members[@]}"; do
+
+        local -n index=${coord_type}_coordinate_index_${field}
+        if [[ -v index[$member] ]]; then
+          row_indexes=( ${index[$ddim]} )
+          array_to_set row_indexes new_matching_rows
+        else
+          # Accoridng to the index, no values exist in this table which match the known dim value
+          clear_set matching_rows
+          abort
+        fi
+
+      done; maybe_break
+
+      intersect_with_all matching_rows new_matching_rows matching_rows
+
+    fi
+
+  done
+}
+
 # inputs:
 #   check_dims
 #   coordinate_data
@@ -4251,7 +4305,6 @@ xlr8() {
 #   coordinate_fields_count
 calc_coordinates_refine_multi() {
   begin_function_lo
-    front_load=6 progress_bar_start $(( coordinate_rows * coordinate_fields_count ))
 
     local target_dim_var_type
     if [[ $seed_already_expanded == f ]]; then
@@ -4260,21 +4313,35 @@ calc_coordinates_refine_multi() {
       target_dim_var_type=ddim
     fi
 
+    local -A matching_rows
+    matching_rows[all]=1
+    calc_coordinates_refine_get_matching_rows || fail
+
+    if (( ${#matching_rows[*]} == 0 )); then
+      log_fatal "No coordinates are possible given user inputs and base possibility sets of the dimensions of this cell."
+      log_fatal "Adjust your dimension specs to fit this cell."
+      fail1
+    fi
+
+    front_load=6 progress_bar_start ${#matching_rows[*]}
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
+      if [[ -v matching_rows[$row_index] ]]; then
 
-      table=${coord_type}_coordinate \
-      convert_table_to_dims || fail
+        table=${coord_type}_coordinate \
+        convert_table_to_dims || fail
 
-      if [[ $seed_already_expanded == f ]]; then
-        expand_dims $check_dims || fail
+        if [[ $seed_already_expanded == f ]]; then
+          expand_dims $check_dims || fail
+        fi
+
+        calc_coordinates_next_dim || fail
+        progress_bar_next
+        log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
+
       fi
-
-      calc_coordinates_next_dim || fail
-      progress_bar_next
-      log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
-
     end_for
     progress_bar_stop
+
   end_function
   handle_return
 }
@@ -4294,9 +4361,6 @@ prep_seed_dims() {
     ddims=${idims:-}
 
   done
-
-  prev_branch_info_cell= \
-  load_branch_info
 
 }
 
@@ -4382,20 +4446,8 @@ calc_coordinates() {
       coordinate_fields=$coord_prefix${coord_type}_coordinate_fields \
 
     if [[ $clear_existing_coords == t ]]; then
-
-      local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords
-
-      if [[ $target_form == tree && -f $context_path-$coord_type-coords ]]; then
-        source $context_path-$coord_type-coords || fail
-        seed_already_expanded=t
-      elif [[ -f $parent_coord_path ]]; then
-        source $parent_coord_path || fail
-        seed_already_expanded=t
-      else
-        coordinate_data=()
-        setup_coord_fields || fail
-      fi
-
+      coordinate_data=()
+      setup_coord_fields || fail
     fi
 
     if [[ ! "${coordinate_fields:-}" ]]; then
@@ -4554,9 +4606,19 @@ build_context() {
     else
       source $context_path-branch || fail
     fi
-    fence_grip
+    fence
 
     if [[ ! -f $context_path-branch-coords ]]; then
+
+      local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords \
+        seed_already_expanded=f \
+        clear_existing_coords=t \
+
+      if [[ -f $parent_coord_path ]]; then
+        source $parent_coord_path || fail
+        seed_already_expanded=t
+        clear_existing_coords=f
+      fi
 
       coord_type=branch \
       target_form=seed \
@@ -4572,6 +4634,8 @@ build_context() {
       coord_type=branch \
       write_coordinates_to_shell_file $context_path-branch-coords || fail
 
+    else
+      source $context_path-branch-coords || fail
     fi
 
     #  unused at the moment
@@ -5106,6 +5170,8 @@ calc_coords_branch() {
   begin_function
     local coord_type=branch
     if [[ "${branch_coordinate_refined:-}" != t ]]; then
+      seed_already_expanded=t \
+      clear_existing_coords=f \
       calc_coordinates || fail
     fi
   end_function
