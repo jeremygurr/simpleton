@@ -332,6 +332,12 @@ load_derive_table() {
     local -n dtp=derive_table_${name}_path \
       derive_table_fields=derive_table_${name}_fields \
 
+    if [[ ! -v dtp ]]; then
+      debug_start
+      log_fatal "Internal error: Missing derive table path for $name."
+      fail1
+    fi
+
     load_dna_tab $dtp derive_table_$name || fail
 
     local row_count field_count data_count
@@ -1621,7 +1627,7 @@ attempt_derive2() {
             fi
 
           fi
-        done
+        done; maybe_break
 
         if [[ $complete_row == t ]];then
 
@@ -2453,6 +2459,11 @@ load_dna_contents_update_cell() {
     local short_cell
     get_short_cell
 
+    if [[ " ${command_history:-}" == *" update $short_cell "* ]]; then
+      # can't update a cell we are already updating
+      abort
+    fi
+
     needs_update= \
     fork execute_commands "$cell_path" update || fail
 
@@ -2975,9 +2986,29 @@ build_context_gather_derive_tables_single() {
   fi
 
   lib_dt_path=$start_path/.lib/derive-tables
+
   if [[ -d $lib_dt_path ]]; then
-    local dt from_written=f
-    for dt in $(find -L $lib_dt_path -type f -not -name '.*' -name '*.*tab' | sort -g); do
+    local dt from_written=f files links link
+    links=$(find -L $lib_dt_path -type l -not -name '.*' -name '*.*tab' | sort -g) || fail
+    for link in $links; do
+      local real_path=$(realpath -m $link)
+      local real_path_parent=${real_path%/*}
+
+      if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
+        # TODO: build freshness mechanism here to auto-refresh stale data
+        dna_up_files+=( "$link" )
+        if [[ ! -e $real_path ]]; then
+          load_dna_contents_update_cell $real_path || fail
+        fi
+      else
+        log_fatal "Broken link found when trying to gather derive tables: $link"
+        fail1
+      fi
+
+    done
+
+    files=$(find -L $lib_dt_path -type f -not -name '.*' -name '*.*tab' | sort -g) || fail
+    for dt in $files; do
 
       if [[ $from_written == f ]]; then
         echo "$NL# FROM $lib_dt_path" >>$context_path-$context_type.new || fail

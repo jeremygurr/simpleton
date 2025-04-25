@@ -74,6 +74,14 @@ sum2() {
   awk 'k != "" && k != $1 { print k, t; t=0 } { k=$1; t+=$2 } END { print k, t }'
 }
 
+awk1() {
+  awk '{ print $1 }'
+}
+
+awk2() {
+  awk '{ print $2 }'
+}
+
 migrate() {
   local name=$1
   if [[ ! -d .dna || $PWD != /work/* ]]; then
