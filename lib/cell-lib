@@ -2503,6 +2503,9 @@ get_dim_path() {
     local shorts=( $lib_dim_path/$short_dim-* )
     if (( ${#shorts[*]} > 1 )); then
       log_fatal "Too many matching dims: ${shorts[*]}, choose one specifically using the longer dim form"
+      if [[ "${parent_long_dim:-}" ]]; then
+        log_fatal "Check in derived_from.arr of dim $parent_long_dim"
+      fi
       return 1
     fi
 
@@ -2522,7 +2525,9 @@ get_dim_path() {
 # 
 build_dim_info_single() {
   local long_dim=$1 downstream_dim_row=${downstream_dim_row:-} \
-    log_show_vars=long_dim
+    log_show_vars=long_dim \
+    parent_long_dim=${parent_long_dim:-} \
+
   begin_function_grip
 
     local dims dim_path= \
@@ -2540,7 +2545,7 @@ build_dim_info_single() {
 
     get_plural $dim dims
 
-    get_dim_path $cell_path
+    get_dim_path $cell_path || fail
     if [[ ! "$dim_path" ]]; then
       log_fatal "Could not find dim $long_dim in any .lib/dim folders of the parents of $cell_path"
       fail1
@@ -2603,9 +2608,12 @@ build_dim_info_single() {
             all_dims[$upstream_dim]=1
             downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
+            parent_long_dim=$long_dim \
             build_dim_info_single "$upstream_long_dim" || fail
           fi
+        log_show_vars=long_dim
         end_for
+      log_show_vars=long_dim
       end_for
     fi
 
@@ -2624,7 +2632,9 @@ build_dim_info_single() {
 # inputs:
 #   dim_derived_from
 add_derived_to_support_dims() {
-  local derived_from long_dim short_dim row OIFS=$IFS
+  local derived_from long_dim short_dim row OIFS=$IFS \
+    parent_long_dim=${parent_long_dim:-} \
+
   for row in "${dim_derived_from[@]}"; do
     local is_first=t
     for long_dim in $row; do
@@ -2646,12 +2656,13 @@ add_derived_to_support_dims() {
         short_dim=${long_dim%%-*}
         local -n dim_derived_from=dim_${short_dim}_derived_from
         if [[ -v dim_derived_from ]]; then
+          parent_long_dim=$long_dim \
           add_derived_to_support_dims || fail
         fi
 
       fi
 
-    done
+    done; maybe_break
   done
 }
 
