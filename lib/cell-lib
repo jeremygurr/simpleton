@@ -368,7 +368,7 @@ load_derive_table() {
 #   $2   name of derive table
 add_derive_table() {
   local derive_path=$1 name=${2:-}
-  begin_function_lo
+  begin_function_grip
 
     local fields name
     fields=$(head -n1 $derive_path)
@@ -2632,38 +2632,46 @@ build_dim_info_single() {
 # inputs:
 #   dim_derived_from
 add_derived_to_support_dims() {
-  local derived_from long_dim short_dim row OIFS=$IFS \
-    parent_long_dim=${parent_long_dim:-} \
+  begin_function_grip
 
-  for row in "${dim_derived_from[@]}"; do
-    local is_first=t
-    for long_dim in $row; do
+    local derived_from long_dim short_dim row OIFS=$IFS \
+      parent_long_dim=${parent_long_dim:-} \
 
-      if [[ $is_first == t ]]; then
-        # skip the action part
-        is_first=f
-        continue
-      fi
+    for row in "${dim_derived_from[@]}"; do
+      local is_first=t
+      for long_dim in $row; do
 
-      if ! array_contains trunk_dims $long_dim \
-        && ! array_contains support_dims $long_dim; then
-
-        downstream_dim_row= \
-        build_dim_info_single "$long_dim" || fail
-
-        support_dims+=( $long_dim )
-
-        short_dim=${long_dim%%-*}
-        local -n dim_derived_from=dim_${short_dim}_derived_from
-        if [[ -v dim_derived_from ]]; then
-          parent_long_dim=$long_dim \
-          add_derived_to_support_dims || fail
+        if [[ $is_first == t ]]; then
+          # skip the action part
+          is_first=f
+          continue
         fi
 
-      fi
+        if ! array_contains trunk_dims $long_dim \
+          && ! array_contains support_dims $long_dim; then
 
-    done; maybe_break
-  done
+          downstream_dim_row= \
+          build_dim_info_single "$long_dim" || fail
+
+          # perplexing why we need this here, but after too much debugging, this was the simplest solution
+          unfail
+
+          support_dims+=( $long_dim )
+
+          short_dim=${long_dim%%-*}
+          local -n dim_derived_from=dim_${short_dim}_derived_from
+          if [[ -v dim_derived_from ]]; then
+            parent_long_dim=$long_dim \
+            add_derived_to_support_dims || fail
+          fi
+
+        fi
+
+      done; maybe_break
+    done
+
+  end_function
+  handle_return
 }
 
 build_context_support_dims() {
@@ -3001,50 +3009,53 @@ build_context_trunk_dna() {
 
 build_context_gather_derive_tables_single() {
   local start_path=$1 lib_dim_path
+  begin_function_grip
 
-  if [[ $start_path == /*/*/* ]]; then
-    build_context_gather_derive_tables_single ${start_path%/*}
-  fi
+    if [[ $start_path == /*/*/* ]]; then
+      build_context_gather_derive_tables_single ${start_path%/*}
+    fi
 
-  lib_dt_path=$start_path/.lib/derive-tables
+    lib_dt_path=$start_path/.lib/derive-tables
 
-  if [[ -d $lib_dt_path ]]; then
-    local dt from_written=f files links link
-    links=$(find -L $lib_dt_path -type l -not -name '.*' -name '*.*tab' | sort -g) || fail
-    for link in $links; do
-      local real_path=$(realpath -m $link)
-      local real_path_parent=${real_path%/*}
+    if [[ -d $lib_dt_path ]]; then
+      local dt from_written=f files links link
+      links=$(find -L $lib_dt_path -type l -not -name '.*' -name '*.*tab' | sort -g) || fail
+      for link in $links; do
+        local real_path=$(realpath -m $link)
+        local real_path_parent=${real_path%/*}
 
-      if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
-        # TODO: build freshness mechanism here to auto-refresh stale data
-        dna_up_files+=( "$link" )
-        if [[ ! -e $real_path ]]; then
-          load_dna_contents_update_cell $real_path || fail
+        if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
+          # TODO: build freshness mechanism here to auto-refresh stale data
+          dna_up_files+=( "$link" )
+          if [[ ! -e $real_path ]]; then
+            load_dna_contents_update_cell $real_path || fail
+          fi
+        else
+          log_fatal "Broken link found when trying to gather derive tables: $link"
+          fail1
         fi
-      else
-        log_fatal "Broken link found when trying to gather derive tables: $link"
-        fail1
-      fi
 
-    done
+      done
 
-    files=$(find -L $lib_dt_path -type f -not -name '.*' -name '*.*tab' | sort -g) || fail
-    for dt in $files; do
+      files=$(find -L $lib_dt_path -type f -not -name '.*' -name '*.*tab' | sort -g) || fail
+      for dt in $files; do
 
-      if [[ $from_written == f ]]; then
-        echo "$NL# FROM $lib_dt_path" >>$context_path-$context_type.new || fail
-        from_written=t
-      fi
+        if [[ $from_written == f ]]; then
+          echo "$NL# FROM $lib_dt_path" >>$context_path-$context_type.new || fail
+          from_written=t
+        fi
 
-      add_derive_table $dt || fail
+        add_derive_table $dt || fail
 
-    done
-  fi
+      done
+    fi
 
+  end_function
+  handle_return
 }
 
 build_context_gather_derive_tables() {
-  begin_function_lo
+  begin_function_grip
 
     derive_tables=()
     build_context_gather_derive_tables_single $cell_path || fail
