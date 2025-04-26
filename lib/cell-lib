@@ -343,6 +343,21 @@ load_derive_table() {
       fail1
     fi
 
+    if [[ -L $dtp && ! -f $dtp ]]; then
+      local real_path=$(realpath -m $dtp)
+      local real_path_parent=${real_path%/*}
+
+      if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
+        # TODO: build freshness mechanism here to auto-refresh stale data
+        if [[ ! -e $real_path ]]; then
+          load_dna_contents_update_cell $real_path || fail
+        fi
+      else
+        log_fatal "Broken link found when trying to gather derive tables: $link"
+        fail1
+      fi
+    fi
+
     load_dna_tab $dtp derive_table_$name || fail
 
     local row_count field_count data_count
@@ -370,29 +385,29 @@ add_derive_table() {
   local derive_path=$1 name=${2:-}
   begin_function_grip
 
-    local fields name
-    fields=$(head -n1 $derive_path)
-    if [[ ! "$name" ]]; then
-      name=${derive_path##*/}
-      name=${name%.*tab}
-      name=${name//-/_}
-    fi
+    #local fields name
+    #fields=$(head -n1 $derive_path)
+    #if [[ ! "$name" ]]; then
+    #  name=${derive_path##*/}
+    #  name=${name%.*tab}
+    #  name=${name//-/_}
+    #fi
 
     derive_tables+=( $name )
 
-    local -n derive_table_fields=derive_table_${name}_fields
-    derive_table_fields=( $fields )
+    #local -n derive_table_fields=derive_table_${name}_fields
+    #derive_table_fields=( $fields )
 
     local -n dtp=derive_table_${name}_path
     dtp=$derive_path
 
-    write_vars_to_context derive_table_${name}_fields derive_table_${name}_path || fail
+    write_vars_to_context derive_table_${name}_path || fail
 
-    local field
-    for field in $fields; do
-      local -n ddt=dim_${field}_derive_tables
-      ddt+="$name "
-    done
+    #local field
+    #for field in $fields; do
+    #  local -n ddt=dim_${field}_derive_tables
+    #  ddt+="$name "
+    #done
 
   end_function
   handle_return
@@ -2593,11 +2608,6 @@ build_dim_info_single() {
       add_word_to_string secret_vars "$dim $dims s_$dim s_$dims d_$dim d_$dims"
     fi
 
-    local -n expand_function=dim_${dim}_expand
-    if ! function_exists expand_function; then
-      build_context_expand || fail
-    fi
-
     local -n dim_dim_type=dim_${dim}_type
     dim_dim_type=$dim_type
 
@@ -2950,6 +2960,69 @@ load_parent_context() {
   handle_return
 }
 
+build_dim_expand_functions() {
+  begin_function_lo
+    local dim
+    for dim in ${!all_dims[*]}; do
+      local -n expand_function=dim_${dim}_expand
+      if ! function_exists expand_function; then
+        build_context_expand || fail
+      fi
+    done; maybe_break
+  end_function
+  handle_return
+}
+
+load_dim_derive_tables() {
+  begin_function_lo
+    local dim \
+      derived_from_row \
+      derived_short_dim \
+      dims_to_add \
+      dim_to_add \
+      action \
+      action_type \
+      table
+
+    for dim in ${!all_dims[*]}; do
+      local -n derived_from_short=dim_${dim}_derived_from_short
+
+      for derived_from_row in "${derived_from_short[@]}"; do
+debug_start
+        first=t
+        dims_to_add=
+        for derived_short_dim in $derived_from_row; do
+          if [[ $first == t ]]; then
+            action=$derived_short_dim
+            action_type=${action##*.}
+            if [[ $action_type != tab ]]; then
+              continue 2
+            fi
+            table=${action%.*}
+            first=f
+          else
+            dims_to_add+="$derived_short_dim "
+          fi
+        done
+
+        for dim_to_add in $dims_to_add; do
+          local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
+          dim_derive_tables+="$table "
+        done
+
+      done
+    done
+
+    for dim in ${!all_dims[*]}; do
+      if [[ -v dim_${dim}_derive_tables ]]; then
+        write_vars_to_context dim_${dim}_derive_tables || fail
+      fi
+    done
+
+  end_function
+  handle_return
+}
+
 build_context_trunk_dna() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
@@ -2975,6 +3048,9 @@ build_context_trunk_dna() {
 
       build_dim_info || fail
       fence
+
+      load_dim_derive_tables || fail
+      build_dim_expand_functions || fail
 
       write_vars_to_context auto_loads || fail
 
@@ -3023,17 +3099,15 @@ build_context_gather_derive_tables_single() {
 
     if [[ -d $lib_dt_path ]]; then
       local dt from_written=f files links link
+
       links=$(find -L $lib_dt_path -type l -not -name '.*' -name '*.*tab' | sort -g) || fail
       for link in $links; do
+
         local real_path=$(realpath -m $link)
         local real_path_parent=${real_path%/*}
 
         if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
-          # TODO: build freshness mechanism here to auto-refresh stale data
           dna_up_files+=( "$link" )
-          if [[ ! -e $real_path ]]; then
-            load_dna_contents_update_cell $real_path || fail
-          fi
         else
           log_fatal "Broken link found when trying to gather derive tables: $link"
           fail1
@@ -3312,21 +3386,20 @@ setup_coord_fields() {
       ;;
     esac
 
-    #  Not sure if this is correct
-    #if [[ $target_form == seed ]]; then
+    if [[ $target_form == seed ]]; then
 
-    #  local new_fields=() dim
+      local new_fields=() dim
 
-    #  for dim in ${coordinate_fields[*]}; do
-    #    local -n member_type=dim_${dim}_member_type
-    #    if [[ $member_type == static ]]; then
-    #      new_fields+=( $dim )
-    #    fi
-    #  done
+      for dim in ${coordinate_fields[*]}; do
+        local -n member_type=dim_${dim}_member_type
+        if [[ $member_type == static ]]; then
+          new_fields+=( $dim )
+        fi
+      done
 
-    #  coordinate_fields=( ${new_fields[*]} )
+      coordinate_fields=( ${new_fields[*]} )
 
-    #fi
+    fi
 
     coordinate_fields_count=${#coordinate_fields[*]}
 
@@ -3399,6 +3472,11 @@ seed_coordinates() {
           localize_dims+=" d_$f d_$p"
         fi
       done
+    fi
+
+    if (( coordinate_fields_count <= 1 )); then
+      log_debug "Too few fields found ($coordinate_fields_count) to generate useful coords"
+      abort
     fi
 
     local field_index seed_field seed_data_index \
@@ -4523,6 +4601,12 @@ calc_coordinates() {
     fi
 
     if [[ ! "${coordinate_fields:-}" ]]; then
+      local -n refined=${coord_type}_coordinate_refined
+      if [[ $target_form == seed ]]; then
+        refined=f
+      else
+        refined=t
+      fi
       abort
     fi
 
@@ -4531,7 +4615,14 @@ calc_coordinates() {
     coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
     unknown_dims= resolved_dims=
 
-    if [[ ! "${coordinate_fields:-}" ]]; then
+    if (( coordinate_fields_count <= 1 )); then
+      log_debug "Too few fields found ($coordinate_fields_count) to generate useful coords"
+      local -n refined=${coord_type}_coordinate_refined
+      if [[ $target_form == seed ]]; then
+        refined=f
+      else
+        refined=t
+      fi
       abort
     fi
 
