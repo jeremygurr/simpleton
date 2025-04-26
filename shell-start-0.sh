@@ -110,6 +110,16 @@ migrate() {
   esac
 }
 
+find_dna_work_cells_from_lib() {
+  local dir=$1
+  if [[ $dir == /*/*/* ]]; then
+    find_dna_work_cells_from_lib "${dir%/*}" || return 1
+  fi
+  if [[ -d $dir/.lib/derive-tables ]]; then
+    find_dna_work_cells "$dir/.lib/derive-tables" || return 1
+  fi
+}
+
 find_dna_work_cells() {
   local dir=$1 possibility only_one=${only_one:-f}
   local possibilities=$(find $dir/* -name ".*" -prune -o '(' -type l -print ')')
@@ -198,6 +208,7 @@ walk() {
         path=$current_selection/.dna
         local work_cells=
         only_one=t find_dna_work_cells $path
+        only_one=t find_dna_work_cells_from_lib $current_selection
         if [[ "${work_cells}" ]]; then
           walk_add_choice "U" "$path" "dna upstream cells"
         fi
@@ -227,6 +238,7 @@ walk() {
       elif [[ ${current_selection##*/} == .dna ]]; then
         local work_cells= work_cell pw possibility
         find_dna_work_cells $current_selection || return 1
+        find_dna_work_cells_from_lib $current_selection || return 1
         for pw in $work_cells; do
           possibility=${pw%,,,*}
           possibility=${possibility#$current_selection/}
