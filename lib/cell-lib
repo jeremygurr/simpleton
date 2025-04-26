@@ -1666,6 +1666,10 @@ attempt_derive2() {
               value_set[all]=1
               derive_table=$action_name \
               extract_from_derive_table || fail
+              if [[ -v value_set[all] ]]; then
+                log_fatal "Internal error: derive of $dim from table ($action_name) didn't produce any results when it was expected. "
+                fail1
+              fi
               set_to_array value_set values
             ;;
             fun)
@@ -2219,7 +2223,7 @@ load_branch_info() {
     fi
 
     if [[ "${branch_dims:-}" ]]; then
-      log_debug "Branch dims found: ${branch_dims[*]}" || fail
+      log_debug "Branch dims found: ${branch_dims[*]}"
     fi
 
     local x y dim_string= 
@@ -2278,7 +2282,7 @@ execute_command() {
       ;;
     esac
 
-    strong_log=t log_verbose "Executing cell command: $short_cell $cell_command" || fail
+    strong_log=t log_verbose "Executing cell command: $short_cell $cell_command"
 
     if [[ $command_requires_cell == t ]]; then
       if [[ ! -e "$cell_path" ]]; then
@@ -2302,7 +2306,7 @@ execute_command() {
     #fi
 
     if [[ $disable_log == t ]]; then
-      #log_debug "Logging disabled." || fail
+      #log_debug "Logging disabled."
       :
     else
       execute_command_log_prep || fail
@@ -2402,7 +2406,7 @@ execute_commands() {
         source $cell_command_path.info || fail
         handle_questions || fail
       else
-        log_warn "Missing file $cell_command_path.info" || fail
+        log_warn "Missing file $cell_command_path.info"
       fi
 
       if [[ ! -d $cell_path/.dna && $command_requires_cell == t ]]; then
@@ -3012,7 +3016,7 @@ build_context_gather_derive_tables_single() {
   begin_function_grip
 
     if [[ $start_path == /*/*/* ]]; then
-      build_context_gather_derive_tables_single ${start_path%/*}
+      build_context_gather_derive_tables_single ${start_path%/*} || fail
     fi
 
     lib_dt_path=$start_path/.lib/derive-tables
@@ -3035,7 +3039,7 @@ build_context_gather_derive_tables_single() {
           fail1
         fi
 
-      done
+      done; maybe_break
 
       files=$(find -L $lib_dt_path -type f -not -name '.*' -name '*.*tab' | sort -g) || fail
       for dt in $files; do
@@ -3047,7 +3051,7 @@ build_context_gather_derive_tables_single() {
 
         add_derive_table $dt || fail
 
-      done
+      done; maybe_break
     fi
 
   end_function
@@ -3070,7 +3074,7 @@ build_context_trunk() {
 
     local context_type=trunk last_type=var \
 
-    log_debug "Building trunk context for $short_cell" || fail
+    log_debug "Building trunk context for $short_cell"
 
     if [[ -e $context_path-$context_type.new ]]; then
       rm $context_path-$context_type.new || fail
@@ -3099,7 +3103,7 @@ build_context_branch() {
   begin_function
 
     local context_type=branch last_type=var
-    log_debug "Building branch context for $short_cell" || fail
+    log_debug "Building branch context for $short_cell"
 
     if [[ -e $context_path-$context_type.new ]]; then
       rm $context_path-$context_type.new || fail
@@ -4444,7 +4448,11 @@ calc_coordinates_slow() {
       calc_coordinates_refine_multi || fail
     else
       # it is assumed that dims are already expanded before this point, and so ddims will be used
-      log_debug "Calculating $coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+      local extra=
+      if [[ $target_form == seed ]]; then
+        extra="seed of "
+      fi
+      log_debug "Calculating $extra$coord_type cell coordinates for dims: ${coordinate_fields[*]}"
       front_load=6 progress_bar_start $coordinate_fields_count
       calc_coordinates_next_dim || fail
       progress_bar_stop
@@ -4594,7 +4602,7 @@ calc_coordinates() {
 build_context_leaf() {
   begin_function
     local context_type=leaf last_type=var
-    log_debug "Building leaf context for $cell_path" || fail
+    log_debug "Building leaf context for $cell_path"
 
     if [[ -e $context_path-$context_type.new ]]; then
       rm $context_path-$context_type.new || fail
@@ -4807,12 +4815,12 @@ parallel_loop() {
     fi
 
     if (( size > 1 )); then
-      log_debug "Looping over $size values$extra. body: $body2" || fail
+      log_debug "Looping over $size values$extra. body: $body2"
     fi
 
     begin_for value in "${array[@]}"; doo
 
-      log_debug "Current iteration value=$value" || fail
+      log_debug "Current iteration value=$value"
 
       if [[ "$head2" ]]; then
         eval "$head2" || fail
@@ -4974,7 +4982,7 @@ plant_seed_internal() {
 
     if [[ ! -d $to ]]; then
 
-      log_verbose "Planting seed from $from to $to" || fail
+      log_verbose "Planting seed from $from to $to"
 
       if [[ $from == /seed/* && -d $from ]]; then
         plant_seed_internal ${from%/*} ${to%/*} || fail
@@ -5497,7 +5505,7 @@ switch_context() {
     handle_return
 
   else
-    log_debug "Context already loaded: $short_cell" || fail
+    log_debug "Context already loaded: $short_cell"
   fi
 
   return 0
@@ -5769,6 +5777,7 @@ after_fork() {
         debug_immediate=f \
         first_run=f \
         debugging=f \
+        debug_skip_breakpoints=f \
         debug_start
 
       fi
@@ -5895,10 +5904,10 @@ reply_file=
 wait_for_sub_processes() {
   begin_function
     if [[ "$processes" ]]; then
-      log_debug "Waiting for sub processes to complete" || fail
+      log_debug "Waiting for sub processes to complete"
       local process last_err_code= last_failed_process= rc
       for process in $processes; do
-        log_debug "Waiting for process $process" || fail
+        log_debug "Waiting for process $process"
         wait $process &>/dev/null; rc=$?
         if [[ $rc -gt 0 && $rc -lt 127 ]]; then
           if [[ ! "$last_err_code" ]]; then
@@ -5984,7 +5993,7 @@ handle_return
 
     if [[ $missing == t ]]; then
       if [[ $ignore_missing == t ]]; then
-        log_debug "No ${op_name}_op function found, ignoring" || fail
+        log_debug "No ${op_name}_op function found, ignoring"
       else
         log_fatal "No ${op_name}_op function found"
         fail1
@@ -6097,7 +6106,7 @@ encrypt_file_with_shared_key() {
     key_path=$key_path \
     user_private_key=${user_private_key:-~/.ssh/id_rsa}
 
-  log_debug "Encrypting $from to $to" || fail
+  log_debug "Encrypting $from to $to"
 
   local log_vars='from to'
   begin_function_hi
@@ -6143,7 +6152,7 @@ encrypt_file_with_shared_key() {
 
       else
 
-        log_debug "There are no keys for this cell yet. Will create a new key." || fail
+        log_debug "There are no keys for this cell yet. Will create a new key."
 
         # create a new main key
         if ! out_to_file=$tmp_path/main log_and_run openssl rand -base64 40; then
@@ -6224,7 +6233,7 @@ handle_secure_edit() {
       if files_are_different $old_unsafe_file $new_unsafe_file >/dev/null; then
         changed=t
       else
-        log_debug "No change" || fail
+        log_debug "No change"
         rm $new_unsafe_file || fail
       fi
     else
@@ -6260,7 +6269,7 @@ handle_insecure_edit() {
       if files_are_different $old_file $new_file >/dev/null; then
         changed=t
       else
-        log_debug "No change" || fail
+        log_debug "No change"
         rm $new_file || fail
       fi
     else
