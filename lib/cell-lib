@@ -3536,8 +3536,6 @@ show_trace_dim_message() {
 attempt_derive_from_function() {
   local function_name=$function_name
   if function_exists dim_${dim}_$function_name; then
-    #log_debug "Trying derive function ${dim_type}_${dim}_$function_name"
-
     # This should be set to t in the derive function if requirements are met
     can_derive=f
 
@@ -3559,7 +3557,7 @@ attempt_derive_from_function() {
 read_dim() {
   local -n target=$1
   begin_function_lo
-    local -n is_secret=${dim_type}_${dim}_is_secret
+    local -n is_secret=dim_${dim}_is_secret
     while true; do
       if [[ "${is_secret:-f}" == t ]]; then
         read -u $fd_original_in -p "(? for more info) $dim=" -rs values >&$fd_original_err || fail
@@ -3595,27 +3593,27 @@ attempt_default() {
     local problem
     local -n dim_type=dim_${dim}_type
 
-    if function_exists ${dim_type}_${dim}_default; then
-      ${dim_type}_${dim}_default || fail
+    if function_exists dim_${dim}_default; then
+      dim_${dim}_default || fail
 
       if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
         var=values \
-        show_trace_dim_message "Default value taken from default function: ${dim_type}_${dim}_default"
+        show_trace_dim_message "Default value taken from default function: dim_${dim}_default"
       fi
 
     fi
 
-    if [[ ! "${values:-}" ]] && function_exists ${dim_type}_${dim}_expand; then
-      value= ${dim_type}_${dim}_expand || fail
+    if [[ ! "${values:-}" ]] && function_exists dim_${dim}_expand; then
+      value= dim_${dim}_expand || fail
       already_expanded=t
 
       if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
-        if [[ -v ${dim_type}_${dim}_default ]]; then
+        if [[ -v dim_${dim}_default ]]; then
           var=values \
-          show_trace_dim_message "Default value taken from default value: ${dim_type}_${dim}_default"
+          show_trace_dim_message "Default value taken from default value: dim_${dim}_default"
         else
           var=values \
-          show_trace_dim_message "Default value taken from expand function: ${dim_type}_${dim}_expand"
+          show_trace_dim_message "Default value taken from expand function: dim_${dim}_expand"
         fi
       fi
 
@@ -3812,7 +3810,7 @@ calc_coordinates_next_unknown_dim_found() {
       ddims=( "${values[@]}" )
     fi
 
-    local new_unknown_dims=( ${unknown_dims[*]:$((dim_index+1))} ${unknown_dims[*]:0:$dim_index} )
+    local unknown_dims=( ${unknown_dims[*]:$((dim_index+1))} ${unknown_dims[*]:0:$dim_index} )
 
     local member ms
     if [[ "${ddims:-}" ]]; then
@@ -4094,7 +4092,7 @@ calc_coordinates_next_dim_member() {
         local d
         for d in $validated_dims; do
           if [[ $phase == unknown ]]; then
-            remove_array_element new_unknown_dims $d
+            remove_array_element unknown_dims $d
           else
             remove_word_from_string check_dims $d
           fi
@@ -4105,11 +4103,11 @@ calc_coordinates_next_dim_member() {
       validated_dims=
 
       if [[ ! "$conflict" ]]; then
-        unknown_dims="${new_unknown_dims[*]}"
-        # recursive
         if [[ $phase == known && "$check_dims" ]]; then
+          # recursive
           calc_coordinates_next_dim || fail
-        elif [[ "${new_unknown_dims:-}" ]]; then
+        elif [[ "${unknown_dims:-}" ]]; then
+          # recursive
           calc_coordinates_next_unknown_dim || fail
         else
           calc_coordinates_row_end || fail
@@ -4550,8 +4548,8 @@ xlr8_get_dim_fields() {
 
     for dim in $*; do
       dim_fields+="
-        ${dim_type}_${dim}_aliases
-        ${dim_type}_${dim}_members
+        dim_${dim}_aliases
+        dim_${dim}_members
         "
     done
   end_function
@@ -4795,8 +4793,10 @@ build_context() {
 
         fence
 
-        coord_type=branch \
-        write_coordinates_to_shell_file $context_path-branch-coords || fail
+        if [[ "${branch_coordinate_data:-}" ]]; then
+          coord_type=branch \
+          write_coordinates_to_shell_file $context_path-branch-coords || fail
+        fi
 
       else
         source $context_path-branch-coords || fail
@@ -4987,14 +4987,12 @@ for_each_member_multi() {
 #   function=function to execute for each member
 #   fork=whether the process should be forked before executing 
 #     the function. (optional)
-#   get_members_from
 for_each_member() {
   local dim=$1 \
     function=$function leave_loop=${leave_loop:-0} \
     fork=${fork:-t} \
     par=${par:-t} \
     cell_path=${cell_path:-} \
-    get_members_from=${get_members_from:-coords}
 
   local log_vars='fork par' \
     log_show_vars='dim function'
@@ -5003,23 +5001,17 @@ for_each_member() {
     local dims values=() member_count=0
     get_plural $dim dims
 
-    case $get_members_from in
-      coords)
-        coord_type=branch \
-        fetch_values_from_coordinates $dim || fail
-      ;;
-      existing_dims)
-        local -n dims_members=d_$dims dim_members=d_$dim
-        values=( "${dims_members[@]:-${dim_members[@]:-}}" )
-      ;;
-      existing_branches)
-        get_members_from_branches || fail
-      ;;
-      *)
-        log_fatal "Internal error: invalid get_members_from value: $get_members_from"
-        fail1
-      ;; 
-    esac
+    local -n coord_fields=branch_coordinate_fields \
+        dims_members=d_$dims dim_members=d_$dim \
+
+    if [[ -v coord_fields && " ${coord_fields[*]} " == *" $dim "* ]]; then
+      coord_type=branch \
+      fetch_values_from_coordinates $dim || fail
+    elif [[ "${dim_member:-}" ]]; then
+      values=( "$dim_member" )
+    elif [[ "${dim_members:-}" ]]; then
+      values=( "${dim_members[@]}" )
+    fi
 
     member_count=${#values[*]}
 
@@ -5335,9 +5327,13 @@ calc_coords_branch() {
   begin_function
     local coord_type=branch
     if [[ "${branch_coordinate_refined:-}" != t ]]; then
-      seed_already_expanded=t \
-      clear_existing_coords=f \
-      calc_coordinates || fail
+      if [[ -v branch_coordinate_data ]]; then
+        seed_already_expanded=t \
+        clear_existing_coords=f \
+        calc_coordinates || fail
+      else
+        calc_coordinates || fail
+      fi
     fi
   end_function
   handle_return
