@@ -787,7 +787,11 @@ build_context_expand_members_derive() {
       local -n dt=dim_${dim}_card_table
     ;;&
     all)
-      get_all_values_from_derive_table \$dt _out || fail
+      if [[ -v dt ]]; then
+        get_all_values_from_derive_table \$dt _out || { problem=\"Failed to get values from derive table \$dt\"; }
+      else
+        problem=\"No members defined for $dim, can't expand 'all'\"
+      fi
     ;;
     *)
       if [[ -v dt ]] && ! value_exists_in_derive_table \$dt \"\$value\"; then
@@ -1371,11 +1375,19 @@ extract_from_derive_table_find_row_indexes() {
 
         if (( ${#new_matching_rows[*]} == 0 )); then
           # Accoridng to the index, no values exist in this table which match the known dim value
+          log_debug "No rows exist in $derive_table for $dim = $ddim"
           value_set=()
           abort
         fi
 
         intersect_with_all matching_rows new_matching_rows matching_rows
+
+        if (( ${#matching_rows[*]} == 0 )); then
+          # Accoridng to the index, no values exist in this table which match the known dim value
+          log_debug "Couldn't find any rows in $derive_table which match all existing dims (last checked: $field = $ddim)"
+          value_set=()
+          abort
+        fi
 
       else # ddim not defined for this field
         #can_derive=f
@@ -1656,15 +1668,19 @@ attempt_derive2() {
               local rows_matched
               derive_table=$action_name \
               extract_from_derive_table || fail
-              if (( rows_matched == 0 )); then
-                log_fatal "Internal error: derive of $dim from table ($action_name) didn't produce any results when it was expected. "
-                fail1
-              fi
 
-              if [[ -v value_set[all] ]]; then
-                value=all expand_dim || fail
+              if (( rows_matched == 0 )); then
+                #log_fatal "Internal error: Derive of $dim from table ($action_name) didn't produce any results when it was expected. "
+                #fail1
+
+                # We can skip this row
+                log_debug "Derive of $dim from table ($action_name) didn't produce any results"
               else
-                set_to_array value_set values
+                if [[ -v value_set[all] ]]; then
+                  value=all expand_dim || fail
+                else
+                  set_to_array value_set values
+                fi
               fi
 
             ;;
@@ -2504,6 +2520,7 @@ get_dim_path() {
     local shorts=( $lib_dim_path/$short_dim-* )
     if (( ${#shorts[*]} > 1 )); then
       log_fatal "Too many matching dims: ${shorts[*]}, choose one specifically using the longer dim form"
+      debug_start
       if [[ "${parent_long_dim:-}" ]]; then
         log_fatal "Check in derived_from.arr of dim $parent_long_dim"
       fi
@@ -3912,7 +3929,7 @@ calc_coordinates_next_unknown_dim() {
           local -n dim_type=${dim}_dim_type
           get_plural $dim dims
 
-          log_show_vars='dim phase unknown_dims'
+          log_show_vars='dim phase'
           fence_grip
           log_debug "Finding values for $dim in phase $phase"
 
@@ -4477,7 +4494,7 @@ calc_coordinates_refine_multi() {
       fail1
     fi
 
-    front_load=6 progress_bar_start ${#matching_rows[*]}
+    front_load=6 progress_bar_start # ${#matching_rows[*]}
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
       if [[ -v matching_rows[all] || -v matching_rows[$row_index] ]]; then
 
