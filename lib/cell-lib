@@ -3357,7 +3357,12 @@ setup_coord_fields() {
 
     case $coord_type in
       branch)
-        coordinate_fields=( ${trunk_dims_short[*]:-} )
+        coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} )
+        #if [[ $target_form == seed ]]; then
+        #  coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} )
+        #else
+        #  coordinate_fields=( ${trunk_dims_short[*]:-} )
+        #fi
       ;;
       leaf)
         coordinate_fields=( ${control_props_short[*]:-} ${data_props_short[*]:-} )
@@ -3366,7 +3371,12 @@ setup_coord_fields() {
         coordinate_fields=( ${sub_dims_short[*]:-} )
       ;;
       tree)
-        coordinate_fields=( ${trunk_dims_short[*]:-} ${sub_dims_short[*]:-} )
+        coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} ${sub_dims_short[*]:-} )
+        #if [[ $target_form == seed ]]; then
+        #  coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} ${sub_dims_short[*]:-} )
+        #else
+        #  coordinate_fields=( ${trunk_dims_short[*]:-} ${sub_dims_short[*]:-} )
+        #fi
       ;;
       *)
         log_fatal "Internal error: invalid coord_type=$coord_type"
@@ -3955,10 +3965,12 @@ calc_coords_validate_member() {
     # all needs to be permitted here in the case of a dim that doesn't have explicit members
     #   but where the user needs to communicate that all are acceptable based on derivation of others?
     if [[ "$member" == all ]]; then
+      log_debug "Dim $dim is all, so it's valid"
       abort
     fi
 
     if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
+      log_debug "Dim $dim is optional and missing, so it's valid"
       abort
     fi
 
@@ -3972,12 +3984,12 @@ calc_coords_validate_member() {
 
     if [[ $can_derive == t ]]; then
       if [[ ! "${values[0]:-}" ]]; then
-        #log_debug "Failed to derive dim $dim when can_derive == t, skipping row"
         is_valid=f
       elif ! array_contains values "$member" && ! array_contains values all; then
         conflicting_values=( "${values[@]}" )
         is_valid=f
       fi
+      log_debug "Dim $dim is not valid because it couldn't be derived from existing dims"
       abort
     fi
 
@@ -4005,9 +4017,13 @@ calc_coords_validate_member() {
             is_valid=f
           fi
         fi
+        log_debug "Dim $dim is not valid because $rd couldn't be derived from it"
         abort
       fi
     done
+
+    log_debug "Dim $dim is valid"
+
   end_function
   handle_return
 }
@@ -4063,7 +4079,7 @@ calc_coordinates_next_dim_member() {
     localize
     local -n member=d_$dim
     member=$m
-    log_debug "Processing $dim = $member"
+    log_debug "Processing $dim = $member in phase $phase"
     local validated_dims=${validated_dims:-} conflicting_values=() is_valid
 
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
@@ -4574,15 +4590,9 @@ calc_coordinates() {
       coordinate_fields_count=0 \
       coordinate_count=0 \
       coordinate_rows=0 \
-      coord_prefix= \
 
-    #  we want the name to be the same to make refining easier
-    #if [[ $target_form == seed ]]; then
-    #  coord_prefix=seed_
-    #fi
-
-    local -n coordinate_data=$coord_prefix${coord_type}_coordinate_data \
-      coordinate_fields=$coord_prefix${coord_type}_coordinate_fields \
+    local -n coordinate_data=${coord_type}_coordinate_data \
+      coordinate_fields=${coord_type}_coordinate_fields \
 
     if [[ $clear_existing_coords == t ]]; then
       coordinate_data=()
@@ -4998,7 +5008,7 @@ for_each_member() {
     local -n coord_fields=branch_coordinate_fields \
         dims_members=d_$dims dim_members=d_$dim \
 
-    if [[ -v coord_fields && " ${coord_fields[*]} " == *" $dim "* ]]; then
+    if [[ -v coord_fields[*] && " ${coord_fields[*]} " == *" $dim "* ]]; then
       coord_type=branch \
       fetch_values_from_coordinates $dim || fail
     elif [[ "${dim_member:-}" ]]; then
@@ -5332,18 +5342,44 @@ any_dim_is_set() {
   [[ $is_set == t ]]
 }
 
+dim_is_missing_from_coords() {
+  local dim is_missing=f
+  for dim in $*; do
+    local coord_fields=${coord_type}_coordinate_fields
+    if [[ " ${coord_fields[*]:-} " != *" $dim "* ]]; then
+      is_missing=t
+      break
+    fi
+  done
+  [[ $is_missing == t ]]
+}
+
 calc_coords_branch() {
   begin_function
     local coord_type=branch
     if [[ "${branch_coordinate_refined:-}" != t ]]; then
       if [[ -v branch_coordinate_data ]]; then
-        if any_dim_is_set ${trunk_dims_short[*]} ${support_dims_short[*]}; then
+        local dims_to_check="${trunk_dims_short[*]} ${support_dims_short[*]}"
+        local skip=t
+
+        if dim_is_missing_from_coords $dims_to_check; then
+          skip=f
+          log_debug "Not skipping coordinate refinement since seed coord fields don't match tree coord fields"
+        fi
+
+        if any_dim_is_set $dims_to_check; then
+          skip=f
+          log_debug "Not skipping coordinate refinement since dim filters were set"
+        fi
+
+        if [[ $skip == f ]]; then
           seed_already_expanded=t \
           clear_existing_coords=f \
           calc_coordinates || fail
         else
-          log_verbose "Skipping coordinate refinement since no dim filters were set"
+          log_debug "Skipping coordinate refinement since no dim filters were set"
         fi
+
       else
         calc_coordinates || fail
       fi
