@@ -785,19 +785,15 @@ build_context_expand_members_derive() {
     code+="
     *)
       local -n dt=dim_${dim}_card_table
-      if [[ ! -v dt ]]; then
-        problem='No members defined for $dim'
-        return 0
-      fi
     ;;&
     all)
       get_all_values_from_derive_table \$dt _out || fail
     ;;
     *)
-      if value_exists_in_derive_table \$dt \"\$value\"; then
-        _out=( \"\$_in\" )
-      else
+      if [[ -v dt ]] && ! value_exists_in_derive_table \$dt \"\$value\"; then
         problem=\"Invalid $dim: \$_in\"
+      else
+        _out=( \"\$_in\" )
       fi
     ;;
   esac
@@ -1570,7 +1566,6 @@ fetch_column_from_table() {
 #   values
 #   can_derive
 attempt_derive2() {
-  local deep=$deep
   begin_function_lo
 
     local one_row_complete=f \
@@ -1599,7 +1594,7 @@ attempt_derive2() {
           local -n derive_from_dim_value=d_$derived_from_dim
           if [[ ! "${derive_from_dim_value:-}" ]]; then
 
-            if [[ $deep == t ]]; then
+            if [[ $derive_deep == t ]]; then
 
               # recursive
               from_dim= \
@@ -1717,6 +1712,7 @@ attempt_derive() {
     old_values_string=${old_values_string:-} \
     stop_after_first_match=${stop_after_first_match:-f} \
     deriving=${deriving:-} \
+    derive_deep=${derive_deep:-t} \
 
   log_show_vars='dim from_dim'
   begin_function_grip
@@ -1733,7 +1729,6 @@ attempt_derive() {
     local resolved_dependencies=()
 
     if [[ "${derived_from:-}" ]]; then
-      deep=t \
       attempt_derive2 || fail
     fi
 
@@ -3358,6 +3353,10 @@ setup_coord_fields() {
     case $coord_type in
       branch)
         coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} )
+        # don't need to do deep derive if we are already include support dims, which come
+        #   from a deep derive analysis
+        derive_deep=f
+
         #if [[ $target_form == seed ]]; then
         #  coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} )
         #else
@@ -3372,6 +3371,10 @@ setup_coord_fields() {
       ;;
       tree)
         coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} ${sub_dims_short[*]:-} )
+        # don't need to do deep derive if we are already include support dims, which come
+        #   from a deep derive analysis
+        derive_deep=f
+
         #if [[ $target_form == seed ]]; then
         #  coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} ${sub_dims_short[*]:-} )
         #else
@@ -4590,6 +4593,7 @@ calc_coordinates() {
       coordinate_fields_count=0 \
       coordinate_count=0 \
       coordinate_rows=0 \
+      derive_deep=t \
 
     local -n coordinate_data=${coord_type}_coordinate_data \
       coordinate_fields=${coord_type}_coordinate_fields \
