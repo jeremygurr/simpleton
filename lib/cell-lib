@@ -4460,7 +4460,7 @@ calc_coordinates_refine_multi() {
 
     front_load=6 progress_bar_start ${#matching_rows[*]}
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
-      if [[ -v matching_rows[$row_index] ]]; then
+      if [[ -v matching_rows[all] || -v matching_rows[$row_index] ]]; then
 
         table=${coord_type}_coordinate \
         convert_table_to_dims || fail
@@ -5317,14 +5317,33 @@ get_required_freshness() {
   return 0
 }
 
+# inputs:
+#   $*   the dims to check, must use short dims (like trunk_dims_short, etc)
+any_dim_is_set() {
+  local dim dims is_set=f
+  for dim in $*; do
+    get_plural $dim dims
+    local -n ddim=d_${dim} ddims=d_${dims}
+    if [[ "${ddim:-}" || "${ddims:-}" ]]; then
+      is_set=t
+      break
+    fi
+  done
+  [[ $is_set == t ]]
+}
+
 calc_coords_branch() {
   begin_function
     local coord_type=branch
     if [[ "${branch_coordinate_refined:-}" != t ]]; then
       if [[ -v branch_coordinate_data ]]; then
-        seed_already_expanded=t \
-        clear_existing_coords=f \
-        calc_coordinates || fail
+        if any_dim_is_set ${trunk_dims_short[*]} ${support_dims_short[*]}; then
+          seed_already_expanded=t \
+          clear_existing_coords=f \
+          calc_coordinates || fail
+        else
+          log_verbose "Skipping coordinate refinement since no dim filters were set"
+        fi
       else
         calc_coordinates || fail
       fi
