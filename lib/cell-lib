@@ -2521,10 +2521,7 @@ get_dim_path() {
     local shorts=( $lib_dim_path/$short_dim-* )
     if (( ${#shorts[*]} > 1 )); then
       log_fatal "Too many matching dims: ${shorts[*]}, choose one specifically using the longer dim form"
-      debug_start
-      if [[ "${parent_long_dim:-}" ]]; then
-        log_fatal "Check in derived_from.arr of dim $parent_long_dim"
-      fi
+      log_fatal "Dim is referenced here: $dim_requested_by"
       return 1
     fi
 
@@ -2545,7 +2542,6 @@ get_dim_path() {
 build_dim_info_single() {
   local long_dim=$1 downstream_dim_row=${downstream_dim_row:-} \
     log_show_vars=long_dim \
-    parent_long_dim=${parent_long_dim:-} \
 
   begin_function_grip
 
@@ -2622,7 +2618,7 @@ build_dim_info_single() {
             all_dims[$upstream_dim]=1
             downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
-            parent_long_dim=$long_dim \
+            dim_requested_by="derived_from of $long_dim" \
             build_dim_info_single "$upstream_long_dim" || fail
           fi
         log_show_vars=long_dim
@@ -2648,8 +2644,7 @@ build_dim_info_single() {
 add_derived_to_support_dims() {
   begin_function_grip
 
-    local derived_from long_dim short_dim row OIFS=$IFS \
-      parent_long_dim=${parent_long_dim:-} \
+    local derived_from long_dim short_dim row OIFS=$IFS
 
     for row in "${dim_derived_from[@]}"; do
       local is_first=t
@@ -2675,7 +2670,7 @@ add_derived_to_support_dims() {
           short_dim=${long_dim%%-*}
           local -n dim_derived_from=dim_${short_dim}_derived_from
           if [[ -v dim_derived_from ]]; then
-            parent_long_dim=$long_dim \
+            dim_requested_by="derived_from of $long_dim" \
             add_derived_to_support_dims || fail
           fi
 
@@ -2697,6 +2692,7 @@ build_context_support_dims() {
       dim=${long_dim%%-*}
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
+        dim_requested_by="derived_from of $long_dim" \
         add_derived_to_support_dims || fail
       fi
     end_for
@@ -2770,6 +2766,7 @@ build_dim_info() {
       local -n dim_array=${dim_type}
 
       begin_for long_dim in "${dim_array[@]}"; doo
+        dim_requested_by="$dim_type $long_dim" \
         downstream_dim_row= \
         build_dim_info_single "$long_dim" || fail
       end_for
