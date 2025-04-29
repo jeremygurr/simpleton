@@ -2103,7 +2103,6 @@ init_context() {
     declare -Ag all_dims=()
 
     auto_loads=() \
-    branch_coordinate_refined= \
     cell_expiration= \
     cell_is_outdated=t \
     check_op_var=f \
@@ -2119,7 +2118,6 @@ init_context() {
     dna_up_files=() \
     implicit_dims=() \
     key_path= \
-    leaf_coordinate_refined= \
     localize_dims= \
     localize_reverse_dims= \
     lock_timeout=2 \
@@ -2137,12 +2135,10 @@ init_context() {
     retry_scale=2 \
     reuse_existing_out=t \
     shuffle_chance=100 \
-    sub_coordinate_refined= \
     sub_dims=() \
     sub_dims_short=() \
     support_dims=() \
     support_dims_short=() \
-    tree_coordinate_refined= \
     trunk_dims=() \
     trunk_dims_short=() \
     up=() \
@@ -3026,11 +3022,6 @@ build_context_trunk_dna() {
     local item_name last_part dna_full_item suffix context_type=trunk
     local -A append_vars
 
-    if [[ -e $context_path-$context_type ]]; then
-      log_fatal "Internal error: $context_type context already exists. Should have been deleted before calling this function."
-      fail1
-    fi
-
     if [[ -d $dna_path ]]; then
 
       auto_loads=()
@@ -3042,17 +3033,7 @@ build_context_trunk_dna() {
       echo "$NL# FROM $dna_path" >>$context_path-$context_type.new || fail
       prefix= load_dna_contents $dna_path || fail
 
-      build_dim_info || fail
-      fence
-
-      load_dim_derive_tables || fail
-      build_dim_expand_functions || fail
-
       write_vars_to_context auto_loads || fail
-
-      if [[ "${dna_up_files:-}" ]]; then
-        write_vars_to_context dna_up_files || fail
-      fi
 
       if [[ ! "${default_anchor_dims:-}" ]]; then
         default_anchor_dims="${trunk_dims_short[*]:-}"
@@ -3155,8 +3136,24 @@ build_context_trunk() {
     build_context_trunk_dna || fail
 
     if (( ${#all_dims[*]} > 0 )); then
+
       build_context_gather_derive_tables || fail
+
+      build_dim_info || fail
+      fence
+
+      load_dim_derive_tables || fail
+
+      # TODO auto calculate members if missing
+
+      build_dim_expand_functions || fail
+
+      if [[ "${dna_up_files:-}" ]]; then
+        write_vars_to_context dna_up_files || fail
+      fi
+
     fi
+
 
     if [[ ! -d $status_path ]]; then
       mkdir -p $status_path || fail
@@ -4615,8 +4612,8 @@ calc_coordinates() {
 
     if [[ $clear_existing_coords == t ]]; then
       coordinate_data=()
-      setup_coord_fields || fail
     fi
+    setup_coord_fields || fail
 
     if [[ ! "${coordinate_fields:-}" ]]; then
       local -n refined=${coord_type}_coordinate_refined
@@ -4632,6 +4629,8 @@ calc_coordinates() {
     coordinate_count=${#coordinate_data[*]}
     coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
     unknown_dims= resolved_dims=
+
+    log_debug "Calculating ${coord_type} coordinates using fields: ${coordinate_fields[*]}"
 
     if (( coordinate_fields_count <= 1 )); then
       if [[ $target_form == seed ]]; then
