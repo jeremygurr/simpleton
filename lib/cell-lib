@@ -371,10 +371,8 @@ init_context() {
     check_op_var=f \
     child_dims=() \
     control_props=() \
-    control_props_short=() \
     current_pause=250 \
     data_props=() \
-    data_props_short=() \
     default_anchor_dims= \
     default_freshness= \
     default_strategies=crl \
@@ -400,11 +398,8 @@ init_context() {
     reuse_existing_out=t \
     shuffle_chance=100 \
     sub_dims=() \
-    sub_dims_short=() \
     support_dims=() \
-    support_dims_short=() \
     trunk_dims=() \
-    trunk_dims_short=() \
     up=() \
     update_cost=1 \
     update_risk=3 \
@@ -2159,7 +2154,7 @@ attempt_derive() {
 
   log_show_vars='dim from_dim'
   begin_function_grip
-    local -n derived_from=dim_${dim}_derived_from_short
+    local -n derived_from=dim_${dim}_derived_from
     values=()
     can_derive=f
     value_found=${value_found:-f}
@@ -2333,10 +2328,10 @@ load_child_dims() {
 
     if [[ ! "${child_dims:-}" ]]; then
       child_dims=()
-      local trunk_dim_count=${#trunk_dims_short[*]}
+      local trunk_dim_count=${#trunk_dims[*]}
       if [[ ! "${anchor_dims:-}" ]]; then
         for (( i = branch_dim_count; i < trunk_dim_count; i++ )); do
-          child_dims+=( ${trunk_dims_short[$i]} )
+          child_dims+=( ${trunk_dims[$i]} )
         done
       else
         local anchor_dim branch_dim leftovers=" $anchor_dims "
@@ -2346,8 +2341,8 @@ load_child_dims() {
         done
 
         for anchor_dim in $anchor_dims; do
-          if [[ " ${trunk_dims_short[*]} ${support_dims_short[*]} " != *" $anchor_dim "* ]]; then
-            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims_short[*]} ${support_dims_short[*]}"
+          if [[ " ${trunk_dims[*]} ${support_dims[*]} " != *" $anchor_dim "* ]]; then
+            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims[*]} ${support_dims[*]}"
             fail1
           fi
         done
@@ -2375,7 +2370,7 @@ load_child_dims() {
 }
 
 init_dims() {
-  local types=${*:-trunk_dims_short sub_dims_short} \
+  local types=${*:-trunk_dims sub_dims} \
     new_value=${new_value:-} vars=${vars:-ddim}
   begin_function
     for dim_type in $types; do
@@ -2404,10 +2399,10 @@ setup_dims() {
     prep_dims || fail
     load_child_dims || fail
     if [[ $cell_is_leaf == t ]]; then
-      expand_dims ${sub_dims_short[*]:-} ${control_props_short[*]:-} ${data_props_short[*]:-} || fail
+      expand_dims ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} || fail
       load_implicit_dims || fail
     else
-      expand_dims ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} || fail
+      expand_dims ${trunk_dims[*]:-} ${support_dims[*]:-} || fail
     fi
 
   end_function
@@ -2650,7 +2645,7 @@ build_dim_info_single() {
   begin_function_grip
 
     local dims dim_path= \
-      dim=${long_dim%%-*} \
+      dim=${long_dim//-/_} \
 
     if [[ ! "$dim" =~ ^[a-zA-Z0-9_]+$ ]]; then
       log_fatal "Invalid dim name: $dim. Dims must consist of alphanumeric characters or underscores."
@@ -2674,7 +2669,7 @@ build_dim_info_single() {
     load_dna_contents $dim_path || fail
 
     local -n derived_from=dim_${dim}_derived_from \
-      derived_from_short=dim_${dim}_derived_from_short \
+      derived_from=dim_${dim}_derived_from \
 
     local derived_from_row \
       new_derived_from_row \
@@ -2683,7 +2678,7 @@ build_dim_info_single() {
       first \
 
     #   everything is expressed in long form now
-    # derived_from_short=()
+    # derived_from=()
     # for derived_from_row in "${derived_from[@]}"; do
     #   new_derived_from_row=
     #   first=t
@@ -2696,9 +2691,9 @@ build_dim_info_single() {
     #     fi
     #     new_derived_from_row+="$derived_short_dim "
     #   done
-    #   derived_from_short+=( "${new_derived_from_row% }" )
+    #   derived_from+=( "${new_derived_from_row% }" )
     # done
-    # write_vars_to_context dim_${dim}_derived_from_short || fail
+    # write_vars_to_context dim_${dim}_derived_from || fail
 
     local -n is_secret=dim_${dim}_is_secret
     if [[ -v is_secret && $is_secret == t ]]; then
@@ -2753,14 +2748,8 @@ add_derived_to_support_dims() {
     local derived_from long_dim short_dim row OIFS=$IFS
 
     for row in "${dim_derived_from[@]}"; do
-      local is_first=t
-      for long_dim in $row; do
-
-        if [[ $is_first == t ]]; then
-          # skip the action part
-          is_first=f
-          continue
-        fi
+      local is_first=t row_array=( $row )
+      for long_dim in ${row_array[*]:2}; do
 
         if ! array_contains trunk_dims $long_dim \
           && ! array_contains support_dims $long_dim; then
@@ -2773,7 +2762,7 @@ add_derived_to_support_dims() {
 
           support_dims+=( $long_dim )
 
-          short_dim=${long_dim%%-*}
+          short_dim=${long_dim//-/_}
           local -n dim_derived_from=dim_${short_dim}_derived_from
           if [[ -v dim_derived_from ]]; then
             dim_requested_by="derived_from of $long_dim" \
@@ -2795,7 +2784,7 @@ build_context_support_dims() {
     local long_dim dim dim_type=trunk_dims
     support_dims=()
     begin_for long_dim in "${trunk_dims[@]}"; doo
-      dim=${long_dim%%-*}
+      dim=${long_dim//-/_}
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
         dim_requested_by="derived_from of $long_dim" \
@@ -2884,23 +2873,22 @@ build_dim_info() {
 
     for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
 
-      local -n short_dims=${dim_type}_short \
+      local -n short_dims=${dim_type} \
         dim_array=${dim_type} \
 
       short_dims=()
 
       for long_dim in "${dim_array[@]}"; do
 
-        local dim=${long_dim%%-*} dims
+        local dim=${long_dim//-/_} dims short_dim=${long_dim%%-*}
         get_plural $dim dims
-        short_dims+=( $dim )
+        short_dims+=( $short_dim )
         all_dims[$dim]=1
 
         localize_dims+=" d_$dim d_$dims"
         localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
         
       done
-      write_vars_to_context ${dim_type}_short || fail
 
     done
 
@@ -3088,9 +3076,9 @@ load_dim_derive_tables() {
       table
 
     for dim in ${!all_dims[*]}; do
-      local -n derived_from_short=dim_${dim}_derived_from_short
+      local -n derived_from=dim_${dim}_derived_from
 
-      for derived_from_row in "${derived_from_short[@]}"; do
+      for derived_from_row in "${derived_from[@]}"; do
         first=t
         dims_to_add=
         for derived_short_dim in $derived_from_row; do
@@ -3146,7 +3134,7 @@ build_context_trunk_dna() {
       write_vars_to_context auto_loads || fail
 
       if [[ ! "${default_anchor_dims:-}" ]]; then
-        default_anchor_dims="${trunk_dims_short[*]:-}"
+        default_anchor_dims="${trunk_dims[*]:-}"
         write_vars_to_context default_anchor_dims || fail
       fi
 
@@ -3566,33 +3554,33 @@ setup_coord_fields() {
 
     case $coord_type in
       branch)
-        coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} )
+        coordinate_fields=( ${trunk_dims[*]:-} ${support_dims[*]:-} )
         # don't need to do deep derive if we are already include support dims, which come
         #   from a deep derive analysis
         derive_deep=f
 
         #if [[ $target_form == seed ]]; then
-        #  coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} )
+        #  coordinate_fields=( ${trunk_dims[*]:-} ${support_dims[*]:-} )
         #else
-        #  coordinate_fields=( ${trunk_dims_short[*]:-} )
+        #  coordinate_fields=( ${trunk_dims[*]:-} )
         #fi
       ;;
       leaf)
-        coordinate_fields=( ${control_props_short[*]:-} ${data_props_short[*]:-} )
+        coordinate_fields=( ${control_props[*]:-} ${data_props[*]:-} )
       ;;
       sub)
-        coordinate_fields=( ${sub_dims_short[*]:-} )
+        coordinate_fields=( ${sub_dims[*]:-} )
       ;;
       tree)
-        coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} ${sub_dims_short[*]:-} )
+        coordinate_fields=( ${trunk_dims[*]:-} ${support_dims[*]:-} ${sub_dims[*]:-} )
         # don't need to do deep derive if we are already include support dims, which come
         #   from a deep derive analysis
         derive_deep=f
 
         #if [[ $target_form == seed ]]; then
-        #  coordinate_fields=( ${trunk_dims_short[*]:-} ${support_dims_short[*]:-} ${sub_dims_short[*]:-} )
+        #  coordinate_fields=( ${trunk_dims[*]:-} ${support_dims[*]:-} ${sub_dims[*]:-} )
         #else
-        #  coordinate_fields=( ${trunk_dims_short[*]:-} ${sub_dims_short[*]:-} )
+        #  coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
         #fi
       ;;
       *)
@@ -3628,7 +3616,7 @@ load_implicit_dims() {
     implicit_dims=()
     if [[ -e $out_path/output.tab ]]; then
       for d in $(head -n1 $out_path/output.tab); do
-        if [[ ! " ${trunk_dims_short[*]} ${sub_dims_short[*]} " == *" $d "* ]]; then
+        if [[ ! " ${trunk_dims[*]} ${sub_dims[*]} " == *" $d "* ]]; then
           implicit_dims+=( $d )
           all_dims[$d]=1
         fi
@@ -4861,8 +4849,8 @@ calc_coordinates() {
         coordinate_fields_count
       "
       local dim_fields
-      local dim_type=trunk_dims_short
-      xlr8_get_dim_fields ${trunk_dims_short[*]}
+      local dim_type=trunk_dims
+      xlr8_get_dim_fields ${trunk_dims[*]}
       xlr8 load_coordinates $coord_fields $dim_fields $fields $dt_fields || fail
     else
       calc_coordinates_slow || fail
@@ -5548,7 +5536,7 @@ get_required_freshness() {
 }
 
 # inputs:
-#   $*   the dims to check, must use short dims (like trunk_dims_short, etc)
+#   $*   the dims to check, must use short dims (like trunk_dims, etc)
 any_dim_is_set() {
   local dim dims is_set=f
   for dim in $*; do
@@ -5579,7 +5567,7 @@ calc_coords_branch() {
     local coord_type=branch
     if [[ "${branch_coordinate_refined:-}" != t ]]; then
       if [[ -v branch_coordinate_data ]]; then
-        local dims_to_check="${trunk_dims_short[*]} ${support_dims_short[*]}"
+        local dims_to_check="${trunk_dims[*]} ${support_dims[*]}"
         local skip=t
 
         if dim_is_missing_from_coords $dims_to_check; then
