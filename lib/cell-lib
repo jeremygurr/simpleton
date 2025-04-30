@@ -297,11 +297,13 @@ make_table_index() {
 
 load_derive_table_card_and_key() {
 
-  local field_index field
+  local field_index field raw_field
 
   for (( field_index = 0; field_index < field_count; field_index++ )); do
 
-    field=${derive_table_fields[$field_index]}
+    raw_field=${derive_table_fields[$field_index]}
+    field=${raw_field//-/_}
+
     local -n index=derive_table_${name}_index_${field}
 
     if [[ ! -v index[*] ]]; then
@@ -713,9 +715,9 @@ load_derive_table() {
 }
 
 # inputs:
-#   name
+#   name        name of derive table
 #   cache_path
-add_derive_item_table() {
+tab_get_derive_from() {
   begin_function_grip
 
     debug_start
@@ -730,14 +732,16 @@ add_derive_item_table() {
       field_index field \
       key_field \
       other_field \
+      other_field_raw \
       other_index \
       other_index_card \
+      raw_field \
 
     (( row_count = data_count / field_count ))
 
     for (( field_index = 0; field_index < field_count; field_index++ )); do
-      field=${derive_table_fields[$field_index]}
-      field=${field//-/_}
+      raw_field=${derive_table_fields[$field_index]}
+      field=${raw_field//-/_}
 
       derive_dims[$field]=1
 
@@ -748,7 +752,7 @@ add_derive_item_table() {
       index_count=${#index[*]}
 
       other_fields="${derive_table_fields[*]}"
-      remove_word_from_string other_fields $field
+      remove_word_from_string other_fields $raw_field
 
       for key_field in $key_fields; do
         if [[ $key_field != $field ]]; then
@@ -760,7 +764,8 @@ add_derive_item_table() {
         derive_from+=( "$name.tab to_many $other_fields" )
       fi
 
-      for other_field in $other_fields; do
+      for other_field_raw in $other_fields; do
+        other_field=${other_field_raw//-/_}
         local -n other_index=derive_table_${name}_index_$other_field
         other_index_card=${#other_index[*]}
         if (( other_index_card > 3 )); then
@@ -777,7 +782,7 @@ add_derive_item_table() {
 # inputs:
 #   name
 #   cache_path
-add_derive_item_function() {
+fun_get_derive_from() {
   local derive_path=$1 name=${2:-}
   begin_function_grip
 
@@ -806,7 +811,6 @@ add_derive_item() {
 
     debug_start
 
-    local name
     if [[ ! "$name" ]]; then
       name=${derive_path##*/}
       name=${name%.*}
@@ -821,7 +825,7 @@ add_derive_item() {
         local -n dtp=derive_table_${name}_path
         dtp=$derive_path
         load_derive_table $name || fail
-        add_derive_item_table || fail
+        tab_get_derive_from || fail
         derive_tables+=( $name )
 
         context_file=$cache_path \
@@ -833,7 +837,7 @@ add_derive_item() {
         local code
         load_fun_to_code $var_full_path derive_function_$name || fail
         eval "$code" || fail
-        add_derive_item_function || fail
+        fun_get_derive_from || fail
         derive_functions+=( $name )
 
         context_file=$cache_path \
@@ -841,7 +845,7 @@ add_derive_item() {
 
       ;;
       *)
-        log_fatal "Unidentified file in derive folder: $dt. It should either be a table (ending in .tab) or a function (ending in .fun)."
+        log_fatal "Unidentified file in derive folder: $derive_path. It should either be a table (ending in .tab) or a function (ending in .fun)."
         fail1
       ;;
     esac
@@ -3199,7 +3203,7 @@ build_context_gather_derive_tables_single() {
           rm $cache_path.new || fail
         fi
 
-        for type in fun tab; do
+        begin_for type in fun tab; doo
 
           if [[ $type == fun ]]; then
             files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.fun' | sort -g) || fail
@@ -3207,7 +3211,7 @@ build_context_gather_derive_tables_single() {
             files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
           fi
 
-          for dt in $files; do
+          begin_for dt in $files; doo
 
             if [[ -L $dt ]]; then
               real_path=$(realpath -m $dt)
@@ -3234,14 +3238,15 @@ build_context_gather_derive_tables_single() {
 
             add_derive_item $dt || fail
 
-          done; maybe_break
-        done; maybe_break
+          end_for
+        end_for
 
-        local derive_dim
-        for derive_dim in ${!derive_dims[*]}; do
+        local derive_dim derive_dim_raw
+        begin_for derive_dim_raw in ${!derive_dims[*]}; doo
+          derive_dim=${derive_dim_raw//-/_}
           context_file=$cache_path \
           write_to_context var dim_${derive_dim}_derived_from || fail
-        done; maybe_break
+        end_for
 
         mv $cache_path.new $cache_path || fail
 
@@ -3276,6 +3281,8 @@ calc_missing_members() {
     local dim members_array
     begin_for dim in $dims_missing_members; doo
 
+      log_debug "Calculating missing dim members for $dim"
+
       local -n dts=dim_${dim}_derive_tables
       local dt
       local -A members_found=()
@@ -3307,6 +3314,8 @@ calc_missing_members() {
       write_vars_to_context dim_${dim}_members
 
     end_for
+
+    dims_missing_members=
 
   end_function
   handle_return
