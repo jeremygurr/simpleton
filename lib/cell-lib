@@ -1148,10 +1148,6 @@ build_context_expand_find_members() {
       fi
     done; maybe_break
 
-    if [[ "$member_paths" && $other_found == f ]]; then
-      has_explicit_member_list=t
-    fi
-
   end_function
   handle_return
 }
@@ -1227,64 +1223,51 @@ value_exists_in_derive_table() {
   [[ -v index["$value"] ]]
 }
 
-build_context_expand_members_derive() {
-  begin_function_lo
+build_context_expand_members_known() {
+  local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
+  for m in "${members[@]}"; do
+    quoted_members+="\"$m\" "
+    if [[ $m == *\ * ]]; then
+      need_quotes=t
+    fi
+  done
 
-    code+="
-    *)
-      local -n dt=dim_${dim}_card_table
-    ;;&
-    all)
-      if [[ -v dt ]]; then
-        get_all_values_from_derive_table \$dt _out || { problem=\"Failed to get values from derive table \$dt\"; }
-      else
-        problem=\"No members defined for $dim, can't expand 'all'\"
-      fi
-    ;;
-    *)
-      if [[ -v dt ]] && ! value_exists_in_derive_table \$dt \"\$value\"; then
-        problem=\"Invalid $dim: \$_in\"
-      else
-        _out=( \"\$_in\" )
-      fi
-    ;;
-  esac
+  if [[ $need_quotes == f ]]; then
+    quoted_members="${members[*]}"
+  fi
+
+  local members_with_pipes=${members_with_pipes// /\|}
+
+  code+="
+  all)
+    _out=( $quoted_members )
+  ;;
+  $members_with_pipes)
+    _out=( \$_in )
+  ;;
+  *)
+    problem=\"Invalid $dim: \$_in\"
+  ;;
+esac
 }"
-
-  end_function
-  handle_return
 }
 
-build_context_expand_members_known() {
-  begin_function_lo
-    local quoted_members= members_with_pipes=${members[*]} need_quotes=f m
-    for m in "${members[@]}"; do
-      quoted_members+="\"$m\" "
-      if [[ $m == *\ * ]]; then
-        need_quotes=t
-      fi
-    done
-
-    if [[ $need_quotes == f ]]; then
-      quoted_members="${members[*]}"
-    fi
-
-    local members_with_pipes=${members_with_pipes// /\|}
-
-    code+="
-    all)
-      _out=( $quoted_members )
-    ;;
-    $members_with_pipes)
-      _out=( \$_in )
-    ;;
-    *)
+build_context_expand_members_will_be_known() {
+  code+="
+  all)
+    local -n members=dim_${dim}_members
+    _out=( "${members[@]}" )
+  ;;
+  *)
+    local -n members=dim_${dim}_members
+    if array_contains members $_in; then
+      _out=( "$_in" )
+    else
       problem=\"Invalid $dim: \$_in\"
-    ;;
-  esac
+    fi
+  ;;
+esac
 }"
-  end_function
-  handle_return
 }
 
 # inputs:
@@ -1294,7 +1277,7 @@ build_context_expand_members_known() {
 build_context_expand() {
   begin_function_grip
 
-    local has_explicit_member_list=f has_derive_table=f fun
+    local fun
 
     local -n member_type=dim_${dim}_member_type
 
@@ -1310,22 +1293,11 @@ build_context_expand() {
       esac
     fi
 
-    local -n members=dim_${dim}_members \
-      dim_derive_tables=dim_${dim}_derive_tables \
-
-    if [[ -v members ]] && (( ${#members[*]} > 0 )); then
-      has_explicit_member_list=t
-    elif [[ "${dim_derive_tables:-}" ]]; then
-      has_derive_table=t
-    fi
+    local -n members=dim_${dim}_members
 
     if [[ ! "${member_type:-}" ]]; then
-      if [[ $has_explicit_member_list == t || $has_derive_table == t ]]; then
-        member_type=static
-      else
-        member_type=dynamic
-      fi
-      write_vars_to_context dim_${dim}_member_type || fail
+      log_fatal "Internal error: dim_${dim}_member_type was not defined"
+      fail1
     fi
 
     local -n aliases=dim_${dim}_aliases
@@ -1341,10 +1313,13 @@ build_context_expand() {
       build_context_expand_handle_aliases || fail
     fi
 
-    if [[ $has_explicit_member_list == t ]]; then
-      build_context_expand_members_known || fail
-    elif [[ $has_derive_table == t ]]; then
-      build_context_expand_members_derive || fail
+    if [[ $member_type == static ]]; then
+      if [[ "${members:-}" ]]; then
+        build_context_expand_members_known || fail
+      else
+        build_context_expand_members_will_be_known || fail
+        dims_missing_members+="$dim "
+      fi
     else
       build_context_expand_members_unknown || fail
     fi
@@ -2703,22 +2678,23 @@ build_dim_info_single() {
       derived_short_dim \
       first \
 
-    derived_from_short=()
-    for derived_from_row in "${derived_from[@]}"; do
-      new_derived_from_row=
-      first=t
-      for derived_long_dim in $derived_from_row; do
-        if [[ $first == t ]]; then
-          derived_short_dim=$derived_long_dim
-          first=f
-        else
-          derived_short_dim=${derived_long_dim%%-*}
-        fi
-        new_derived_from_row+="$derived_short_dim "
-      done
-      derived_from_short+=( "${new_derived_from_row% }" )
-    done
-    write_vars_to_context dim_${dim}_derived_from_short || fail
+    #   everything is expressed in long form now
+    # derived_from_short=()
+    # for derived_from_row in "${derived_from[@]}"; do
+    #   new_derived_from_row=
+    #   first=t
+    #   for derived_long_dim in $derived_from_row; do
+    #     if [[ $first == t ]]; then
+    #       derived_short_dim=$derived_long_dim
+    #       first=f
+    #     else
+    #       derived_short_dim=${derived_long_dim%%-*}
+    #     fi
+    #     new_derived_from_row+="$derived_short_dim "
+    #   done
+    #   derived_from_short+=( "${new_derived_from_row% }" )
+    # done
+    # write_vars_to_context dim_${dim}_derived_from_short || fail
 
     local -n is_secret=dim_${dim}_is_secret
     if [[ -v is_secret && $is_secret == t ]]; then
@@ -2753,7 +2729,12 @@ build_dim_info_single() {
       write_vars_to_context dim_${dim}_derive_tables || fail
     fi
 
-    write_vars_to_context dim_${dim}_type || fail
+    local -n member_type=dim_${dim}_member_type
+    if [[ ! "${member_type:-}" ]]; then
+      member_type=dynamic
+    fi
+     
+    write_vars_to_context dim_${dim}_type dim_${dim}_member_type || fail
 
   end_function
   handle_return
@@ -3289,6 +3270,25 @@ build_context_gather_derive_tables() {
 
 calc_missing_members() {
   begin_function_grip
+    # loop over dims_missing_members
+    local missing_dim
+    for missing_dim in $dims_missing_members; do
+      # loop over related derive table
+      local -n dts=dim_${dim}_derive_tables
+      local dt
+      if [[ -v dts ]]; then
+        for dt in $dts; do
+          local -n dtd=derive_table_${dt}_data
+          if [[ ! -v dtd ]]; then
+            load_derive_table $dt || fail
+          fi
+        done
+      fi
+      # grab members from index of each table
+      # union those members
+      # store members in context
+    done
+
     log_fatal "Incomplete"
     fail1
   end_function
@@ -3310,6 +3310,8 @@ build_context_trunk() {
 
     if [[ "$trunk_dims$sub_dims$control_props$data_props" ]]; then
 
+      local dims_missing_members=
+
       build_dim_expand_functions || fail
 
       build_context_gather_derive_tables || fail
@@ -3319,7 +3321,9 @@ build_context_trunk() {
 
       load_dim_derive_tables || fail
 
-      calc_missing_members || fail
+      if [[ "$dims_missing_members" ]]; then
+        calc_missing_members || fail
+      fi
 
       if [[ "${dna_up_files:-}" ]]; then
         write_vars_to_context dna_up_files || fail
