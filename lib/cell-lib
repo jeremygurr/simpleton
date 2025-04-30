@@ -241,6 +241,7 @@ make_table_index() {
     field_index \
     data_offset \
     field \
+    field_raw \
     value \
     values \
     row_count \
@@ -261,7 +262,9 @@ make_table_index() {
 
   for (( field_index = 0; field_index < field_count; field_index++ )); do
 
-    field=${table_fields[$field_index]}
+    field_raw=${table_fields[$field_index]}
+    field=${field_raw//-/_}
+
     local -n index=${table}_index_${field}
 
     unset index
@@ -2688,10 +2691,6 @@ build_dim_info_single() {
       fail1
     fi
 
-    local -n expand_function=dim_${dim}_expand
-
-    unset default_function
-
     prefix=dim_${dim}_ \
     load_dna_contents $dim_path || fail
 
@@ -3201,8 +3200,9 @@ build_context_gather_derive_tables_single() {
     local lib_dt_path=$start_path/.lib/derive
 
     if [[ -d $lib_dt_path ]]; then
-      local dt files links link \
+      local dt files links link type is_generated \
         cache_path=$start_path/.lib/derive-cache \
+        real_path real_path_parent \
 
       derive_caches+="$cache_path "
 
@@ -3218,7 +3218,6 @@ build_context_gather_derive_tables_single() {
           rm $cache_path.new || fail
         fi
 
-        local type
         for type in fun tab; do
 
           if [[ $type == fun ]]; then
@@ -3229,18 +3228,27 @@ build_context_gather_derive_tables_single() {
 
           for dt in $files; do
 
-            dna_up_files+=( "$dt" )
+            if [[ -L $dt ]]; then
+              real_path=$(realpath -m $dt)
+              real_path_parent=${real_path%/*}
 
-            if [[ ! -f $dt ]]; then
-              local real_path=$(realpath -m $dt)
-              local real_path_parent=${real_path%/*}
               if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
-                log_debug "Executing cell update to generate $dt"
-                load_dna_contents_update_cell $real_path || fail
+                is_generated=t
+                dna_up_files+=( "$dt" )
               else
-                log_fatal "Broken link found when trying to gather derive tables: $dt"
-                fail1
+                is_generated=f
               fi
+
+              if [[ ! -f $dt ]]; then
+                if [[ $is_generated == t ]]; then
+                  log_debug "Executing cell update to generate $dt"
+                  load_dna_contents_update_cell $real_path || fail
+                else
+                  log_fatal "Broken link found when trying to gather derive tables: $dt"
+                  fail1
+                fi
+              fi
+
             fi
 
             add_derive_item $dt || fail
@@ -3279,6 +3287,14 @@ build_context_gather_derive_tables() {
   handle_return
 }
 
+calc_missing_members() {
+  begin_function_grip
+    log_fatal "Incomplete"
+    fail1
+  end_function
+  handle_return
+}
+
 build_context_trunk() {
   begin_function
 
@@ -3294,6 +3310,8 @@ build_context_trunk() {
 
     if [[ "$trunk_dims$sub_dims$control_props$data_props" ]]; then
 
+      build_dim_expand_functions || fail
+
       build_context_gather_derive_tables || fail
 
       build_dim_info || fail
@@ -3301,9 +3319,7 @@ build_context_trunk() {
 
       load_dim_derive_tables || fail
 
-      # TODO auto calculate members if missing
-
-      build_dim_expand_functions || fail
+      calc_missing_members || fail
 
       if [[ "${dna_up_files:-}" ]]; then
         write_vars_to_context dna_up_files || fail
