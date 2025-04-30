@@ -3270,27 +3270,44 @@ build_context_gather_derive_tables() {
 
 calc_missing_members() {
   begin_function_grip
-    # loop over dims_missing_members
-    local missing_dim
-    for missing_dim in $dims_missing_members; do
-      # loop over related derive table
+
+    debug_start
+
+    local dim members_array
+    begin_for dim in $dims_missing_members; doo
+
       local -n dts=dim_${dim}_derive_tables
       local dt
-      if [[ -v dts ]]; then
-        for dt in $dts; do
-          local -n dtd=derive_table_${dt}_data
-          if [[ ! -v dtd ]]; then
-            load_derive_table $dt || fail
-          fi
-        done
-      fi
-      # grab members from index of each table
-      # union those members
-      # store members in context
-    done
+      local -A members_found=()
 
-    log_fatal "Incomplete"
-    fail1
+      if [[ -v dts ]]; then
+        begin_for dt in $dts; doo
+          local -n dt_index=derive_table_${dt}_index_${dim}
+          local members_array=${!dt_index[*]}
+          local -A members_set
+          array_to_set members_array members_set
+          union members_found members_set
+        end_for
+      else
+        log_fatal "Needed to calculate members for $dim but no derive tables were found with this dim. "
+        log_fatal "Either explicitly define the members with members.var, or add a derive table using this dim, or mark this dim as dynamic by removing the member_type.var from the dim folder."
+        fail1
+      fi
+
+      if [[ ! "${members_found[*]}" ]]; then
+        log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
+        fail1
+      fi
+
+      local -n dim_members=dim_${dim}_members
+      dim_members=()
+
+      set_to_array members_found dim_members
+      sort_array dim_members
+      write_vars_to_context dim_${dim}_members
+
+    end_for
+
   end_function
   handle_return
 }
