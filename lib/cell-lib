@@ -292,7 +292,7 @@ make_table_index() {
 
 }
 
-load_derive_table_card_and_cross() {
+load_derive_table_card_and_key() {
 
   local field_index field
 
@@ -308,8 +308,11 @@ load_derive_table_card_and_cross() {
 
     local card=${#index[*]}
     if (( card == row_count )); then
-      local -n key_tables=dim_${field}_key_tables
+      local -n key_tables=dim_${field}_key_tables \ 
+        key_fields=derive_table_${name}_key_fields \ 
+
       key_tables+="$name "
+      key_fields+="$field "
     fi
 
     local -n card_table=dim_${field}_card_table
@@ -698,7 +701,7 @@ load_derive_table() {
 
     fence_grip
 
-    load_derive_table_card_and_cross || fail
+    load_derive_table_card_and_key || fail
 
   fi
 
@@ -710,9 +713,80 @@ load_derive_table() {
 #   name
 #   cache_path
 add_derive_item_table() {
-  # loop over each field
-  # if field is pk, add "to one" derive_from
-  # write to cache_path
+  begin_function_grip
+
+    debug_start
+
+    local -n derive_table_fields=derive_table_${name}_fields \
+      derive_table_data=derive_table_${name}_data \
+
+    local field_count=${#derive_table_fields[*]} \
+      data_count=${#derive_table_data[*]} \
+      row_count index_count \
+      other_fields \
+      field_index field \
+      key_field \
+      other_field \
+      other_index \
+      other_index_card \
+
+    (( row_count = data_count / field_count ))
+
+    for (( field_index = 0; field_index < field_count; field_index++ )); do
+      field=${derive_table_fields[$field_index]}
+      field=${field//-/_}
+
+      derive_dims[$field]=1
+
+      local -n index=derive_table_${name}_index_$field \
+        derive_from=dim_${field}_derived_from \
+        key_fields=derive_table_${name}_key_fields \ 
+
+      index_count=${#index[*]}
+
+      other_fields="${derive_table_fields[*]}"
+      remove_word_from_string other_fields $field
+
+      for key_field in $key_fields; do
+        if [[ $key_field != $field ]]; then
+          derive_from+=( "$name.tab to_one $key_field" )
+        fi
+      done
+
+      if (( index_count == row_count )); then
+        derive_from+=( "$name.tab to_many $other_fields" )
+      fi
+
+      for other_field in $other_fields; do
+        local -n other_index=derive_table_${name}_index_$other_field
+        other_index_card=${#other_index[*]}
+        if (( other_index_card > 3 )); then
+          derive_from+=( "$name.tab to_many $other_field" )
+        fi
+      done
+
+    done
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   name
+#   cache_path
+add_derive_item_function() {
+  local derive_path=$1 name=${2:-}
+  begin_function_grip
+
+    debug_start
+
+    local values=()
+
+    action=info \
+    derive_function_$name || fail
+
+  end_function
+  handle_return
 }
 
 # inputs:
@@ -3124,13 +3198,15 @@ build_context_gather_derive_tables_single() {
 
     if [[ -d $lib_dt_path ]]; then
       local dt files links link \
-        cache_path=$start_path/.lib/derive_cache \
+        cache_path=$start_path/.lib/derive-cache \
 
       if [[ -f $cache_path ]]; then
         source $cache_path || fail
       else # build the cache
 
         log_debug "Generating derive cache for $lib_dt_path"
+
+        local -A derive_dims=()
 
         if [[ -f $cache_path.new ]]; then
           rm $cache_path.new || fail
@@ -3156,6 +3232,12 @@ build_context_gather_derive_tables_single() {
           add_derive_item $dt || fail
 
         done; maybe_break
+
+        local derive_dim
+        for derive_dim in ${!derive_dims[*]}; do
+          context_file=$cache_path \
+          write_to_context var dim_${derive_dim}_derived_from || fail
+        done
 
         # TODO mv cache.new to cache
 
