@@ -785,6 +785,10 @@ add_derive_item_function() {
     action=info \
     derive_function_$name || fail
 
+    local -n derive_from=dim_${name}_derived_from
+
+    derive_from+=( "$name.fun ${values[*]}" )
+
   end_function
   handle_return
 }
@@ -3200,6 +3204,8 @@ build_context_gather_derive_tables_single() {
       local dt files links link \
         cache_path=$start_path/.lib/derive-cache \
 
+      derive_caches+="$cache_path "
+
       if [[ -f $cache_path ]]; then
         source $cache_path || fail
       else # build the cache
@@ -3212,34 +3218,43 @@ build_context_gather_derive_tables_single() {
           rm $cache_path.new || fail
         fi
 
-        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
-        for dt in $files; do
+        local type
+        for type in fun tab; do
 
-          dna_up_files+=( "$dt" )
-
-          if [[ ! -f $dt ]]; then
-            local real_path=$(realpath -m $dt)
-            local real_path_parent=${real_path%/*}
-            if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
-              log_debug "Executing cell update to generate $dt"
-              load_dna_contents_update_cell $real_path || fail
-            else
-              log_fatal "Broken link found when trying to gather derive tables: $dt"
-              fail1
-            fi
+          if [[ $type == fun ]]; then
+            files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.fun' | sort -g) || fail
+          else
+            files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
           fi
 
-          add_derive_item $dt || fail
+          for dt in $files; do
 
+            dna_up_files+=( "$dt" )
+
+            if [[ ! -f $dt ]]; then
+              local real_path=$(realpath -m $dt)
+              local real_path_parent=${real_path%/*}
+              if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
+                log_debug "Executing cell update to generate $dt"
+                load_dna_contents_update_cell $real_path || fail
+              else
+                log_fatal "Broken link found when trying to gather derive tables: $dt"
+                fail1
+              fi
+            fi
+
+            add_derive_item $dt || fail
+
+          done; maybe_break
         done; maybe_break
 
         local derive_dim
         for derive_dim in ${!derive_dims[*]}; do
           context_file=$cache_path \
           write_to_context var dim_${derive_dim}_derived_from || fail
-        done
+        done; maybe_break
 
-        # TODO mv cache.new to cache
+        mv $cache_path.new $cache_path || fail
 
       fi
     fi
@@ -3251,10 +3266,14 @@ build_context_gather_derive_tables_single() {
 build_context_gather_derive_tables() {
   begin_function_grip
 
+    derive_caches=
     derive_tables=()
     derive_functions=()
+
     build_context_gather_derive_tables_single $cell_path || fail
-    write_vars_to_context derive_tables derive_functions || fail
+
+    derive_caches=${derive_caches% }
+    write_vars_to_context derive_tables derive_functions derive_caches || fail
 
   end_function
   handle_return
@@ -5654,7 +5673,7 @@ load_post_context_dynamic_vars() {
   handle_return
 }
 
-build_cyto_inner() {
+build_cyto() {
   local cell_path=$1
 
   begin_function
@@ -5690,12 +5709,6 @@ build_cyto_inner() {
 
   end_function
   handle_return
-}
-
-# Can be called on a cell that already has a cyto folder, in which case it will repair missing
-#   parts
-build_cyto() {
-  fork build_cyto_inner "$@"
 }
 
 # inputs:
@@ -5757,7 +5770,7 @@ switch_context() {
       seed_path=
       if [[ $dna_exists == t ]]; then
         if [[ ! -f $context_path ]]; then
-          build_cyto $cell_path || fail
+          fork build_cyto $cell_path || fail
         fi
 
         source $context_path || fail
