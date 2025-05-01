@@ -80,10 +80,13 @@ bash_lifted_init() {
   DEBUG_COLOR=$CYAN
   DIM_DEBUG_COLOR=$DIM_CYAN
   trace_structure=${trace_structure:-${trace_struct:-}}
-  grip=${grip:-0}
+
+  default_grip=1000
+  grip=${grip:-$default_grip}
   if [[ $grip == t ]]; then
-    grip=1
+    grip=100
   fi
+
   slow_down=${slow_down:-${slow:-}}
   if [[ $slow_down == t ]]; then
     slow_down=0.1
@@ -293,17 +296,21 @@ reached_debug_id() {
 debug_id_inc() {
   (( no_trace_depth++ )) || true
 
+  local debug_id_inc_start=${EPOCHREALTIME//./} diff
   if [[ -v lifted_breaker_open[$current_function] ]]; then
     #echo "Skipping $current_function because breaker is open"
+    debug_id_inc_diff=$(( ${EPOCHREALTIME//./} - debug_id_inc_start ))
+    echo "debug_id_inc_diff($current_function) = $debug_id_inc_diff" >&2
     (( no_trace_depth-- )) || true
     return 0
   fi
 
-  local debug_id_inc_start=${EPOCHREALTIME//./} diff
   if [[ -v lifted_breaker_time[$current_function] ]]; then
     (( diff = debug_id_inc_start - lifted_breaker_time[$current_function] )) || true
-    if (( diff < ${lifted_breaker_limit:-1000} )); then
-      #echo "Opening breaker for $current_function because two events happened less than ${lifted_breaker_limit:-1000} microseconds apart: $diff"
+    if (( diff < grip )); then
+      if (( grip < default_grip )); then
+        echo "Opening breaker for $current_function because two events happened less than $grip microseconds apart: $diff" >&$fd_original_err
+      fi
       lifted_breaker_open[$current_function]=t
       #echo "Breakers open: ${!lifted_breaker_open[*]}"
       (( no_trace_depth-- )) || true
@@ -388,8 +395,8 @@ debug_id_inc() {
   fi
 
   #   for performance testing
-  #debug_id_inc_diff=$(( ${EPOCHREALTIME//./} - debug_id_inc_start ))
-  #echo "debug_id_inc_diff = $debug_id_inc_diff"
+  debug_id_inc_diff=$(( ${EPOCHREALTIME//./} - debug_id_inc_start ))
+  echo "debug_id_inc_diff($current_function) = $debug_id_inc_diff" >&2
 
   (( no_trace_depth-- )) || true
 }
@@ -538,12 +545,10 @@ alias begin_function='
   
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 # This one switches between a low level and a mid level function, based on the grip variable
-# grip=0 is default, where these functions will be low level
-# grip=1 makes these functions mid level
 alias begin_function_grip='
   (( no_trace_depth++ )) || true
   local return_value=0 break_out=f function_level=0 repair_attempted=f current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
-  if (( grip > 0 )); then
+  if (( grip < default_grip )); then
     function_level=1
     trace_time_open
     struct_type="start of $current_function" debug_id_inc
@@ -551,7 +556,7 @@ alias begin_function_grip='
     stack_debug_id[$stack_pos]=$fork_debug_id
   fi
   while true; do
-  if (( grip > 0 )); then
+  if (( grip < default_grip )); then
     if [[ ${debug_step_to_mid_function:-f} == t ]]; then
       debug_id=t
       debug_immediate=t
@@ -632,7 +637,7 @@ alias         doo=do
 #   providing a stopping point for debugging of larger blocks of code that otherwise
 #   can't be split up.
 alias fence='debug_id_inc; log_show_vars='
-alias fence_grip='(( grip > 0 )) && debug_id_inc; log_show_vars='
+alias fence_grip='(( grip < default_grip )) && debug_id_inc; log_show_vars='
 # Same as fence, but denotes that it is intended to be only for a brief debug session and should be removed before committing
 alias fence_zombie='debug_id_inc; log_show_vars='
 
