@@ -809,8 +809,6 @@ add_derive_item() {
   local derive_path=$1 name=${2:-}
   begin_function_grip
 
-    debug_start
-
     if [[ ! "$name" ]]; then
       name=${derive_path##*/}
       name=${name%.*}
@@ -835,7 +833,7 @@ add_derive_item() {
       fun)
 
         local code
-        load_fun_to_code $var_full_path derive_function_$name || fail
+        load_fun_to_code $derive_path derive_function_$name || fail
         eval "$code" || fail
         fun_get_derive_from || fail
         derive_functions+=( $name )
@@ -1665,6 +1663,7 @@ expand_dim() {
       if ! function_exists dim_${dim}_expand; then
 
         context_type= \
+        recursive=f \
         build_dim_info_single || fail
 
         context_type= \
@@ -2667,6 +2666,8 @@ build_dim_info_single() {
 
     local dims dim_path=
 
+    all_dims[$long_dim]=1
+
     if [[ ! "$dim" =~ ^[a-zA-Z0-9_]+$ ]]; then
       log_fatal "Invalid dim name: $dim. Dims must consist of alphanumeric characters or underscores."
       fail1
@@ -2713,7 +2714,6 @@ build_dim_info_single() {
           upstream_dim=${upstream_long_dim%%-*}
           local -n upstream_dim_type=dim_${upstream_dim}_type
           if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_dim] ]]; then
-            all_dims[$upstream_long_dim]=1
             downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
             dim_requested_by="derived_from of $long_dim" \
@@ -2761,8 +2761,10 @@ add_derived_to_support_dims() {
 
           dim=${long_dim//-/_}
 
-          downstream_dim_row= \
-          build_dim_info_single || fail
+          if [[ ! -v all_dims[$long_dim] ]]; then
+            downstream_dim_row= \
+            build_dim_info_single || fail
+          fi
 
           # perplexing why we need this here, but after too much debugging, this was the simplest solution
           unfail
@@ -2867,10 +2869,12 @@ build_dim_info() {
       local -n dim_array=${dim_type}
 
       begin_for long_dim in "${dim_array[@]}"; doo
-        dim_requested_by="$dim_type $long_dim" \
-        downstream_dim_row= \
-        dim=${long_dim//-/_} \
-        build_dim_info_single || fail
+        if [[ ! -v all_dims[$long_dim] ]]; then
+          dim_requested_by="$dim_type $long_dim" \
+          downstream_dim_row= \
+          dim=${long_dim//-/_} \
+          build_dim_info_single || fail
+        fi
       end_for
 
     end_for
@@ -2890,8 +2894,6 @@ build_dim_info() {
         get_plural $dim dims
 
         short_to_long[$short_dim]=$long_dim
-
-        all_dims[$long_dim]=1
 
         localize_dims+=" d_$dim d_$dims"
         localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
@@ -3261,9 +3263,9 @@ build_context_gather_derive_tables_single() {
 build_context_gather_derive_tables() {
   begin_function_grip
 
-    derive_caches=
-    derive_tables=()
-    derive_functions=()
+    derive_caches= \
+    derive_tables=() \
+    derive_functions=() \
 
     build_context_gather_derive_tables_single $cell_path || fail
 
@@ -3336,7 +3338,7 @@ build_context_trunk() {
 
     build_context_trunk_dna || fail
 
-    if [[ "$trunk_dims$sub_dims$control_props$data_props" ]]; then
+    if [[ "${trunk_dims[0]:-}${sub_dims[0]:-}${control_props[0]:-}${data_props[0]:-}" ]]; then
 
       local dims_missing_members=
 

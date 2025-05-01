@@ -8,7 +8,7 @@
 
 type -t bash_lifted_init >/dev/null && return 0
 
-declare -A trace_var_old trace_var_sub
+declare -A trace_var_old trace_var_sub lifted_breaker_time lifted_breaker_open
 debug_id_current=0
 
 # this is empty, meaning we haven't forked yet. the top level process having a blank id
@@ -290,9 +290,28 @@ reached_debug_id() {
   done
 }
 
-# ALSO IN: CellOp
 debug_id_inc() {
   (( no_trace_depth++ )) || true
+
+  if [[ -v lifted_breaker_open[$current_function] ]]; then
+    #echo "Skipping $current_function because breaker is open"
+    (( no_trace_depth-- )) || true
+    return 0
+  fi
+
+  local debug_id_inc_start=${EPOCHREALTIME//./} diff
+  if [[ -v lifted_breaker_time[$current_function] ]]; then
+    (( diff = debug_id_inc_start - lifted_breaker_time[$current_function] )) || true
+    if (( diff < ${lifted_breaker_limit:-1000} )); then
+      #echo "Opening breaker for $current_function because two events happened less than ${lifted_breaker_limit:-1000} microseconds apart: $diff"
+      lifted_breaker_open[$current_function]=t
+      #echo "Breakers open: ${!lifted_breaker_open[*]}"
+      (( no_trace_depth-- )) || true
+      return 0
+    fi
+  fi
+  lifted_breaker_time[$current_function]=$debug_id_inc_start
+
   (( debug_id_current++ )) || true
   local showed_something=f 
 
@@ -367,6 +386,10 @@ debug_id_inc() {
     debug_skip_breakpoints=f \
     debug_start n
   fi
+
+  #   for performance testing
+  #debug_id_inc_diff=$(( ${EPOCHREALTIME//./} - debug_id_inc_start ))
+  #echo "debug_id_inc_diff = $debug_id_inc_diff"
 
   (( no_trace_depth-- )) || true
 }
@@ -475,7 +498,7 @@ alias trace_time_close='
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 alias begin_function_hi='
   (( no_trace_depth++ )) || true
-  local return_value=0 break_out=f function_level=2 repair_attempted=f current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
+  local return_value=0 break_out=f function_level=2 repair_attempted=f current_function=${function_override:-${FUNCNAME:-unknown}} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
   write_to_log_and_save 
   (( log_depth_current++ )) || true
   trace_time_open
