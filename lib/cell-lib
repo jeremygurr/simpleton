@@ -2265,8 +2265,9 @@ fetch_values_from_coordinates() {
 prep_dims() {
   begin_function
 
-    local dim_var dims_var
-    for dim_var in ${!all_dims[*]}; do
+    local dim_var dims_var dim_long
+    for dim_long in ${!all_dims[*]}; do
+      dim_var=${dim_long//-/_}
 
       get_plural $dim_var dims_var
 
@@ -2711,7 +2712,7 @@ build_dim_info_single() {
           upstream_dim=${upstream_long_dim%%-*}
           local -n upstream_dim_type=dim_${upstream_dim}_type
           if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_dim] ]]; then
-            all_dims[$upstream_dim]=1
+            all_dims[$upstream_long_dim]=1
             downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
             dim_requested_by="derived_from of $long_dim" \
@@ -2883,7 +2884,7 @@ build_dim_info() {
         local dim=${long_dim//-/_} dims short_dim=${long_dim%%-*}
         get_plural $dim dims
         short_dims+=( $short_dim )
-        all_dims[$dim]=1
+        all_dims[$long_dim]=1
 
         localize_dims+=" d_$dim d_$dims"
         localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
@@ -3053,8 +3054,9 @@ load_parent_context() {
 
 build_dim_expand_functions() {
   begin_function_lo
-    local dim
-    for dim in ${!all_dims[*]}; do
+    local dim long_dim
+    for long_dim in ${!all_dims[*]}; do
+      dim=${long_dim//-/_}
       local -n expand_function=dim_${dim}_expand
       if ! function_exists expand_function; then
         build_context_expand || fail
@@ -3073,15 +3075,17 @@ load_dim_derive_tables() {
       dim_to_add \
       action \
       action_type \
-      table
+      table \
+      long_dim \
 
-    for dim in ${!all_dims[*]}; do
+    begin_for long_dim in ${!all_dims[*]}; doo
+      dim=${long_dim//-/_}
       local -n derived_from=dim_${dim}_derived_from
 
-      for derived_from_row in "${derived_from[@]}"; do
+      begin_for derived_from_row in "${derived_from[@]}"; doo
         first=t
         dims_to_add=
-        for derived_short_dim in $derived_from_row; do
+        begin_for derived_short_dim in $derived_from_row; doo
           if [[ $first == t ]]; then
             action=$derived_short_dim
             action_type=${action##*.}
@@ -3093,21 +3097,22 @@ load_dim_derive_tables() {
           else
             dims_to_add+="$derived_short_dim "
           fi
-        done
+        end_for
 
-        for dim_to_add in $dims_to_add; do
+        begin_for dim_to_add in $dims_to_add; doo
           local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
           dim_derive_tables+="$table "
-        done
+        end_for
 
-      done
-    done
+      end_for
+    end_for
 
-    for dim in ${!all_dims[*]}; do
+    begin_for long_dim in ${!all_dims[*]}; doo
+      dim=${long_dim//-/_}
       if [[ -v dim_${dim}_derive_tables ]]; then
         write_vars_to_context dim_${dim}_derive_tables || fail
       fi
-    done
+    end_for
 
   end_function
   handle_return
@@ -3916,7 +3921,7 @@ set_cross_dims_single() {
   local field_count=${#derive_fields[*]} \
     data_count=${#derive_data[*]} \
     row_index data_index=0 column_index \
-    value= field \
+    value= field field_long \
 
   local row_count=$((data_count / field_count))
 
@@ -3929,10 +3934,11 @@ set_cross_dims_single() {
     fi
 
     for (( column_index = 0; column_index < field_count; column_index++ )); do
-      field=${derive_fields[$column_index]}
+      field_long=${derive_fields[$column_index]}
+      field=${field_long//-/_}
       local fields
       get_plural $field fields
-      if [[ $field != $dim && -v all_dims[$field] ]]; then
+      if [[ $field != $dim && -v all_dims[$field_long] ]]; then
         (( data_index = row_index * field_count + column_index ))
         value=${derive_data[$data_index]}
         local -n field_dim=d_$field
@@ -4457,12 +4463,13 @@ seed_coordinates_handle_row() {
   log_show_vars=row_index
   begin_function_grip
     localize
-    local is_valid
+    local is_valid seed_field_long
     check_table_row
     if [[ $is_valid == t ]]; then
       for field_index in ${!seed_fields[*]}; do
-        seed_field=${seed_fields[$field_index]}
-        if [[ -v all_dims[$seed_field] ]]; then
+        seed_field_long=${seed_fields[$field_index]}
+        seed_field=${seed_field_long//-/_}
+        if [[ -v all_dims[$seed_field_long] ]]; then
           local -n member=d_$seed_field
           (( seed_data_index = row_index * seed_field_count + field_index ))
           member=${seed_data[$seed_data_index]}
@@ -4704,9 +4711,10 @@ calc_coordinates_refine_multi() {
 
 prep_seed_dims() {
 
-  local dim dims
-  for dim in ${!all_dims[*]}; do
+  local dim dims long_dim
+  for long_dim in ${!all_dims[*]}; do
 
+    dim=${long_dim//-/_}
     get_plural $dim dims
 
     local -n \
