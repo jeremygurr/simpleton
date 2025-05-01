@@ -81,29 +81,31 @@ get_tmp_file() {
 }
 
 write_to_context() {
-  local context_type=$context_type new_type=$1 context_file=${context_file:-}
+  local context_type=${context_type:-} new_type=$1 context_file=${context_file:-}
   local -n _content=$2
   begin_function_lo
-    if [[ ! "$context_file" ]]; then
-      context_file=$context_path-$context_type.new
-    fi
-
-    last_type=${last_type:-var}
-    if [[ $last_type == fun || $new_type == fun ]]; then
-      echo >>$context_file || fail
-    fi
-    trim_ws _content
-    echo "${_content}" >>$context_file || fail
-    last_type=$new_type
-    eval "$_content" || {
-      if [[ "${var_full_path:-}" ]]; then
-        log_fatal "Invalid dna file: $var_full_path"
-      else
-        log_fatal "Invalid dna file. Contents:"
-        log_fatal "$_content"
+    if [[ "$context_type" || "$context_file" ]]; then
+      if [[ ! "$context_file" ]]; then
+        context_file=$context_path-$context_type.new
       fi
-      fail1
-    }
+
+      last_type=${last_type:-var}
+      if [[ $last_type == fun || $new_type == fun ]]; then
+        echo >>$context_file || fail
+      fi
+      trim_ws _content
+      echo "${_content}" >>$context_file || fail
+      last_type=$new_type
+      eval "$_content" || {
+        if [[ "${var_full_path:-}" ]]; then
+          log_fatal "Invalid dna file: $var_full_path"
+        else
+          log_fatal "Invalid dna file. Contents:"
+          log_fatal "$_content"
+        fi
+        fail1
+      }
+    fi
   end_function
   handle_return
 }
@@ -367,7 +369,9 @@ init_context() {
 
     auto_loads=() \
     cell_expiration= \
+    cell_is_leaf= \
     cell_is_outdated=t \
+    cell_is_trunk= \
     check_op_var=f \
     child_dims=() \
     control_props=() \
@@ -391,6 +395,7 @@ init_context() {
     out_path= \
     post_validate=f \
     pre_validate=f \
+    prev_branch_info_cell= \
     refresh_less_than=${refresh_less_than:-1} \
     retry_delay=1 \
     retry_delay_max=10 \
@@ -1644,6 +1649,7 @@ convert_table_to_dims() {
 
 # input: 
 #   dim
+#   long_dim
 #   $1               name of input var
 #   $2               name of output var
 #   ignore_problems
@@ -1657,8 +1663,14 @@ expand_dim() {
     if [[ "${!in_var:-}" && "${!in_var}" != \? ]]; then
 
       if ! function_exists dim_${dim}_expand; then
-        log_fatal "Internal error: Missing dim_${dim}_expand function, which should have been created by make_context method"
-        fail1
+
+        context_type= \
+        build_dim_info_single || fail
+
+        context_type= \
+        build_context_expand || fail
+        eval "$code" || fail
+
       fi
 
       local problem
@@ -2642,17 +2654,18 @@ get_dim_path() {
 }
 
 # inputs:
-#   $1                long_dim
+#   long_dim
+#   dim
 #   downstream_dim    optional
 # 
 build_dim_info_single() {
-  local long_dim=$1 downstream_dim_row=${downstream_dim_row:-} \
+  local long_dim=$long_dim downstream_dim_row=${downstream_dim_row:-} \
     log_show_vars=long_dim \
+    recursive=${recursive:-t} \
 
   begin_function_grip
 
-    local dims dim_path= \
-      dim=${long_dim//-/_} \
+    local dims dim_path=
 
     if [[ ! "$dim" =~ ^[a-zA-Z0-9_]+$ ]]; then
       log_fatal "Invalid dim name: $dim. Dims must consist of alphanumeric characters or underscores."
@@ -2684,24 +2697,6 @@ build_dim_info_single() {
       derived_short_dim \
       first \
 
-    #   everything is expressed in long form now
-    # derived_from=()
-    # for derived_from_row in "${derived_from[@]}"; do
-    #   new_derived_from_row=
-    #   first=t
-    #   for derived_long_dim in $derived_from_row; do
-    #     if [[ $first == t ]]; then
-    #       derived_short_dim=$derived_long_dim
-    #       first=f
-    #     else
-    #       derived_short_dim=${derived_long_dim%%-*}
-    #     fi
-    #     new_derived_from_row+="$derived_short_dim "
-    #   done
-    #   derived_from+=( "${new_derived_from_row% }" )
-    # done
-    # write_vars_to_context dim_${dim}_derived_from || fail
-
     local -n is_secret=dim_${dim}_is_secret
     if [[ -v is_secret && $is_secret == t ]]; then
       add_word_to_string secret_vars "$dim $dims s_$dim s_$dims d_$dim d_$dims"
@@ -2711,7 +2706,7 @@ build_dim_info_single() {
     dim_dim_type=$dim_type
 
     local -n derived_from=dim_${dim}_derived_from
-    if [[ -v derived_from ]]; then
+    if [[ $recursive == t && -v derived_from ]]; then
       local upstream_long_dim upstream_dim upstream_dim_row
       begin_for upstream_dim_row in "${derived_from[@]}"; doo
         begin_for upstream_long_dim in ${upstream_dim_row#* }; doo
@@ -2722,7 +2717,10 @@ build_dim_info_single() {
             downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
             dim_requested_by="derived_from of $long_dim" \
-            build_dim_info_single "$upstream_long_dim" || fail
+
+            long_dim=$upstream_long_dim \
+            dim=${upstream_long_dim//-/_} \
+            build_dim_info_single || fail
           fi
         log_show_vars=long_dim
         end_for
@@ -2761,16 +2759,17 @@ add_derived_to_support_dims() {
         if ! array_contains trunk_dims $long_dim \
           && ! array_contains support_dims $long_dim; then
 
+          dim=${long_dim//-/_}
+
           downstream_dim_row= \
-          build_dim_info_single "$long_dim" || fail
+          build_dim_info_single || fail
 
           # perplexing why we need this here, but after too much debugging, this was the simplest solution
           unfail
 
           support_dims+=( $long_dim )
 
-          short_dim=${long_dim//-/_}
-          local -n dim_derived_from=dim_${short_dim}_derived_from
+          local -n dim_derived_from=dim_${dim}_derived_from
           if [[ -v dim_derived_from ]]; then
             dim_requested_by="derived_from of $long_dim" \
             add_derived_to_support_dims || fail
@@ -2870,7 +2869,8 @@ build_dim_info() {
       begin_for long_dim in "${dim_array[@]}"; doo
         dim_requested_by="$dim_type $long_dim" \
         downstream_dim_row= \
-        build_dim_info_single "$long_dim" || fail
+        dim=${long_dim//-/_} \
+        build_dim_info_single || fail
       end_for
 
     end_for
@@ -3326,7 +3326,7 @@ calc_missing_members() {
 build_context_trunk() {
   begin_function
 
-    local context_type=trunk last_type=var \
+    local context_type=trunk last_type=var
 
     log_debug "Building trunk context for $short_cell"
 
@@ -3340,12 +3340,12 @@ build_context_trunk() {
 
       local dims_missing_members=
 
-      build_dim_expand_functions || fail
-
       build_context_gather_derive_tables || fail
 
       build_dim_info || fail
-      fence
+      fence_grip
+
+      build_dim_expand_functions || fail
 
       load_dim_derive_tables || fail
 
