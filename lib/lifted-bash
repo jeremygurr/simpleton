@@ -296,6 +296,8 @@ reached_debug_id() {
 debug_id_inc() {
   (( no_trace_depth++ )) || true
 
+  local allow_breaker_update=${allow_breaker_update:-t}
+
   if [[ -v lifted_breaker_open[$current_function] ]]; then
     #echo "Skipping $current_function because breaker is open" >&2
     (( no_trace_depth-- )) || true
@@ -303,7 +305,7 @@ debug_id_inc() {
   fi
 
   local debug_id_inc_start=${EPOCHREALTIME//./} diff
-  if [[ -v lifted_breaker_time[$current_function] ]]; then
+  if [[ -v lifted_breaker_time[$current_function] && $allow_breaker_update == t ]]; then
     (( diff = debug_id_inc_start - lifted_breaker_time[$current_function] )) || true
     if (( diff < grip )); then
       if (( grip < default_grip )); then
@@ -634,10 +636,10 @@ alias         doo=do
 #   except unlike begin_function this may be placed anywhere within a function,
 #   providing a stopping point for debugging of larger blocks of code that otherwise
 #   can't be split up.
-alias fence='debug_id_inc; log_show_vars='
-alias fence_grip='(( grip < default_grip )) && debug_id_inc; log_show_vars='
+alias fence='allow_breaker_update=f debug_id_inc; log_show_vars='
+alias fence_grip='(( grip < default_grip )) && allow_breaker_update=f debug_id_inc; log_show_vars='
 # Same as fence, but denotes that it is intended to be only for a brief debug session and should be removed before committing
-alias fence_zombie='debug_id_inc; log_show_vars='
+alias fence_zombie='allow_breaker_update=f debug_id_inc; log_show_vars='
 
 # used after a direct command which may fail: cd /somewhere || fail
 alias fail='{ return_value=$?; (( return_value < 100 )) && attempt_autorepair $FUNCNAME && { repair_attempted=t; continue; }; break_out=t; break; }'

@@ -315,8 +315,8 @@ load_derive_table_card_and_key() {
 
     local card=${#index[*]}
     if (( card == row_count )); then
-      local -n key_tables=dim_${field}_key_tables \ 
-        key_fields=derive_table_${name}_key_fields \ 
+      local -n key_tables=dim_${field}_key_tables \
+        key_fields=derive_table_${name}_key_fields \
 
       key_tables+="$name "
       key_fields+="$field "
@@ -696,15 +696,8 @@ load_derive_table() {
       load_dna_vtab $dtp derive_table_$name || fail
     fi
 
-    local row_count field_count data_count
-    field_count=${#derive_table_fields[*]}
-    data_count=${#derive_table_data[*]}
-    (( row_count = data_count / field_count ))
-
     table=derive_table_${name} \
     make_table_index || fail
-
-    fence
 
     load_derive_table_card_and_key || fail
 
@@ -720,10 +713,9 @@ load_derive_table() {
 tab_get_derive_from() {
   begin_function
 
-    debug_start
-
     local -n derive_table_fields=derive_table_${name}_fields \
       derive_table_data=derive_table_${name}_data \
+      key_fields=derive_table_${name}_key_fields \
 
     local field_count=${#derive_table_fields[*]} \
       data_count=${#derive_table_data[*]} \
@@ -732,45 +724,53 @@ tab_get_derive_from() {
       field_index field \
       key_field \
       other_field \
-      other_field_raw \
+      other_field_long \
       other_index \
       other_index_card \
-      raw_field \
+      long_field \
 
     (( row_count = data_count / field_count ))
 
     for (( field_index = 0; field_index < field_count; field_index++ )); do
-      raw_field=${derive_table_fields[$field_index]}
-      field=${raw_field//-/_}
+      long_field=${derive_table_fields[$field_index]}
+      field=${long_field//-/_}
 
       derive_dims[$field]=1
 
       local -n index=derive_table_${name}_index_$field \
         derive_from=dim_${field}_derived_from \
-        key_fields=derive_table_${name}_key_fields \ 
 
       index_count=${#index[*]}
 
       other_fields="${derive_table_fields[*]}"
-      remove_word_from_string other_fields $raw_field
+      remove_word_from_string other_fields $long_field
 
-      for key_field in $key_fields; do
-        if [[ $key_field != $field ]]; then
-          derive_from+=( "$name.tab to_one $key_field" )
-        fi
-      done
+      
+      while [[ "$other_fields" ]]; do
 
-      if (( index_count == row_count )); then
-        derive_from+=( "$name.tab to_many $other_fields" )
-      fi
+        # find which dim has the highest cardinality
+        local highest_card=0 highest_dim
+        for other_field_long in $other_fields; do
+          other_field=${other_field_long//-/_}
+          local -n other_index=derive_table_${name}_index_$other_field
+          other_index_card=${#other_index[*]}
+          if (( other_index_card > highest_card )); then
+            highest_card=$other_index_card
+            highest_dim=$other_field_long
+          fi
+        done
 
-      for other_field_raw in $other_fields; do
-        other_field=${other_field_raw//-/_}
-        local -n other_index=derive_table_${name}_index_$other_field
-        other_index_card=${#other_index[*]}
-        if (( other_index_card > 3 )); then
-          derive_from+=( "$name.tab to_many $other_field" )
-        fi
+        local -n other_index=derive_table_${name}_index_$highest_dim
+
+        local join='to_many'
+        if (( highest_card == row_count )); then
+          join='to_one'
+        fi 
+
+        derive_from+=( "$name.tab $join $highest_dim" )
+
+        remove_word_from_string other_fields $highest_dim
+
       done
 
     done
@@ -784,9 +784,6 @@ tab_get_derive_from() {
 #   cache_path
 #   derive_path
 fun_get_derive_from() {
-
-  debug_start
-
   begin_function
 
     local values=()
@@ -2210,8 +2207,6 @@ fetch_values_from_coordinates2_row() {
     target_dim_var_type=ddim \
     convert_table_to_dims || fail
 
-    fence
-
     value_found=f
     skip_dims= \
     attempt_derive || fail
@@ -2712,26 +2707,21 @@ build_dim_info_single() {
       local upstream_long_dim upstream_dim upstream_dim_row
       begin_for upstream_dim_row in "${derived_from[@]}"; doo
         begin_for upstream_long_dim in ${upstream_dim_row#* }; doo
-          upstream_dim=${upstream_long_dim%%-*}
+          upstream_dim=${upstream_long_dim//-/_}
           local -n upstream_dim_type=dim_${upstream_dim}_type
-          if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_dim] ]]; then
+          if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_long_dim] ]]; then
             downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
             dim_requested_by="derived_from of $long_dim" \
 
             long_dim=$upstream_long_dim \
-            dim=${upstream_long_dim//-/_} \
+            dim=$upstream_dim \
             build_dim_info_single || fail
           fi
         log_show_vars=long_dim
         end_for
       log_show_vars=long_dim
       end_for
-    fi
-
-    local -n ddt=dim_${dim}_derive_tables
-    if [[ -v ddt ]]; then
-      write_vars_to_context dim_${dim}_derive_tables || fail
     fi
 
     local -n member_type=dim_${dim}_member_type
@@ -2881,7 +2871,6 @@ build_dim_info() {
     end_for
 
     build_context_support_dims || fail
-    fence
 
     for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
 
@@ -3077,7 +3066,7 @@ build_dim_expand_functions() {
   handle_return
 }
 
-load_dim_derive_tables() {
+load_dim_derive_items() {
   begin_function_lo
     local dim \
       derived_from_row \
@@ -3086,7 +3075,7 @@ load_dim_derive_tables() {
       dim_to_add \
       action \
       action_type \
-      table \
+      item \
       long_dim \
 
     begin_for long_dim in ${!all_dims[*]}; doo
@@ -3100,20 +3089,31 @@ load_dim_derive_tables() {
           if [[ $first == t ]]; then
             action=$derived_short_dim
             action_type=${action##*.}
-            if [[ $action_type != tab ]]; then
-              continue 2
-            fi
-            table=${action%.*}
+            item=${action%.*}
             first=f
           else
             dims_to_add+="$derived_short_dim "
           fi
         end_for
 
-        begin_for dim_to_add in $dims_to_add; doo
-          local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
-          dim_derive_tables+="$table "
-        end_for
+        case $action_type in
+          tab)
+            begin_for dim_to_add in $dims_to_add; doo
+              local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
+              dim_derive_tables+="$item "
+            end_for
+          ;;
+          fun)
+            begin_for dim_to_add in $dims_to_add; doo
+              local -n dim_derive_functions=dim_${dim_to_add}_derive_functions
+              dim_derive_tables+="$item "
+            end_for
+          ;;
+          *)
+            log_fatal "Internal error: Unknown action type in derived from dim $long_dim: $action"
+            fail1
+          ;;
+        esac
 
       end_for
     end_for
@@ -3121,7 +3121,7 @@ load_dim_derive_tables() {
     begin_for long_dim in ${!all_dims[*]}; doo
       dim=${long_dim//-/_}
       if [[ -v dim_${dim}_derive_tables ]]; then
-        write_vars_to_context dim_${dim}_derive_tables || fail
+        write_vars_to_context dim_${dim}_derive_tables dim_${dim}_derive_functions || fail
       fi
     end_for
 
@@ -3346,11 +3346,10 @@ build_context_trunk() {
       build_context_gather_derive_tables || fail
 
       build_dim_info || fail
-      fence
 
       build_dim_expand_functions || fail
 
-      load_dim_derive_tables || fail
+      load_dim_derive_items || fail
 
       if [[ "$dims_missing_members" ]]; then
         calc_missing_members || fail
@@ -4232,9 +4231,6 @@ calc_coords_validate_member() {
     skip_dims= \
     attempt_derive || fail
 
-    log_show_vars='dim member'
-    fence
-
     if [[ $can_derive == t ]]; then
       if [[ ! "${values[0]:-}" ]]; then
         is_valid=f
@@ -4761,6 +4757,8 @@ calc_coordinates_slow() {
       check_dims="${coordinate_fields[*]}" \
       validated_dims= \
 
+    debug_start
+
     if [[ $target_form == seed ]]; then
       prep_seed_dims || fail
     fi
@@ -4999,6 +4997,25 @@ get_highest_trunk_context_cell() {
   handle_return
 }
 
+make_coord_index() {
+  begin_function
+
+    local row_count field_count data_count coord_type=$coord_type
+
+    local -n fields=${coord_type}_coordinate_fields \
+      data=${coord_type}_coordinate_data \
+
+    field_count=${#fields[*]}
+    data_count=${#data[*]}
+    (( row_count = data_count / field_count ))
+
+    table=branch_coordinate \
+    make_table_index || fail
+
+  end_function
+  handle_return
+}
+
 build_context() {
   local cell_path=$1
   begin_function
@@ -5017,7 +5034,6 @@ build_context() {
     else
       source $context_path-trunk || fail
     fi
-    fence
 
     calc_anchor_dims || fail
 
@@ -5027,7 +5043,6 @@ build_context() {
     else
       source $context_path-branch || fail
     fi
-    fence
 
     if [[ "${trunk_dims:-}" ]]; then
       if [[ ! -f $context_path-branch-coords ]]; then
@@ -5046,12 +5061,8 @@ build_context() {
         target_form=seed \
         calc_coordinates || fail
 
-        fence
-
-        table=branch_coordinate \
-        make_table_index || fail
-
-        fence
+        coord_type=branch \
+        make_coord_index || fail
 
         if [[ "${branch_coordinate_data:-}" ]]; then
           coord_type=branch \
