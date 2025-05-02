@@ -110,8 +110,11 @@ write_to_context() {
   handle_return
 }
 
+# inputs:
+#   either context_type or context_file
+#   $*    vars to write to context file
 write_vars_to_context() {
-  local context_type=$context_type vars_to_write=$*
+  local vars_to_write=$*
   begin_function_lo
     local var val quoted_val
     for var in $vars_to_write; do
@@ -751,7 +754,6 @@ tab_get_derive_from() {
       other_fields="${derive_table_fields[*]}"
       remove_word_from_string other_fields $long_field
 
-      
       while [[ "$other_fields" ]]; do
 
         # find which dim has the highest cardinality
@@ -3184,12 +3186,12 @@ build_context_trunk_dna() {
   handle_return
 }
 
-build_context_gather_derive_tables_single() {
+gather_derive_tables_single() {
   local start_path=$1 lib_dim_path
   begin_function
 
     if [[ $start_path == /*/*/* ]]; then
-      build_context_gather_derive_tables_single ${start_path%/*} || fail
+      gather_derive_tables_single ${start_path%/*} || fail
     fi
 
     local lib_dt_path=$start_path/.lib/derive
@@ -3206,6 +3208,7 @@ build_context_gather_derive_tables_single() {
       else # build the cache
 
         log_debug "Generating derive cache for $lib_dt_path"
+        deriving_dims=t
 
         local -A derive_dims=()
 
@@ -3259,6 +3262,7 @@ build_context_gather_derive_tables_single() {
         end_for
 
         mv $cache_path.new $cache_path || fail
+        unset deriving_dims
 
       fi
     fi
@@ -3267,17 +3271,18 @@ build_context_gather_derive_tables_single() {
   handle_return
 }
 
-build_context_gather_derive_tables() {
+gather_derive_tables() {
   begin_function
 
     derive_caches= \
     derive_tables=() \
     derive_functions=() \
 
-    build_context_gather_derive_tables_single $cell_path || fail
-
-    derive_caches=${derive_caches% }
-    write_vars_to_context derive_tables derive_functions derive_caches || fail
+    if [[ ! "${deriving_dims:-}" ]]; then
+      gather_derive_tables_single $cell_path || fail
+      derive_caches=${derive_caches% }
+      write_vars_to_context derive_tables derive_functions derive_caches || fail
+    fi
 
   end_function
   handle_return
@@ -3348,8 +3353,6 @@ build_context_trunk() {
     if [[ "${trunk_dims[0]:-}${sub_dims[0]:-}${control_props[0]:-}${data_props[0]:-}" ]]; then
 
       local dims_missing_members=
-
-      build_context_gather_derive_tables || fail
 
       build_dim_info || fail
 
@@ -5871,6 +5874,9 @@ switch_context() {
 
       seed_path=
       if [[ $dna_exists == t ]]; then
+
+        gather_derive_tables || fail
+
         if [[ ! -f $context_path ]]; then
           fork build_cyto $cell_path || fail
         fi
