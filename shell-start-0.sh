@@ -115,8 +115,8 @@ find_dna_work_cells_from_lib() {
   if [[ $dir == /*/*/* ]]; then
     find_dna_work_cells_from_lib "${dir%/*}" || return 1
   fi
-  if [[ -d $dir/.lib/derive-tables ]]; then
-    find_dna_work_cells "$dir/.lib/derive-tables" || return 1
+  if [[ -d $dir/.lib/derive ]]; then
+    find_dna_work_cells "$dir/.lib/derive" || return 1
   fi
 }
 
