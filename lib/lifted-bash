@@ -80,7 +80,10 @@ bash_lifted_init() {
   DEBUG_COLOR=$CYAN
   DIM_DEBUG_COLOR=$DIM_CYAN
   trace_structure=${trace_structure:-${trace_struct:-}}
-  trace_stack=${trace_stack:-f}
+  trace_stack=${trace_stack:-}
+  if [[ "$trace_stack" == t ]]; then
+    trace_stack=0
+  fi
 
   default_grip=1000
   grip=${grip:-$default_grip}
@@ -181,14 +184,16 @@ show_trace_vars() {
     showed_something=t
   fi
 
-  if [[ $trace_stack == t && "${struct_type:-}" ]]; then
+  if [[ "$trace_stack" && "${struct_type:-}" ]]; then
     show_time_update
-    local linear_stack= part i
-    for (( i = ${#FUNCNAME[*]} - 1; i >=0; i-- )); do
-      linear_stack+="${FUNCNAME[$i]} -> "
-    done
-    echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id$RESET ${linear_stack%% -> } ${struct_type:-}" >&$fd_original_err
-    showed_something=t
+    local linear_stack= part i size=${#FUNCNAME[*]}
+    if (( size - 1 > trace_stack )); then
+      for (( i = size - 1 - trace_stack; i >= 2; i-- )); do
+        linear_stack+="${FUNCNAME[$i]} -> "
+      done
+      echo " $prefix${DIM_DEBUG_COLOR}debug_id=$fork_debug_id$RESET ${linear_stack%% -> } ${struct_type:-}" >&$fd_original_err
+      showed_something=t
+    fi
   fi
 
   if [[ "${trace_fun:-}" ]]; then
