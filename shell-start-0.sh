@@ -110,33 +110,6 @@ migrate() {
   esac
 }
 
-find_dna_work_cells_from_lib() {
-  local dir=$1
-  if [[ $dir == /*/*/* ]]; then
-    find_dna_work_cells_from_lib "${dir%/*}" || return 1
-  fi
-  if [[ -d $dir/.lib/derive ]]; then
-    find_dna_work_cells "$dir/.lib/derive" || return 1
-  fi
-}
-
-find_dna_work_cells() {
-  local dir=$1 possibility only_one=${only_one:-f}
-  local possibilities=$(find $dir/* -name ".*" -prune -o '(' -type l -print ')')
-  for possibility in $possibilities; do
-    local real=$(realpath $possibility) || return 1
-    if [[ $real == /work/* && -e ${real%/*}/.dna ]]; then
-      work_cells+=" $possibility,,,$real"
-      if [[ $only_one == t ]]; then
-        break
-      fi
-    elif [[ -d $real ]]; then
-      find_dna_work_cells $possibility || return 1
-    fi
-  done
-  return 0
-}
-
 get_short_path() {
   local p=$1
   local o=$p
@@ -207,8 +180,6 @@ walk() {
 
         path=$current_selection/.dna
         local work_cells=
-        only_one=t find_dna_work_cells $path
-        only_one=t find_dna_work_cells_from_lib $current_selection
         if [[ "${work_cells}" ]]; then
           walk_add_choice "U" "$path" "dna upstream cells"
         fi
@@ -237,8 +208,6 @@ walk() {
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == .dna ]]; then
         local work_cells= work_cell pw possibility
-        find_dna_work_cells $current_selection || return 1
-        find_dna_work_cells_from_lib $current_selection || return 1
         for pw in $work_cells; do
           possibility=${pw%,,,*}
           possibility=${possibility#$current_selection/}
@@ -848,7 +817,7 @@ new() {
     echo "  if type=clone, will do a simple clone of the parent cell." >&2
     echo "  if type=up, will clone the cell and add the child cell as the upstream of the parent." >&2
     echo "  if type=down, will clone the cell and add the parent cell as the upstream of the child." >&2
-    echo "  name is the cell path of the new cell being created. Could include full work path, or just path inside of the module." >&2
+    echo "  name is the cell path of the new cell being created. Could include full work or seed path, or just path inside of the module." >&2
     echo "  if clean is specified, will delete any existing cell of the same name." >&2
   }
 
@@ -878,6 +847,9 @@ new() {
   fi
 
   local old_work_path=$PWD
+  if [[ $old_work_path == /seed/* ]]; then
+    old_work_path=/work${old_work_path#/seed}
+  fi
 
   if [[ ! -e $old_work_path/.dna ]]; then
     echo "This command must be run within the parent cell to be cloned" >&2

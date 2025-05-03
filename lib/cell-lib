@@ -384,7 +384,6 @@ init_context() {
     default_freshness= \
     default_strategies=crl \
     derive_caches= \
-    dna_up_files=() \
     implicit_dims=() \
     key_path= \
     localize_dims= \
@@ -2988,19 +2987,6 @@ load_dna_contents() {
       fi
 
       local real_path=$(realpath -m $item)
-      if [[ -L $item && $item != */up/* && $item != */reactors/* ]]; then
-
-        local real_path_parent=${real_path%/*}
-
-        if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
-          # TODO: build freshness mechanism here to auto-refresh stale data
-          dna_up_files+=( "$item" )
-          if [[ ! -e $real_path ]]; then
-            load_dna_contents_update_cell $real_path || fail
-          fi
-        fi
-
-      fi
 
       if [[ -d $item ]]; then
         if [[ $recursive == t ]]; then
@@ -3225,32 +3211,7 @@ gather_derive_tables_single() {
           fi
 
           begin_for dt in $files; doo
-
-            if [[ -L $dt ]]; then
-              real_path=$(realpath -m $dt)
-              real_path_parent=${real_path%/*}
-
-              if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
-                is_generated=t
-                dna_up_files+=( "$dt" )
-              else
-                is_generated=f
-              fi
-
-              if [[ ! -f $dt ]]; then
-                if [[ $is_generated == t ]]; then
-                  log_debug "Executing cell update to generate $dt"
-                  load_dna_contents_update_cell $real_path || fail
-                else
-                  log_fatal "Broken link found when trying to gather derive tables: $dt"
-                  fail1
-                fi
-              fi
-
-            fi
-
             add_derive_item $dt || fail
-
           end_for
         end_for
 
@@ -3258,7 +3219,7 @@ gather_derive_tables_single() {
         begin_for derive_dim_raw in ${!derive_dims[*]}; doo
           derive_dim=${derive_dim_raw//-/_}
           context_file=$cache_path \
-          write_to_context var dim_${derive_dim}_derived_from || fail
+          write_vars_to_context dim_${derive_dim}_derived_from || fail
         end_for
 
         mv $cache_path.new $cache_path || fail
@@ -3362,10 +3323,6 @@ build_context_trunk() {
 
       if [[ "$dims_missing_members" ]]; then
         calc_missing_members || fail
-      fi
-
-      if [[ "${dna_up_files:-}" ]]; then
-        write_vars_to_context dna_up_files || fail
       fi
 
     fi
