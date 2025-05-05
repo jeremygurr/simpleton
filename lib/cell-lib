@@ -1737,7 +1737,7 @@ expand_dims() {
     local long_dim_var dim_var plural dim_type
     for long_dim_var in $to_expand; do
 
-      dim_var=${long_dim_var%%-*}
+      dim_var=${long_dim_var//-/_}
 
       local dims_var
       get_plural $dim_var dims_var
@@ -2267,7 +2267,7 @@ fetch_values_from_coordinates() {
     local table_var=${coord_type}_coordinate
     local -n table_fields=${table_var}_fields
 
-    if [[ " ${table_fields[*]} " == *" $dim_var "* ]]; then
+    if [[ " ${table_fields[*]} " == *" $long_dim "* ]]; then
       field=$long_dim \
       fetch_column_from_table || fail
     else
@@ -3520,6 +3520,7 @@ calc_coordinates_add_row() {
     local i new_coords=()
     for (( i = 0; i < coordinate_fields_count; i++ )); do
       local dim_var=${coordinate_fields[$i]}
+      dim_var=${dim_var//-/_}
       local -n dim_value=d_$dim_var
       if [[ ! "${dim_value:-}" ]]; then
         if [[ $ignore_missing == f ]]; then
@@ -3582,12 +3583,13 @@ setup_coord_fields() {
 
     if [[ $target_form == seed ]]; then
 
-      local new_fields=() dim
+      local new_fields=() long_dim dim
 
-      for dim in ${coordinate_fields[*]}; do
+      for long_dim in ${coordinate_fields[*]}; do
+        dim=${long_dim//-/_}
         local -n member_type=dim_${dim}_member_type
         if [[ $member_type == static ]]; then
-          new_fields+=( $dim )
+          new_fields+=( $long_dim )
         fi
       done
 
@@ -4180,7 +4182,7 @@ calc_coordinates_next_unknown_dim() {
 #   long_dim
 #   dim
 calc_coords_validate_member() {
-  local member=$2 log_show_vars='dim member'
+  local member=$1 log_show_vars='dim member'
   begin_function
 
     is_valid=t
@@ -4731,8 +4733,6 @@ calc_coordinates_slow() {
       check_dims="${coordinate_fields[*]}" \
       validated_dims= \
 
-    debug_start
-
     if [[ $target_form == seed ]]; then
       prep_seed_dims || fail
     fi
@@ -5233,7 +5233,7 @@ for_each_member_multi() {
 #   fork=whether the process should be forked before executing 
 #     the function. (optional)
 for_each_member() {
-  local dim=$1 \
+  local long_dim=$1 \
     function=$function leave_loop=${leave_loop:-0} \
     fork=${fork:-t} \
     par=${par:-t} \
@@ -5243,15 +5243,17 @@ for_each_member() {
     log_show_vars='dim function'
   begin_function
 
-    local dims values=() member_count=0
+    local dims values=() member_count=0 \
+      dim=${long_dim//-/_}
+
     get_plural $dim dims
 
     local -n coord_fields=branch_coordinate_fields \
         dims_members=d_$dims dim_members=d_$dim \
 
-    if [[ -v coord_fields[*] && " ${coord_fields[*]} " == *" $dim "* ]]; then
+    if [[ -v coord_fields[*] && " ${coord_fields[*]} " == *" $long_dim "* ]]; then
       coord_type=branch \
-      fetch_values_from_coordinates $dim || fail
+      fetch_values_from_coordinates || fail
     elif [[ "${dim_member:-}" ]]; then
       values=( "$dim_member" )
     elif [[ "${dim_members:-}" ]]; then
@@ -5343,6 +5345,8 @@ plant_seed_internal() {
 
                 local values
                 coord_type=branch \
+                long_dim=$dim_part \
+                dim=${dim_part//-/_} \
                 fetch_values_from_coordinates $dim_part || fail
 
                 local value_count=${#values[*]}
