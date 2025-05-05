@@ -378,8 +378,10 @@ init_context() {
     check_op_var=f \
     child_dims=() \
     control_props=() \
+    control_props_expanded=() \
     current_pause=250 \
     data_props=() \
+    data_props_expanded=() \
     default_anchor_dims= \
     default_freshness= \
     default_strategies=crl \
@@ -405,8 +407,11 @@ init_context() {
     reuse_existing_out=t \
     shuffle_chance=100 \
     sub_dims=() \
+    sub_dims_expanded=() \
     support_dims=() \
+    support_dims_expanded=() \
     trunk_dims=() \
+    trunk_dims_expanded=() \
     up=() \
     update_cost=1 \
     update_risk=3 \
@@ -2349,10 +2354,10 @@ load_child_dims() {
 
     if [[ ! "${child_dims:-}" ]]; then
       child_dims=()
-      local trunk_dim_count=${#trunk_dims[*]}
+      local trunk_dim_count=${#trunk_dims_expanded[*]}
       if [[ ! "${anchor_dims:-}" ]]; then
         for (( i = branch_dim_count; i < trunk_dim_count; i++ )); do
-          child_dims+=( ${trunk_dims[$i]} )
+          child_dims+=( ${trunk_dims_expanded[$i]} )
         done
       else
         local anchor_dim branch_dim leftovers=" $anchor_dims "
@@ -2362,8 +2367,8 @@ load_child_dims() {
         done
 
         for anchor_dim in $anchor_dims; do
-          if [[ " ${trunk_dims[*]} ${support_dims[*]} " != *" $anchor_dim "* ]]; then
-            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims[*]} ${support_dims[*]}"
+          if [[ " ${trunk_dims_expanded[*]} ${support_dims_expanded[*]} " != *" $anchor_dim "* ]]; then
+            log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims_expanded[*]} ${support_dims_expanded[*]}"
             fail1
           fi
         done
@@ -2390,40 +2395,16 @@ load_child_dims() {
   handle_return
 }
 
-init_dims() {
-  local types=${*:-trunk_dims sub_dims} \
-    new_value=${new_value:-} vars=${vars:-ddim}
-  begin_function
-    for dim_type in $types; do
-      log_debug "Setting $dim_type ${vars// / s and }s to '$new_value'"
-      local -n dims=$dim_type
-      for dim in ${dims[*]:-}; do
-        local plural
-        get_plural $dim
-        if [[ " $vars " == *" ddim "* ]]; then
-          local -n ddims=d_$plural ddim=d_$dim
-          ddim= ddims=$new_value
-        fi
-        if [[ " $vars " == *" sdim "* ]]; then
-          local -n sdims=s_$plural sdim=s_$dim
-          sdim= sdims=$new_value
-        fi
-      done
-    done
-  end_function
-  handle_return
-}
-
 setup_dims() {
   begin_function
 
     prep_dims || fail
     load_child_dims || fail
     if [[ $cell_is_leaf == t ]]; then
-      expand_dims ${sub_dims[*]:-} ${control_props[*]:-} ${data_props[*]:-} || fail
+      expand_dims ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} || fail
       load_implicit_dims || fail
     else
-      expand_dims ${trunk_dims[*]:-} ${support_dims[*]:-} || fail
+      expand_dims ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} || fail
     fi
 
   end_function
@@ -2717,10 +2698,10 @@ build_dim_info_single() {
           upstream_dim=${upstream_long_dim//-/_}
           local -n upstream_dim_type=dim_${upstream_dim}_type
           if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_long_dim] ]]; then
+            # recursive
             downstream_dim_row="$dim ${upstream_dim_row#* }" \
             dim_type=support_dims \
             dim_requested_by="derived_from of $long_dim" \
-
             long_dim=$upstream_long_dim \
             dim=$upstream_dim \
             build_dim_info_single || fail
@@ -2754,8 +2735,8 @@ add_derived_to_support_dims() {
       local is_first=t row_array=( $row )
       for long_dim in ${row_array[*]:2}; do
 
-        if ! array_contains trunk_dims $long_dim \
-          && ! array_contains support_dims $long_dim; then
+        if ! array_contains trunk_dims_expanded $long_dim \
+          && ! array_contains support_dims_expanded $long_dim; then
 
           dim=${long_dim//-/_}
 
@@ -2767,7 +2748,7 @@ add_derived_to_support_dims() {
           # perplexing why we need this here, but after too much debugging, this was the simplest solution
           unfail
 
-          support_dims+=( $long_dim )
+          support_dims_expanded+=( $long_dim )
 
           local -n dim_derived_from=dim_${dim}_derived_from
           if [[ -v dim_derived_from ]]; then
@@ -2788,8 +2769,8 @@ build_context_support_dims() {
   begin_function
 
     local long_dim dim dim_type=trunk_dims
-    support_dims=()
-    begin_for long_dim in "${trunk_dims[@]}"; doo
+    support_dims_expanded=()
+    begin_for long_dim in "${trunk_dims_expanded[@]}"; doo
       dim=${long_dim//-/_}
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
@@ -2798,10 +2779,10 @@ build_context_support_dims() {
       fi
     end_for
 
-    sort_array support_dims
+    sort_array support_dims_expanded
 
-    log_debug "Calculated support_dims: ${support_dims[*]}"
-    write_vars_to_context support_dims || fail
+    log_debug "Calculated support_dims: ${support_dims_expanded[*]}"
+    write_vars_to_context support_dims_expanded || fail
 
   end_function
   handle_return
@@ -2843,28 +2824,26 @@ build_dim_info() {
     localize_dims=
     localize_reverse_dims=
 
-    local -I trunk_dims sub_dims control_props data_props
-
     begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
 
-      local -n dim_array=${dim_type}
-      local new_dim_array=()
+      local -n dim_array=${dim_type} expanded_array=${dim_type}_expanded
+      local expanded_array=()
 
       begin_for long_dim in "${dim_array[@]}"; doo
         if [[ $long_dim == _* ]]; then
           build_dim_info_expand_group $long_dim || fail
         else
-          new_dim_array+=( $long_dim )
+          expanded_array+=( $long_dim )
         fi
       end_for
 
-      dim_array=( ${new_dim_array[*]} )
+      write_vars_to_context ${dim_type}_expanded || fail
 
     end_for
 
     begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
 
-      local -n dim_array=${dim_type}
+      local -n dim_array=${dim_type}_expanded
 
       begin_for long_dim in "${dim_array[@]}"; doo
         if [[ ! -v all_dims[$long_dim] ]]; then
@@ -2881,7 +2860,7 @@ build_dim_info() {
 
     for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
 
-      local -n dim_array=${dim_type}
+      local -n dim_array=${dim_type}_expanded
 
       short_dims=()
 
@@ -3144,7 +3123,7 @@ build_context_trunk_dna() {
       write_vars_to_context auto_loads || fail
 
       if [[ ! "${default_anchor_dims:-}" ]]; then
-        default_anchor_dims="${trunk_dims[*]:-}"
+        default_anchor_dims="${trunk_dims_expanded[*]:-}"
         write_vars_to_context default_anchor_dims || fail
       fi
 
@@ -3539,33 +3518,33 @@ setup_coord_fields() {
 
     case $coord_type in
       branch)
-        coordinate_fields=( ${trunk_dims[*]:-} ${support_dims[*]:-} )
+        coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} )
         # don't need to do deep derive if we are already include support dims, which come
         #   from a deep derive analysis
         derive_deep=f
 
         #if [[ $target_form == seed ]]; then
-        #  coordinate_fields=( ${trunk_dims[*]:-} ${support_dims[*]:-} )
+        #  coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} )
         #else
-        #  coordinate_fields=( ${trunk_dims[*]:-} )
+        #  coordinate_fields=( ${trunk_dims_expanded[*]:-} )
         #fi
       ;;
       leaf)
-        coordinate_fields=( ${control_props[*]:-} ${data_props[*]:-} )
+        coordinate_fields=( ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} )
       ;;
       sub)
-        coordinate_fields=( ${sub_dims[*]:-} )
+        coordinate_fields=( ${sub_dims_expanded[*]:-} )
       ;;
       tree)
-        coordinate_fields=( ${trunk_dims[*]:-} ${support_dims[*]:-} ${sub_dims[*]:-} )
+        coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} )
         # don't need to do deep derive if we are already include support dims, which come
         #   from a deep derive analysis
         derive_deep=f
 
         #if [[ $target_form == seed ]]; then
-        #  coordinate_fields=( ${trunk_dims[*]:-} ${support_dims[*]:-} ${sub_dims[*]:-} )
+        #  coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} )
         #else
-        #  coordinate_fields=( ${trunk_dims[*]:-} ${sub_dims[*]:-} )
+        #  coordinate_fields=( ${trunk_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} )
         #fi
       ;;
       *)
@@ -3601,7 +3580,7 @@ load_implicit_dims() {
     implicit_dims=()
     if [[ -e $out_path/output.tab ]]; then
       for d in $(head -n1 $out_path/output.tab); do
-        if [[ ! " ${trunk_dims[*]} ${sub_dims[*]} " == *" $d "* ]]; then
+        if [[ ! " ${trunk_dims_expanded[*]} ${sub_dims_expanded[*]} " == *" $d "* ]]; then
           implicit_dims+=( $d )
           all_dims[$d]=1
         fi
@@ -4851,7 +4830,7 @@ calc_coordinates() {
       "
       local dim_fields
       local dim_type=trunk_dims
-      xlr8_get_dim_fields ${trunk_dims[*]}
+      xlr8_get_dim_fields ${trunk_dims_expanded[*]}
       xlr8 load_coordinates $coord_fields $dim_fields $fields $dt_fields || fail
     else
       calc_coordinates_slow || fail
@@ -5012,7 +4991,7 @@ build_context() {
       source $context_path-branch || fail
     fi
 
-    if [[ "${trunk_dims:-}" ]]; then
+    if [[ "${trunk_dims_expanded:-}" ]]; then
       if [[ ! -f $context_path-branch-coords ]]; then
 
         local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords \
@@ -5078,7 +5057,7 @@ build_context() {
         out_path \
         cell_is_leaf \
         check_op_var \
-        data_props \
+        data_props_expanded \
         default_freshness \
         || fail
       mv $context_path-check.new $context_path-check || fail
@@ -5597,7 +5576,7 @@ calc_coords_branch() {
     local coord_type=branch
     if [[ "${branch_coordinate_refined:-}" != t ]]; then
       if [[ -v branch_coordinate_data ]]; then
-        local dims_to_check="${trunk_dims[*]} ${support_dims[*]}"
+        local dims_to_check="${trunk_dims_expanded[*]} ${support_dims_expanded[*]}"
         local skip=t
 
         if dim_is_missing_from_coords $dims_to_check; then
@@ -5683,7 +5662,7 @@ calc_coords_sub() {
 load_post_context_dynamic_vars() {
   begin_function
 
-    if [[ $cell_is_leaf == t && "${trunk_dims:-}" ]]; then
+    if [[ $cell_is_leaf == t && "${trunk_dims_expanded:-}" ]]; then
       target_dim_var_type=ddim \
       table=branch_coordinate \
       convert_table_to_dims || fail
