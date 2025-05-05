@@ -1904,14 +1904,6 @@ debug_trap() {
   fi
   debug_recording_trace=f
 
-  if [[ " $debug_ignore " == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
-    debug_output_stop
-    return 0
-  fi
-
-  debug_load_state || return 1
-
   if [[ "$debug_exit" ]]; then
     if [[ "$debug_debug" == t ]]; then
       echo "${CYAN}Exiting because debug_exit=$debug_exit${RESET}" >&$fd_original_err
@@ -1919,46 +1911,55 @@ debug_trap() {
     exit $debug_exit
   fi
 
-  debug_rewind=f
-
-  debug_source_update
-
-  local line_part=$debug_line file_part=
-  if [[ "$debug_line" ]]; then
-    if [[ $debug_line == *:* ]]; then
-      line_part=${debug_line##*:}
-      file_part=${debug_line%:*}
-    fi
-  fi
-
-  local expanded_command= fixed_command=
-  if [[ "$debug_search" ]]; then
-    if [ "$debug_expanded_search" == t ]; then
-      fixed_command=${debug_command}
-      fixed_command=${fixed_command//\\/**BS**}
-      fixed_command=${fixed_command//\\\$/\\\\\$}
-      # temporarily hide this so we can keep $(( but transform $(
-      fixed_command=${fixed_command//\$((/{{{}
-      fixed_command=${fixed_command//\$(/\\\$(}
-      # restore {{{ to $((
-      fixed_command=${fixed_command//{{{/\$((}
-      fixed_command=${fixed_command//\"/\\\"}
-      fixed_command=${fixed_command//\*\*BS\*\*/\\}
-      eval "expanded_command=\"$fixed_command\"" &>/dev/null || true
-    fi
-  fi
-
-  local ok_to_debug=f
-  debug_get_ok_to_debug
-
-  if [[ $ok_to_debug == t ]]; then
-    no_trace_depth=0
-    tracing_depth=0
-    debug_output_expansion
-    debug_inner
-  else
-    [[ $debug_debug == t ]] && echo "${CYAN}Not stopping.${RESET}" >&$fd_original_err
+  if [[ " $debug_ignore " == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
+    [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
     debug_output_stop
+  else
+
+    debug_load_state || return 1
+
+    debug_rewind=f
+
+    debug_source_update
+
+    local line_part=$debug_line file_part=
+    if [[ "$debug_line" ]]; then
+      if [[ $debug_line == *:* ]]; then
+        line_part=${debug_line##*:}
+        file_part=${debug_line%:*}
+      fi
+    fi
+
+    local expanded_command= fixed_command=
+    if [[ "$debug_search" ]]; then
+      if [ "$debug_expanded_search" == t ]; then
+        fixed_command=${debug_command}
+        fixed_command=${fixed_command//\\/**BS**}
+        fixed_command=${fixed_command//\\\$/\\\\\$}
+        # temporarily hide this so we can keep $(( but transform $(
+        fixed_command=${fixed_command//\$((/{{{}
+        fixed_command=${fixed_command//\$(/\\\$(}
+        # restore {{{ to $((
+        fixed_command=${fixed_command//{{{/\$((}
+        fixed_command=${fixed_command//\"/\\\"}
+        fixed_command=${fixed_command//\*\*BS\*\*/\\}
+        eval "expanded_command=\"$fixed_command\"" &>/dev/null || true
+      fi
+    fi
+
+    local ok_to_debug=f
+    debug_get_ok_to_debug
+
+    if [[ $ok_to_debug == t ]]; then
+      no_trace_depth=0
+      tracing_depth=0
+      debug_output_expansion
+      debug_inner
+    else
+      [[ $debug_debug == t ]] && echo "${CYAN}Not stopping.${RESET}" >&$fd_original_err
+      debug_output_stop
+    fi
+
   fi
 
   debug_update_expansion
@@ -1968,6 +1969,12 @@ debug_trap() {
   [[ $debug_subshell == t ]] && set -T
   [[ $debug_saved_shell_options_short == *e* ]] && set -e
   [[ $debug_saved_shell_options_short == *u* ]] && set -u
+  if [[ ${trace_debugger:-f} == t ]]; then 
+    set +x
+    trace_debugger=f
+  fi
+
+  debug_debug=f
 
   BASH_REMATCH=( "${debug_rematch[@]}" )
   : <&10 >&11 2>&12
@@ -2253,6 +2260,44 @@ debug() {
   fi
 }
 
+debug_handle_resolve_next() {
+  local debug_item="${debug%% *}"
+
+  if [[ "$debug" == *' '* ]]; then
+    debug=${debug#* }
+  else
+    debug=
+  fi
+
+  if [[ "$debug_item" ]]; then
+    case "$debug_item" in
+      t)
+        debug_immediate=t
+      ;;
+      f)
+        debug_skip_breakpoints=t
+      ;;
+      *:*)
+        debug_line=$debug_item
+      ;;
+      =*)
+        debug_search=${debug_item#=}
+      ;;
+      \?)
+        debug_id_out=t
+      ;;
+      *)
+        if [[ "$debug_item" =~ ^[0-9\.]+$ ]]; then
+          debug_id=$debug_item
+        else
+          debug_quick_function=$debug_item
+          debug_function_old=$debug_quick_function
+        fi
+      ;;
+    esac
+  fi
+}
+
 debug_setup() {
   debugging=f
 
@@ -2281,32 +2326,7 @@ debug_setup() {
   debug=${debug:-}
 
   if [[ "$debug" ]]; then
-    case "$debug" in
-      t)
-        debug_immediate=t
-      ;;
-      f)
-        debug_skip_breakpoints=t
-      ;;
-      *:*)
-        debug_line=$debug
-      ;;
-      =*)
-        debug_search=${debug#=}
-      ;;
-      \?)
-        debug_id_out=t
-      ;;
-      *)
-        if [[ "$debug" =~ ^[0-9\.]+$ ]]; then
-          debug_id=$debug
-        else
-          debug_quick_function=$debug
-          debug_function_old=$debug_quick_function
-        fi
-      ;;
-    esac
-    debug=
+    debug_handle_resolve_next
   fi
 
   if [[ "${debug_search:-}" \
