@@ -2290,11 +2290,14 @@ fetch_values_from_coordinates() {
 prep_dims() {
   begin_function
 
-    local dim_var dims_var dim_long
+    local dim_var dims_var dim_var_short dims_var_short dim_long
     for dim_long in ${!all_dims[*]}; do
       dim_var=${dim_long//-/_}
+      dim_var_short=${dim_long%%-*}
+      dim_var_short=${dim_var_short//-/_}
 
       get_plural $dim_var dims_var
+      get_plural $dim_var_short dims_var_short
 
       # p_dims are what the user sets when putting parameters on the commandline (without the p_), or explicitly set in environemnt (with the p_)
       # i_dims are set in the dna and are a permanent feature of the cell and can't be overridden by the user
@@ -2305,39 +2308,63 @@ prep_dims() {
         sdim=s_$dim_var sdims=s_$dims_var \
         pdim=p_$dim_var pdims=p_$dims_var \
         idim=i_$dim_var idims=i_$dims_var \
+        ddim_short=d_$dim_var_short ddims_short=d_$dims_var_short \
+        sdim_short=s_$dim_var_short sdims_short=s_$dims_var_short \
+        pdim_short=p_$dim_var_short pdims_short=p_$dims_var_short \
+        idim_short=i_$dim_var_short idims_short=i_$dims_var_short \
 
-      # We do not support pulling from simple dim here
-      # If we want to set an dim in env vars, it must be set with p_dim form
-      sdim=${sdim:-${idim:-${pdim:-}}}
+      if [[ "${ddim:-}" || "${ddims:-}" ]]; then
+        unset pdim pdims pdim_short pdims_short sdim sdims sdim_short sdims_short
+      elif [[ "${ddim_short:-}" ]]; then
+        ddim=${ddim_short}
+        unset pdim pdims pdim_short pdims_short sdim sdims sdim_short sdims_short
+      elif [[ "${ddims_short:-}" ]]; then
+        ddims=( "${ddims_short[@]}" )
+        unset pdim pdims pdim_short pdims_short sdim sdims sdim_short sdims_short
+      else
 
-      if [[ ! "${sdims:-}" ]]; then
-        if [[ "${idims:-}" ]]; then
-          sdims=( "${idims[@]}" )
-        elif [[ "${pdims:-}" ]]; then
-          # Multiple members that have spaces inside are not supported
-          # Only single member dims can be used if the value requires spaces or special characters
-          sdims=( $pdims )
-        else
-          sdims=()
+        # We do not support pulling from simple dim here
+        # If we want to set an dim in env vars, it must be set with p_dim form
+        sdim=${sdim:-${sdim_short:-${idim:-${idim_short:-${pdim:-${pdim_short:-}}}}}}
+
+        if [[ ! "${sdims:-}" ]]; then
+          if [[ "${sdims_short:-}" ]]; then
+            sdims=( "${sdims_short[@]}" )
+          elif [[ "${idims:-}" ]]; then
+            sdims=( "${idims[@]}" )
+          elif [[ "${idims_short:-}" ]]; then
+            sdims=( "${idims_short[@]}" )
+          elif [[ "${pdims:-}" ]]; then
+            # Multiple members that have spaces inside are not supported
+            # Only single member dims can be used if the value requires spaces or special characters
+            sdims=( $pdims )
+          elif [[ "${pdims_short:-}" ]]; then
+            # Multiple members that have spaces inside are not supported
+            # Only single member dims can be used if the value requires spaces or special characters
+            sdims=( $pdims_short )
+          else
+            sdims=()
+          fi
         fi
-      fi
 
-      # from here on out only sdims and ddims should be used
-      # sdims may contain shortcuts, ddims are always expanded (never shortcuts)
-      unset p_$dim_var p_$dims_var 
+        # from here on out only sdims and ddims should be used
+        # sdims may contain shortcuts, ddims are always expanded (never shortcuts)
+        unset pdim pdims pdim_short pdims_short
 
-      # idims are needed when calculating seed coordinates
-      # unset i_$dim_var i_$dims_var
+        # idims are needed when calculating seed coordinates
+        # unset i_$dim_var i_$dims_var
 
-      [[ "${sdim:-}" == $empty_member ]] && sdim=
-      [[ "${sdims:-}" == $empty_member ]] && sdims=()
-      [[ "${ddim:-}" == $empty_member ]] && ddim=
-      [[ "${ddims:-}" == $empty_member ]] && ddims=()
+        [[ "${sdim:-}" == $empty_member ]] && sdim=
+        [[ "${sdims:-}" == $empty_member ]] && sdims=()
+        [[ "${ddim:-}" == $empty_member ]] && ddim=
+        [[ "${ddims:-}" == $empty_member ]] && ddims=()
 
-      local -n is_optional=dim_${dim_var}_is_optional
-      if [[ ${is_optional:-} == t && " $optional_dims " != *" $dim_var "* ]]; then
-        optional_dims+=" $dim_var"
-        optional_dims=${optional_dims# }
+        local -n is_optional=dim_${dim_var}_is_optional
+        if [[ ${is_optional:-} == t && " $optional_dims " != *" $dim_var "* ]]; then
+          optional_dims+=" $dim_var"
+          optional_dims=${optional_dims# }
+        fi
+
       fi
 
     done
