@@ -778,7 +778,6 @@ tab_get_derive_from() {
             highest_card=$other_index_card
             highest_dim=$other_field_long
           fi
-fence_zombie
         done
 
         local -n other_index=derive_table_${name}_index_${highest_dim//-/_}
@@ -1805,11 +1804,14 @@ extract_from_derive_table_find_row_indexes() {
   local row_indexes \
     row_index_count \
     column_index \
+    field \
+    long_field \
 
   local -A new_matching_rows
 
   for (( column_index = 0; column_index < field_count; column_index++ )); do
-    field=${derive_fields[$column_index]}
+    long_field=${derive_fields[$column_index]}
+    field=${long_field//-/_}
     if [[ $field == $dim ]]; then
       output_dim_index=$column_index
     else
@@ -2047,10 +2049,10 @@ attempt_derive2() {
 
         complete_row=t
         local row_array=( $derived_from_row ) i
-        log_debug "Attempting to derive $dim from ${row_array[*]:1} using ${row_array[0]}"
+        log_debug "Attempting to derive $dim from ${row_array[*]:2} using ${row_array[0]} (${row_array[1]})"
 
         maybe_resolved=
-        for (( i = 1; i < ${#row_array[*]}; i++ )); do
+        for (( i = 2; i < ${#row_array[*]}; i++ )); do
           derived_from_long_dim=${row_array[$i]}
           derived_from_dim=${derived_from_long_dim%%-*}
           maybe_resolved+="$derived_from_dim "
@@ -3098,17 +3100,12 @@ load_dim_derive_items() {
       local -n derived_from=dim_${dim}_derived_from
 
       begin_for derived_from_row in "${derived_from[@]}"; doo
-        first=t
         dims_to_add=
-        begin_for derived_long_dim in $derived_from_row; doo
-          if [[ $first == t ]]; then
-            action=$derived_long_dim
-            action_type=${action##*.}
-            item=${action%.*}
-            first=f
-          else
-            dims_to_add+="$derived_long_dim "
-          fi
+        action=${derived_from_row%% *}
+        action_type=${action##*.}
+        item=${action%.*}
+        begin_for derived_long_dim in ${derived_from_row##* * }; doo
+          dims_to_add+="$derived_long_dim "
         end_for
 
         case $action_type in
@@ -3116,14 +3113,18 @@ load_dim_derive_items() {
             begin_for long_dim_to_add in $dims_to_add; doo
               dim_to_add=${long_dim_to_add//-/_}
               local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
-              dim_derive_tables+="$item "
+              if [[ ! "${dim_derive_tables:-}" || " $dim_derive_tables " != *" $item "* ]]; then
+                dim_derive_tables+="$item "
+              fi
             end_for
           ;;
           fun)
             begin_for long_dim_to_add in $dims_to_add; doo
               dim_to_add=${long_dim_to_add//-/_}
               local -n dim_derive_functions=dim_${dim_to_add}_derive_functions
-              dim_derive_tables+="$item "
+              if [[ ! "${dim_derive_functions:-}" || " $dim_derive_functions " != *" $item "* ]]; then
+                dim_derive_functions+="$item "
+              fi
             end_for
           ;;
           *)
