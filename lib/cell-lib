@@ -3066,7 +3066,7 @@ load_parent_context() {
 }
 
 build_dim_expand_functions() {
-  begin_function_lo
+  begin_function
     local dim long_dim
     for long_dim in ${!all_dims[*]}; do
       dim=${long_dim//-/_}
@@ -3080,12 +3080,13 @@ build_dim_expand_functions() {
 }
 
 load_dim_derive_items() {
-  begin_function_lo
+  begin_function
     local dim \
       derived_from_row \
       derived_short_dim \
       dims_to_add \
       dim_to_add \
+      long_dim_to_add \
       action \
       action_type \
       item \
@@ -3098,26 +3099,28 @@ load_dim_derive_items() {
       begin_for derived_from_row in "${derived_from[@]}"; doo
         first=t
         dims_to_add=
-        begin_for derived_short_dim in $derived_from_row; doo
+        begin_for derived_long_dim in $derived_from_row; doo
           if [[ $first == t ]]; then
-            action=$derived_short_dim
+            action=$derived_long_dim
             action_type=${action##*.}
             item=${action%.*}
             first=f
           else
-            dims_to_add+="$derived_short_dim "
+            dims_to_add+="$derived_long_dim "
           fi
         end_for
 
         case $action_type in
           tab)
-            begin_for dim_to_add in $dims_to_add; doo
+            begin_for long_dim_to_add in $dims_to_add; doo
+              dim_to_add=${long_dim_to_add//-/_}
               local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
               dim_derive_tables+="$item "
             end_for
           ;;
           fun)
-            begin_for dim_to_add in $dims_to_add; doo
+            begin_for long_dim_to_add in $dims_to_add; doo
+              dim_to_add=${long_dim_to_add//-/_}
               local -n dim_derive_functions=dim_${dim_to_add}_derive_functions
               dim_derive_tables+="$item "
             end_for
@@ -5799,6 +5802,21 @@ build_cyto() {
   handle_return
 }
 
+check_foundation() {
+  begin_function
+    local module_path=${cell_path#/*/*/}
+    module_path=${cell_path%/$module_path}
+    if [[ $cell_path != */foundation/* 
+       && -d $module_path/foundation/all 
+       && ! -d $module_path/foundation/all/.cyto
+       ]]; then
+      log_fatal "Foundation cells have not been updated, so update can't proceed. Update $module_path/foundation/all before attempting to update other cells."
+      fail1
+    fi
+  end_function
+  handle_return
+}
+
 # inputs:
 #   $1   cell_path
 #   anchor_dims (as a space separated string)
@@ -5858,6 +5876,7 @@ switch_context() {
       seed_path=
       if [[ $dna_exists == t ]]; then
 
+        check_foundation || fail
         gather_derive_tables || fail
 
         if [[ ! -f $context_path ]]; then
