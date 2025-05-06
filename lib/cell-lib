@@ -408,8 +408,8 @@ init_context() {
     shuffle_chance=100 \
     sub_dims=() \
     sub_dims_expanded=() \
-    support_dims=() \
     support_dims_expanded=() \
+    support_dims_one_expanded=() \
     trunk_dims=() \
     trunk_dims_expanded=() \
     up=() \
@@ -733,7 +733,7 @@ tab_get_derive_from() {
 
     local field_count=${#derive_table_fields[*]} \
       data_count=${#derive_table_data[*]} \
-      row_count index_count \
+      row_count index_card \
       other_fields \
       field_index field \
       key_field \
@@ -742,6 +742,8 @@ tab_get_derive_from() {
       other_index \
       other_index_card \
       long_field \
+      join \
+      join2 \
 
     (( row_count = data_count / field_count ))
 
@@ -754,7 +756,12 @@ tab_get_derive_from() {
       local -n index=derive_table_${name}_index_$field \
         derive_from=dim_${field}_derived_from \
 
-      index_count=${#index[*]}
+      index_card=${#index[*]}
+      if (( index_card == row_count )); then
+        join=one-
+      else
+        join=many-
+      fi
 
       other_fields="${derive_table_fields[*]}"
       remove_word_from_string other_fields $long_field
@@ -775,12 +782,13 @@ tab_get_derive_from() {
 
         local -n other_index=derive_table_${name}_index_$highest_dim
 
-        local join='to_many'
         if (( highest_card == row_count )); then
-          join='to_one'
+          join2=to-one
+        else
+          join2=to-many
         fi 
 
-        derive_from+=( "$name.tab $join $highest_dim" )
+        derive_from+=( "$name.tab $join$join2 $highest_dim" )
 
         remove_word_from_string other_fields $highest_dim
 
@@ -2757,10 +2765,11 @@ build_dim_info_single() {
 add_derived_to_support_dims() {
   begin_function
 
-    local derived_from long_dim short_dim row OIFS=$IFS
+    local derived_from long_dim short_dim type row OIFS=$IFS
 
     for row in "${dim_derived_from[@]}"; do
-      local is_first=t row_array=( $row )
+      local row_array=( $row )
+      type=${row_array[1]}
       for long_dim in ${row_array[*]:2}; do
 
         if ! array_contains trunk_dims_expanded $long_dim \
@@ -2776,6 +2785,9 @@ add_derived_to_support_dims() {
           # perplexing why we need this here, but after too much debugging, this was the simplest solution
           unfail
 
+          if [[ $type == *-to-one ]]; then
+            support_dims_one_expanded+=( $long_dim )
+          fi
           support_dims_expanded+=( $long_dim )
 
           local -n dim_derived_from=dim_${dim}_derived_from
