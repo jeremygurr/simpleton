@@ -246,7 +246,6 @@ make_table_index() {
     field_index \
     data_offset \
     field \
-    field_raw \
     value \
     values \
     row_count \
@@ -267,8 +266,7 @@ make_table_index() {
 
   for (( field_index = 0; field_index < field_count; field_index++ )); do
 
-    field_long=${table_fields[$field_index]}
-    field=${field_long//-/_}
+    field=${table_fields[$field_index]}
 
     local -n index=${table}_index_${field}
 
@@ -302,12 +300,11 @@ make_table_index() {
 
 load_derive_table_card_and_key() {
 
-  local field_index field raw_field
+  local field_index field
 
   for (( field_index = 0; field_index < field_count; field_index++ )); do
 
-    raw_field=${derive_table_fields[$field_index]}
-    field=${raw_field//-/_}
+    field=${derive_table_fields[$field_index]}
 
     local -n index=derive_table_${name}_index_${field}
 
@@ -368,7 +365,7 @@ init_context() {
       ${!sub_coordinate_*} \
       ${!tree_coordinate_*} \
 
-    declare -Ag all_dims=() short_to_long=()
+    declare -Ag all_dims=()
 
     auto_loads=() \
     cell_expiration= \
@@ -468,14 +465,14 @@ load_branch_info() {
       p=${c##*/}
       if [[ $p == *:* ]]; then
 
-        long_dim=${p%%:*}
+        dim=${p%%:*}
 
-        if [[ " ${branch_dims[*]} " == *" $long_dim "* ]]; then
-          log_fatal "Duplicate branch dim found: $long_dim in $cell_path"
+        if [[ " ${branch_dims[*]} " == *" $dim "* ]]; then
+          log_fatal "Duplicate branch dim found: $dim in $cell_path"
           fail1
         fi
 
-        branch_dims=( $long_dim ${branch_dims[*]} )
+        branch_dims=( $dim ${branch_dims[*]} )
 
         m=${p#*:}
         branch_hashes=( $m ${branch_hashes[*]} )
@@ -486,7 +483,6 @@ load_branch_info() {
         fi
         branch_members=( "$m" "${branch_members[@]}" )
 
-        local dim=${long_dim//-/_}
         local -n ddim=d_$dim idim=i_$dim
         ddim=$m
         idim=$m
@@ -738,18 +734,16 @@ tab_get_derive_from() {
       field_index field \
       key_field \
       other_field \
-      other_field_long \
+      other_field \
       other_index \
       other_index_card \
-      long_field \
       join \
       join2 \
 
     (( row_count = data_count / field_count ))
 
     for (( field_index = 0; field_index < field_count; field_index++ )); do
-      long_field=${derive_table_fields[$field_index]}
-      field=${long_field//-/_}
+      field=${derive_table_fields[$field_index]}
 
       derive_dims[$field]=1
 
@@ -764,23 +758,22 @@ tab_get_derive_from() {
       fi
 
       other_fields="${derive_table_fields[*]}"
-      remove_word_from_string other_fields $long_field
+      remove_word_from_string other_fields $field
 
       while [[ "$other_fields" ]]; do
 
         # find which dim has the highest cardinality
         local highest_card=0 highest_dim
-        for other_field_long in $other_fields; do
-          other_field=${other_field_long//-/_}
+        for other_field in $other_fields; do
           local -n other_index=derive_table_${name}_index_$other_field
           other_index_card=${#other_index[*]}
           if (( other_index_card > highest_card )); then
             highest_card=$other_index_card
-            highest_dim=$other_field_long
+            highest_dim=$other_field
           fi
         done
 
-        local -n other_index=derive_table_${name}_index_${highest_dim//-/_}
+        local -n other_index=derive_table_${name}_index_${highest_dim}
 
         if (( highest_card == row_count )); then
           join2=to-one
@@ -831,7 +824,6 @@ add_derive_item() {
     if [[ ! "$name" ]]; then
       name=${derive_path##*/}
       name=${name%.*}
-      name=${name//-/_}
       name=${name#derive_}
     fi
 
@@ -1012,7 +1004,6 @@ extract_simple_name() {
   local to_var=$3
   local -n _from=$1 _ord=$2 _to=$to_var
   split_ordinal _from _ord _to
-  #_to=${_to//-/_}
   debug_return_vars=$to_var
 }
 
@@ -1053,8 +1044,6 @@ load_dna_item() {
       is_auto=t
       var_name=${var_name#auto-}
     fi
-
-    var_name=${var_name//-/_}
 
     if [[ $is_auto == t ]]; then
       auto_loads+=( $var_name.$suffix )
@@ -1293,7 +1282,6 @@ esac
 
 # inputs:
 #   dim
-#   long_dim
 # outputs:
 #   code
 build_context_expand() {
@@ -1340,7 +1328,7 @@ build_context_expand() {
         build_context_expand_members_known || fail
       else
         build_context_expand_members_will_be_known || fail
-        dims_missing_members+="$long_dim "
+        dims_missing_members+="$dim "
       fi
     else
       build_context_expand_members_unknown || fail
@@ -1366,7 +1354,7 @@ write_coordinates_to_shell_file() {
       fail1
     fi
 
-    local value field_index data_offset row_index field long_field
+    local value field_index data_offset row_index field
 
     local -n c_data=${coord_type}_coordinate_data \
       c_fields=${coord_type}_coordinate_fields \
@@ -1407,8 +1395,7 @@ write_coordinates_to_shell_file() {
 
     for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
 
-      long_field=${c_fields[$field_index]}
-      field=${long_field//-/_}
+      field=${c_fields[$field_index]}
       local -n table_index=${coord_type}_coordinate_index_${field}
       if [[ ! -v table_index[*] ]]; then
         log_fatal "Internal error: Missing index ${coord_type}_coordinate_index_${field}"
@@ -1606,7 +1593,7 @@ convert_table_to_dims() {
 
   begin_function
 
-    local long_field field fields field_index values=() count field_count data_offset
+    local field fields field_index values=() count field_count data_offset
 
     local -n c_fields=${table}_fields \
              c_data=${table}_data \
@@ -1626,8 +1613,7 @@ convert_table_to_dims() {
     if (( c_data_count >= c_fields_count * (row_index + 1) )); then
 
       for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
-        long_field=${c_fields[$field_index]}
-        field=${long_field//-/_}
+        field=${c_fields[$field_index]}
 
         get_plural $field fields
 
@@ -1667,7 +1653,6 @@ convert_table_to_dims() {
 
 # input: 
 #   dim
-#   long_dim
 #   $1               name of input var
 #   $2               name of output var
 #   ignore_problems
@@ -1744,10 +1729,8 @@ expand_dims() {
   local to_expand=$*
   begin_function_lo
 
-    local long_dim_var dim_var plural dim_type
-    for long_dim_var in $to_expand; do
-
-      dim_var=${long_dim_var//-/_}
+    local dim_var dim_var plural dim_type
+    for dim_var in $to_expand; do
 
       local dims_var
       get_plural $dim_var dims_var
@@ -1806,13 +1789,11 @@ extract_from_derive_table_find_row_indexes() {
     row_index_count \
     column_index \
     field \
-    long_field \
 
   local -A new_matching_rows
 
   for (( column_index = 0; column_index < field_count; column_index++ )); do
-    long_field=${derive_fields[$column_index]}
-    field=${long_field//-/_}
+    field=${derive_fields[$column_index]}
     if [[ $field == $dim ]]; then
       output_dim_index=$column_index
     else
@@ -1931,14 +1912,13 @@ extract_from_derive_table_check_row() {
 # inputs:
 #   derive_table            name of var of derive table
 #   value_set               each valid value
-#   long_dim                which field to read from the table
 #   dim
 # outputs:
 #   value_set               the var out_set points to will contain a set of all matches
 #   can_derive
 #   rows_matched
 extract_from_derive_table() {
-  local derive_table=$derive_table long_dim=$long_dim
+  local derive_table=$derive_table
 
   begin_function
       
@@ -2041,7 +2021,7 @@ attempt_derive2() {
   begin_function_lo
 
     local one_row_complete=f \
-      derived_from_row derived_from_dim derived_from_long_dim \
+      derived_from_row derived_from_dim \
       complete_row derived_from_incomplete=f \
       maybe_resolved
 
@@ -2054,8 +2034,7 @@ attempt_derive2() {
 
         maybe_resolved=
         for (( i = 2; i < ${#row_array[*]}; i++ )); do
-          derived_from_long_dim=${row_array[$i]}
-          derived_from_dim=${derived_from_long_dim%%-*}
+          derived_from_dim=${row_array[$i]}
           maybe_resolved+="$derived_from_dim "
 
           if [[ " $deriving " == *" $derived_from_dim "* ]]; then
@@ -2172,7 +2151,6 @@ attempt_derive2() {
 }
 
 # inputs:
-#   long_dim        dimension to derive
 #   dim 
 #   from_dim        optional, will only look for ways to derive 'dim' from 'from_dim'
 #   value_found
@@ -2214,7 +2192,7 @@ attempt_derive() {
       skip_dims+="$dim "
     else
       value_found=t
-      log_debug "Derive of $long_dim successful: ${values[*]:0:30}"
+      log_debug "Derive of $dim successful: ${values[*]:0:30}"
     fi
 
   end_function
@@ -2239,7 +2217,7 @@ fetch_values_from_coordinates2_row() {
     if [[ $value_found == t ]]; then
       new_values+=( "${values[@]}" )
     else
-      log_fatal "Could not extract dim $long_dim from ${coord_type}_coordinate table at row $row_index"
+      log_fatal "Could not extract dim $dim from ${coord_type}_coordinate table at row $row_index"
       fail1
     fi
 
@@ -2268,7 +2246,6 @@ fetch_values_from_coordinates2() {
 }
 
 # inputs:
-#   long_dim         name of dim to fetch
 #   dim
 #   coord_type
 # outputs:
@@ -2280,8 +2257,8 @@ fetch_values_from_coordinates() {
     local table_var=${coord_type}_coordinate
     local -n table_fields=${table_var}_fields
 
-    if [[ " ${table_fields[*]} " == *" $long_dim "* ]]; then
-      field=$long_dim \
+    if [[ " ${table_fields[*]} " == *" $dim "* ]]; then
+      field=$dim \
       fetch_column_from_table || fail
     else
       fetch_values_from_coordinates2 || fail
@@ -2292,9 +2269,9 @@ fetch_values_from_coordinates() {
     fi
 
     if [[ "${values[*]:-}" ]]; then
-      log_debug "$long_dim fetched from coordinates: ${values[*]}"
+      log_debug "$dim fetched from coordinates: ${values[*]}"
     else
-      log_debug "Failed to fetch $long_dim from coordinates"
+      log_debug "Failed to fetch $dim from coordinates"
     fi
   end_function
   handle_return
@@ -2303,11 +2280,9 @@ fetch_values_from_coordinates() {
 prep_dims() {
   begin_function
 
-    local dim_var dims_var dim_var_short dims_var_short dim_long
-    for dim_long in ${!all_dims[*]}; do
-      dim_var=${dim_long//-/_}
-      dim_var_short=${dim_long%%-*}
-      dim_var_short=${dim_var_short//-/_}
+    local dim_var dims_var dim_var_short dims_var_short
+    for dim in ${!all_dims[*]}; do
+      dim_var_short=$dim
 
       get_plural $dim_var dims_var
       get_plural $dim_var_short dims_var_short
@@ -2647,19 +2622,23 @@ substitute_command_alias() {
 
 # inputs:
 #   $1        start_path
-#   long_dim
+#   dim
 # outputs:
 #   dim_path
 get_dim_path() {
 
-  local start_path=$1 lib_dim_path short_dim=${long_dim%%-*}
+  local start_path=$1 lib_dim_path
 
   lib_dim_path=$start_path/.lib/dim
-  if [[ -d $lib_dim_path/$long_dim ]]; then
-    dim_path=$lib_dim_path/$long_dim
+  if [[ -d $lib_dim_path/$dim ]]; then
+    dim_path=$lib_dim_path/$dim
   else
 
-    local shorts=( $lib_dim_path/$short_dim-* )
+    # TODO Need to redo this
+    log_fatal "Incomplete"
+    fail1
+
+    local shorts=( $lib_dim_path/$dim-* )
     if (( ${#shorts[*]} > 1 )); then
       log_fatal "Too many matching dims: ${shorts[*]}, choose one specifically using the longer dim form"
       log_fatal "Dim is referenced here: $dim_requested_by"
@@ -2677,20 +2656,19 @@ get_dim_path() {
 }
 
 # inputs:
-#   long_dim
 #   dim
 #   downstream_dim    optional
 # 
 build_dim_info_single() {
-  local long_dim=$long_dim downstream_dim_row=${downstream_dim_row:-} \
-    log_show_vars=long_dim \
+  local downstream_dim_row=${downstream_dim_row:-} \
+    log_show_vars=dim \
     recursive=${recursive:-t} \
 
   begin_function
 
     local dims dim_path=
 
-    all_dims[$long_dim]=1
+    all_dims[$dim]=1
 
     if [[ ! "$dim" =~ ^[a-zA-Z0-9_]+$ ]]; then
       log_fatal "Invalid dim name: $dim. Dims must consist of alphanumeric characters or underscores."
@@ -2706,7 +2684,7 @@ build_dim_info_single() {
 
     get_dim_path $cell_path || fail
     if [[ ! "$dim_path" ]]; then
-      log_fatal "Could not find dim $long_dim in any .lib/dim folders of the parents of $cell_path"
+      log_fatal "Could not find dim $dim in any .lib/dim folders of the parents of $cell_path"
       fail1
     fi
 
@@ -2718,8 +2696,7 @@ build_dim_info_single() {
 
     local derived_from_row \
       new_derived_from_row \
-      derived_long_dim \
-      derived_short_dim \
+      derived_dim \
       first \
 
     local -n is_secret=dim_${dim}_is_secret
@@ -2732,23 +2709,21 @@ build_dim_info_single() {
 
     local -n derived_from=dim_${dim}_derived_from
     if [[ $recursive == t && -v derived_from ]]; then
-      local upstream_long_dim upstream_dim upstream_dim_row
+      local upstream_dim upstream_dim upstream_dim_row
       begin_for upstream_dim_row in "${derived_from[@]}"; doo
-        begin_for upstream_long_dim in ${upstream_dim_row#* * }; doo
-          upstream_dim=${upstream_long_dim//-/_}
+        begin_for upstream_dim in ${upstream_dim_row#* * }; doo
           local -n upstream_dim_type=dim_${upstream_dim}_type
-          if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_long_dim] ]]; then
+          if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_dim] ]]; then
             # recursive
             downstream_dim_row="$dim ${upstream_dim_row#* * }" \
             dim_type=support_dims \
-            dim_requested_by="derived_from of $long_dim" \
-            long_dim=$upstream_long_dim \
+            dim_requested_by="derived_from of $dim" \
             dim=$upstream_dim \
             build_dim_info_single || fail
           fi
-        log_show_vars=long_dim
+        log_show_vars=dim
         end_for
-      log_show_vars=long_dim
+      log_show_vars=dim
       end_for
     fi
 
@@ -2774,19 +2749,17 @@ build_dim_info_single() {
 add_derived_to_support_dims() {
   begin_function
 
-    local derived_from long_dim short_dim type row OIFS=$IFS
+    local derived_from dim short_dim type row OIFS=$IFS
 
     for row in "${dim_derived_from[@]}"; do
       local row_array=( $row )
       type=${row_array[1]}
-      for long_dim in ${row_array[*]:2}; do
+      for dim in ${row_array[*]:2}; do
 
-        if ! array_contains trunk_dims_expanded $long_dim \
-          && ! array_contains support_dims_expanded $long_dim; then
+        if ! array_contains trunk_dims_expanded $dim \
+          && ! array_contains support_dims_expanded $dim; then
 
-          dim=${long_dim//-/_}
-
-          if [[ ! -v all_dims[$long_dim] ]]; then
+          if [[ ! -v all_dims[$dim] ]]; then
             downstream_dim_row= \
             build_dim_info_single || fail
           fi
@@ -2795,13 +2768,13 @@ add_derived_to_support_dims() {
           unfail
 
           if [[ $type == *-to-one ]]; then
-            support_dims_one_expanded+=( $long_dim )
+            support_dims_one_expanded+=( $dim )
           fi
-          support_dims_expanded+=( $long_dim )
+          support_dims_expanded+=( $dim )
 
           local -n dim_derived_from=dim_${dim}_derived_from
           if [[ -v dim_derived_from ]]; then
-            dim_requested_by="derived_from of $long_dim" \
+            dim_requested_by="derived_from of $dim" \
             add_derived_to_support_dims || fail
           fi
 
@@ -2817,13 +2790,12 @@ add_derived_to_support_dims() {
 build_context_support_dims() {
   begin_function
 
-    local long_dim dim dim_type=trunk_dims
+    local dim dim_type=trunk_dims
     support_dims_expanded=()
-    begin_for long_dim in "${trunk_dims_expanded[@]}"; doo
-      dim=${long_dim//-/_}
+    begin_for dim in "${trunk_dims_expanded[@]}"; doo
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
-        dim_requested_by="derived_from of $long_dim" \
+        dim_requested_by="derived_from of $dim" \
         add_derived_to_support_dims || fail
       fi
     end_for
@@ -2838,14 +2810,14 @@ build_context_support_dims() {
 }
 
 build_dim_info_expand_group() {
-  local long_dim=$1
+  local dim=$1
   begin_function_lo
 
     local dim_path=
     get_dim_path $cell_path || fail
 
     if [[ ! "$dim_path" ]]; then
-      log_fatal "Could not find dim $long_dim of $dim_type"
+      log_fatal "Could not find dim $dim of $dim_type"
       fail1
     fi
 
@@ -2853,12 +2825,12 @@ build_dim_info_expand_group() {
     dim_folders=$(find1 $dim_path | sort -g) || fail
 
     for dim_folder in $dim_folders; do
-      local long_dim=${dim_folder##*/}
-      long_dim=${long_dim##+([0-9])-}
-      if [[ $long_dim == _* ]]; then
-        build_dim_info_expand_group $long_dim || fail
+      local dim=${dim_folder##*/}
+      dim=${dim##+([0-9])-}
+      if [[ $dim == _* ]]; then
+        build_dim_info_expand_group $dim || fail
       else
-        expanded_array+=( $long_dim )
+        expanded_array+=( $dim )
       fi
     done
 
@@ -2869,7 +2841,7 @@ build_dim_info_expand_group() {
 build_dim_info() {
   begin_function
 
-    local long_dim dim_type
+    local dim dim_type
     localize_dims=
     localize_reverse_dims=
 
@@ -2878,11 +2850,11 @@ build_dim_info() {
       local -n dim_array=${dim_type} expanded_array=${dim_type}_expanded
       expanded_array=()
 
-      begin_for long_dim in "${dim_array[@]}"; doo
-        if [[ $long_dim == _* ]]; then
-          build_dim_info_expand_group $long_dim || fail
+      begin_for dim in "${dim_array[@]}"; doo
+        if [[ $dim == _* ]]; then
+          build_dim_info_expand_group $dim || fail
         else
-          expanded_array+=( $long_dim )
+          expanded_array+=( $dim )
         fi
       end_for
 
@@ -2894,11 +2866,10 @@ build_dim_info() {
 
       local -n dim_array=${dim_type}_expanded
 
-      begin_for long_dim in "${dim_array[@]}"; doo
-        if [[ ! -v all_dims[$long_dim] ]]; then
-          dim_requested_by="$dim_type $long_dim" \
+      begin_for dim in "${dim_array[@]}"; doo
+        if [[ ! -v all_dims[$dim] ]]; then
+          dim_requested_by="$dim_type $dim" \
           downstream_dim_row= \
-          dim=${long_dim//-/_} \
           build_dim_info_single || fail
         fi
       end_for
@@ -2913,12 +2884,10 @@ build_dim_info() {
 
       short_dims=()
 
-      for long_dim in "${dim_array[@]}"; do
+      for dim in "${dim_array[@]}"; do
 
-        local dim=${long_dim//-/_} dims short_dim=${long_dim%%-*}
+        local dim=$dim dims
         get_plural $dim dims
-
-        short_to_long[$short_dim]=$long_dim
 
         localize_dims+=" d_$dim d_$dims"
         localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
@@ -2931,7 +2900,6 @@ build_dim_info() {
       localize_dims localize_reverse_dims \
       secret_vars \
       all_dims \
-      short_to_long \
       || fail
 
   end_function
@@ -3076,9 +3044,8 @@ load_parent_context() {
 
 build_dim_expand_functions() {
   begin_function
-    local dim long_dim
-    for long_dim in ${!all_dims[*]}; do
-      dim=${long_dim//-/_}
+    local dim
+    for dim in ${!all_dims[*]}; do
       local -n expand_function=dim_${dim}_expand
       if ! function_exists expand_function; then
         build_context_expand || fail
@@ -3095,14 +3062,11 @@ load_dim_derive_items() {
       derived_short_dim \
       dims_to_add \
       dim_to_add \
-      long_dim_to_add \
       action \
       action_type \
       item \
-      long_dim \
 
-    begin_for long_dim in ${!all_dims[*]}; doo
-      dim=${long_dim//-/_}
+    begin_for dim in ${!all_dims[*]}; doo
       local -n derived_from=dim_${dim}_derived_from
 
       begin_for derived_from_row in "${derived_from[@]}"; doo
@@ -3110,14 +3074,13 @@ load_dim_derive_items() {
         action=${derived_from_row%% *}
         action_type=${action##*.}
         item=${action%.*}
-        begin_for derived_long_dim in ${derived_from_row##* * }; doo
-          dims_to_add+="$derived_long_dim "
+        begin_for derived_dim in ${derived_from_row##* * }; doo
+          dims_to_add+="$derived_dim "
         end_for
 
         case $action_type in
           tab)
-            begin_for long_dim_to_add in $dims_to_add; doo
-              dim_to_add=${long_dim_to_add//-/_}
+            begin_for dim_to_add in $dims_to_add; doo
               local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
               if [[ ! "${dim_derive_tables:-}" || " $dim_derive_tables " != *" $item "* ]]; then
                 dim_derive_tables+="$item "
@@ -3125,8 +3088,7 @@ load_dim_derive_items() {
             end_for
           ;;
           fun)
-            begin_for long_dim_to_add in $dims_to_add; doo
-              dim_to_add=${long_dim_to_add//-/_}
+            begin_for dim_to_add in $dims_to_add; doo
               local -n dim_derive_functions=dim_${dim_to_add}_derive_functions
               if [[ ! "${dim_derive_functions:-}" || " $dim_derive_functions " != *" $item "* ]]; then
                 dim_derive_functions+="$item "
@@ -3134,7 +3096,7 @@ load_dim_derive_items() {
             end_for
           ;;
           *)
-            log_fatal "Internal error: Unknown action type in derived from dim $long_dim: $action"
+            log_fatal "Internal error: Unknown action type in derived from dim $dim: $action"
             fail1
           ;;
         esac
@@ -3142,8 +3104,7 @@ load_dim_derive_items() {
       end_for
     end_for
 
-    begin_for long_dim in ${!all_dims[*]}; doo
-      dim=${long_dim//-/_}
+    begin_for dim in ${!all_dims[*]}; doo
       if [[ -v dim_${dim}_derive_tables ]]; then
         write_vars_to_context dim_${dim}_derive_tables dim_${dim}_derive_functions || fail
       fi
@@ -3245,9 +3206,8 @@ gather_derive_tables_single() {
           end_for
         end_for
 
-        local derive_dim derive_dim_raw
-        begin_for derive_dim_raw in ${!derive_dims[*]}; doo
-          derive_dim=${derive_dim_raw//-/_}
+        local derive_dim
+        begin_for derive_dim in ${!derive_dims[*]}; doo
           context_file=$cache_path.new \
           write_vars_to_context dim_${derive_dim}_derived_from || fail
         end_for
@@ -3286,11 +3246,9 @@ calc_missing_members() {
 
     debug_start
 
-    local dim members_array long_dim
-    begin_for long_dim in $dims_missing_members; doo
-      dim=${long_dim//-/_}
-
-      log_debug "Calculating missing dim members for $long_dim"
+    local dim members_array dim
+    begin_for dim in $dims_missing_members; doo
+      log_debug "Calculating missing dim members for $dim"
 
       local -n dts=dim_${dim}_derive_tables
       local dt
@@ -3305,13 +3263,13 @@ calc_missing_members() {
           union members_found members_set
         end_for
       else
-        log_fatal "Needed to calculate members for $long_dim but no derive tables were found with this dim. "
+        log_fatal "Needed to calculate members for $dim but no derive tables were found with this dim. "
         log_fatal "Either explicitly define the members with members.var, or add a derive table using this dim, or mark this dim as dynamic by removing the member_type.var from the dim folder."
         fail1
       fi
 
       if [[ ! "${members_found[*]}" ]]; then
-        log_fatal "No members were found for this dim $long_dim. Check the derive tables or explicitly make a members list in the dim folder."
+        log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
         fail1
       fi
 
@@ -3382,10 +3340,9 @@ build_context_branch() {
       rm $context_path-$context_type.new || fail
     fi
 
-    local long_dim dim assignment member i members_string=
+    local dim assignment member i members_string=
     begin_for ((i = 0; i < branch_dim_count; i++)); doo
-      long_dim=${branch_dims[$i]}
-      dim=${long_dim//-/_}
+      dim=${branch_dims[$i]}
       member=${branch_members[$i]}
       shell_quote_var member
       assignment="d_$dim=$member"
@@ -3544,7 +3501,6 @@ calc_coordinates_add_row() {
     local i new_coords=()
     for (( i = 0; i < coordinate_fields_count; i++ )); do
       local dim_var=${coordinate_fields[$i]}
-      dim_var=${dim_var//-/_}
       local -n dim_value=d_$dim_var
       if [[ ! "${dim_value:-}" ]]; then
         if [[ $ignore_missing == f ]]; then
@@ -3607,13 +3563,12 @@ setup_coord_fields() {
 
     if [[ $target_form == seed ]]; then
 
-      local new_fields=() long_dim dim
+      local new_fields=() dim
 
-      for long_dim in ${coordinate_fields[*]}; do
-        dim=${long_dim//-/_}
+      for dim in ${coordinate_fields[*]}; do
         local -n member_type=dim_${dim}_member_type
         if [[ $member_type == static ]]; then
-          new_fields+=( $long_dim )
+          new_fields+=( $dim )
         fi
       done
 
@@ -3807,7 +3762,7 @@ read_dim() {
 }
 
 attempt_default() {
-  local long_dim=$1 dim=${1//-/_}
+  local dim=$1
   begin_function_lo
 
     local problem
@@ -3933,7 +3888,7 @@ set_cross_dims_single() {
   local field_count=${#derive_fields[*]} \
     data_count=${#derive_data[*]} \
     row_index data_index=0 column_index \
-    value= field field_long \
+    value= field \
 
   local row_count=$((data_count / field_count))
 
@@ -3946,11 +3901,10 @@ set_cross_dims_single() {
     fi
 
     for (( column_index = 0; column_index < field_count; column_index++ )); do
-      field_long=${derive_fields[$column_index]}
-      field=${field_long//-/_}
+      field=${derive_fields[$column_index]}
       local fields
       get_plural $field fields
-      if [[ $field != $dim && -v all_dims[$field_long] ]]; then
+      if [[ $field != $dim && -v all_dims[$field] ]]; then
         (( data_index = row_index * field_count + column_index ))
         value=${derive_data[$data_index]}
         local -n field_dim=d_$field
@@ -3979,7 +3933,6 @@ set_cross_dims_single() {
 
 # input: 
 #   dim
-#   long_dim
 set_cross_dims() {
   begin_function
 
@@ -3996,9 +3949,9 @@ set_cross_dims() {
         get_plural $conflict conflict_plural
         local -n conflict_member=d_$conflict \
           conflict_members=d_$conflict_plural
-        log_debug "Conflict found between cross-dim $long_dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
+        log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
       else
-        log_debug "Conflict found for cross-dim $long_dim = $member $conflict"
+        log_debug "Conflict found for cross-dim $dim = $member $conflict"
       fi
     fi
 
@@ -4007,11 +3960,11 @@ set_cross_dims() {
 }
 
 # input:
-#   $1   name of long dim
+#   $1   name of dim
 # output:
 #   derive_tables_loaded
 load_related_derive_tables() {
-  local long_dim=$1 dim=${1//-/_}
+  local dim=$1
   begin_function_lo
     local -n dts=dim_${dim}_derive_tables
     local dt
@@ -4033,7 +3986,7 @@ calc_coordinates_next_unknown_dim_found() {
     log_show_vars=dim
   begin_function
 
-    resolved_dims+=" $long_dim"
+    resolved_dims+=" $dim"
     progress_bar_next
 
     local -n \
@@ -4044,7 +3997,7 @@ calc_coordinates_next_unknown_dim_found() {
 
     local -n derive_tables_loaded=dim_${dim}_derive_tables_loaded
     if [[ "${derive_tables_loaded:-}" != t ]]; then
-      load_related_derive_tables $long_dim || fail
+      load_related_derive_tables $dim || fail
     fi
 
     unset sdim ddim ddims sdims
@@ -4056,7 +4009,7 @@ calc_coordinates_next_unknown_dim_found() {
     fi
 
     local unknown_dims=${unknown_dims% }
-    remove_word_from_string unknown_dims $long_dim
+    remove_word_from_string unknown_dims $dim
     if [[ "$unknown_dims" == *" "* ]]; then
       unknown_dims="${unknown_dims#* } ${unknown_dims%% *}"
     fi
@@ -4137,7 +4090,7 @@ calc_coordinates_next_unknown_dim_found() {
 calc_coordinates_next_unknown_dim() {
   local log_show_vars=unknown_dims
   begin_function
-    local long_dim dim dims \
+    local dim dims \
       phase unknown_dims=${unknown_dims:-} \
       resolved_dims=${resolved_dims:-} \
       row_ended=f \
@@ -4151,8 +4104,7 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       for phase in derive default; do
-        for long_dim in $unknown_dims; do
-          dim=${long_dim//-/_}
+        for dim in $unknown_dims; do
 
           local -n dim_type=${dim}_dim_type
           get_plural $dim dims
@@ -4180,7 +4132,7 @@ calc_coordinates_next_unknown_dim() {
               expand_dim value values || fail
               already_expanded=t
             else
-              attempt_default $long_dim || fail
+              attempt_default $dim || fail
             fi
           fi
 
@@ -4203,7 +4155,6 @@ calc_coordinates_next_unknown_dim() {
 }
 
 # inputs:
-#   long_dim
 #   dim
 calc_coords_validate_member() {
   local member=$1 log_show_vars='dim member'
@@ -4212,7 +4163,7 @@ calc_coords_validate_member() {
     is_valid=t
     conflicting_values=()
 
-    log_debug "Validating $long_dim = $member"
+    log_debug "Validating $dim = $member"
 
     # all needs to be permitted here in the case of a dim that doesn't have explicit members
     #   but where the user needs to communicate that all are acceptable based on derivation of others?
@@ -4254,8 +4205,7 @@ calc_coords_validate_member() {
       deriving= \
       skip_dims= \
       from_dim=$dim \
-      long_dim=$rd \
-      dim=${rd//-/_} \
+      dim=$rd \
       attempt_derive || fail
 
       if [[ $can_derive == t ]]; then
@@ -4320,7 +4270,6 @@ member_conflicts() {
 }
 
 # inputs:
-#   long_dim
 #   dim
 #   m       member value
 #   phase   unknown or known.  
@@ -4331,7 +4280,7 @@ calc_coordinates_next_dim_member() {
     localize
     local -n member=d_$dim
     member=$m
-    log_debug "Processing $long_dim = $member in phase $phase"
+    log_debug "Processing $dim = $member in phase $phase"
     local validated_dims=${validated_dims:-} conflicting_values=() is_valid
 
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
@@ -4399,20 +4348,19 @@ calc_coordinates_next_dim() {
       abort
     fi
 
-    local long_dim dim dims \
+    local dim dims \
       row_index=${row_index:-} \
       unknown_dims=${unknown_dims:-} \
       check_dims=${check_dims:-} \
       resolved_dims=${resolved_dims:-} \
       needs_validation=${needs_validation:-t} \
 
-    long_dim=${check_dims%% *}
-    check_dims=${check_dims##$long_dim*( )}
-    dim=${long_dim//-/_}
+    dim=${check_dims%% *}
+    check_dims=${check_dims##$dim*( )}
 
     if [[ "$dim" ]]; then
 
-      log_debug "Checking dim $long_dim"
+      log_debug "Checking dim $dim"
       get_plural $dim dims
 
       eval "local -I d_$dim d_$dims"
@@ -4483,13 +4431,12 @@ seed_coordinates_handle_row() {
   log_show_vars=row_index
   begin_function
     localize
-    local is_valid seed_field_long
+    local is_valid seed_field
     check_table_row
     if [[ $is_valid == t ]]; then
       for field_index in ${!seed_fields[*]}; do
-        seed_field_long=${seed_fields[$field_index]}
-        seed_field=${seed_field_long//-/_}
-        if [[ -v all_dims[$seed_field_long] ]]; then
+        seed_field=${seed_fields[$field_index]}
+        if [[ -v all_dims[$seed_field] ]]; then
           local -n member=d_$seed_field
           (( seed_data_index = row_index * seed_field_count + field_index ))
           member=${seed_data[$seed_data_index]}
@@ -4635,7 +4582,6 @@ calc_coordinates_refine_get_matching_rows() {
   local column_index \
     field_count=${#derive_fields[*]} \
     field \
-    long_field \
     fields \
     members \
 
@@ -4643,8 +4589,7 @@ calc_coordinates_refine_get_matching_rows() {
 
   for (( column_index = 0; column_index < field_count; column_index++ )); do
 
-    long_field=${derive_fields[$column_index]}
-    field=${long_field//-/_}
+    field=${derive_fields[$column_index]}
     get_plural $field fields
 
     local -n ddim=d_$field \
@@ -4734,10 +4679,9 @@ calc_coordinates_refine_multi() {
 
 prep_seed_dims() {
 
-  local dim dims long_dim
-  for long_dim in ${!all_dims[*]}; do
+  local dim dims
+  for dim in ${!all_dims[*]}; do
 
-    dim=${long_dim//-/_}
     get_plural $dim dims
 
     local -n \
@@ -4958,11 +4902,7 @@ calc_anchor_dims() {
     if [[ "$anchor_dims" ]]; then
       local new_anchors=
       for dim in $anchor_dims; do
-        if [[ -v short_to_long[$dim] ]]; then
-          new_anchors+="${short_to_long[$dim]} "
-        else
-          new_anchors+="$dim "
-        fi
+        new_anchors+="$dim "
       done
       anchor_dims=${new_anchors% }
     fi
@@ -5258,7 +5198,7 @@ for_each_member_multi() {
 #   fork=whether the process should be forked before executing 
 #     the function. (optional)
 for_each_member() {
-  local long_dim=$1 \
+  local dim=$1 \
     function=$function leave_loop=${leave_loop:-0} \
     fork=${fork:-t} \
     par=${par:-t} \
@@ -5269,14 +5209,13 @@ for_each_member() {
   begin_function
 
     local dims values=() member_count=0 \
-      dim=${long_dim//-/_}
 
     get_plural $dim dims
 
     local -n coord_fields=branch_coordinate_fields \
         dims_members=d_$dims dim_members=d_$dim \
 
-    if [[ -v coord_fields[*] && " ${coord_fields[*]} " == *" $long_dim "* ]]; then
+    if [[ -v coord_fields[*] && " ${coord_fields[*]} " == *" $dim "* ]]; then
       coord_type=branch \
       fetch_values_from_coordinates || fail
     elif [[ "${dim_member:-}" ]]; then
@@ -5370,8 +5309,7 @@ plant_seed_internal() {
 
                 local values
                 coord_type=branch \
-                long_dim=$dim_part \
-                dim=${dim_part//-/_} \
+                dim=$dim_part \
                 fetch_values_from_coordinates $dim_part || fail
 
                 local value_count=${#values[*]}
@@ -5603,9 +5541,8 @@ get_required_freshness() {
 # inputs:
 #   $*   the dims to check, must use short dims (like trunk_dims, etc)
 any_dim_is_set() {
-  local long_dim dim dims is_set=f
-  for long_dim in $*; do
-    dim=${long_dim//-/_}
+  local dim dims is_set=f
+  for dim in $*; do
     get_plural $dim dims
     local -n ddim=d_${dim} ddims=d_${dims}
     if [[ "${ddim:-}" || "${ddims:-}" ]]; then
@@ -6436,12 +6373,12 @@ handle_return
   handle_return
 }
 
-# inputs: parent_path seed_path member long_dim
+# inputs: parent_path seed_path member dim
 plant_member() {
   begin_function
     local deep=${deep:-f} repair=${repair:-f}
     get_sane_value "$member" || fail
-    member_path=$parent_path/$long_dim:$sane_value
+    member_path=$parent_path/$dim:$sane_value
     if [[ ! -d $member_path || $repair == t ]]; then
 
       local new_path=$member_path.new
