@@ -365,7 +365,8 @@ init_context() {
       ${!sub_coordinate_*} \
       ${!tree_coordinate_*} \
 
-    declare -Ag all_dims=()
+    declare -Ag all_dims=() \
+      dim_shorts=() \
 
     auto_loads=() \
     cell_expiration= \
@@ -2285,7 +2286,6 @@ prep_dims() {
       dim_var_short=$dim
 
       get_plural $dim_var dims_var
-      get_plural $dim_var_short dims_var_short
 
       # p_dims are what the user sets when putting parameters on the commandline (without the p_), or explicitly set in environemnt (with the p_)
       # i_dims are set in the dna and are a permanent feature of the cell and can't be overridden by the user
@@ -2296,40 +2296,51 @@ prep_dims() {
         sdim=s_$dim_var sdims=s_$dims_var \
         pdim=p_$dim_var pdims=p_$dims_var \
         idim=i_$dim_var idims=i_$dims_var \
-        ddim_short=d_$dim_var_short ddims_short=d_$dims_var_short \
-        sdim_short=s_$dim_var_short sdims_short=s_$dims_var_short \
-        pdim_short=p_$dim_var_short pdims_short=p_$dims_var_short \
-        idim_short=i_$dim_var_short idims_short=i_$dims_var_short \
+
+      if [[ $dim_var == *_* && ! "${pdim:-}" && ! "${pdims:-}" ]]; then
+
+        debug_start
+        local shorter_dim=$dim_var shorter_dims
+
+        while [[ $shorter_dim == *_* ]]; do
+
+          shorter_dim=${shorter_dim#*_}
+          get_plural $shorter_dim shorter_dims
+          if [[ ! -v dim_shorts[$shorter_dim] ]]; then
+            dim_shorts[$shorter_dim]=$dim_var
+          else
+            dim_shorts[$shorter_dim]+=" $dim_var"
+          fi
+
+          local -n short_pdim=p_$shorter_dim \
+            short_pdims=p_$shorter_dims \
+
+          if [[ "${short_pdim:-}" ]]; then
+            pdim=$short_pdim
+            break
+          elif [[ "${short_pdims:-}" ]]; then
+            pdims=( "${short_pdims[@]}" )
+            break
+          fi
+
+        done
+      fi
 
       if [[ "${ddim:-}" || "${ddims:-}" ]]; then
-        unset pdim pdims pdim_short pdims_short sdim sdims sdim_short sdims_short
-      elif [[ "${ddim_short:-}" ]]; then
-        ddim=${ddim_short}
-        unset pdim pdims pdim_short pdims_short sdim sdims sdim_short sdims_short
-      elif [[ "${ddims_short:-}" ]]; then
-        ddims=( "${ddims_short[@]}" )
-        unset pdim pdims pdim_short pdims_short sdim sdims sdim_short sdims_short
+        unset pdim pdims sdim sdims
       else
 
         # We do not support pulling from simple dim here
         # If we want to set an dim in env vars, it must be set with p_dim form
-        sdim=${sdim:-${sdim_short:-${idim:-${idim_short:-${pdim:-${pdim_short:-}}}}}}
+        sdim=${sdim:-${idim:-${pdim:-}}}
 
         if [[ ! "${sdims:-}" ]]; then
-          if [[ "${sdims_short:-}" ]]; then
-            sdims=( "${sdims_short[@]}" )
-          elif [[ "${idims:-}" ]]; then
+          if [[ "${idims:-}" ]]; then
             sdims=( "${idims[@]}" )
-          elif [[ "${idims_short:-}" ]]; then
-            sdims=( "${idims_short[@]}" )
           elif [[ "${pdims:-}" ]]; then
             # Multiple members that have spaces inside are not supported
             # Only single member dims can be used if the value requires spaces or special characters
             sdims=( $pdims )
-          elif [[ "${pdims_short:-}" ]]; then
-            # Multiple members that have spaces inside are not supported
-            # Only single member dims can be used if the value requires spaces or special characters
-            sdims=( $pdims_short )
           else
             sdims=()
           fi
@@ -2337,7 +2348,7 @@ prep_dims() {
 
         # from here on out only sdims and ddims should be used
         # sdims may contain shortcuts, ddims are always expanded (never shortcuts)
-        unset pdim pdims pdim_short pdims_short
+        unset pdim pdims
 
         # idims are needed when calculating seed coordinates
         # unset i_$dim_var i_$dims_var
