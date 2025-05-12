@@ -253,6 +253,12 @@ make_table_index() {
   local -n table_fields=${table}_fields \
     table_data=${table}_data \
 
+  if [[ ! -v table_fields ]]; then
+    debug_start
+    log_fatal "Internal error: Table not defined: $table"
+    fail1
+  fi
+
   local \
     field_count=${#table_fields[*]} \
     data_count=${#table_data[*]} \
@@ -1527,6 +1533,86 @@ write_coordinates_to_vtab_file() {
   handle_return
 }
 
+# initialized coordinates with a table to speed up coordinate calculation
+#   of all possibilities
+# won't work if coordinates already has data
+# inputs:
+#   coord_type: which coordinates to load
+#   seed_table: defaults to auto, which will just choose the largest available table
+seed_coordinates() {
+  local seed_table=${seed_table:-auto} \
+    coord_type=$coord_type \
+    add_implicit_dims=${add_implicit_dims:-f} \
+    fill_in_the_blanks=${fill_in_the_blanks:-f} \
+
+  begin_function
+    local -n coordinate_data=${coord_type}_coordinate_data \
+      coordinate_fields=${coord_type}_coordinate_fields \
+
+    local coordinate_fields_count=0 \
+      coordinate_count=0 \
+      coordinate_rows=0 \
+
+    log_debug "Seeding $coord_type coordinates with seed table $seed_table"
+    seed_coordinates_prep || fail
+
+    local -n seed_fields=${seed_table}_fields \
+             seed_data=${seed_table}_data \
+
+    if [[ ! -v seed_fields ]]; then
+      log_fatal "Invalid seed table: $seed_table"
+      fail1
+    fi
+
+    local seed_field_count=${#seed_fields[*]} \
+          seed_data_count=${#seed_data[*]} \
+          total_coord_rows_added=0 \
+
+    local seed_table_rows=$(( seed_data_count / seed_field_count ))
+
+    setup_coord_fields || fail
+    if [[ $add_implicit_dims == t ]]; then
+      local f p
+      for f in ${seed_fields[*]}; do
+        if ! array_contains coordinate_fields $f; then
+          coordinate_fields+=( $f )
+          (( coordinate_fields_count++ ))
+          all_dims[$f]=1
+          get_plural $f p
+          localize_dims+=" d_$f d_$p"
+        fi
+      done
+    fi
+
+    if (( coordinate_fields_count <= 1 )); then
+      log_debug "Too few fields found ($coordinate_fields_count) to generate useful $coord_type seed coords"
+      abort
+    fi
+
+    local field_index seed_field seed_data_index \
+      new_coordinate_data=() \
+
+    local -n \
+      field_count=seed_field_count \
+      table_fields=seed_fields \
+      table_data=seed_data \
+
+    begin_for (( row_index = 0; row_index < seed_table_rows; row_index++ )); doo
+      seed_coordinates_handle_row || fail
+    end_for
+
+    coordinate_data=( "${new_coordinate_data[@]}" )
+    (( coordinate_count = ${#coordinate_data[*]} ))
+    (( coordinate_rows = coordinate_count / coordinate_fields_count ))
+
+    if (( coordinate_rows > 1 )); then
+      calc_coordinates_dedup || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 # Adds the branch coords (from existing dims) to the given table file
 append_coords_to_file() {
   local from=$1 to=$2 coord_type=$coord_type fill_in_the_blanks=${fill_in_the_blanks:-f}
@@ -2298,7 +2384,6 @@ prep_dims() {
 
       if [[ $dim_var == *_* && ! "${pdim:-}" && ! "${pdims:-}" ]]; then
 
-        debug_start
         local shorter_dim=$dim_var shorter_dims
 
         while [[ $shorter_dim == *_* ]]; do
@@ -2306,7 +2391,7 @@ prep_dims() {
           shorter_dim=${shorter_dim#*_}
           get_plural $shorter_dim shorter_dims
 
-          if [[ ! -v dim_short[$shorter_dim] ]]; then
+          if [[ ! -v dim_shorts[$shorter_dim] ]]; then
             log_fatal "Internal error: dim_short[$shorter_dim] doesn't exist, and it should have already been set in build_dim_info"
             fail1
           fi
@@ -2314,17 +2399,21 @@ prep_dims() {
           local -n short_pdim=p_$shorter_dim \
             short_pdims=p_$shorter_dims \
 
-          if [[ ${dim_shorts[$shorter_dim]} == *" "* && "${short_pdim:-}${short_pdims:-}" ]]; then
-            log_fatal "Ambiguous dim: $dim_var. This could refer to any of: ${dim_shorts[$shorter_dim]}. Choose one specifically when setting this dim."
-            fail1
-          fi
+          if [[ "${short_pdim:-}${short_pdims:-}" ]]; then
 
-          if [[ "${short_pdim:-}" ]]; then
-            pdim=$short_pdim
-            break
-          elif [[ "${short_pdims:-}" ]]; then
-            pdims=( "${short_pdims[@]}" )
-            break
+            if [[ ${dim_shorts[$shorter_dim]} == *' '* ]]; then
+              log_fatal "Ambiguous dim: $dim_var. This could refer to any of: ${dim_shorts[$shorter_dim]}. Choose one specifically when setting this dim."
+              fail1
+            fi
+
+            if [[ "${short_pdim:-}" ]]; then
+              pdim=$short_pdim
+              break
+            elif [[ "${short_pdims:-}" ]]; then
+              pdims=( "${short_pdims[@]}" )
+              break
+            fi
+
           fi
 
         done
@@ -2396,13 +2485,12 @@ load_child_dims() {
           remove_word_from_string leftovers $branch_dim
         done
 
-        for anchor_dim in $anchor_dims; do
+        begin_for anchor_dim in $anchor_dims; doo
           if [[ " ${trunk_dims_expanded[*]} ${support_dims_expanded[*]} " != *" $anchor_dim "* ]]; then
             log_fatal "Invalid anchor_dim: $anchor_dim. It does not exist in the list of possible leaf nodes: ${trunk_dims_expanded[*]} ${support_dims_expanded[*]}"
             fail1
           fi
-        done
-        maybe_break
+        end_for
         
         child_dims=( $leftovers )
       fi
@@ -2815,7 +2903,7 @@ build_context_support_dims() {
     sort_array support_dims_expanded
 
     log_debug "Calculated support_dims: ${support_dims_expanded[*]}"
-    write_vars_to_context support_dims_expanded || fail
+    write_vars_to_context support_dims_expanded support_dims_one_expanded || fail
 
   end_function
   handle_return
@@ -3537,7 +3625,9 @@ calc_coordinates_add_row() {
 setup_coord_fields() {
   begin_function
 
-    case $coord_type in
+    local short_coord_type=${coord_type%_seed}
+
+    case $short_coord_type in
       branch)
         coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_one_expanded[*]:-} )
         # don't need to do deep derive if we are already include support dims, which come
@@ -3607,86 +3697,6 @@ load_implicit_dims() {
         fi
       done
     fi
-  end_function
-  handle_return
-}
-
-# initialized coordinatas with a table to speed up coordinate calculation
-#   of all possibilities
-# won't work if coordinates already has data
-# inputs:
-#   coord_type: which coordinates to load
-#   seed_table: defaults to auto, which will just choose the largest available table
-seed_coordinates() {
-  local seed_table=${seed_table:-auto} \
-    coord_type=$coord_type \
-    add_implicit_dims=${add_implicit_dims:-f} \
-    fill_in_the_blanks=${fill_in_the_blanks:-f} \
-
-  begin_function
-    local -n coordinate_data=${coord_type}_coordinate_data \
-      coordinate_fields=${coord_type}_coordinate_fields \
-
-    local coordinate_fields_count=0 \
-      coordinate_count=0 \
-      coordinate_rows=0 \
-
-    log_debug "Seeding $coord_type coordinates with seed table $seed_table"
-    seed_coordinates_prep || fail
-
-    local -n seed_fields=${seed_table}_fields \
-             seed_data=${seed_table}_data \
-
-    if [[ ! -v seed_fields ]]; then
-      log_fatal "Invalid seed table: $seed_table"
-      fail1
-    fi
-
-    local seed_field_count=${#seed_fields[*]} \
-          seed_data_count=${#seed_data[*]} \
-          total_coord_rows_added=0 \
-
-    local seed_table_rows=$(( seed_data_count / seed_field_count ))
-
-    setup_coord_fields || fail
-    if [[ $add_implicit_dims == t ]]; then
-      local f p
-      for f in ${seed_fields[*]}; do
-        if ! array_contains coordinate_fields $f; then
-          coordinate_fields+=( $f )
-          (( coordinate_fields_count++ ))
-          all_dims[$f]=1
-          get_plural $f p
-          localize_dims+=" d_$f d_$p"
-        fi
-      done
-    fi
-
-    if (( coordinate_fields_count <= 1 )); then
-      log_debug "Too few fields found ($coordinate_fields_count) to generate useful $coord_type seed coords"
-      abort
-    fi
-
-    local field_index seed_field seed_data_index \
-      new_coordinate_data=() \
-
-    local -n \
-      field_count=seed_field_count \
-      table_fields=seed_fields \
-      table_data=seed_data \
-
-    begin_for (( row_index = 0; row_index < seed_table_rows; row_index++ )); doo
-      seed_coordinates_handle_row || fail
-    end_for
-
-    coordinate_data=( "${new_coordinate_data[@]}" )
-    (( coordinate_count = ${#coordinate_data[*]} ))
-    (( coordinate_rows = coordinate_count / coordinate_fields_count ))
-
-    if (( coordinate_rows > 1 )); then
-      calc_coordinates_dedup || fail
-    fi
-
   end_function
   handle_return
 }
@@ -4023,7 +4033,7 @@ calc_coordinates_next_unknown_dim_found() {
 
     local unknown_dims=${unknown_dims% }
     remove_word_from_string unknown_dims $dim
-    if [[ "$unknown_dims" == *" "* ]]; then
+    if [[ "$unknown_dims" == *' '* ]]; then
       unknown_dims="${unknown_dims#* } ${unknown_dims%% *}"
     fi
 
@@ -4760,9 +4770,6 @@ xlr8_get_dim_fields() {
 #   coord_type
 #   source       set to dims to load coordinates from existing dims
 #                set to coords to using existing coordinates and attempt to fill in blanks
-#   target_form  seed / tree whether to produce seed coords or not
-#                seed coords don't take into account user provided dims, but
-#                will calculate all possible dims to be filtered later
 #   all ddims of that type OR existing coords
 # assumes ddims are in array form (not space separated)
 # assumes all checks were done previously to determine if this is needed
@@ -4770,7 +4777,7 @@ calc_coordinates() {
   local clear_existing_coords=${clear_existing_coords:-t} \
     coord_type=$coord_type \
     coord_limit=${coord_limit:-} \
-    target_form=${target_form:-tree} \
+    target_form=tree \
     seed_already_expanded=${seed_already_expanded:-f} \
 
   begin_function
@@ -4788,10 +4795,19 @@ calc_coordinates() {
     local -n coordinate_data=${coord_type}_coordinate_data \
       coordinate_fields=${coord_type}_coordinate_fields \
 
+    if [[ $coord_type == *_seed ]]; then
+      target_form=seed
+    fi
+    
+    setup_coord_fields || fail
+
     if [[ $clear_existing_coords == t ]]; then
       coordinate_data=()
+      if [[ $target_form == tree && -v ${coord_type}_seed_coordinate_fields ]]; then
+        seed_table=${coord_type}_seed \
+        seed_coordinates || fail
+      fi
     fi
-    setup_coord_fields || fail
 
     if [[ ! "${coordinate_fields:-}" ]]; then
       local -n refined=${coord_type}_coordinate_refined
@@ -4960,7 +4976,7 @@ make_coord_index() {
     if (( field_count > 0 )); then
       data_count=${#data[*]}
       (( row_count = data_count / field_count ))
-      table=branch_coordinate \
+      table=${coord_type}_coordinate \
       make_table_index || fail
     fi
 
@@ -5009,15 +5025,14 @@ build_context() {
           clear_existing_coords=f
         fi
 
-        coord_type=branch \
-        target_form=seed \
+        local coord_type=branch_seed
+
         calc_coordinates || fail
 
-        coord_type=branch \
         make_coord_index || fail
 
         if [[ "${branch_coordinate_data:-}" ]]; then
-          coord_type=branch \
+          coord_type=branch_seed \
           write_coordinates_to_shell_file $context_path-branch-coords || fail
         fi
 
