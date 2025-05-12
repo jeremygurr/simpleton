@@ -2281,9 +2281,8 @@ fetch_values_from_coordinates() {
 prep_dims() {
   begin_function
 
-    local dim_var dims_var dim_var_short dims_var_short
-    for dim in ${!all_dims[*]}; do
-      dim_var_short=$dim
+    local dim_var dims_var
+    for dim_var in ${!all_dims[*]}; do
 
       get_plural $dim_var dims_var
 
@@ -2306,14 +2305,19 @@ prep_dims() {
 
           shorter_dim=${shorter_dim#*_}
           get_plural $shorter_dim shorter_dims
-          if [[ ! -v dim_shorts[$shorter_dim] ]]; then
-            dim_shorts[$shorter_dim]=$dim_var
-          else
-            dim_shorts[$shorter_dim]+=" $dim_var"
+
+          if [[ ! -v dim_short[$shorter_dim] ]]; then
+            log_fatal "Internal error: dim_short[$shorter_dim] doesn't exist, and it should have already been set in build_dim_info"
+            fail1
           fi
 
           local -n short_pdim=p_$shorter_dim \
             short_pdims=p_$shorter_dims \
+
+          if [[ ${dim_shorts[$shorter_dim]} == *" "* && "${short_pdim:-}${short_pdims:-}" ]]; then
+            log_fatal "Ambiguous dim: $dim_var. This could refer to any of: ${dim_shorts[$shorter_dim]}. Choose one specifically when setting this dim."
+            fail1
+          fi
 
           if [[ "${short_pdim:-}" ]]; then
             pdim=$short_pdim
@@ -2635,7 +2639,7 @@ substitute_command_alias() {
 #   $1        start_path
 #   dim
 # outputs:
-#   dim_path
+#   dim_path    will not be set if it's not found
 get_dim_path() {
 
   local start_path=$1 lib_dim_path
@@ -2643,25 +2647,8 @@ get_dim_path() {
   lib_dim_path=$start_path/.lib/dim
   if [[ -d $lib_dim_path/$dim ]]; then
     dim_path=$lib_dim_path/$dim
-  else
-
-    # TODO Need to redo this
-    log_fatal "Incomplete"
-    fail1
-
-    local shorts=( $lib_dim_path/$dim-* )
-    if (( ${#shorts[*]} > 1 )); then
-      log_fatal "Too many matching dims: ${shorts[*]}, choose one specifically using the longer dim form"
-      log_fatal "Dim is referenced here: $dim_requested_by"
-      return 1
-    fi
-
-    if [[ -d "$shorts" ]]; then
-      dim_path=$shorts
-    elif [[ $start_path == /*/*/* ]]; then
-      get_dim_path ${start_path%/*}
-    fi
-
+  elif [[ $start_path == /*/*/* ]]; then
+    get_dim_path ${start_path%/*}
   fi
 
 }
@@ -2749,6 +2736,20 @@ build_dim_info_single() {
     fi
      
     write_vars_to_context dim_${dim}_type dim_${dim}_member_type || fail
+
+    local shorter_dim=$dim shorter_dims
+
+    while [[ $shorter_dim == *_* ]]; do
+
+      shorter_dim=${shorter_dim#*_}
+      get_plural $shorter_dim shorter_dims
+      if [[ ! -v dim_shorts[$shorter_dim] ]]; then
+        dim_shorts[$shorter_dim]=$dim
+      else
+        dim_shorts[$shorter_dim]+=" $dim"
+      fi
+
+    done
 
   end_function
   handle_return
@@ -2911,6 +2912,7 @@ build_dim_info() {
       localize_dims localize_reverse_dims \
       secret_vars \
       all_dims \
+      dim_shorts \
       || fail
 
   end_function
