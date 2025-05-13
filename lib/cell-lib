@@ -2818,6 +2818,8 @@ build_dim_info_single() {
       members=dim_${dim}_members \
       derive_tables=dim_${dim}_derive_tables \
 
+    load_dim_derive_item || fail
+
     if [[ "${members:-}" || "${derive_tables:-}" ]]; then
       member_type=static
     else
@@ -3157,7 +3159,8 @@ build_dim_expand_functions() {
   handle_return
 }
 
-load_dim_derive_items() {
+load_dim_derive_item() {
+  local dim=$dim
   begin_function
     local dim \
       derived_from_row \
@@ -3168,42 +3171,40 @@ load_dim_derive_items() {
       action_type \
       item \
 
-    begin_for dim in ${!all_dims[*]}; doo
-      local -n derived_from=dim_${dim}_derived_from
+    local -n derived_from=dim_${dim}_derived_from
 
-      begin_for derived_from_row in "${derived_from[@]}"; doo
-        dims_to_add=
-        action=${derived_from_row%% *}
-        action_type=${action##*.}
-        item=${action%.*}
-        begin_for derived_dim in ${derived_from_row##* * }; doo
-          dims_to_add+="$derived_dim "
-        end_for
-
-        case $action_type in
-          tab)
-            begin_for dim_to_add in $dims_to_add; doo
-              local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
-              if [[ ! "${dim_derive_tables:-}" || " $dim_derive_tables " != *" $item "* ]]; then
-                dim_derive_tables+="$item "
-              fi
-            end_for
-          ;;
-          fun)
-            begin_for dim_to_add in $dims_to_add; doo
-              local -n dim_derive_functions=dim_${dim_to_add}_derive_functions
-              if [[ ! "${dim_derive_functions:-}" || " $dim_derive_functions " != *" $item "* ]]; then
-                dim_derive_functions+="$item "
-              fi
-            end_for
-          ;;
-          *)
-            log_fatal "Internal error: Unknown action type in derived from dim $dim: $action"
-            fail1
-          ;;
-        esac
-
+    begin_for derived_from_row in "${derived_from[@]}"; doo
+      dims_to_add=
+      action=${derived_from_row%% *}
+      action_type=${action##*.}
+      item=${action%.*}
+      begin_for derived_dim in ${derived_from_row##* * }; doo
+        dims_to_add+="$derived_dim "
       end_for
+
+      case $action_type in
+        tab)
+          begin_for dim_to_add in $dims_to_add; doo
+            local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
+            if [[ ! "${dim_derive_tables:-}" || " $dim_derive_tables " != *" $item "* ]]; then
+              dim_derive_tables+="$item "
+            fi
+          end_for
+        ;;
+        fun)
+          begin_for dim_to_add in $dims_to_add; doo
+            local -n dim_derive_functions=dim_${dim_to_add}_derive_functions
+            if [[ ! "${dim_derive_functions:-}" || " $dim_derive_functions " != *" $item "* ]]; then
+              dim_derive_functions+="$item "
+            fi
+          end_for
+        ;;
+        *)
+          log_fatal "Internal error: Unknown action type in derived from dim $dim: $action"
+          fail1
+        ;;
+      esac
+
     end_for
 
     begin_for dim in ${!all_dims[*]}; doo
@@ -3410,8 +3411,6 @@ build_context_trunk() {
       build_dim_info || fail
 
       build_dim_expand_functions || fail
-
-      load_dim_derive_items || fail
 
       if [[ "$dims_missing_members" ]]; then
         calc_missing_members || fail
