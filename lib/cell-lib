@@ -685,18 +685,20 @@ load_derive_table() {
     fi
 
     if [[ -L $dtp && ! -f $dtp ]]; then
-      local real_path=$(realpath -m $dtp)
-      local real_path_parent=${real_path%/*}
+      log_fatal "Broken link: $dtp"
+      fail1
+      #local real_path=$(realpath -m $dtp)
+      #local real_path_parent=${real_path%/*}
 
-      if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
-        # TODO: build freshness mechanism here to auto-refresh stale data
-        if [[ ! -e $real_path ]]; then
-          load_dna_contents_update_cell $real_path || fail
-        fi
-      else
-        log_fatal "Broken link found when trying to gather derive tables: $link"
-        fail1
-      fi
+      #if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
+      #  # TODO: build freshness mechanism here to auto-refresh stale data
+      #  if [[ ! -e $real_path ]]; then
+      #    load_dna_contents_update_cell $real_path || fail
+      #  fi
+      #else
+      #  log_fatal "Broken link found when trying to gather derive tables: $link"
+      #  fail1
+      #fi
     fi
 
     local type=${dtp##*.}
@@ -3347,8 +3349,6 @@ gather_derive_tables() {
 calc_missing_members() {
   begin_function
 
-    debug_start
-
     local dim members_array dim
     begin_for dim in $dims_missing_members; doo
       log_debug "Calculating missing dim members for $dim"
@@ -3359,12 +3359,15 @@ calc_missing_members() {
 
       if [[ -v dts ]]; then
         begin_for dt in $dts; doo
+          zombie_fence
+          load_derive_table $dt || fail
           local -n dt_index=derive_table_${dt}_index_${dim}
           local members_array=${!dt_index[*]}
           local -A members_set
           array_to_set members_array members_set
-          union members_found members_set
+          union members_set members_found
         end_for
+        log_debug "Found ${#members_found[*]} for $dim"
       else
         log_fatal "Needed to calculate members for $dim but no derive tables were found with this dim. "
         log_fatal "Either explicitly define the members with members.var, or add a derive table using this dim, or mark this dim as dynamic by removing the member_type.var from the dim folder."
