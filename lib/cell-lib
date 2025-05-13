@@ -2117,7 +2117,6 @@ attempt_derive2() {
 
         complete_row=t
         local row_array=( $derived_from_row ) i
-        log_debug "Attempting to derive $dim from ${row_array[*]:2} using ${row_array[0]} (${row_array[1]})"
 
         maybe_resolved=
         for (( i = 2; i < ${#row_array[*]}; i++ )); do
@@ -2166,6 +2165,8 @@ attempt_derive2() {
         done; maybe_break
 
         if [[ $complete_row == t ]];then
+
+          log_debug "Attempting to derive $dim from ${row_array[*]:2} using ${row_array[0]} (${row_array[1]})"
 
           can_derive=t
           one_row_complete=t
@@ -4658,7 +4659,7 @@ calc_coordinates_refine_get_matching_rows() {
 #   coordinate_rows
 #   coordinate_fields_count
 calc_coordinates_refine_multi() {
-  begin_function_lo
+  begin_function
 
     local target_dim_var_type
     if [[ $seed_already_expanded == f ]]; then
@@ -4669,7 +4670,10 @@ calc_coordinates_refine_multi() {
 
     local -A matching_rows
     matching_rows[all]=1
-    calc_coordinates_refine_get_matching_rows || fail
+
+    if [[ $seed_already_expanded == f ]]; then
+      calc_coordinates_refine_get_matching_rows || fail
+    fi
 
     if (( ${#matching_rows[*]} == 0 )); then
       log_fatal "No coordinates are possible given user inputs and base possibility sets of the dimensions of this cell."
@@ -4766,6 +4770,26 @@ xlr8_get_dim_fields() {
   handle_return
 }
 
+make_coord_index() {
+  begin_function
+
+    local row_count field_count data_count coord_type=$coord_type
+
+    local -n fields=${coord_type}_coordinate_fields \
+      data=${coord_type}_coordinate_data \
+
+    field_count=${#fields[*]}
+    if (( field_count > 0 )); then
+      data_count=${#data[*]}
+      (( row_count = data_count / field_count ))
+      table=${coord_type}_coordinate \
+      make_table_index || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   coord_type
 #   source       set to dims to load coordinates from existing dims
@@ -4804,8 +4828,10 @@ calc_coordinates() {
     if [[ $clear_existing_coords == t ]]; then
       coordinate_data=()
       if [[ $target_form == tree && -v ${coord_type}_seed_coordinate_fields ]]; then
-        seed_table=${coord_type}_seed \
+        seed_table=${coord_type}_seed_coordinate \
         seed_coordinates || fail
+        make_coord_index || fail
+        seed_already_expanded=t
       fi
     fi
 
@@ -4964,26 +4990,6 @@ get_highest_trunk_context_cell() {
   handle_return
 }
 
-make_coord_index() {
-  begin_function
-
-    local row_count field_count data_count coord_type=$coord_type
-
-    local -n fields=${coord_type}_coordinate_fields \
-      data=${coord_type}_coordinate_data \
-
-    field_count=${#fields[*]}
-    if (( field_count > 0 )); then
-      data_count=${#data[*]}
-      (( row_count = data_count / field_count ))
-      table=${coord_type}_coordinate \
-      make_table_index || fail
-    fi
-
-  end_function
-  handle_return
-}
-
 build_context() {
   local cell_path=$1
   begin_function
@@ -5031,8 +5037,7 @@ build_context() {
 
         make_coord_index || fail
 
-        if [[ "${branch_coordinate_data:-}" ]]; then
-          coord_type=branch_seed \
+        if [[ "${branch_seed_coordinate_data:-}" ]]; then
           write_coordinates_to_shell_file $context_path-branch-coords || fail
         fi
 
