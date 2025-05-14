@@ -2854,7 +2854,9 @@ build_dim_info_single() {
 add_derived_to_support_dims() {
   begin_function
 
-    local derived_from dim short_dim type row OIFS=$IFS
+    local derived_from dim short_dim type row \
+      OIFS=$IFS support_dim_depth=$((support_dim_depth+1)) \
+      next_level_dims=()
 
     for row in "${dim_derived_from[@]}"; do
       local row_array=( $row )
@@ -2864,6 +2866,7 @@ add_derived_to_support_dims() {
         if ! array_contains trunk_dims_expanded $dim \
           && ! array_contains support_dims_expanded $dim; then
 
+          log_debug "Support dim found: $dim ($support_dim_depth)"
           if [[ ! -v all_dims[$dim] ]]; then
             downstream_dim_row= \
             build_dim_info_single || fail
@@ -2879,13 +2882,19 @@ add_derived_to_support_dims() {
 
           local -n dim_derived_from=dim_${dim}_derived_from
           if [[ -v dim_derived_from ]]; then
-            dim_requested_by="derived_from of $dim" \
-            add_derived_to_support_dims || fail
+            next_level_dims+=( "$dim $dim_derived_from" )
           fi
 
         fi
 
       done; maybe_break
+    done
+
+    local next_dim_info dim_derived_from dim_requested_by
+    for next_dim_info in "${next_level_dims[@]}"; do
+      dim_requested_by=${next_dim_info%% *}
+      dim_derived_from=${next_dim_info#* }
+      add_derived_to_support_dims || fail
     done
 
   end_function
@@ -2895,7 +2904,8 @@ add_derived_to_support_dims() {
 build_context_support_dims() {
   begin_function
 
-    local dim dim_type=trunk_dims
+    local dim dim_type=trunk_dims support_dim_depth=0
+
     support_dims_expanded=()
     begin_for dim in "${trunk_dims_expanded[@]}"; doo
       local -n dim_derived_from=dim_${dim}_derived_from
@@ -4910,11 +4920,12 @@ calc_coordinates() {
       esac
     fi
 
-    if [[ $target_form == tree && $coord_type == branch && ${cell_is_leaf:-f} == t ]] \
-       && (( coordinate_rows > 1 )); then
-      log_fatal "Cell error: found more than one branch coordinate possibility on a leaf cell."
-      fail1
-    fi
+    #  Allowing this for now, to handle situations where support dims split the rows
+    #if [[ $target_form == tree && $coord_type == branch && ${cell_is_leaf:-f} == t ]] \
+    #   && (( coordinate_rows > 1 )); then
+    #  log_fatal "Cell error: found more than one branch coordinate possibility on a leaf cell."
+    #  fail1
+    #fi
 
     # refine is used to determine if coords need to be calculated
     local -n refined=${coord_type}_coordinate_refined
