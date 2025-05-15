@@ -115,11 +115,15 @@ is_set() {
   [[ ${_set@a} == A ]]
 }
 
-# duplicated from bash-lib
 get_var_value() {
-  local -n _var=$1 _val=${2:-value} || return 1
-  _val='(unbound)'
-  if is_set _var; then
+  local var_name=$1 val_name=${2:-value}
+  local -n _var=$var_name _val=$val_name || return 1
+  _val='(unset)'
+  if [[ "$var_name" == *\[* ]]; then
+    if is_set ${var_name%%\[*} && [[ -v $var_name ]]; then
+      eval "_val=\${$var_name}"
+    fi
+  elif is_set _var; then
     local c=0 k v
     _val="( "
     for k in "${!_var[@]}"; do
@@ -145,8 +149,6 @@ get_var_value() {
   elif [[ -v _var ]]; then
     _val=$_var
     newlines=preserved quotes=single shell_quote_var _val
-  else
-    _val='(unset)'
   fi
 }
 
@@ -708,7 +710,7 @@ debug_shell() {
 
 debug_show_var() {
   local display_var=$1 val=
-  if [[ "$display_var" =~ ^[a-zA-Z_0-9]+$ ]]; then
+  if [[ "$display_var" =~ ^[a-zA-Z_0-9\[\]]+$ ]]; then
     get_var_value $display_var val
     echo "$val" >&$fd_original_err 
   elif [[ "$display_var" == ^^* ]]; then

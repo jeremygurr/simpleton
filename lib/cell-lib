@@ -2865,14 +2865,19 @@ add_derived_to_support_dims() {
       type=${row_array[1]}
       for dim in ${row_array[*]:2}; do
 
-        local dim_distance
-        (( dim_distance = 100 / dim_freq[$dim] * dim_depth[$dim] ))
-        log_debug "Potential support dim found: $object $type $dim (${dim_depth[$dim]} * 100 / ${dim_freq[$dim]} = $dim_distance)"
+        if ! array_contains trunk_dims_expanded $dim \
+          && ! array_contains support_dims_expanded $dim \
+          ; then
 
-        if (( dim_distance <= dim_max_distance )); then
-          if ! array_contains trunk_dims_expanded $dim \
-            && ! array_contains support_dims_expanded $dim \
-            ; then
+          local dim_distance=0
+          if [[ -v dim_freq[$dim] ]]; then
+            (( dim_distance = 100 / dim_freq[$dim] * dim_depth[$dim] ))
+            log_debug "Potential support dim found: $object $type $dim (${dim_depth[$dim]} * 100 / ${dim_freq[$dim]} = $dim_distance)"
+          else
+            log_debug "Potential support dim found: $object $type $dim (distance 0)"
+          fi
+
+          if (( dim_distance <= dim_max_distance )); then
 
             #log_debug "Support dim found: $dim ($support_dim_depth / $freq)"
             if [[ ! -v all_dims[$dim] ]]; then
@@ -2893,9 +2898,10 @@ add_derived_to_support_dims() {
               next_level_dims+=( "$dim $dim_derived_from" )
             fi
 
+          else
+            log_debug "Skipped adding support dim $dim because it's too distant. distance ($dim_distance) > dim_max_distance ($dim_max_distance)"
           fi
-        else
-          log_debug "Skipped adding support dim $dim because it's too distant. distance ($dim_distance) > dim_max_distance ($dim_max_distance)"
+
         fi
 
       done; maybe_break
@@ -2912,16 +2918,9 @@ add_derived_to_support_dims() {
   handle_return
 }
 
-# inputs:
-#   dim
-#   dim_derived_from
-build_context_support_dims_calc_distance() {
-  local -I current_depth
+build_context_support_dims_calc_distance_handle_dim() {
   local log_show_vars=dim
   begin_function
-
-    (( current_depth++ )) || true
-
     local already_done=f
     if [[ -v dim_depth[$dim] ]]; then
       if (( dim_depth[$dim] > current_depth )); then
@@ -2938,20 +2937,49 @@ build_context_support_dims_calc_distance() {
       dim_freq[$dim]=1
     fi
 
-    if [[ $already_done == f ]]; then
-      begin_for row in "${dim_derived_from[@]}"; doo
-        local row_array=( $row )
-        object=${row_array[0]}
-        type=${row_array[1]}
-        begin_for dim in ${row_array[*]:2}; doo
-          local -n dim_derived_from=dim_${dim}_derived_from
-          if [[ -v dim_derived_from ]]; then
-            build_context_support_dims_calc_distance || fail
-            #log_debug "Found derived dim $dim ${dim_depth[$dim]} / ${dim_freq[$dim]}"
-          fi
-        end_for
-      end_for
+    if [[ $already_done == f 
+      && " $in_process " != *" $dim "* ]] \
+      && ! array_contains trunk_dims_expanded $dim \
+      ; then
+
+      local -n dim_derived_from=dim_${dim}_derived_from
+      if [[ -v dim_derived_from ]]; then
+        # recursive
+        build_context_support_dims_calc_distance || fail
+        log_debug "Found derived dim $dim ${dim_depth[$dim]:-0} / ${dim_freq[$dim]:-0} (row_array=${row_array[*]})"
+      fi
     fi
+  end_function
+  handle_return
+}
+
+# inputs:
+#   dim
+#   dim_derived_from
+build_context_support_dims_calc_distance() {
+  local -I current_depth in_process
+  local log_show_vars=dim
+  begin_function
+
+    (( current_depth++ )) || true
+    in_process+="$dim "
+
+    local row
+    begin_for row in "${dim_derived_from[@]}"; doo
+      local row_array=( $row )
+      object=${row_array[0]}
+      type=${row_array[1]}
+      local up_dim
+      begin_for up_dim in ${row_array[*]:2}; doo
+        if ! array_contains trunk_dims_expanded $up_dim \
+          && [[ " $in_process " != *" $up_dim "* ]]; then
+
+          dim=$up_dim \
+          build_context_support_dims_calc_distance_handle_dim || fail
+
+        fi
+      end_for
+    end_for
 
   end_function
   handle_return
@@ -2961,18 +2989,20 @@ build_context_support_dims() {
   begin_function
 
     local dim dim_type=trunk_dims support_dim_depth=0
+
     declare -A dim_freq=() dim_depth=()
 
-    begin_for dim in "${trunk_dims_expanded[@]}"; doo
+    begin_for dim in ${trunk_dims_expanded[*]}; doo
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
         local current_depth=0
+        in_process= \
         build_context_support_dims_calc_distance || fail
       fi
     end_for
 
     support_dims_expanded=()
-    begin_for dim in "${trunk_dims_expanded[@]}"; doo
+    begin_for dim in ${trunk_dims_expanded[*]}; doo
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
         log_debug "Finding support dims for trunk dim $dim"
