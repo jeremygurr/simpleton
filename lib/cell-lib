@@ -372,6 +372,7 @@ init_context() {
       ${!tree_coordinate_*} \
 
     declare -Ag all_dims=() \
+      related_dims_expanded=() \
       dim_shorts=() \
 
     auto_loads=() \
@@ -718,6 +719,7 @@ load_derive_table() {
 
     table=derive_table_${name} \
     make_table_index || fail
+    fence
 
     load_derive_table_card_and_key || fail
 
@@ -2849,103 +2851,50 @@ build_dim_info_single() {
   handle_return
 }
 
-# assumes that dim_derived_from for the given dim already exists
-# inputs:
-#   dim_derived_from
-add_derived_to_support_dims() {
-  begin_function
+dim_set_in_parameter() {
+  local dim=$1
+  local -n pdim=p_$dim
 
-    local derived_from dim short_dim type object row \
-      OIFS=$IFS \
-      next_level_dims=() \
+  if [[ -v pdim ]]; then
+    return 0
+  fi
 
-    for row in "${dim_derived_from[@]}"; do
-      local row_array=( $row )
-      object=${row_array[0]}
-      type=${row_array[1]}
-      for dim in ${row_array[*]:2}; do
+  if [[ $dim == *_* ]]; then
+    dim_set_in_parameter ${dim#*_} || return 1
+  else
+    return 1
+  fi
 
-        if ! array_contains trunk_dims_expanded $dim \
-          && ! array_contains support_dims_expanded $dim \
-          ; then
-
-          local dim_distance=0
-          if [[ -v dim_freq[$dim] ]]; then
-            (( dim_distance = 100 / dim_freq[$dim] * dim_depth[$dim] ))
-            log_debug "Potential support dim found: $object $type $dim (${dim_depth[$dim]} * 100 / ${dim_freq[$dim]} = $dim_distance)"
-          else
-            log_debug "Potential support dim found: $object $type $dim (distance 0)"
-          fi
-
-          if (( dim_distance <= dim_max_distance )); then
-
-            #log_debug "Support dim found: $dim ($support_dim_depth / $freq)"
-            if [[ ! -v all_dims[$dim] ]]; then
-              downstream_dim_row= \
-              build_dim_info_single || fail
-            fi
-
-            # perplexing why we need this here, but after too much debugging, this was the simplest solution
-            unfail
-
-            if [[ $type == *-to-one ]]; then
-              support_dims_one_expanded+=( $dim )
-            fi
-            support_dims_expanded+=( $dim )
-
-            local -n dim_derived_from=dim_${dim}_derived_from
-            if [[ -v dim_derived_from ]]; then
-              next_level_dims+=( "$dim $dim_derived_from" )
-            fi
-
-          else
-            log_debug "Skipped adding support dim $dim because it's too distant. distance ($dim_distance) > dim_max_distance ($dim_max_distance)"
-          fi
-
-        fi
-
-      done; maybe_break
-    done
-
-    local next_dim_info dim_derived_from dim_requested_by
-    for next_dim_info in "${next_level_dims[@]}"; do
-      dim_requested_by=${next_dim_info%% *}
-      dim_derived_from=${next_dim_info#* }
-      add_derived_to_support_dims || fail
-    done
-
-  end_function
-  handle_return
+  return 0
 }
 
-build_context_support_dims_calc_distance_handle_dim() {
+build_context_support_dims_find_related_handle_dim() {
   local log_show_vars=dim
   begin_function
-    local already_done=f
-    if [[ -v dim_depth[$dim] ]]; then
-      if (( dim_depth[$dim] > current_depth )); then
-        dim_depth[$dim]=$current_depth
+
+    log_debug "Found reference to derived dim $dim (from $from_dim via $object)"
+
+    related_dims_expanded[$dim]=1
+
+    if [[ ! -v all_dims[$dim] ]]; then
+      downstream_dim_row= \
+      build_dim_info_single || fail
+    fi
+
+    # perplexing why we need this here, but after too much debugging, this was the simplest solution
+    unfail
+
+    if dim_set_in_parameter $dim; then
+      #log_debug "Support dim found: $dim"
+      if [[ $type == *-to-one ]]; then
+        support_dims_one_expanded+=( $dim )
       fi
-    else
-      dim_depth[$dim]=$current_depth
+      support_dims_expanded+=( $dim )
     fi
 
-    if [[ -v dim_freq[$dim] ]]; then
-      (( dim_freq[$dim]++ ))
-      already_done=t
-    else
-      dim_freq[$dim]=1
-    fi
-    log_debug "Found reference to derived dim $dim ${dim_depth[$dim]:-0} / ${dim_freq[$dim]:-0} (from $down_dim via $object)"
+    local -n dim_derived_from=dim_${dim}_derived_from
+    build_context_support_dims_find_related || fail
 
-    if [[ $already_done == f 
-      && " $in_process " != *" $dim "* ]] \
-      && ! array_contains trunk_dims_expanded $dim \
-      ; then
-
-      local -n dim_derived_from=dim_${dim}_derived_from
-      next_level_dims+=( "$dim $dim_derived_from" )
-    fi
   end_function
   handle_return
 }
@@ -2953,15 +2902,15 @@ build_context_support_dims_calc_distance_handle_dim() {
 # inputs:
 #   dim
 #   dim_derived_from
-build_context_support_dims_calc_distance() {
-  local -I current_depth in_process
+build_context_support_dims_find_related() {
+  local -I in_process
   local log_show_vars=dim
+
   begin_function
 
-    (( current_depth++ )) || true
     in_process+="$dim "
 
-    local row object type next_level_dims=()
+    local row object type
     begin_for row in "${dim_derived_from[@]}"; doo
       local row_array=( $row )
       object=${row_array[0]}
@@ -2969,22 +2918,16 @@ build_context_support_dims_calc_distance() {
       local up_dim
       begin_for up_dim in ${row_array[*]:2}; doo
         if ! array_contains trunk_dims_expanded $up_dim \
-          && [[ " $in_process " != *" $up_dim "* ]]; then
+          && [[ " $in_process " != *" $up_dim "* \
+          && ! -v related_dims_expanded[$up_dim] ]] \
+          ; then
 
-          down_dim=$dim \
+          from_dim=$dim \
           dim=$up_dim \
-          build_context_support_dims_calc_distance_handle_dim || fail
-
+          build_context_support_dims_find_related_handle_dim || fail
         fi
       end_for
     end_for
-
-    local next_dim_info
-    for next_dim_info in "${next_level_dims[@]}"; do
-      dim=${next_dim_info%% *} \
-      dim_derived_from=${next_dim_info#* } \
-      build_context_support_dims_calc_distance || fail
-    done
 
   end_function
   handle_return
@@ -2993,9 +2936,7 @@ build_context_support_dims_calc_distance() {
 build_context_support_dims() {
   begin_function
 
-    local dim dim_type=trunk_dims support_dim_depth=0 down_dim
-
-    declare -A dim_freq=() dim_depth=()
+    local dim dim_type=trunk_dims support_dim_depth=0 down_dim \
 
     begin_for dim in ${trunk_dims_expanded[*]}; doo
       local -n dim_derived_from=dim_${dim}_derived_from
@@ -3003,24 +2944,18 @@ build_context_support_dims() {
         log_debug "Checking distances of upstream dims of trunk dim $dim"
         local current_depth=0
         in_process= \
-        build_context_support_dims_calc_distance || fail
-      fi
-    end_for
-
-    support_dims_expanded=()
-    begin_for dim in ${trunk_dims_expanded[*]}; doo
-      local -n dim_derived_from=dim_${dim}_derived_from
-      if [[ -v dim_derived_from ]]; then
-        log_debug "Finding support dims for trunk dim $dim"
-        dim_requested_by="derived_from of $dim" \
-        add_derived_to_support_dims || fail
+        build_context_support_dims_find_related || fail
       fi
     end_for
 
     sort_array support_dims_expanded
+    sort_array support_dims_one_expanded
+    sort_array related_dims_expanded
 
-    log_debug "Calculated support_dims: ${support_dims_expanded[*]}"
-    write_vars_to_context support_dims_expanded support_dims_one_expanded || fail
+    if [[ "${support_dims_expanded:-}" ]]; then
+      log_debug "Found support_dims: ${support_dims_expanded[*]}"
+    fi
+    write_vars_to_context related_dims_expanded support_dims_expanded support_dims_one_expanded || fail
 
   end_function
   handle_return
@@ -3743,16 +3678,16 @@ setup_coord_fields() {
 
     case $short_coord_type in
       branch)
-        coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_one_expanded[*]:-} )
+        #coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_one_expanded[*]:-} )
         # don't need to do deep derive if we are already include support dims, which come
         #   from a deep derive analysis
-        derive_deep=f
+        #derive_deep=f
 
-        #if [[ $target_form == seed ]]; then
-        #  coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} )
-        #else
-        #  coordinate_fields=( ${trunk_dims_expanded[*]:-} )
-        #fi
+        if [[ $target_form == seed ]]; then
+          coordinate_fields=( ${trunk_dims_expanded[*]:-} )
+        else
+          coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} )
+        fi
       ;;
       leaf)
         coordinate_fields=( ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} )
