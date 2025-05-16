@@ -2936,6 +2936,7 @@ build_context_support_dims_calc_distance_handle_dim() {
     else
       dim_freq[$dim]=1
     fi
+    log_debug "Found reference to derived dim $dim ${dim_depth[$dim]:-0} / ${dim_freq[$dim]:-0} (from $down_dim via $object)"
 
     if [[ $already_done == f 
       && " $in_process " != *" $dim "* ]] \
@@ -2943,11 +2944,7 @@ build_context_support_dims_calc_distance_handle_dim() {
       ; then
 
       local -n dim_derived_from=dim_${dim}_derived_from
-      if [[ -v dim_derived_from ]]; then
-        # recursive
-        build_context_support_dims_calc_distance || fail
-        log_debug "Found derived dim $dim ${dim_depth[$dim]:-0} / ${dim_freq[$dim]:-0} (row_array=${row_array[*]})"
-      fi
+      next_level_dims+=( "$dim $dim_derived_from" )
     fi
   end_function
   handle_return
@@ -2964,7 +2961,7 @@ build_context_support_dims_calc_distance() {
     (( current_depth++ )) || true
     in_process+="$dim "
 
-    local row
+    local row object type next_level_dims=()
     begin_for row in "${dim_derived_from[@]}"; doo
       local row_array=( $row )
       object=${row_array[0]}
@@ -2974,12 +2971,20 @@ build_context_support_dims_calc_distance() {
         if ! array_contains trunk_dims_expanded $up_dim \
           && [[ " $in_process " != *" $up_dim "* ]]; then
 
+          down_dim=$dim \
           dim=$up_dim \
           build_context_support_dims_calc_distance_handle_dim || fail
 
         fi
       end_for
     end_for
+
+    local next_dim_info
+    for next_dim_info in "${next_level_dims[@]}"; do
+      dim=${next_dim_info%% *} \
+      dim_derived_from=${next_dim_info#* } \
+      build_context_support_dims_calc_distance || fail
+    done
 
   end_function
   handle_return
@@ -2988,13 +2993,14 @@ build_context_support_dims_calc_distance() {
 build_context_support_dims() {
   begin_function
 
-    local dim dim_type=trunk_dims support_dim_depth=0
+    local dim dim_type=trunk_dims support_dim_depth=0 down_dim
 
     declare -A dim_freq=() dim_depth=()
 
     begin_for dim in ${trunk_dims_expanded[*]}; doo
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
+        log_debug "Checking distances of upstream dims of trunk dim $dim"
         local current_depth=0
         in_process= \
         build_context_support_dims_calc_distance || fail

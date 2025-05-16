@@ -4,9 +4,9 @@ FROM $ALPINE_IMAGE
 
 USER root
 
-ARG NO_PROXY=""
-ARG HTTPS_PROXY=""
-ARG HTTP_PROXY=""
+ARG NO_PROXY=
+ARG HTTPS_PROXY=
+ARG HTTP_PROXY=
 ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine/
 
 COPY target/repositories /etc/apk/
@@ -17,6 +17,10 @@ ENV LANGUAGE=en_US.en
 ENV LC_ALL=en_US.UTF-8
 
 RUN ln -s /var/cache/apk /etc/apk/cache 
+
+RUN --mount=type=cache,target=/var/cache/apk \
+  apk --allow-untrusted add \
+    alpine-conf
 
 RUN --mount=type=cache,target=/var/cache/apk \
   apk --allow-untrusted add \
