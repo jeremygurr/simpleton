@@ -2835,6 +2835,7 @@ build_dim_info_single() {
 
     local shorter_dim=$dim shorter_dims
 
+    dim_shorts[$dim]=$dim
     while [[ $shorter_dim == *_* ]]; do
 
       shorter_dim=${shorter_dim#*_}
@@ -2842,7 +2843,10 @@ build_dim_info_single() {
       if [[ ! -v dim_shorts[$shorter_dim] ]]; then
         dim_shorts[$shorter_dim]=$dim
       else
-        dim_shorts[$shorter_dim]+=" $dim"
+        # Allow exact dim name to override all abbreviations
+        if [[ " ${dim_shorts[*]} " != *" $shorter_dim "* ]]; then
+          dim_shorts[$shorter_dim]+=" $dim"
+        fi
       fi
 
     done
@@ -2852,15 +2856,15 @@ build_dim_info_single() {
 }
 
 dim_set_in_parameter() {
-  local dim=$1
+  local long_dim=$1 dim=$2
   local -n pdim=p_$dim
 
-  if [[ -v pdim ]]; then
+  if [[ -v pdim && ${dim_shorts[$dim]} == $long_dim ]]; then
     return 0
   fi
 
   if [[ $dim == *_* ]]; then
-    dim_set_in_parameter ${dim#*_} || return 1
+    dim_set_in_parameter $long_dim ${dim#*_} || return 1
   else
     return 1
   fi
@@ -2884,7 +2888,7 @@ build_context_support_dims_find_related_handle_dim() {
     # perplexing why we need this here, but after too much debugging, this was the simplest solution
     unfail
 
-    if dim_set_in_parameter $dim; then
+    if dim_set_in_parameter $dim $dim; then
       #log_debug "Support dim found: $dim"
       if [[ $type == *-to-one ]]; then
         support_dims_one_expanded+=( $dim )
@@ -2941,7 +2945,7 @@ build_context_support_dims() {
     begin_for dim in ${trunk_dims_expanded[*]}; doo
       local -n dim_derived_from=dim_${dim}_derived_from
       if [[ -v dim_derived_from ]]; then
-        log_debug "Checking distances of upstream dims of trunk dim $dim"
+        log_debug "Finding related dims of $dim"
         local current_depth=0
         in_process= \
         build_context_support_dims_find_related || fail
@@ -3235,16 +3239,16 @@ load_dim_derive_item() {
         tab)
           begin_for dim_to_add in $dims_to_add; doo
             local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
-            if [[ ! "${dim_derive_tables:-}" || " $dim_derive_tables " != *" $item "* ]]; then
-              dim_derive_tables+="$item "
+            if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $item "* ]]; then
+              dim_derive_tables+=( $item )
             fi
           end_for
         ;;
         fun)
           begin_for dim_to_add in $dims_to_add; doo
             local -n dim_derive_functions=dim_${dim_to_add}_derive_functions
-            if [[ ! "${dim_derive_functions:-}" || " $dim_derive_functions " != *" $item "* ]]; then
-              dim_derive_functions+="$item "
+            if [[ ! "${dim_derive_functions:-}" || " ${dim_derive_functions[*]} " != *" $item "* ]]; then
+              dim_derive_functions+=( $item )
             fi
           end_for
         ;;
@@ -3386,9 +3390,32 @@ gather_derive_tables() {
     if [[ ! "${deriving_dims:-}" ]]; then
       gather_derive_tables_single $cell_path || fail
       derive_caches=${derive_caches% }
-      write_vars_to_context derive_tables derive_functions derive_caches || fail
+      #  This happens outside of context building, so it should not be writing to context
+      # write_vars_to_context derive_tables derive_functions derive_caches || fail
     fi
 
+  end_function
+  handle_return
+}
+
+# inputs:
+#   derive_tables
+#   members
+# outputs:
+#   refine_tables
+update_refine_tables() {
+  begin_function
+    local dt v member_count=${#members[*]}
+    for dt in ${derive_tables[*]}; do
+      local -n index=derive_table_${dt}_index_$dim
+      if [[ ! -v index ]]; then
+        debug_start
+        zombie "Should be impossible"
+      fi
+      if (( ${#index[*]} == member_count )); then
+        refine_tables+=( $dt )
+      fi
+    done
   end_function
   handle_return
 }
@@ -3401,36 +3428,45 @@ calc_missing_members() {
       log_debug "Calculating missing dim members for $dim"
 
       local -n dts=dim_${dim}_derive_tables
-      local dt
-      local -A members_found=()
+      local -A found_members=()
 
       if [[ -v dts ]]; then
-        begin_for dt in $dts; doo
+
+        local -n members=dim_${dim}_members
+        members=()
+
+        local dt v
+        for dt in $dts; do
           load_derive_table $dt || fail
-          local -n dt_index=derive_table_${dt}_index_${dim}
-          local members_array=( "${!dt_index[@]}" )
-          local -A members_set=()
-          array_to_set members_array members_set
-          union members_set members_found
-        end_for
-        log_debug "Found ${#members_found[*]} for $dim"
+          local -n index=derive_table_${dt}_index_$dim
+          for v in ${!index[*]}; do
+            found_members[$v]=1
+          done
+        done
+        members=( "${!found_members[@]}" )
+        sort_array members
+
+        log_debug "Found ${#found_members[*]} members for $dim"
+
       else
         log_fatal "Needed to calculate members for $dim but no derive tables were found with this dim. "
         log_fatal "Either explicitly define the members with members.var, or add a derive table using this dim, or mark this dim as dynamic by removing the member_type.var from the dim folder."
         fail1
       fi
 
-      if [[ ! "${members_found[*]}" ]]; then
+      if [[ ! "${found_members[*]}" ]]; then
         log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
         fail1
       fi
 
-      local -n dim_members=dim_${dim}_members
-      dim_members=()
-
-      set_to_array members_found dim_members
-      sort_array dim_members
       write_vars_to_context dim_${dim}_members
+
+      local -n refine_tables=dim_${dim}_refine_tables
+      refine_tables=()
+      update_refine_tables || fail
+      if [[ "${refine_tables:-}" ]]; then
+        log_debug "Refine tables found for $dim: ${refine_tables[*]}"
+      fi
 
     end_for
 
@@ -4101,8 +4137,8 @@ calc_coordinates_next_unknown_dim_found() {
 
       log_debug "Narrowing down possibilities"
 
-      local -n dim_derive_tables=dim_${dim}_derive_tables
-      begin_for derive_table in ${dim_derive_tables[*]:-}; doo
+      local -n dim_refine_tables=dim_${dim}_refine_tables
+      begin_for derive_table in ${dim_refine_tables[*]}; doo
         extract_from_derive_table || fail
         log_show_vars=dim
       end_for
@@ -5084,7 +5120,6 @@ build_context() {
         local coord_type=branch_seed
 
         calc_coordinates || fail
-
         make_coord_index || fail
 
         if [[ "${branch_seed_coordinate_data:-}" ]]; then
