@@ -3405,17 +3405,6 @@ gather_derive_tables() {
 #   refine_tables
 update_refine_tables() {
   begin_function
-    local dt v member_count=${#members[*]}
-    for dt in ${derive_tables[*]}; do
-      local -n index=derive_table_${dt}_index_$dim
-      if [[ ! -v index ]]; then
-        debug_start
-        zombie "Should be impossible"
-      fi
-      if (( ${#index[*]} == member_count )); then
-        refine_tables+=( $dt )
-      fi
-    done
   end_function
   handle_return
 }
@@ -3430,29 +3419,27 @@ calc_missing_members() {
       local -n dts=dim_${dim}_derive_tables
       local -A found_members=()
 
-      if [[ -v dts ]]; then
-
-        local -n members=dim_${dim}_members
-        members=()
-
-        local dt v
-        for dt in $dts; do
-          load_derive_table $dt || fail
-          local -n index=derive_table_${dt}_index_$dim
-          for v in ${!index[*]}; do
-            found_members[$v]=1
-          done
-        done
-        members=( "${!found_members[@]}" )
-        sort_array members
-
-        log_debug "Found ${#found_members[*]} members for $dim"
-
-      else
+      local dt v
+      if [[ ! -v dts ]]; then
         log_fatal "Needed to calculate members for $dim but no derive tables were found with this dim. "
         log_fatal "Either explicitly define the members with members.var, or add a derive table using this dim, or mark this dim as dynamic by removing the member_type.var from the dim folder."
         fail1
       fi
+
+      local -n members=dim_${dim}_members
+      members=()
+
+      for dt in $dts; do
+        load_derive_table $dt || fail
+        local -n index=derive_table_${dt}_index_$dim
+        for v in ${!index[*]}; do
+          found_members[$v]=1
+        done
+      done
+      members=( "${!found_members[@]}" )
+      sort_array members
+
+      log_debug "Found ${#found_members[*]} members for $dim"
 
       if [[ ! "${found_members[*]}" ]]; then
         log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
@@ -3463,7 +3450,15 @@ calc_missing_members() {
 
       local -n refine_tables=dim_${dim}_refine_tables
       refine_tables=()
-      update_refine_tables || fail
+
+      local member_count=${#members[*]}
+      for dt in $dts; do
+        local -n index=derive_table_${dt}_index_$dim
+        if (( ${#index[*]} == member_count )); then
+          refine_tables+=( $dt )
+        fi
+      done
+
       if [[ "${refine_tables:-}" ]]; then
         log_debug "Refine tables found for $dim: ${refine_tables[*]}"
       fi
