@@ -254,7 +254,6 @@ make_table_index() {
     table_data=${table}_data \
 
   if [[ ! -v table_fields ]]; then
-    debug_start
     log_fatal "Internal error: Table not defined: $table"
     fail1
   fi
@@ -269,6 +268,11 @@ make_table_index() {
   fi
 
   (( row_count = data_count / field_count ))
+
+  if [[ $table == derive_table_url_component ]]; then
+    debug_start
+    zombie "Indexing derive_table_url_component"
+  fi
 
   for (( field_index = 0; field_index < field_count; field_index++ )); do
 
@@ -689,18 +693,6 @@ load_derive_table() {
     if [[ -L $dtp && ! -f $dtp ]]; then
       log_fatal "Broken link: $dtp"
       fail1
-      #local real_path=$(realpath -m $dtp)
-      #local real_path_parent=${real_path%/*}
-
-      #if [[ -d $real_path_parent/.dna && $real_path == /work/* ]]; then
-      #  # TODO: build freshness mechanism here to auto-refresh stale data
-      #  if [[ ! -e $real_path ]]; then
-      #    load_dna_contents_update_cell $real_path || fail
-      #  fi
-      #else
-      #  log_fatal "Broken link found when trying to gather derive tables: $link"
-      #  fail1
-      #fi
     fi
 
     local type=${dtp##*.}
@@ -732,6 +724,8 @@ load_derive_table() {
 # inputs:
 #   name        name of derive table
 #   cache_path
+# outputs:
+#   dim_*_derive_from
 tab_get_derive_from() {
   begin_function
 
@@ -4000,7 +3994,7 @@ set_cross_dims_single() {
     row_index=( ${dt_index["$member"]} )
     if (( ${#row_index[*]} > 1 )); then
       log_fatal "Too many rows found in derive table matching cross dim: $row_index"
-      fail1
+      return 1
     fi
 
     for (( column_index = 0; column_index < field_count; column_index++ )); do
