@@ -819,56 +819,6 @@ fun_get_derive_from() {
   handle_return
 }
 
-# inputs:
-#   $1          path to derive item
-#   $2          name of derive item
-#   cache_path
-add_derive_item() {
-  local derive_path=$1 name=${2:-}
-  begin_function
-
-    if [[ ! "$name" ]]; then
-      name=${derive_path##*/}
-      name=${name%.*}
-      name=${name#derive_}
-    fi
-
-    local type=${derive_path##*.}
-    case $type in
-      *tab)
-
-        local -n dtp=derive_table_${name}_path
-        dtp=$derive_path
-        load_derive_table $name || fail
-        tab_get_derive_from || fail
-        derive_tables+=( $name )
-
-        context_file=$cache_path.new \
-        write_vars_to_context derive_table_${name}_path || fail
-
-      ;;
-      fun)
-
-        local code
-        load_fun_to_code $derive_path derive_function_$name || fail
-        eval "$code" || fail
-        fun_get_derive_from || fail
-        derive_functions+=( $name )
-
-        context_file=$cache_path.new \
-        write_to_context fun code || fail
-
-      ;;
-      *)
-        log_fatal "Unidentified file in derive folder: $derive_path. It should either be a table (ending in .tab) or a function (ending in .fun)."
-        fail1
-      ;;
-    esac
-
-  end_function
-  handle_return
-}
-
 # not handling failure here for performance reasons
 # should be nearly impossible to fail at this point anyway
 maybe_write_newline_to_context() {
@@ -3313,6 +3263,91 @@ build_context_trunk_dna() {
   handle_return
 }
 
+write_index_to_file() {
+  begin_function
+
+    local \
+      field_count=${#table_fields[*]} \
+      data_count=${#table_data[*]} \
+      row_count \
+
+    (( row_count = data_count / field_count ))
+
+    for (( field_index = 0; field_index < field_count; field_index++ )); do
+      field=${table_fields[$field_index]}
+      local -n index=${table}_index_${field}
+    done
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   lib_dt_path
+#   cache_path
+make_derive_cache() {
+  begin_function
+
+    log_debug "Generating derive cache for $lib_dt_path"
+    deriving_dims=t
+
+    local -A derive_dims=()
+
+    if [[ -f $cache_path.new ]]; then
+      rm $cache_path.new || fail
+    fi
+
+    begin_for type in fun tab; doo
+
+      if [[ $type == fun ]]; then
+        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.fun' | sort -g) || fail
+      else
+        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
+      fi
+
+      local name code
+      begin_for dt in $files; doo
+        name=${dt##*/}
+        name=${name%.*}
+        name=${name#derive_}
+        if [[ $type == fun ]]; then
+          load_fun_to_code $dt derive_function_$name || fail
+          eval "$code" || fail
+          context_file=$cache_path.new \
+          write_to_context fun code || fail
+        else
+          load_derive_table || fail
+
+          table=derive_table_${name} \
+          make_table_index || fail
+
+          table=derive_table_${name} \
+          write_index_to_file $cache_path.new || fail
+
+          local -n dtp=derive_table_${name}_path
+          dtp=$derive_path
+          context_file=$cache_path.new \
+          write_vars_to_context derive_table_${name}_path || fail
+        fi
+      end_for
+    end_for
+
+    # derived_from is calculated per cell, not in this cache
+    #local derive_dim
+    #begin_for derive_dim in ${!derive_dims[*]}; doo
+    #  context_file=$cache_path.new \
+    #  write_vars_to_context dim_${derive_dim}_derived_from || fail
+    #end_for
+
+    if [[ -f $cache_path.new ]]; then
+      mv $cache_path.new $cache_path || fail
+    fi
+    unset deriving_dims
+
+  end_function
+  handle_return
+}
+ 
 gather_derive_tables_single() {
   local start_path=$1 lib_dim_path
   begin_function
@@ -3333,40 +3368,7 @@ gather_derive_tables_single() {
       if [[ -f $cache_path ]]; then
         source $cache_path || fail
       else # build the cache
-
-        log_debug "Generating derive cache for $lib_dt_path"
-        deriving_dims=t
-
-        local -A derive_dims=()
-
-        if [[ -f $cache_path.new ]]; then
-          rm $cache_path.new || fail
-        fi
-
-        begin_for type in fun tab; doo
-
-          if [[ $type == fun ]]; then
-            files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.fun' | sort -g) || fail
-          else
-            files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
-          fi
-
-          begin_for dt in $files; doo
-            add_derive_item $dt || fail
-          end_for
-        end_for
-
-        local derive_dim
-        begin_for derive_dim in ${!derive_dims[*]}; doo
-          context_file=$cache_path.new \
-          write_vars_to_context dim_${derive_dim}_derived_from || fail
-        end_for
-
-        if [[ -f $cache_path.new ]]; then
-          mv $cache_path.new $cache_path || fail
-        fi
-        unset deriving_dims
-
+        make_derive_cache || fail
       fi
     fi
 
