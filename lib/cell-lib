@@ -242,70 +242,68 @@ load_arr_to_code() {
 make_table_index() {
 
   local table=$table
-  local row_index \
-    field_index \
-    data_offset \
-    field \
-    value \
-    values \
-    row_count \
+  begin_function
+    local row_index \
+      field_index \
+      data_offset \
+      field \
+      value \
+      values \
+      row_count \
 
-  local -n table_fields=${table}_fields \
-    table_data=${table}_data \
+    local -n table_fields=${table}_fields \
+      table_data=${table}_data \
 
-  if [[ ! -v table_fields ]]; then
-    log_fatal "Internal error: Table not defined: $table"
-    fail1
-  fi
+    if [[ ! -v table_fields ]]; then
+      log_fatal "Internal error: Table not defined: $table"
+      fail1
+    fi
 
-  local \
-    field_count=${#table_fields[*]} \
-    data_count=${#table_data[*]} \
+    local \
+      field_count=${#table_fields[*]} \
+      data_count=${#table_data[*]} \
 
-  if (( field_count == 0 )); then
-    log_warn "Internal warning: make_table_index called on a table with no fields."
-    return 0
-  fi
+    if (( field_count == 0 )); then
+      log_warn "Internal warning: make_table_index called on a table with no fields."
+      succeed
+    fi
 
-  (( row_count = data_count / field_count ))
+    (( row_count = data_count / field_count ))
 
-  if [[ $table == derive_table_url_component ]]; then
-    debug_start
-    zombie "Indexing derive_table_url_component"
-  fi
+    begin_for (( field_index = 0; field_index < field_count; field_index++ )); doo
 
-  for (( field_index = 0; field_index < field_count; field_index++ )); do
+      field=${table_fields[$field_index]}
 
-    field=${table_fields[$field_index]}
+      local -n index=${table}_index_${field}
 
-    local -n index=${table}_index_${field}
+      unset index
+      eval "declare -gA ${table}_index_${field}=()"
 
-    unset index
-    eval "declare -gA ${table}_index_${field}=()"
+      begin_for (( row_index = 0; row_index < row_count; row_index++ )); doo
 
-    for (( row_index = 0; row_index < row_count; row_index++ )); do
+        (( data_offset = row_index * field_count + field_index ))
+        value=${table_data[$data_offset]}
 
-      (( data_offset = row_index * field_count + field_index ))
-      value=${table_data[$data_offset]}
+        if [[ -v all_dims[$field] ]]; then
+          values=()
 
-      if [[ -v all_dims[$field] ]]; then
-        values=()
+          dim=$field \
+          ignore_problems=t \
+          expand_dim || fail
 
-        dim=$field \
-        ignore_problems=t \
-        expand_dim || return 1
-
-        for value in "${values[@]}"; do
+          for value in "${values[@]}"; do
+            index[$value]+="$row_index "
+          done
+        else
           index[$value]+="$row_index "
-        done
-      else
-        index[$value]+="$row_index "
-      fi
+        fi
 
-    done
+      end_for
 
-  done
+    end_for
 
+  end_function
+  handle_return
 }
 
 load_derive_table_card_and_key() {
@@ -2967,7 +2965,7 @@ build_dim_info() {
     localize_reverse_dims=
 
     local name field_count data_count row_count
-    begin_For name in ${derive_tables[*]}; doo
+    begin_for name in ${derive_tables[*]}; doo
       local -n derive_table_fields=derive_table_${name}_fields \
         derive_table_data=derive_table_${name}_data \
       field_count=${#derive_table_fields[*]}
@@ -2977,7 +2975,7 @@ build_dim_info() {
       tab_get_derive_from || fail
     end_for
 
-    begin_For name in ${derive_functions[*]}; doo
+    begin_for name in ${derive_functions[*]}; doo
       fun_get_derive_from || fail
     end_for
 
@@ -3334,7 +3332,7 @@ make_derive_cache() {
           context_file=$cache_path.new \
           write_to_context fun code || fail
         else
-          load_derive_table || fail
+          load_derive_table $name || fail
           derive_tables+=( $name )
 
           table=derive_table_${name} \
