@@ -370,6 +370,7 @@ init_context() {
 
     unset ${!dim_*} \
       ${!derive_table*} \
+      ${!derive_function*} \
       ${!branch_coordinate_*} \
       ${!leaf_coordinate_*} \
       ${!sub_coordinate_*} \
@@ -674,6 +675,8 @@ load_dna_contents_update_cell() {
 }
 
 # Will load the given derive table if not already loaded
+# Will not load indexes (those should have already been loaded from the table cache)
+# Will not calculate cardinality or key fields
 load_derive_table() {
   local name=$1
   begin_function
@@ -702,18 +705,11 @@ load_derive_table() {
       load_dna_vtab $dtp derive_table_$name || fail
     fi
 
-    local -n derive_table_fields=derive_table_${name}_fields \
-      derive_table_data=derive_table_${name}_data \
+    #table=derive_table_${name} \
+    #make_table_index || fail
+    #fence
 
-    field_count=${#derive_table_fields[*]}
-    data_count=${#derive_table_data[*]}
-    (( row_count = data_count / field_count ))
-
-    table=derive_table_${name} \
-    make_table_index || fail
-    fence
-
-    load_derive_table_card_and_key || fail
+    #load_derive_table_card_and_key || fail
 
   fi
 
@@ -1296,6 +1292,48 @@ build_context_expand() {
   handle_return
 }
 
+# inputs:
+#   table
+#   $1      path to target file
+write_index_to_file() {
+  local target_file=$1
+  begin_function
+
+    local value field_index data_offset row_index field
+
+    local -n c_data=${table}_data \
+      c_fields=${table}_fields \
+
+    local c_fields_count=${#c_fields[*]} \
+      c_count=${#c_data[*]} \
+
+    local c_rows=$(( c_count / c_fields_count ))
+
+    for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+
+      field=${c_fields[$field_index]}
+      local -n table_index=${coord_type}_coordinate_index_${field}
+      if [[ ! -v table_index[*] ]]; then
+        log_fatal "Internal error: Missing index ${coord_type}_coordinate_index_${field}"
+        fail1
+      fi
+
+      echo "declare -Ag ${coord_type}_coordinate_index_${field}=(" >>$target_file || fail
+
+      local k v
+      for k in "${!table_index[@]}"; do
+        v=${table_index[$k]}
+        echo "  ['$k']='${v% }'" >>$target_file || fail
+      done
+
+      echo ")$NL" >>$target_file || fail
+
+    done
+
+  end_function
+  handle_return
+}
+
 # writes $coord_type coords to a file, skipping dims specified in skip_dims
 # also assumes that there is 1 or more sub coord rows
 # inputs:
@@ -1349,26 +1387,9 @@ write_coordinates_to_shell_file() {
 
     echo ")$NL" >>$target_file || fail
 
-    for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
 
-      field=${c_fields[$field_index]}
-      local -n table_index=${coord_type}_coordinate_index_${field}
-      if [[ ! -v table_index[*] ]]; then
-        log_fatal "Internal error: Missing index ${coord_type}_coordinate_index_${field}"
-        fail1
-      fi
-
-      echo "declare -Ag ${coord_type}_coordinate_index_${field}=(" >>$target_file || fail
-
-      local k v
-      for k in "${!table_index[@]}"; do
-        v=${table_index[$k]}
-        echo "  ['$k']='${v% }'" >>$target_file || fail
-      done
-
-      echo ")$NL" >>$target_file || fail
-
-    done
+    table=${coord_type}_coordinate \
+    write_index_to_file $target_file || fail
 
   end_function
   handle_return
@@ -2945,6 +2966,21 @@ build_dim_info() {
     localize_dims=
     localize_reverse_dims=
 
+    local name field_count data_count row_count
+    begin_For name in ${derive_tables[*]}; doo
+      local -n derive_table_fields=derive_table_${name}_fields \
+        derive_table_data=derive_table_${name}_data \
+      field_count=${#derive_table_fields[*]}
+      data_count=${#derive_table_data[*]}
+      (( row_count = data_count / field_count ))
+      load_derive_table_card_and_key || fail
+      tab_get_derive_from || fail
+    end_for
+
+    begin_For name in ${derive_functions[*]}; doo
+      fun_get_derive_from || fail
+    end_for
+
     begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
 
       local -n dim_array=${dim_type} expanded_array=${dim_type}_expanded
@@ -3263,25 +3299,6 @@ build_context_trunk_dna() {
   handle_return
 }
 
-write_index_to_file() {
-  begin_function
-
-    local \
-      field_count=${#table_fields[*]} \
-      data_count=${#table_data[*]} \
-      row_count \
-
-    (( row_count = data_count / field_count ))
-
-    for (( field_index = 0; field_index < field_count; field_index++ )); do
-      field=${table_fields[$field_index]}
-      local -n index=${table}_index_${field}
-    done
-
-  end_function
-  handle_return
-}
-
 # inputs:
 #   lib_dt_path
 #   cache_path
@@ -3313,10 +3330,12 @@ make_derive_cache() {
         if [[ $type == fun ]]; then
           load_fun_to_code $dt derive_function_$name || fail
           eval "$code" || fail
+          derive_functions+=( $name )
           context_file=$cache_path.new \
           write_to_context fun code || fail
         else
           load_derive_table || fail
+          derive_tables+=( $name )
 
           table=derive_table_${name} \
           make_table_index || fail
@@ -3331,13 +3350,6 @@ make_derive_cache() {
         fi
       end_for
     end_for
-
-    # derived_from is calculated per cell, not in this cache
-    #local derive_dim
-    #begin_for derive_dim in ${!derive_dims[*]}; doo
-    #  context_file=$cache_path.new \
-    #  write_vars_to_context dim_${derive_dim}_derived_from || fail
-    #end_for
 
     if [[ -f $cache_path.new ]]; then
       mv $cache_path.new $cache_path || fail
@@ -3386,8 +3398,6 @@ gather_derive_tables() {
     if [[ ! "${deriving_dims:-}" ]]; then
       gather_derive_tables_single $cell_path || fail
       derive_caches=${derive_caches% }
-      #  This happens outside of context building, so it should not be writing to context
-      # write_vars_to_context derive_tables derive_functions derive_caches || fail
     fi
 
   end_function
@@ -3396,11 +3406,37 @@ gather_derive_tables() {
 
 # inputs:
 #   derive_tables
-#   members
 # outputs:
 #   refine_tables
-update_refine_tables() {
+build_refine_tables() {
   begin_function
+
+    local dim dt dts
+
+    for dim in all_dims[*]; do
+
+      local -n refine_tables=dim_${dim}_refine_tables \
+        dts=dim_${dim}_derive_tables \
+        members=dim_${dim}_members \
+
+      refine_tables=()
+      local member_count=${#members[*]}
+
+      for dt in $dts; do
+        local -n index=derive_table_${dt}_index_$dim
+        if (( ${#index[*]} == member_count )); then
+          refine_tables+=( $dt )
+        fi
+      done
+
+      if [[ "${refine_tables:-}" ]]; then
+        log_debug "Refine tables found for $dim: ${refine_tables[*]}"
+      fi
+
+      write_vars_to_context dim_${dim}_refine_tables || fail
+
+    done
+
   end_function
   handle_return
 }
@@ -3426,7 +3462,6 @@ calc_missing_members() {
       members=()
 
       for dt in $dts; do
-        load_derive_table $dt || fail
         local -n index=derive_table_${dt}_index_$dim
         for v in ${!index[*]}; do
           found_members[$v]=1
@@ -3443,21 +3478,6 @@ calc_missing_members() {
       fi
 
       write_vars_to_context dim_${dim}_members
-
-      local -n refine_tables=dim_${dim}_refine_tables
-      refine_tables=()
-
-      local member_count=${#members[*]}
-      for dt in $dts; do
-        local -n index=derive_table_${dt}_index_$dim
-        if (( ${#index[*]} == member_count )); then
-          refine_tables+=( $dt )
-        fi
-      done
-
-      if [[ "${refine_tables:-}" ]]; then
-        log_debug "Refine tables found for $dim: ${refine_tables[*]}"
-      fi
 
     end_for
 
@@ -3484,6 +3504,8 @@ build_context_trunk() {
 
       local dims_missing_members=
 
+      write_vars_to_context derive_tables derive_functions derive_caches || fail
+
       build_dim_info || fail
 
       build_dim_expand_functions || fail
@@ -3491,6 +3513,8 @@ build_context_trunk() {
       if [[ "$dims_missing_members" ]]; then
         calc_missing_members || fail
       fi
+
+      build_refine_tables || fail
 
     fi
 
