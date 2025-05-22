@@ -1310,13 +1310,13 @@ write_index_to_file() {
     for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
 
       field=${c_fields[$field_index]}
-      local -n table_index=${coord_type}_coordinate_index_${field}
+      local -n table_index=${table}_index_${field}
       if [[ ! -v table_index[*] ]]; then
-        log_fatal "Internal error: Missing index ${coord_type}_coordinate_index_${field}"
+        log_fatal "Internal error: Missing index ${table}_index_${field}"
         fail1
       fi
 
-      echo "declare -Ag ${coord_type}_coordinate_index_${field}=(" >>$target_file || fail
+      echo "declare -Ag ${table}_index_${field}=(" >>$target_file || fail
 
       local k v
       for k in "${!table_index[@]}"; do
@@ -3320,18 +3320,22 @@ make_derive_cache() {
         files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
       fi
 
-      local name code
-      begin_for dt in $files; doo
-        name=${dt##*/}
+      local name code derive_path
+      begin_for derive_path in $files; doo
+        fence
+        name=${derive_path##*/}
         name=${name%.*}
         name=${name#derive_}
         if [[ $type == fun ]]; then
-          load_fun_to_code $dt derive_function_$name || fail
+          load_fun_to_code $derive_path derive_function_$name || fail
           eval "$code" || fail
           derive_functions+=( $name )
           context_file=$cache_path.new \
           write_to_context fun code || fail
         else
+          local -n dtp=derive_table_${name}_path
+          dtp=$derive_path
+
           load_derive_table $name || fail
           derive_tables+=( $name )
 
@@ -3341,8 +3345,6 @@ make_derive_cache() {
           table=derive_table_${name} \
           write_index_to_file $cache_path.new || fail
 
-          local -n dtp=derive_table_${name}_path
-          dtp=$derive_path
           context_file=$cache_path.new \
           write_vars_to_context derive_table_${name}_path || fail
         fi
