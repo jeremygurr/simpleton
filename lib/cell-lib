@@ -2931,26 +2931,6 @@ build_dim_info() {
 
     end_for
 
-    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
-
-      local -n dim_array=${dim_type}_expanded
-
-      begin_for dim in "${dim_array[@]}"; doo
-
-        if [[ ! -v all_dims[$dim] ]]; then
-          dim_requested_by="$dim_type $dim" \
-          downstream_dim_row= \
-          build_dim_info_single || fail
-        fi
-
-        local -n dim_dim_type=dim_${dim}_type
-        dim_dim_type=$dim_type
-        write_vars_to_context dim_${dim}_type || fail
-
-      end_for
-
-    end_for
-
     build_context_support_dims || fail
 
     for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
@@ -5210,9 +5190,29 @@ build_context() {
       rm $context_path.new || fail
     fi
 
+    local dim_cache derive_cache
+
+    begin_for dim_cache in ${dim_caches:-}; doo
+      cat $dim_cache >>$context_path.new || fail
+    end_for
+
+    begin_for derive_cache in ${derive_caches:-}; doo
+      cat $derive_cache >>$context_path.new || fail
+    end_for
+
     if [[ -e $context_path-trunk ]]; then
       cat $context_path-trunk >>$context_path.new || fail
     fi
+
+    local dim_type dim
+    for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
+      local -n dim_array=${dim_type}_expanded
+      for dim in ${dim_array[*]}; do
+        local -n dt=dim_${dim}_type
+        dt=$dim_type
+        write_vars_to_context dim_${dim}_type || fail
+      done
+    done
 
     if [[ -e $context_path-branch ]]; then
       cat $context_path-branch >>$context_path.new || fail
