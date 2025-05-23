@@ -1723,15 +1723,8 @@ expand_dim() {
     if [[ "${!in_var:-}" && "${!in_var}" != \? ]]; then
 
       if ! function_exists dim_${dim}_expand; then
-
-        context_type= \
-        recursive=f \
-        build_dim_info_single || fail
-
-        context_type= \
-        build_context_expand || fail
-        eval "$code" || fail
-
+        log_fatal "Missing expand function for $dim"
+        fail1
       fi
 
       local problem
@@ -2719,6 +2712,11 @@ build_dim_info_single() {
 
     local dims dim=${dim_path##*/}
 
+    if [[ -v all_dims[$dim] ]]; then
+      log_fatal "Dim $dim has already been built"
+      fail1
+    fi
+
     all_dims[$dim]=1
 
     if [[ ! "$dim" =~ ^[a-zA-Z0-9][a-zA-Z0-9_]+$ ]]; then
@@ -2758,12 +2756,6 @@ build_dim_info_single() {
 
     done
 
-    write_vars_to_context \
-      secret_vars \
-      all_dims \
-      dim_shorts \
-      || fail
-
   end_function
   handle_return
 }
@@ -2794,8 +2786,8 @@ build_context_support_dims_find_related_handle_dim() {
     related_dims_expanded[$dim]=1
 
     if [[ ! -v all_dims[$dim] ]]; then
-      downstream_dim_row= \
-      build_dim_info_single || fail
+      log_fatal "Missing dim $dim"
+      fail1
     fi
 
     # perplexing why we need this here, but after too much debugging, this was the simplest solution
@@ -5068,22 +5060,27 @@ make_dim_cache() {
       rm $cache_path.new || fail
     fi
 
-    local dim_paths dim_path dim_file context_file=$cache_path.new
-    local -gA dim_group
+    local dim_paths dim_path dim context_file=$cache_path.new
+    local -A dim_group=()
     dim_paths=$(find1 $lib_dim_path -type d -not -name ".*" | sort) || fail
 
     for dim_path in $dim_paths; do
-      dim_file=${dim_path##*/}
-      if [[ $dim_file == _* ]]; then
+      dim=${dim_path##*/}
+      if [[ $dim == _* ]]; then
         local group_dims=
         get_group_dims $dim_path || fail
-        dim_group[$group_name]="$group_dims"
+        dim_group[$dim]="$group_dims"
       else
         build_dim_info_single $dim_path || fail
       fi
     done
 
-    write_vars_to_context dim_group || fail
+    write_vars_to_context \
+      dim_group \
+      secret_vars \
+      all_dims \
+      dim_shorts \
+      || fail
 
     mv $cache_path.new $cache_path || fail
 
