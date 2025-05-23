@@ -114,7 +114,7 @@ write_to_context() {
 #   either context_type or context_file
 #   $*    vars to write to context file
 write_vars_to_context() {
-  local vars_to_write=$*
+  local vars_to_write=$* ignore_missing=${ignore_missing:-f}
   begin_function_lo
     local var val quoted_val
     for var in $vars_to_write; do
@@ -123,6 +123,8 @@ write_vars_to_context() {
         set_to_string val quoted_val
       elif is_array val; then
         array_to_string val quoted_val
+      elif [[ $ignore_missing == t && ! -v $var ]]; then
+        continue
       else
         local quoted_val=${val:-}
         shell_quote_var quoted_val
@@ -295,7 +297,9 @@ make_table_index() {
             index[$value]+="$row_index "
           done
         else
-          index[$value]+="$row_index "
+          log_fatal "Unknown dim found in derive table $table: $field"
+          fail1
+          #index[$value]+="$row_index "
         fi
 
       end_for
@@ -310,6 +314,8 @@ load_derive_table_card_and_key() {
 
   local field_index field
 
+  local -n key_fields=derive_table_${name}_key_fields
+
   for (( field_index = 0; field_index < field_count; field_index++ )); do
 
     field=${derive_table_fields[$field_index]}
@@ -323,8 +329,7 @@ load_derive_table_card_and_key() {
 
     local card=${#index[*]}
     if (( card == row_count )); then
-      local -n key_tables=dim_${field}_key_tables \
-        key_fields=derive_table_${name}_key_fields \
+      local -n key_tables=dim_${field}_key_tables
 
       key_tables+="$name "
       key_fields+="$field "
@@ -343,6 +348,8 @@ load_derive_table_card_and_key() {
     fi
 
   done
+
+  write_vars_to_context derive_table_${name}_key_fields || fail
 
 }
 
@@ -394,6 +401,7 @@ init_context() {
     default_freshness= \
     default_strategies=crl \
     derive_caches= \
+    dim_caches= \
     dim_max_distance=${dim_max_distance:-50} \
     implicit_dims=() \
     key_path= \
@@ -702,12 +710,6 @@ load_derive_table() {
     else
       load_dna_vtab $dtp derive_table_$name || fail
     fi
-
-    #table=derive_table_${name} \
-    #make_table_index || fail
-    #fence
-
-    #load_derive_table_card_and_key || fail
 
   fi
 
@@ -1292,9 +1294,8 @@ build_context_expand() {
 
 # inputs:
 #   table
-#   $1      path to target file
-write_index_to_file() {
-  local target_file=$1
+#   context_file      path to target file
+write_index_to_context() {
   begin_function
 
     local value field_index data_offset row_index field
@@ -1316,15 +1317,15 @@ write_index_to_file() {
         fail1
       fi
 
-      echo "declare -Ag ${table}_index_${field}=(" >>$target_file || fail
+      echo "declare -Ag ${table}_index_${field}=(" >>$context_file || fail
 
       local k v
       for k in "${!table_index[@]}"; do
         v=${table_index[$k]}
-        echo "  ['$k']='${v% }'" >>$target_file || fail
+        echo "  ['$k']='${v% }'" >>$context_file || fail
       done
 
-      echo ")$NL" >>$target_file || fail
+      echo ")$NL" >>$context_file || fail
 
     done
 
@@ -1387,7 +1388,8 @@ write_coordinates_to_shell_file() {
 
 
     table=${coord_type}_coordinate \
-    write_index_to_file $target_file || fail
+    context_file=$target_file \
+    write_index_to_context || fail
 
   end_function
   handle_return
@@ -1983,11 +1985,7 @@ extract_from_derive_table() {
              derive_data=derive_table_${derive_table}_data \
 
     if [[ ! -v derive_data ]]; then
-      load_derive_table $derive_table || fail
-    fi
-
-    if [[ ! -v derive_data ]]; then
-      log_fatal "Couldn't load derive table $derive_table"
+      log_fatal "Missing derive table data for $derive_table"
       fail1
     fi
 
@@ -2711,90 +2709,36 @@ get_dim_path() {
 }
 
 # inputs:
-#   dim
-#   downstream_dim    optional
+#   $1      dim path
 # 
 build_dim_info_single() {
-  local downstream_dim_row=${downstream_dim_row:-} \
-    log_show_vars=dim \
-    recursive=${recursive:-t} \
+  local log_show_vars=dim_path \
+    dim_path=$1 dim
 
   begin_function
 
-    local dims dim_path=
+    local dims dim=${dim_path##*/}
 
     all_dims[$dim]=1
 
-    if [[ ! "$dim" =~ ^[a-zA-Z0-9_]+$ ]]; then
+    if [[ ! "$dim" =~ ^[a-zA-Z0-9][a-zA-Z0-9_]+$ ]]; then
       log_fatal "Invalid dim name: $dim. Dims must consist of alphanumeric characters or underscores."
       fail1
     fi
 
-    if [[ "$downstream_dim_row" ]]; then
-      local -n derived_to=dim_${dim}_derived_to
-      derived_to+=( "$downstream_dim_row" )
-    fi
-
     get_plural $dim dims
-
-    get_dim_path $cell_path || fail
-    if [[ ! "$dim_path" ]]; then
-      log_fatal "Could not find dim $dim in any .lib/dim folders of the parents of $cell_path"
-      fail1
-    fi
 
     prefix=dim_${dim}_ \
     load_dna_contents $dim_path || fail
-
-    local -n derived_from=dim_${dim}_derived_from \
-      derived_from=dim_${dim}_derived_from \
-
-    local derived_from_row \
-      new_derived_from_row \
-      derived_dim \
-      first \
 
     local -n is_secret=dim_${dim}_is_secret
     if [[ -v is_secret && $is_secret == t ]]; then
       add_word_to_string secret_vars "$dim $dims s_$dim s_$dims d_$dim d_$dims"
     fi
 
-    local -n dim_dim_type=dim_${dim}_type
-    dim_dim_type=$dim_type
+    local -n members=dim_${dim}_members
 
-    local -n derived_from=dim_${dim}_derived_from
-    if [[ $recursive == t && -v derived_from ]]; then
-      local upstream_dim upstream_dim upstream_dim_row
-      begin_for upstream_dim_row in "${derived_from[@]}"; doo
-        begin_for upstream_dim in ${upstream_dim_row#* * }; doo
-          local -n upstream_dim_type=dim_${upstream_dim}_type
-          if [[ ! -v upstream_dim_type && ! -v all_dims[$upstream_dim] ]]; then
-            # recursive
-            downstream_dim_row="$dim ${upstream_dim_row#* * }" \
-            dim_type=support_dims \
-            dim_requested_by="derived_from of $dim" \
-            dim=$upstream_dim \
-            build_dim_info_single || fail
-          fi
-        log_show_vars=dim
-        end_for
-      log_show_vars=dim
-      end_for
-    fi
-
-    local -n member_type=dim_${dim}_member_type \
-      members=dim_${dim}_members \
-      derive_tables=dim_${dim}_derive_tables \
-
-    load_dim_derive_item || fail
-
-    if [[ "${members:-}" || "${derive_tables:-}" ]]; then
-      member_type=static
-    else
-      member_type=dynamic
-    fi
-     
-    write_vars_to_context dim_${dim}_type dim_${dim}_member_type || fail
+    #write_vars_to_context dim_${dim}_type dim_${dim}_member_type || fail
 
     local shorter_dim=$dim shorter_dims
 
@@ -2813,6 +2757,12 @@ build_dim_info_single() {
       fi
 
     done
+
+    write_vars_to_context \
+      secret_vars \
+      all_dims \
+      dim_shorts \
+      || fail
 
   end_function
   handle_return
@@ -2964,21 +2914,6 @@ build_dim_info() {
     localize_dims=
     localize_reverse_dims=
 
-    local name field_count data_count row_count
-    begin_for name in ${derive_tables[*]}; doo
-      local -n derive_table_fields=derive_table_${name}_fields \
-        derive_table_data=derive_table_${name}_data \
-      field_count=${#derive_table_fields[*]}
-      data_count=${#derive_table_data[*]}
-      (( row_count = data_count / field_count ))
-      load_derive_table_card_and_key || fail
-      tab_get_derive_from || fail
-    end_for
-
-    begin_for name in ${derive_functions[*]}; doo
-      fun_get_derive_from || fail
-    end_for
-
     begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
 
       local -n dim_array=${dim_type} expanded_array=${dim_type}_expanded
@@ -3001,11 +2936,17 @@ build_dim_info() {
       local -n dim_array=${dim_type}_expanded
 
       begin_for dim in "${dim_array[@]}"; doo
+
         if [[ ! -v all_dims[$dim] ]]; then
           dim_requested_by="$dim_type $dim" \
           downstream_dim_row= \
           build_dim_info_single || fail
         fi
+
+        local -n dim_dim_type=dim_${dim}_type
+        dim_dim_type=$dim_type
+        write_vars_to_context dim_${dim}_type || fail
+
       end_for
 
     end_for
@@ -3030,12 +2971,7 @@ build_dim_info() {
 
     done
 
-    write_vars_to_context \
-      localize_dims localize_reverse_dims \
-      secret_vars \
-      all_dims \
-      dim_shorts \
-      || fail
+    write_vars_to_context localize_dims localize_reverse_dims || fail
 
   end_function
   handle_return
@@ -3298,6 +3234,62 @@ build_context_trunk_dna() {
 }
 
 # inputs:
+#   name
+#   derive_path
+#   cache_path
+make_derive_cache_handle_table() {
+  begin_function
+    local -n dtp=derive_table_${name}_path
+    dtp=$derive_path
+
+    load_derive_table $name || fail
+    derive_tables+=( $name )
+
+    write_vars_to_context derive_table_${name}_path || fail
+
+    table=derive_table_${name} \
+    make_table_index || fail
+
+    table=derive_table_${name} \
+    write_index_to_context $cache_path.new || fail
+
+    fence
+
+    load_derive_table_card_and_key || fail
+
+    tab_get_derive_from || fail
+
+    local dim
+    for dim in ${!all_dims[*]}; do
+
+      fence
+
+      ignore_missing=t \
+      write_vars_to_context \
+        dim_${dim}_card_table \
+        dim_${dim}_key_tables \
+        dim_${dim}_derived_from \
+        || fail
+
+      local -n member_type=dim_${dim}_member_type \
+        dim_members=dim_${dim}_members \
+        dim_derive_tables=dim_${dim}_derive_tables \
+
+      if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
+        member_type=static
+      else
+        member_type=dynamic
+      fi
+
+      write_vars_to_context dim_${dim}_member_type || fail
+       
+    done
+
+  end_function
+  handle_return
+}
+
+# inputs:
 #   lib_dt_path
 #   cache_path
 make_derive_cache() {
@@ -3311,6 +3303,9 @@ make_derive_cache() {
     if [[ -f $cache_path.new ]]; then
       rm $cache_path.new || fail
     fi
+
+    local context_file=$cache_path.new \
+      type files \
 
     begin_for type in fun tab; doo
 
@@ -3330,26 +3325,14 @@ make_derive_cache() {
           load_fun_to_code $derive_path derive_function_$name || fail
           eval "$code" || fail
           derive_functions+=( $name )
-          context_file=$cache_path.new \
           write_to_context fun code || fail
         else
-          local -n dtp=derive_table_${name}_path
-          dtp=$derive_path
-
-          load_derive_table $name || fail
-          derive_tables+=( $name )
-
-          table=derive_table_${name} \
-          make_table_index || fail
-
-          table=derive_table_${name} \
-          write_index_to_file $cache_path.new || fail
-
-          context_file=$cache_path.new \
-          write_vars_to_context derive_table_${name}_path || fail
+          make_derive_cache_handle_table || fail
         fi
       end_for
     end_for
+
+    write_vars_to_context derive_tables derive_functions || fail
 
     if [[ -f $cache_path.new ]]; then
       mv $cache_path.new $cache_path || fail
@@ -3360,19 +3343,19 @@ make_derive_cache() {
   handle_return
 }
  
-gather_derive_tables_single() {
-  local start_path=$1 lib_dim_path
+load_derive_caches() {
+  local work_path=$1
   begin_function
 
-    if [[ $start_path == /*/*/* ]]; then
-      gather_derive_tables_single ${start_path%/*} || fail
+    if [[ $work_path == /*/*/* ]]; then
+      load_derive_caches ${work_path%/*} || fail
     fi
 
-    local lib_dt_path=$start_path/.lib/derive
+    local lib_dt_path=$work_path/.lib/derive
 
     if [[ -d $lib_dt_path ]]; then
       local dt files links link type is_generated \
-        cache_path=$start_path/.lib/derive-cache \
+        cache_path=$work_path/.lib/derive-cache \
         real_path real_path_parent \
 
       derive_caches+="$cache_path "
@@ -3382,22 +3365,6 @@ gather_derive_tables_single() {
       else # build the cache
         make_derive_cache || fail
       fi
-    fi
-
-  end_function
-  handle_return
-}
-
-gather_derive_tables() {
-  begin_function
-
-    derive_caches= \
-    derive_tables=() \
-    derive_functions=() \
-
-    if [[ ! "${deriving_dims:-}" ]]; then
-      gather_derive_tables_single $cell_path || fail
-      derive_caches=${derive_caches% }
     fi
 
   end_function
@@ -4095,7 +4062,8 @@ load_related_derive_tables() {
       for dt in $dts; do
         local -n dtd=derive_table_${dt}_data
         if [[ ! -v dtd ]]; then
-          load_derive_table $dt || fail
+          log_fatal "Missing derive table data for $dt"
+          fail1
         fi
       done
     fi
@@ -5091,9 +5059,92 @@ get_highest_trunk_context_cell() {
   handle_return
 }
 
+get_group_dims() {
+  begin_function
+    local group_path=$1 contents item dim
+    contents=$(find1 $group_path -type d -not -name ".*" | sort) || fail
+    begin_for item in $contents; doo
+      item=$(realpath $item) || fail
+      dim=${item##*/}
+      if [[ $dim == _* ]]; then
+        get_group_dims $item || fail
+      else
+        group_dims+="$dim "
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+# inputs:
+#   lib_dim_path
+#   cache_path
+make_dim_cache() {
+  begin_function
+
+    log_debug "Generating dim cache for $lib_dim_path"
+
+    if [[ -f $cache_path.new ]]; then
+      rm $cache_path.new || fail
+    fi
+
+    local dim_paths dim_path dim_file context_file=$cache_path.new
+    local -gA dim_group
+    dim_paths=$(find1 $lib_dim_path -type d -not -name ".*" | sort) || fail
+
+    for dim_path in $dim_paths; do
+      dim_file=${dim_path##*/}
+      if [[ $dim_file == _* ]]; then
+        local group_dims=
+        get_group_dims $dim_path || fail
+        dim_group[$group_name]="$group_dims"
+      else
+        build_dim_info_single $dim_path || fail
+      fi
+    done
+
+    write_vars_to_context dim_group || fail
+
+    mv $cache_path.new $cache_path || fail
+
+  end_function
+  handle_return
+}
+
+load_dim_caches() {
+  local work_path=$1
+  begin_function
+
+    if [[ $work_path == /*/*/* ]]; then
+      load_dim_caches ${work_path%/*} || fail
+    fi
+
+    local lib_dim_path=$work_path/.lib/dim
+
+    if [[ -d $lib_dim_path ]]; then
+      local dt files links link type is_generated \
+        cache_path=$work_path/.lib/dim-cache \
+        real_path real_path_parent \
+
+      dim_caches+="$cache_path "
+
+      if [[ -f $cache_path ]]; then
+        source $cache_path || fail
+      else # build the cache
+        make_dim_cache || fail
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
 build_context() {
   local cell_path=$1
   begin_function
+
+    load_dim_caches $cell_path || fail
+    load_derive_caches $cell_path || fail
 
     if [[ ! -f $context_path-trunk ]]; then
       local trunk_context_path=$trunk_cell/.cyto/context
@@ -5956,24 +6007,25 @@ switch_context() {
       if [[ $dna_exists == t ]]; then
 
         check_foundation || fail
-        gather_derive_tables || fail
 
         if [[ ! -f $context_path ]]; then
           fork build_cyto $cell_path || fail
         fi
 
         source $context_path || fail
-        if [[ "$derive_caches" ]]; then
-          local derive_cache
-          for derive_cache in $derive_caches; do
-            if [[ -f $derive_caches ]]; then
-              source $derive_cache || fail
-            else
-              log_fatal "Internal error: Derive cache is expected to exist at this point but is missing."
-              fail1
-            fi
-          done
-        fi
+
+        #  this is now built into the context
+        #if [[ "$derive_caches" ]]; then
+        #  local derive_cache
+        #  for derive_cache in $derive_caches; do
+        #    if [[ -f $derive_caches ]]; then
+        #      source $derive_cache || fail
+        #    else
+        #      log_fatal "Internal error: Derive cache is expected to exist at this point but is missing."
+        #      fail1
+        #    fi
+        #  done
+        #fi
 
         if [[ -f $context_path-branch-coords ]]; then
           source $context_path-branch-coords || fail
