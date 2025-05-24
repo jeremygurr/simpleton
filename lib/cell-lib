@@ -1172,15 +1172,6 @@ build_context_expand_handle_aliases() {
   handle_return
 }
 
-build_context_expand_members_unknown() {
-  code+="
-    *)
-      _out=( \"\$_in\" )
-    ;;
-  esac
-}"
-}
-
 get_all_values_from_derive_table() {
   local derive_table=$1 output_var=$2
   local -n __out=$output_var \
@@ -1224,18 +1215,22 @@ esac
 }"
 }
 
-build_context_expand_members_will_be_known() {
+build_context_expand_members() {
   code+="
   all)
     local -n members=dim_${dim}_members
-    _out=( "\${members[@]}" )
+    if [[ -v members ]]; then
+      _out=( "\${members[@]}" )
+    else
+      problem=\"Can't use all value for a dynamic dim\"
+    fi
   ;;
   *)
     local -n members=dim_${dim}_members
-    if array_contains members \$_in; then
+    if [[ -v members ]] && array_contains members \$_in; then
       _out=( "\$_in" )
     else
-      problem=\"Invalid $dim: \$_in\"
+      problem=\"Invalid dim member for $dim: \$_in\"
     fi
   ;;
 esac
@@ -1251,27 +1246,6 @@ build_context_expand() {
 
     local fun
 
-    local -n member_type=dim_${dim}_member_type
-
-    if [[ -v member_type ]]; then
-      case $member_type in
-        dynamic|static)
-          :
-        ;;
-        *)
-          log_fatal "Invalid member_type variable loaded from dna: $member_type. Must be either dynamic or static."
-          fail1
-        ;;
-      esac
-    fi
-
-    local -n members=dim_${dim}_members
-
-    if [[ ! "${member_type:-}" ]]; then
-      log_fatal "Internal error: dim_${dim}_member_type was not defined"
-      fail1
-    fi
-
     local -n aliases=dim_${dim}_aliases
 
     code="dim_${dim}_expand() {
@@ -1285,16 +1259,7 @@ build_context_expand() {
       build_context_expand_handle_aliases || fail
     fi
 
-    if [[ $member_type == static ]]; then
-      if [[ "${members:-}" ]]; then
-        build_context_expand_members_known || fail
-      else
-        build_context_expand_members_will_be_known || fail
-        dims_missing_members+="$dim "
-      fi
-    else
-      build_context_expand_members_unknown || fail
-    fi
+    build_context_expand_members || fail
 
     write_to_context fun code || fail
 
@@ -2746,8 +2711,6 @@ build_dim_info_single() {
 
     local -n members=dim_${dim}_members
 
-    #write_vars_to_context dim_${dim}_type dim_${dim}_member_type || fail
-
     local shorter_dim=$dim shorter_dims
 
     dim_shorts[$dim]=$dim
@@ -2765,6 +2728,10 @@ build_dim_info_single() {
       fi
 
     done
+
+    if ! function_exists expand_function; then
+      build_context_expand || fail
+    fi
 
   end_function
   handle_return
@@ -2948,6 +2915,11 @@ build_dim_info() {
 
         localize_dims+=" d_$dim d_$dims"
         localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
+
+        local -n members=dim_${dim}_members
+        if [[ ! -v members ]]; then
+          dims_missing_members+="$dim "
+        fi
         
       done
 
@@ -3095,6 +3067,7 @@ load_parent_context() {
   handle_return
 }
 
+# Unused now?
 build_dim_expand_functions() {
   begin_function
     local dim
@@ -3456,8 +3429,6 @@ build_context_trunk() {
       write_vars_to_context derive_tables derive_functions derive_caches || fail
 
       build_dim_info || fail
-
-      build_dim_expand_functions || fail
 
       if [[ "$dims_missing_members" ]]; then
         calc_missing_members || fail
