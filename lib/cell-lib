@@ -310,47 +310,58 @@ make_table_index() {
   handle_return
 }
 
+# inputs:
+#   name
 load_derive_table_card_and_key() {
+  begin_function
 
-  local field_index field
+    local -n table_fields=derive_table_${name}_fields \
+      table_data=derive_table_${name}_data \
+      key_fields=derive_table_${name}_key_fields \
 
-  local -n key_fields=derive_table_${name}_key_fields
+    local field_count=${#table_fields[*]} \
+      data_count=${#table_data[*]} \
+      field_index field row_count \
 
-  for (( field_index = 0; field_index < field_count; field_index++ )); do
+    (( row_count = data_count / field_count ))
 
-    field=${derive_table_fields[$field_index]}
+    for (( field_index = 0; field_index < field_count; field_index++ )); do
 
-    local -n index=derive_table_${name}_index_${field}
+      field=${table_fields[$field_index]}
 
-    if [[ ! "${index[*]:-}" ]]; then
-      log_warn "Internal error: index missing from derive_table ${name} field ${field}"
-      continue
-    fi
+      local -n index=derive_table_${name}_index_${field}
 
-    local card=${#index[*]}
-    if (( card == row_count )); then
-      local -n key_tables=dim_${field}_key_tables
+      if [[ ! "${index[*]:-}" ]]; then
+        log_warn "Internal error: index missing from derive_table ${name} field ${field}"
+        continue
+      fi
 
-      key_tables+="$name "
-      key_fields+="$field "
-    fi
+      local card=${#index[*]}
+      if (( card == row_count )); then
+        local -n key_tables=dim_${field}_key_tables
 
-    local -n card_table=dim_${field}_card_table
+        key_tables+="$name "
+        key_fields+="$field "
+      fi
 
-    if [[ -v card_table ]]; then
-      local -n old_index=derive_table_${card_table}_index_${field}
-      local old_card=${#old_index[*]}
-      if (( card > old_card )); then
+      local -n card_table=dim_${field}_card_table
+
+      if [[ -v card_table ]]; then
+        local -n old_index=derive_table_${card_table}_index_${field}
+        local old_card=${#old_index[*]}
+        if (( card > old_card )); then
+          card_table=$name
+        fi
+      else
         card_table=$name
       fi
-    else
-      card_table=$name
-    fi
 
-  done
+    done
 
-  write_vars_to_context derive_table_${name}_key_fields || fail
+    write_vars_to_context derive_table_${name}_key_fields || fail
 
+  end_function
+  handle_return
 }
 
 init_context() {
@@ -1287,7 +1298,7 @@ write_index_to_context() {
 
       field=${c_fields[$field_index]}
       local -n table_index=${table}_index_${field}
-      if [[ ! -v table_index[*] ]]; then
+      if [[ ! "${!table_index[*]}" ]]; then
         log_fatal "Internal error: Missing index ${table}_index_${field}"
         fail1
       fi
