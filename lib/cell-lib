@@ -3205,6 +3205,7 @@ build_context_trunk_dna() {
 #   cache_path
 make_derive_cache_handle_table() {
   begin_function
+
     local -n dtp=derive_table_${name}_path
     dtp=$derive_path
 
@@ -3224,32 +3225,6 @@ make_derive_cache_handle_table() {
     load_derive_table_card_and_key || fail
 
     tab_get_derive_from || fail
-
-    local dim
-    for dim in ${!all_dims[*]}; do
-
-      fence
-
-      ignore_missing=t \
-      write_vars_to_context \
-        dim_${dim}_card_table \
-        dim_${dim}_key_tables \
-        dim_${dim}_derived_from \
-        || fail
-
-      local -n member_type=dim_${dim}_member_type \
-        dim_members=dim_${dim}_members \
-        dim_derive_tables=dim_${dim}_derive_tables \
-
-      if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
-        member_type=static
-      else
-        member_type=dynamic
-      fi
-
-      write_vars_to_context dim_${dim}_member_type || fail
-       
-    done
 
   end_function
   handle_return
@@ -3299,6 +3274,32 @@ make_derive_cache() {
     end_for
 
     write_vars_to_context derive_tables derive_functions || fail
+
+    local dim
+    for dim in ${!all_dims[*]}; do
+
+      fence
+
+      ignore_missing=t \
+      write_vars_to_context \
+        dim_${dim}_card_table \
+        dim_${dim}_key_tables \
+        dim_${dim}_derived_from \
+        || fail
+
+      local -n member_type=dim_${dim}_member_type \
+        dim_members=dim_${dim}_members \
+        dim_derive_tables=dim_${dim}_derive_tables \
+
+      if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
+        member_type=static
+      else
+        member_type=dynamic
+      fi
+
+      write_vars_to_context dim_${dim}_member_type || fail
+       
+    done
 
     if [[ -f $cache_path.new ]]; then
       mv $cache_path.new $cache_path || fail
@@ -3381,36 +3382,42 @@ calc_missing_members() {
     begin_for dim in $dims_missing_members; doo
       log_debug "Calculating missing dim members for $dim"
 
-      local -n dts=dim_${dim}_derive_tables
+      local -n dts=dim_${dim}_derive_tables \
+        member_type=dim_${dim}_member_type \
+
       local -A found_members=()
 
       local dt v
-      if [[ ! -v dts ]]; then
-        log_fatal "Needed to calculate members for $dim but no derive tables were found with this dim. "
-        log_fatal "Either explicitly define the members with members.var, or add a derive table using this dim, or mark this dim as dynamic by removing the member_type.var from the dim folder."
-        fail1
-      fi
+      if [[ -v dts ]]; then
 
-      local -n members=dim_${dim}_members
-      members=()
+        local -n members=dim_${dim}_members
+        members=()
 
-      for dt in $dts; do
-        local -n index=derive_table_${dt}_index_$dim
-        for v in ${!index[*]}; do
-          found_members[$v]=1
+        for dt in $dts; do
+          local -n index=derive_table_${dt}_index_$dim
+          for v in ${!index[*]}; do
+            found_members[$v]=1
+          done
         done
-      done
-      members=( "${!found_members[@]}" )
-      sort_array members
+        members=( "${!found_members[@]}" )
+        sort_array members
 
-      log_debug "Found ${#found_members[*]} members for $dim"
+        log_debug "Found ${#found_members[*]} members for $dim"
 
-      if [[ ! "${found_members[*]}" ]]; then
-        log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
-        fail1
+        if [[ ! "${found_members[*]}" ]]; then
+          log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
+          fail1
+        fi
+
+        member_type=static
+        write_vars_to_context dim_${dim}_members || fail
+
+      else
+        log_debug "No derive tables found for $dim, and no explicit members are defined, so it must be a dynamic dim"
+        member_type=dynamic
       fi
 
-      write_vars_to_context dim_${dim}_members
+      write_vars_to_context dim_${dim}_member_type || fail
 
     end_for
 
