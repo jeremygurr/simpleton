@@ -356,6 +356,11 @@ load_derive_table_card_and_key() {
         card_table=$name
       fi
 
+      local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
+      if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $item "* ]]; then
+        dim_derive_tables+=( $item )
+      fi
+
     done
 
     write_vars_to_context derive_table_${name}_key_fields || fail
@@ -809,7 +814,6 @@ tab_get_derive_from() {
 # inputs:
 #   name
 #   cache_path
-#   derive_path
 fun_get_derive_from() {
   begin_function
 
@@ -821,6 +825,14 @@ fun_get_derive_from() {
     local -n derive_from=dim_${name}_derived_from
 
     derive_from+=( "$name.fun ${values[*]}" )
+
+    local dim row=( ${values[*]} )
+    for dim in ${row[*]:1}; do
+      local -n dim_derive_functions=dim_${dim}_derive_functions
+      if [[ ! "${dim_derive_functions:-}" || " ${dim_derive_functions[*]} " != *" $name "* ]]; then
+        dim_derive_functions+=( $name )
+      fi
+    done
 
   end_function
   handle_return
@@ -3092,64 +3104,6 @@ build_dim_expand_functions() {
   handle_return
 }
 
-load_dim_derive_item() {
-  local dim=$dim
-  begin_function
-    local dim \
-      derived_from_row \
-      derived_short_dim \
-      dims_to_add \
-      dim_to_add \
-      action \
-      action_type \
-      item \
-
-    local -n derived_from=dim_${dim}_derived_from
-
-    begin_for derived_from_row in "${derived_from[@]}"; doo
-      dims_to_add=
-      action=${derived_from_row%% *}
-      action_type=${action##*.}
-      item=${action%.*}
-      begin_for derived_dim in ${derived_from_row##* * }; doo
-        dims_to_add+="$derived_dim "
-      end_for
-
-      case $action_type in
-        tab)
-          begin_for dim_to_add in $dims_to_add; doo
-            local -n dim_derive_tables=dim_${dim_to_add}_derive_tables
-            if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $item "* ]]; then
-              dim_derive_tables+=( $item )
-            fi
-          end_for
-        ;;
-        fun)
-          begin_for dim_to_add in $dims_to_add; doo
-            local -n dim_derive_functions=dim_${dim_to_add}_derive_functions
-            if [[ ! "${dim_derive_functions:-}" || " ${dim_derive_functions[*]} " != *" $item "* ]]; then
-              dim_derive_functions+=( $item )
-            fi
-          end_for
-        ;;
-        *)
-          log_fatal "Internal error: Unknown action type in derived from dim $dim: $action"
-          fail1
-        ;;
-      esac
-
-    end_for
-
-    begin_for dim in ${!all_dims[*]}; doo
-      if [[ -v dim_${dim}_derive_tables ]]; then
-        write_vars_to_context dim_${dim}_derive_tables dim_${dim}_derive_functions || fail
-      fi
-    end_for
-
-  end_function
-  handle_return
-}
-
 build_context_trunk_dna() {
   local log_vars=cell_path log_show_vars=short_cell
   begin_function
@@ -3267,6 +3221,7 @@ make_derive_cache() {
           eval "$code" || fail
           derive_functions+=( $name )
           write_to_context fun code || fail
+          fun_get_derive_from || fail
         else
           make_derive_cache_handle_table || fail
         fi
@@ -3347,27 +3302,31 @@ build_refine_tables() {
 
     local dim dt dts
 
-    for dim in all_dims[*]; do
+    for dim in ${!all_dims[*]}; do
 
       local -n refine_tables=dim_${dim}_refine_tables \
         dts=dim_${dim}_derive_tables \
         members=dim_${dim}_members \
 
-      refine_tables=()
-      local member_count=${#members[*]}
+      if [[ -v dts ]]; then
 
-      for dt in $dts; do
-        local -n index=derive_table_${dt}_index_$dim
-        if (( ${#index[*]} == member_count )); then
-          refine_tables+=( $dt )
+        refine_tables=()
+        local member_count=${#members[*]}
+
+        for dt in $dts; do
+          local -n index=derive_table_${dt}_index_$dim
+          if (( ${#index[*]} == member_count )); then
+            refine_tables+=( $dt )
+          fi
+        done
+
+        if [[ "${refine_tables:-}" ]]; then
+          log_debug "Refine tables found for $dim: ${refine_tables[*]}"
         fi
-      done
 
-      if [[ "${refine_tables:-}" ]]; then
-        log_debug "Refine tables found for $dim: ${refine_tables[*]}"
+        write_vars_to_context dim_${dim}_refine_tables || fail
+
       fi
-
-      write_vars_to_context dim_${dim}_refine_tables || fail
 
     done
 
