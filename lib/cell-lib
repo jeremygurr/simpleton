@@ -2925,6 +2925,7 @@ build_dim_info() {
 
     build_context_support_dims || fail
 
+    local dim dims
     for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
 
       local -n dim_array=${dim_type}_expanded
@@ -2932,18 +2933,9 @@ build_dim_info() {
       short_dims=()
 
       for dim in "${dim_array[@]}"; do
-
-        local dim=$dim dims
         get_plural $dim dims
-
         localize_dims+=" d_$dim d_$dims"
         localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
-
-        local -n members=dim_${dim}_members
-        if [[ ! -v members ]]; then
-          dims_missing_members+="$dim "
-        fi
-        
       done
 
     done
@@ -3246,6 +3238,10 @@ make_derive_cache() {
         dim_members=dim_${dim}_members \
         dim_derive_tables=dim_${dim}_derive_tables \
 
+      if [[ ! -v dim_members ]]; then
+        calc_missing_members || fail
+      fi
+
       if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
         member_type=static
       else
@@ -3308,7 +3304,7 @@ build_refine_tables() {
         dts=dim_${dim}_derive_tables \
         members=dim_${dim}_members \
 
-      if [[ -v dts ]]; then
+      if [[ -v dts && -v members ]]; then
 
         refine_tables=()
         local member_count=${#members[*]}
@@ -3334,53 +3330,45 @@ build_refine_tables() {
   handle_return
 }
 
+# inputs:
+#   dim
 calc_missing_members() {
   begin_function
 
-    local dim members_array dim
-    begin_for dim in $dims_missing_members; doo
-      log_debug "Calculating missing dim members for $dim"
+    local members_array 
+    log_debug "Calculating missing dim members for $dim"
 
-      local -n dts=dim_${dim}_derive_tables \
-        member_type=dim_${dim}_member_type \
+    local -n dts=dim_${dim}_derive_tables
 
-      local -A found_members=()
+    local -A found_members=()
 
-      local dt v
-      if [[ -v dts ]]; then
+    local dt v
+    if [[ -v dts ]]; then
 
-        local -n members=dim_${dim}_members
-        members=()
+      local -n members=dim_${dim}_members
+      members=()
 
-        for dt in $dts; do
-          local -n index=derive_table_${dt}_index_$dim
-          for v in ${!index[*]}; do
-            found_members[$v]=1
-          done
+      for dt in $dts; do
+        local -n index=derive_table_${dt}_index_$dim
+        for v in ${!index[*]}; do
+          found_members[$v]=1
         done
-        members=( "${!found_members[@]}" )
-        sort_array members
+      done
+      members=( "${!found_members[@]}" )
+      sort_array members
 
-        log_debug "Found ${#found_members[*]} members for $dim"
+      log_debug "Found ${#found_members[*]} members for $dim"
 
-        if [[ ! "${found_members[*]}" ]]; then
-          log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
-          fail1
-        fi
-
-        member_type=static
-        write_vars_to_context dim_${dim}_members || fail
-
-      else
-        log_debug "No derive tables found for $dim, and no explicit members are defined, so it must be a dynamic dim"
-        member_type=dynamic
+      if [[ ! "${found_members[*]}" ]]; then
+        log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
+        fail1
       fi
 
-      write_vars_to_context dim_${dim}_member_type || fail
+      write_vars_to_context dim_${dim}_members || fail
 
-    end_for
-
-    dims_missing_members=
+    else
+      log_debug "No derive tables found for $dim, and no explicit members are defined, so it must be a dynamic dim"
+    fi
 
   end_function
   handle_return
