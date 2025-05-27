@@ -1402,8 +1402,107 @@ write_coordinates_to_shell_file() {
   handle_return
 }
 
+display_coordinates_veritcal() {
+  begin_function
+    for (( row_index = 0; row_index < c_rows; row_index++ )); do
+      echo "$hbar_minus" >&$fd_original_err
+      echo "ROW $row_index" >&$fd_original_err
+      for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+        (( data_offset = row_index * c_fields_count + field_index ))
+        field=${c_fields[$field_index]}
+        if [[ " $skip_dims " != *" $field "* ]]; then
+          value=${c_data[$data_offset]}
+          echo "${field^^}: $value" >&$fd_original_err
+        fi
+      done
+    done
+  end_function
+  handle_return
+}
+
+display_coordinates_horizontal() {
+  begin_function
+    local line=
+
+    for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+      field=${c_fields[$field_index]}
+      if [[ " $skip_dims " != *" $field "* ]]; then
+        apad line $field ${field^^}
+      fi
+    done
+    echo "$line" >$fd_original_err || fail
+
+    for (( row_index = 0; row_index < c_rows; row_index++ )); do
+      line=
+      for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+        (( data_offset = row_index * c_fields_count + field_index ))
+        field=${c_fields[$field_index]}
+        if [[ " $skip_dims " != *" $field "* ]]; then
+          value=${c_data[$data_offset]}
+          apad line $field "$value"
+        fi
+      done
+
+      echo "$line" >$fd_original_err || fail
+    done
+  end_function
+  handle_return
+}
+
+# displays $coord_type coords to the user, skipping dims specified in skip_dims
+# inputs:
+#   $1          full path of file to write to
+#   skip_dims   (optional) dims to skip
+display_coordinates() {
+  local coord_type=$coord_type skip_dims=${skip_dims:-}
+  begin_function
+
+    local value field_index data_offset row_index field
+
+    local -n c_data=${coord_type}_coordinate_data \
+      c_fields=${coord_type}_coordinate_fields \
+
+    local c_fields_count=${#c_fields[*]} \
+      c_count=${#c_data[*]} \
+
+    local c_rows=$(( c_count / c_fields_count ))
+
+    if [[ ! "{c_fields:-}" || c_rows -eq 0 ]]; then
+      log_fatal "No $coord_type coordinates found"
+      fail1
+    fi
+
+    apad_clear
+    for (( row_index = 0; row_index < c_rows; row_index++ )); do
+      line=
+      for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+        (( data_offset = row_index * c_fields_count + field_index ))
+        field=${c_fields[$field_index]}
+        if [[ " $skip_dims " != *" $field "* ]]; then
+          value=${c_data[$data_offset]}
+          apad_calc $field "$value"
+        fi
+      done
+    done
+
+    local max_row_width=0 col_size
+    for col_size in ${apad_size[*]}; do
+      (( max_row_width += col_size ))
+    done
+
+    if (( max_row_width > ${COLUMNS:-120} )) \
+    || [[ "${out_form:-${form:-}}" == l* ]]; then
+      display_coordinates_veritcal || fail
+    else
+      display_coordinates_horizontal || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 # writes $coord_type coords to a file, skipping dims specified in skip_dims
-# also assumes that there is 1 or more sub coord rows
+# also assumes that there is 1 or more coord rows
 # inputs:
 #   $1          full path of file to write to
 #   skip_dims   (optional) dims to skip
