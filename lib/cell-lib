@@ -2229,6 +2229,7 @@ attempt_derive() {
 
   log_show_vars='dim from_dim'
   begin_function
+
     local -n derived_from=dim_${dim}_derived_from
     values=()
     can_derive=f
@@ -2249,9 +2250,12 @@ attempt_derive() {
     if [[ ! "${values:-}" ]]; then
       log_debug "Derive of $dim failed"
       skip_dims+="$dim "
-    else
+    elif (( ${#values[*]} == 1 )); then
       value_found=t
       log_debug "Derive of $dim successful: ${values[*]:0:30}"
+    else
+      value_found=f
+      log_debug "Derive of $dim found too many values: ${#values[*]}, not accepting result"
     fi
 
   end_function
@@ -3292,17 +3296,19 @@ load_derive_caches() {
     local lib_dt_path=$work_path/.lib/derive
 
     if [[ -d $lib_dt_path ]]; then
+
       local dt files links link type is_generated \
         cache_path=$work_path/.lib/derive-cache \
         real_path real_path_parent \
 
       derive_caches+="$cache_path "
 
-      if [[ -f $cache_path ]]; then
-        source $cache_path || fail
-      else # build the cache
-        make_derive_cache || fail
+      if [[ ! -f $cache_path ]]; then
+        fork make_derive_cache || fail
       fi
+
+      source $cache_path || fail
+
     fi
 
   end_function
@@ -5081,11 +5087,12 @@ load_dim_caches() {
 
       dim_caches+="$cache_path "
 
-      if [[ -f $cache_path ]]; then
-        source $cache_path || fail
-      else # build the cache
-        make_dim_cache || fail
+      if [[ ! -f $cache_path ]]; then
+        fork make_dim_cache || fail
       fi
+
+      source $cache_path || fail
+
     fi
 
   end_function
