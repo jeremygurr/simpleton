@@ -119,8 +119,10 @@ write_vars_to_context() {
     local var val quoted_val
     for var in $vars_to_write; do
       local -n val=$var
+      local is_set=f
       if is_set val; then
         set_to_string val quoted_val
+        is_set=t
       elif is_array val; then
         array_to_string val quoted_val
       elif [[ $ignore_missing == t && ! -v $var ]]; then
@@ -130,6 +132,9 @@ write_vars_to_context() {
         shell_quote_var quoted_val
       fi
       local content="$var=$quoted_val"
+      if [[ $is_set == t ]]; then
+        content="declare -Ag $content"
+      fi
       write_to_context var content || fail
     done; maybe_break
   end_function
@@ -4457,6 +4462,7 @@ seed_coordinates_handle_row() {
     local is_valid seed_field
     check_table_row
     if [[ $is_valid == t ]]; then
+
       for field_index in ${!seed_fields[*]}; do
         seed_field=${seed_fields[$field_index]}
         if [[ -v all_dims[$seed_field] ]]; then
@@ -4467,7 +4473,13 @@ seed_coordinates_handle_row() {
       done
 
       if [[ $fill_in_the_blanks == t ]]; then
-        local check_dims=${!all_dims[*]} unknown_dims= dim validated_dims=
+        local check_dims="${trunk_dims_expanded[*]} 
+          ${sub_dims_expanded[*]} 
+          ${control_props_expanded[*]} 
+          ${data_props_expanded[*]} 
+          ${related_dims_expanded[*]}" \
+          unknown_dims= dim validated_dims= \
+
         needs_validation=f \
         calc_coordinates_next_dim || fail
       else
