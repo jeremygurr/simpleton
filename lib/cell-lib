@@ -762,6 +762,7 @@ tab_get_derive_from() {
       other_index_card \
       join \
       join2 \
+      is_key \
 
     (( row_count = data_count / field_count ))
 
@@ -776,39 +777,24 @@ tab_get_derive_from() {
       index_card=${#index[*]}
       if (( index_card == row_count )); then
         join=one-
+        is_key=t
       else
         join=many-
+        is_key=f
       fi
 
       other_fields="${derive_table_fields[*]}"
       remove_word_from_string other_fields $field
 
-      while [[ "$other_fields" ]]; do
-
-        # find which dim has the highest cardinality
-        local highest_card=0 highest_dim
-        for other_field in $other_fields; do
-          local -n other_index=derive_table_${name}_index_$other_field
-          other_index_card=${#other_index[*]}
-          if (( other_index_card > highest_card )); then
-            highest_card=$other_index_card
-            highest_dim=$other_field
-          fi
-        done
-
-        local -n other_index=derive_table_${name}_index_${highest_dim}
-
-        if (( highest_card == row_count )); then
+      join2=to-many
+      for other_field in $other_fields; do
+        if [[ " $key_fields " == *" $other_field "* ]]; then
           join2=to-one
-        else
-          join2=to-many
-        fi 
-
-        derive_from+=( "$name.tab $join$join2 $highest_dim" )
-
-        remove_word_from_string other_fields $highest_dim
-
+          break
+        fi
       done
+
+      derive_from+=( "$name.tab $join$join2 $other_fields" )
 
     done
 
@@ -2173,7 +2159,7 @@ fetch_column_from_table() {
 #   values
 #   can_derive
 attempt_derive2() {
-  begin_function_lo
+  begin_function
 
     local one_row_complete=f \
       derived_from_row derived_from_dim \
@@ -2879,7 +2865,7 @@ build_dim_info_single() {
 }
 
 dim_set_in_parameter() {
-  local long_dim=$1 dim=$2
+  local long_dim=$1 dim=${2:-$1}
   local -n pdim=p_$dim
 
   if [[ -v pdim && ${dim_shorts[$dim]} == $long_dim ]]; then
@@ -2911,16 +2897,15 @@ build_context_support_dims_find_related_handle_dim() {
     # perplexing why we need this here, but after too much debugging, this was the simplest solution
     unfail
 
-    if dim_set_in_parameter $dim $dim; then
-      #log_debug "Support dim found: $dim"
-      if [[ $type == *-to-one ]]; then
-        support_dims_one_expanded+=( $dim )
-      fi
-      support_dims_expanded+=( $dim )
-    fi
-
     local -n dim_derived_from=dim_${dim}_derived_from
+    # recursive
     build_context_support_dims_find_related || fail
+
+    if [[ ! -v shortest_path[$dim] 
+       || in_process_count -lt shortest_path_count[$dim] ]]; then
+       shortest_path_count[$dim]=$in_process_count
+       shortest_path[$dim]=$in_process
+    fi
 
   end_function
   handle_return
@@ -2930,12 +2915,13 @@ build_context_support_dims_find_related_handle_dim() {
 #   dim
 #   dim_derived_from
 build_context_support_dims_find_related() {
-  local -I in_process
+  local -I in_process in_process_count
   local log_show_vars=dim
 
   begin_function
 
     in_process+="$dim "
+    (( in_process_count++ ))
 
     local row object type
     begin_for row in "${dim_derived_from[@]}"; doo
@@ -2965,7 +2951,10 @@ build_context_support_dims() {
 
     local dim dim_type=trunk_dims support_dim_depth=0 down_dim
 
-    local -A related_dims_set=()
+    local -A related_dims_set=() \
+      support_dim_set=() \
+      shortest_path=() \
+      shortest_path_count=() \
 
     begin_for dim in ${trunk_dims_expanded[*]}; doo
       local -n dim_derived_from=dim_${dim}_derived_from
@@ -2973,19 +2962,36 @@ build_context_support_dims() {
         log_debug "Finding related dims of $dim"
         local current_depth=0
         in_process= \
+        in_process_count=0 \
         build_context_support_dims_find_related || fail
       fi
     end_for
 
-    sort_array support_dims_expanded
-    sort_array support_dims_one_expanded
     related_dims_expanded=( ${!related_dims_set[*]} )
     sort_array related_dims_expanded
 
+    begin_for related_dim in ${related_dims_expanded[*]}; doo
+      
+      if dim_set_in_parameter $related_dim; then
+        #  not sure if this is needed
+        #if [[ $type == *-to-one ]]; then
+        #  support_dims_one_expanded+=( $dim )
+        #fi
+        local d
+        for d in ${shortest_path[$related_dim]}; do
+          support_dims_set[$dim]=1
+        done
+      fi
+
+    end_for
+
+    support_dims_expanded=( ${!support_dims_set[*]} )
+    sort_array support_dims_expanded
+    #sort_array support_dims_one_expanded
     if [[ "${support_dims_expanded:-}" ]]; then
       log_debug "Found support_dims: ${support_dims_expanded[*]}"
     fi
-    write_vars_to_context related_dims_expanded support_dims_expanded support_dims_one_expanded || fail
+    write_vars_to_context related_dims_expanded support_dims_expanded || fail
 
   end_function
   handle_return
@@ -3757,7 +3763,7 @@ setup_coord_fields() {
         coordinate_fields=( ${sub_dims_expanded[*]:-} )
       ;;
       tree)
-        coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_one_expanded[*]:-} ${sub_dims_expanded[*]:-} )
+        coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} )
         # don't need to do deep derive if we are already include support dims, which come
         #   from a deep derive analysis
         derive_deep=f
