@@ -2963,7 +2963,7 @@ build_context_support_dims() {
     local dim dim_type=trunk_dims support_dim_depth=0 down_dim
 
     local -A related_dims_set=() \
-      support_dim_set=() \
+      support_dims_set=() \
       shortest_path=() \
       shortest_path_count=() \
 
@@ -4496,6 +4496,64 @@ calc_coordinates_next_dim_member() {
   handle_return
 }
 
+narrow_dim_fun() {
+  begin_function
+    local derived_from_dim all_dims_are_set=t
+    local f_name=derive_function_$dim
+    local action=check values=()
+    $f_name || fail
+    if [[ ${values:-f} == t ]]; then
+      action=derive
+      $f_name || fail
+      local -A new_values=()
+      array_to_set values new_values
+      intersect new_values value_set
+    fi
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1   dim
+#   $2   name of array variable containing members
+# outputs:
+#   ($2) array variable
+narrow_dim() {
+  local dim=$1 member_var=$2
+  local -n result=$member_var
+  begin_function
+    local -n derived_from=dim_${dim}_derived_from
+    local row type target row_array 
+
+    local -A value_set=()
+    array_to_set result value_set
+
+    begin_for derived_from_row in "${derived_from[@]}"; doo
+      row_array=( $derived_from_row )
+      target=$row_array
+      type=${target##*.}
+      case $type in
+        fun)
+          narrow_dim_fun || fail
+        ;;
+        tab)
+          local derive_table=${target%.*}
+          extract_from_derive_table || fail
+        ;;
+        *)
+          log_fatal "Unknown derived_from type: $type"
+          fail1
+        ;;
+      esac
+    end_for
+
+    set_to_array value_set result
+    sort_array result
+
+  end_function
+  handle_return
+}
+
 # calling this will produce and end at least one coordinate row 
 # inputs:
 #   check_dims (may be empty)
@@ -4514,7 +4572,6 @@ calc_coordinates_next_dim() {
       unknown_dims=${unknown_dims:-} \
       check_dims=${check_dims:-} \
       resolved_dims=${resolved_dims:-} \
-      needs_validation=${needs_validation:-t} \
 
     dim=${check_dims%% *}
     check_dims=${check_dims##$dim*( )}
@@ -4537,20 +4594,35 @@ calc_coordinates_next_dim() {
 
       if [[ "${member:-}" || "${members:-}" ]]; then
         
-        local m
-        local -n dim_type=dim_${dim}_type
+        local m ms conflict
+        #local -n dim_type=dim_${dim}_type
 
         resolved_dims+=" $dim"
         progress_bar_next
 
         if [[ "${member:-}" ]]; then
-          m=$member
+          ms=( $member )
+          narrow_dim $dim ms || fail
+          if [[ ! "$ms" ]]; then
+            log_fatal "$dim = $member conflicts with $conflict"
+            fail1
+          fi
+
+          m=$ms
         else
-          local ms=( "${members[@]}" )
+          ms=( "${members[@]}" )
+          narrow_dim $dim ms || fail
+
           if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
             log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
             fail1
           fi
+
+          if [[ ! "$ms" ]]; then
+            log_fatal "$dim has no matching values that align with $conflict"
+            fail1
+          fi
+
         fi
 
         local -n key_tables=dim_${dim}_key_tables
