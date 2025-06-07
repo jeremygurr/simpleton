@@ -487,7 +487,7 @@ forge_add_roots() {
 }
 
 forge() {
-  local colorize=${colorize:-t}
+  local colorize=${colorize:-t} original_pwd=$PWD
   begin_function
 
     walk_init || fail
@@ -797,6 +797,7 @@ forge() {
     fi
 
   end_function
+  cd $original_pwd
   handle_return
 }
 
