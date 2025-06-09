@@ -2083,32 +2083,56 @@ extract_from_derive_table() {
       row_index \
       output_dim_index \
 
-    local row_count=$(( data_count / field_count ))
+    local -n index=derive_table_${derive_table}_index_${dim} \
+      dim_members=dim_${dim}_members \
+      member_type=dim_${dim}_member_type \
 
-    local -A matching_rows=() new_value_set=()
-    matching_rows[all]=1
+    local row_count=$(( data_count / field_count )) \
+      ok_to_proceed=t \
 
-    can_derive=t
-    extract_from_derive_table_find_row_indexes
-    maybe_break
-
-    local -n index=derive_table_${derive_table}_index_${dim}
-    if [[ -v matching_rows[all] ]]; then
-      add_to_set index new_value_set
-    else
-      for value in "${!index[@]}"; do
-        local row_indexes=${index[$value]}
-        for row_index in $row_indexes; do
-          if [[ -v matching_rows[$row_index] ]]; then
-            new_value_set[$value]=1
+    if [[ $member_type == static ]]; then
+      local member_count=${#dim_members[*]}
+      if (( ${#index[*]} != member_count )); then
+        local column_index
+        for (( column_index = 0; column_index < field_count; column_index++ )); do
+          field=${derive_fields[$column_index]}
+          if [[ $field != $dim ]]; then
+            local -n ddim=d_$field
+            if [[ ! "${ddim:-}" ]]; then
+              ok_to_proceed=f
+              break
+            fi
           fi
         done
-      done
+      fi
     fi
 
-    rows_matched=${#new_value_set[*]}
+    if [[ $ok_to_proceed == t ]]; then
+      local -A matching_rows=() new_value_set=()
+      matching_rows[all]=1
 
-    intersect_with_all value_set new_value_set value_set
+      can_derive=t
+      extract_from_derive_table_find_row_indexes
+      maybe_break
+
+      if [[ -v matching_rows[all] ]]; then
+        add_to_set index new_value_set
+      else
+        for value in "${!index[@]}"; do
+          local row_indexes=${index[$value]}
+          for row_index in $row_indexes; do
+            if [[ -v matching_rows[$row_index] ]]; then
+              new_value_set[$value]=1
+            fi
+          done
+        done
+      fi
+
+      rows_matched=${#new_value_set[*]}
+
+      intersect_with_all value_set new_value_set value_set
+    fi
+
 
     debug_return_vars=value_set
   end_function
