@@ -2092,25 +2092,25 @@ extract_from_derive_table() {
     extract_from_derive_table_find_row_indexes
     maybe_break
 
+    local -n index=derive_table_${derive_table}_index_${dim}
     if [[ -v matching_rows[all] ]]; then
-      for (( row_index = 0; row_index < row_count; row_index++ )); do
-        (( data_index = row_index * field_count + output_dim_index ))
-        value=${derive_data[$data_index]}
-        new_value_set[$value]=1
-        (( rows_matched++ )) || true
-      done
+      add_to_set index new_value_set
     else
-      for row_index in ${!matching_rows[*]}; do
-        (( data_index = row_index * field_count + output_dim_index ))
-        value=${derive_data[$data_index]}
-        new_value_set[$value]=1
-        (( rows_matched++ )) || true
+      for value in "${!index[@]}"; do
+        local row_indexes=${index[$value]}
+        for row_index in $row_indexes; do
+          if [[ -v matching_rows[$row_index] ]]; then
+            new_value_set[$value]=1
+          fi
+        done
       done
     fi
 
+    rows_matched=${#new_value_set[*]}
+
     intersect_with_all value_set new_value_set value_set
 
-    debug_return_vars=values
+    debug_return_vars=value_set
   end_function
   handle_return
 }
@@ -4197,23 +4197,7 @@ calc_coordinates_next_unknown_dim_found() {
     fi
 
     if [[ $needs_narrowing == t ]] && (( ${#ms[*]} > 5 )); then
-
-      local derive_table 
-      local -A value_set
-      array_to_set ms value_set
-
-      log_debug "Narrowing down possibilities"
-
-      local -n dim_refine_tables=dim_${dim}_refine_tables
-      begin_for derive_table in ${dim_refine_tables[*]}; doo
-        extract_from_derive_table || fail
-        log_show_vars=dim
-      end_for
-
-      if (( ${#value_set[*]} < ${#ms[*]} )); then
-        set_to_array value_set ms
-      fi
-
+      narrow_dim $dim ms || fail
     fi
 
     if [[ "${ms:-}" ]]; then
@@ -4540,8 +4524,11 @@ narrow_dim() {
   local dim=$1 member_var=$2
   local -n result=$member_var
   begin_function
+    log_debug "Narrowing down $dim"
     local -n derived_from=dim_${dim}_derived_from
-    local row type target row_array 
+
+    local row type target row_array \
+      original_count=${#result[*]} new_count \
 
     local -A value_set=()
     array_to_set result value_set
@@ -4568,6 +4555,10 @@ narrow_dim() {
     set_to_array value_set result
     if (( ${#result} > 1 )); then
       sort_array result
+    fi
+    new_count=${#result[*]}
+    if [[ $new_count != $original_count ]]; then
+      log_debug "Narrowed down $dim from $original_count to $new_count"
     fi
 
   end_function
