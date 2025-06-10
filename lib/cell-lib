@@ -1949,18 +1949,18 @@ extract_from_derive_table_find_row_indexes() {
         if [[ -v dt_index[$ddim] ]]; then
           row_indexes=( ${dt_index[$ddim]} )
           array_to_set row_indexes new_matching_rows
+        else
+          # table is incomplete for this dim, meaning
+          # it doesn't contain all possible values for it
+          # so we can't use this table for deriving
+          complete_table=f
+          log_debug "No rows exist in $derive_table for $field = $ddim"
+          break
         fi
 
         if [[ -v dt_index[all] ]]; then
           row_indexes=( ${dt_index[all]} )
           array_to_set row_indexes new_matching_rows
-        fi
-
-        if (( ${#new_matching_rows[*]} == 0 )); then
-          # Accoridng to the index, no values exist in this table which match the known dim value
-          log_debug "No rows exist in $derive_table for $dim = $ddim"
-          value_set=()
-          abort
         fi
 
         intersect_with_all matching_rows new_matching_rows matching_rows
@@ -2088,26 +2088,26 @@ extract_from_derive_table() {
       member_type=dim_${dim}_member_type \
 
     local row_count=$(( data_count / field_count )) \
-      ok_to_proceed=t \
+      complete_table=t \
 
-    if [[ $member_type == static ]]; then
-      local member_count=${#dim_members[*]}
-      if (( ${#index[*]} != member_count )); then
-        local column_index
-        for (( column_index = 0; column_index < field_count; column_index++ )); do
-          field=${derive_fields[$column_index]}
-          if [[ $field != $dim ]]; then
-            local -n ddim=d_$field
-            if [[ ! "${ddim:-}" ]]; then
-              ok_to_proceed=f
-              break
-            fi
-          fi
-        done
-      fi
-    fi
+    # if [[ $member_type == static ]]; then
+    #   local member_count=${#dim_members[*]}
+    #   if (( ${#index[*]} != member_count )); then
+    #     local column_index
+    #     for (( column_index = 0; column_index < field_count; column_index++ )); do
+    #       field=${derive_fields[$column_index]}
+    #       if [[ $field != $dim ]]; then
+    #         local -n ddim=d_$field
+    #         if [[ ! "${ddim:-}" ]]; then
+    #           ok_to_proceed=f
+    #           break
+    #         fi
+    #       fi
+    #     done
+    #   fi
+    # fi
 
-    if [[ $ok_to_proceed == t ]]; then
+    #if [[ $ok_to_proceed == t ]]; then
       local -A matching_rows=() new_value_set=()
       matching_rows[all]=1
 
@@ -2115,24 +2115,25 @@ extract_from_derive_table() {
       extract_from_derive_table_find_row_indexes
       maybe_break
 
-      if [[ -v matching_rows[all] ]]; then
-        add_to_set index new_value_set
-      else
-        for value in "${!index[@]}"; do
-          local row_indexes=${index[$value]}
-          for row_index in $row_indexes; do
-            if [[ -v matching_rows[$row_index] ]]; then
-              new_value_set[$value]=1
-            fi
+      if [[ $complete_table == t ]]; then
+        if [[ -v matching_rows[all] ]]; then
+          add_to_set index new_value_set
+        else
+          for value in "${!index[@]}"; do
+            local row_indexes=${index[$value]}
+            for row_index in $row_indexes; do
+              if [[ -v matching_rows[$row_index] ]]; then
+                new_value_set[$value]=1
+              fi
+            done
           done
-        done
+        fi
+
+        rows_matched=${#new_value_set[*]}
+
+        intersect_with_all value_set new_value_set value_set
       fi
-
-      rows_matched=${#new_value_set[*]}
-
-      intersect_with_all value_set new_value_set value_set
-    fi
-
+    #fi
 
     debug_return_vars=value_set
   end_function
@@ -4220,7 +4221,7 @@ calc_coordinates_next_unknown_dim_found() {
       ms=( "$ddim" )
     fi
 
-    if [[ $needs_narrowing == t ]] && (( ${#ms[*]} > 5 )); then
+    if [[ $needs_narrowing == t ]] && (( ${#ms[*]} > 0 )); then
       narrow_dim $dim ms || fail
     fi
 
@@ -4246,12 +4247,13 @@ calc_coordinates_next_unknown_dim_found() {
         fail1
       fi
 
+      # not validating now
       # don't need to validate if in derive phase, since it's already proven valid by the derive
       #   process itself
-      local needs_validation=f
-      if [[ $phase == default ]]; then
-        needs_validation=t
-      fi
+      #local needs_validation=f
+      #if [[ $phase == default ]]; then
+      #  needs_validation=t
+      #fi
 
       # recursive
       phase=unknown \
@@ -4289,6 +4291,8 @@ calc_coordinates_next_unknown_dim() {
       local -A derive_tried=()
       for phase in derive default; do
         for dim in $unknown_dims; do
+
+          needs_narrowing=t
 
           local -n dim_type=${dim}_dim_type
           get_plural $dim dims
@@ -4574,6 +4578,9 @@ narrow_dim() {
           fail1
         ;;
       esac
+      if (( ${#value_set[*]} == 0 )); then
+        break
+      fi
     end_for
 
     set_to_array value_set result
