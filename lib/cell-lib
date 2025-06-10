@@ -2058,8 +2058,7 @@ extract_from_derive_table_check_row() {
 #   dim
 # outputs:
 #   value_set               the var out_set points to will contain a set of all matches
-#   can_derive
-#   rows_matched
+#   derive_found
 extract_from_derive_table() {
   local derive_table=$derive_table
 
@@ -2111,7 +2110,6 @@ extract_from_derive_table() {
       local -A matching_rows=() new_value_set=()
       matching_rows[all]=1
 
-      can_derive=t
       extract_from_derive_table_find_row_indexes
       maybe_break
 
@@ -2172,144 +2170,70 @@ fetch_column_from_table() {
 
 }
 
-# inputs:
-#   dim
-#   from_dim
-#   value_found
-#   deep
-# outputs:
-#   value_found
-#   values
-#   can_derive
-attempt_derive2() {
+narrow_dim_fun() {
   begin_function
+    local derived_from_dim all_dims_are_set=t
+    local f_name=derive_function_$dim
+    local action=check values=()
+    $f_name || fail
+    if [[ ${values:-f} == t ]]; then
+      action=derive
+      $f_name || fail
+      local -A new_values=()
+      array_to_set values new_values
+      intersect new_values value_set
+    fi
+  end_function
+  handle_return
+}
 
-    local one_row_complete=f \
-      derived_from_row derived_from_dim \
-      complete_row derived_from_incomplete=f \
-      maybe_resolved
+# inputs:
+#   $1   dim
+#   $2   name of array variable containing members
+# outputs:
+#   ($2) array variable
+narrow_dim() {
+  local dim=$dim result_var=$result_var
+  local -n result=$result_var
+  begin_function
+    log_debug "Narrowing down $dim"
+    local -n derived_from=dim_${dim}_derived_from
 
-    for derived_from_row in "${derived_from[@]}"; do
-      if [[ ! "$from_dim" || " $derived_from_row " == *" $from_dim "* ]]; then
+    local row type target row_array \
+      original_count=${#result[*]} new_count \
 
-        complete_row=t
-        local row_array=( $derived_from_row ) i
+    local -A value_set=()
+    array_to_set result value_set
 
-        maybe_resolved=
-        for (( i = 2; i < ${#row_array[*]}; i++ )); do
-          derived_from_dim=${row_array[$i]}
-          maybe_resolved+="$derived_from_dim "
-
-          if [[ " $deriving " == *" $derived_from_dim "* ]]; then
-            complete_row=f
-            break
-          fi
-
-          local -n derive_from_dim_value=d_$derived_from_dim
-          if [[ ! "${derive_from_dim_value:-}" ]]; then
-
-            if [[ $derive_deep == t && ! -v derive_tried[$dim] ]]; then
-
-              # recursive
-              from_dim= \
-              dim=$derived_from_dim \
-              attempt_derive $derived_from_dim || fail
-
-              if [[ $value_found == f ]]; then
-                complete_row=f
-                break
-              fi
-
-              if (( "${#values[*]}" > 1 )); then
-                local plural
-                get_plural $derived_from_dim
-                local -n ddims=d_$plural
-                ddims=( "${values[@]}" )
-              else
-                derive_from_dim_value=$values
-              fi
-
-              values=()
-              value_found=f
-
-            else
-
-              complete_row=f
-              break
-
-            fi
-
-          fi
-        done; maybe_break
-
-        if [[ $complete_row == t ]];then
-
-          log_debug "Attempting to derive $dim from ${row_array[*]:2} using ${row_array[0]} (${row_array[1]})"
-
-          can_derive=t
-          one_row_complete=t
-          resolved_dependencies+=( $maybe_resolved )
-
-          local action=${row_array[0]}
-
-          if [[ ! "$action" =~ ^[a-zA-Z0-9_-]+\.(tab|fun)$ ]]; then
-            log_fatal "Invalid action format for derived_from of dim $dim. First field of a derived_from must be the derive table or function to execute. For example: 'ez.tab' or 'derive_ez.fun'"
-            fail1
-          fi
-
-          local action_type=${action##*.} \
-            action_name=${action%.*} \
-
-          if [[ ! "$action_name" || "$action_name" == "$action" ]]; then
-            log_fatal "Invalid action name: $action_name found in derived_from of dim $dim"
-            fail1
-          fi
-
-          case $action_type in
-            tab)
-
-              local -A value_set
-              value_set[all]=1
-              local rows_matched
-              derive_table=$action_name \
-              extract_from_derive_table || fail
-
-              if (( rows_matched == 0 )); then
-                #log_fatal "Internal error: Derive of $dim from table ($action_name) didn't produce any results when it was expected. "
-                #fail1
-
-                # We can skip this row
-                log_debug "Derive of $dim from table ($action_name) didn't produce any results"
-              else
-                if [[ -v value_set[all] ]]; then
-                  value=all expand_dim || fail
-                else
-                  set_to_array value_set values
-                fi
-              fi
-
-            ;;
-            fun)
-              function_name=$action_name \
-              attempt_derive_from_function || fail
-            ;;
-            *)
-              log_fatal "Unknown derive action: $action_type"
-              fail1
-            ;;
-          esac
-
-          if [[ "${values:-}" ]]; then
-            break
-          fi
-
-        fi
-
+    begin_for derived_from_row in "${derived_from[@]}"; doo
+      row_array=( $derived_from_row )
+      target=$row_array
+      type=${target##*.}
+      case $type in
+        fun)
+          narrow_dim_fun || fail
+        ;;
+        tab)
+          local derive_table=${target%.*}
+          extract_from_derive_table || fail
+        ;;
+        *)
+          log_fatal "Unknown derived_from type: $type"
+          fail1
+        ;;
+      esac
+      if (( ${#value_set[*]} == 0 )); then
+        break
       fi
-    done
+    end_for
 
-    if [[ $one_row_complete == f ]]; then
-      derived_from_incomplete=t
+    set_to_array value_set result
+    if (( ${#result} > 1 )); then
+      sort_array result
+    fi
+    new_count=${#result[*]}
+    if [[ $new_count != $original_count ]]; then
+      log_debug "Narrowed down $dim from $original_count to $new_count"
     fi
 
   end_function
@@ -2325,8 +2249,7 @@ attempt_derive2() {
 #                   dim multiple times.
 # output:
 #   values          array of members
-#   can_derive      whether a derive function or derive table exists for the given dim
-#   value_found
+#   derive_found    whether a derive function or derive table exists for the given dim
 attempt_derive() {
 
   local from_dim=${from_dim:-} \
@@ -2339,31 +2262,32 @@ attempt_derive() {
   begin_function
 
     local -n derived_from=dim_${dim}_derived_from
-    values=()
-    can_derive=f
+    values=( all )
     value_found=${value_found:-f}
-    derive_tried[$dim]=1
 
-    if [[ " $deriving " == *" $dim "* || " $skip_dims " == *" $dim "* ]]; then
+    if [[ " $deriving " == *" $dim "* || -v derive_tried[$dim] ]]; then
       abort
     fi
     deriving+="$dim "
-
-    local resolved_dependencies=()
+    derive_tried[$dim]=1
 
     if [[ "${derived_from:-}" ]]; then
-      attempt_derive2 || fail
+      result_var=values \
+      narrow_dim || fail
+      if [[ $values == all ]]; then
+        values=()
+      fi
     fi
 
     if [[ ! "${values:-}" ]]; then
       log_debug "Derive of $dim failed"
-      skip_dims+="$dim "
-    elif (( ${#values[*]} == 1 )); then
-      value_found=t
-      log_debug "Derive of $dim successful: ${values[*]:0:30}"
+#    elif (( ${#values[*]} == 1 )); then
+#      value_found=t
+#      log_debug "Derive of $dim successful: ${values[*]:0:30}"
     else
-      value_found=f
-      log_debug "Derive of $dim found too many values: ${#values[*]}, not accepting result"
+#      value_found=f
+#      log_debug "Derive of $dim found too many values: ${#values[*]}, not accepting result"
+      log_debug "Derive of $dim successful: ${values[*]:0:30}"
     fi
 
   end_function
@@ -3919,22 +3843,6 @@ load_implicit_dims() {
   handle_return
 }
 
-attempt_derive_check_derive_table() {
-  local resolved_row resolved_dim
-  for resolved_row in "${resolved_dependencies[@]}"; do
-    found=t
-    for resolved_dim in $resolved_row; do
-      if [[ " ${fields[*]} " != *" $resolved_dim "* ]]; then
-        found=f
-        break
-      fi
-    done
-    if [[ $found == t ]]; then
-      break
-    fi
-  done
-}
-
 # inputs
 #   dim    dim to output
 #   var    var name containing value of dim
@@ -3953,7 +3861,6 @@ attempt_derive_from_function() {
   local function_name=$function_name
   if function_exists dim_${dim}_$function_name; then
     # This should be set to t in the derive function if requirements are met
-    can_derive=f
 
     dim_${dim}_$function_name || return 1
     if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
@@ -4222,7 +4129,8 @@ calc_coordinates_next_unknown_dim_found() {
     fi
 
     if [[ $needs_narrowing == t ]] && (( ${#ms[*]} > 0 )); then
-      narrow_dim $dim ms || fail
+      result_var=ms \
+      narrow_dim || fail
     fi
 
     if [[ "${ms:-}" ]]; then
@@ -4304,7 +4212,6 @@ calc_coordinates_next_unknown_dim() {
           local values=() already_expanded=f needs_narrowing=t value_found=f
           if [[ $phase == derive ]]; then
             deriving= \
-            skip_dims= \
             attempt_derive || fail
             needs_narrowing=f
           elif [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
@@ -4342,81 +4249,79 @@ calc_coordinates_next_unknown_dim() {
   handle_return
 }
 
+# not used now
 # inputs:
 #   dim
-calc_coords_validate_member() {
-  local member=$1 log_show_vars='dim member'
-  begin_function
-
-    is_valid=t
-    conflicting_values=()
-
-    log_debug "Validating $dim = $member"
-
-    # all needs to be permitted here in the case of a dim that doesn't have explicit members
-    #   but where the user needs to communicate that all are acceptable based on derivation of others?
-    if [[ "$member" == all ]]; then
-      log_debug "Dim $dim is all, so it's valid"
-      abort
-    fi
-
-    if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
-      log_debug "Dim $dim is optional and missing, so it's valid"
-      abort
-    fi
-
-    local values=() can_derive value_found=f
-    local -A derive_tried=()
-    deriving= \
-    skip_dims= \
-    attempt_derive || fail
-
-    if [[ $can_derive == t ]]; then
-      if [[ ! "${values[0]:-}" ]]; then
-        is_valid=f
-      elif ! array_contains values "$member" && ! array_contains values all; then
-        conflicting_values=( "${values[@]}" )
-        is_valid=f
-      fi
-      log_debug "Dim $dim is not valid because it couldn't be derived from existing dims"
-      abort
-    fi
-
-    #  should have already been set
-    #eval "local d_$dim=\$member"
-    local rd
-    for rd in $resolved_dims; do
-      if [[ $rd == $dim ]]; then
-        continue
-      fi
-      local value_found=f
-      stop_after_first_match=t \
-      deriving= \
-      skip_dims= \
-      from_dim=$dim \
-      dim=$rd \
-      attempt_derive || fail
-
-      if [[ $can_derive == t ]]; then
-        if [[ ! "${values:-}" ]]; then
-          is_valid=f
-        else
-          local -n rd_member=d_$rd
-          if [[ "${rd_member:-}" ]] && ! array_contains values "$rd_member" && ! array_contains values all; then
-            conflicting_values=( "${values[@]}" )
-            is_valid=f
-          fi
-        fi
-        log_debug "Dim $dim is not valid because $rd couldn't be derived from it"
-        abort
-      fi
-    done
-
-    log_debug "Dim $dim is valid"
-
-  end_function
-  handle_return
-}
+#  calc_coords_validate_member() {
+#    local member=$1 log_show_vars='dim member'
+#    begin_function
+#  
+#      is_valid=t
+#      conflicting_values=()
+#  
+#      log_debug "Validating $dim = $member"
+#  
+#      # all needs to be permitted here in the case of a dim that doesn't have explicit members
+#      #   but where the user needs to communicate that all are acceptable based on derivation of others?
+#      if [[ "$member" == all ]]; then
+#        log_debug "Dim $dim is all, so it's valid"
+#        abort
+#      fi
+#  
+#      if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
+#        log_debug "Dim $dim is optional and missing, so it's valid"
+#        abort
+#      fi
+#  
+#      local values=() 
+#      local -A derive_tried=()
+#      deriving= \
+#      attempt_derive || fail
+#  
+#      if [[ $can_derive == t ]]; then
+#        if [[ ! "${values[0]:-}" ]]; then
+#          is_valid=f
+#        elif ! array_contains values "$member" && ! array_contains values all; then
+#          conflicting_values=( "${values[@]}" )
+#          is_valid=f
+#        fi
+#        log_debug "Dim $dim is not valid because it couldn't be derived from existing dims"
+#        abort
+#      fi
+#  
+#      #  should have already been set
+#      #eval "local d_$dim=\$member"
+#      local rd
+#      for rd in $resolved_dims; do
+#        if [[ $rd == $dim ]]; then
+#          continue
+#        fi
+#        local stop_after_first_match=t \
+#        deriving= \
+#        from_dim=$dim \
+#        dim=$rd \
+#        attempt_derive || fail
+#  
+#        if [[ $can_derive == t ]]; then
+#          if [[ ! "${values:-}" ]]; then
+#            is_valid=f
+#          else
+#            local -n rd_member=d_$rd
+#            if [[ "${rd_member:-}" ]] && ! array_contains values "$rd_member" && ! array_contains values all; then
+#              conflicting_values=( "${values[@]}" )
+#              is_valid=f
+#            fi
+#          fi
+#          log_debug "Dim $dim is not valid because $rd couldn't be derived from it"
+#          abort
+#        fi
+#      done
+#  
+#      log_debug "Dim $dim is valid"
+#  
+#    end_function
+#    handle_return
+#  }
 
 # inputs:
 #   dim            can't be empty
@@ -4526,76 +4431,6 @@ calc_coordinates_next_dim_member() {
   handle_return
 }
 
-narrow_dim_fun() {
-  begin_function
-    local derived_from_dim all_dims_are_set=t
-    local f_name=derive_function_$dim
-    local action=check values=()
-    $f_name || fail
-    if [[ ${values:-f} == t ]]; then
-      action=derive
-      $f_name || fail
-      local -A new_values=()
-      array_to_set values new_values
-      intersect new_values value_set
-    fi
-  end_function
-  handle_return
-}
-
-# inputs:
-#   $1   dim
-#   $2   name of array variable containing members
-# outputs:
-#   ($2) array variable
-narrow_dim() {
-  local dim=$1 member_var=$2
-  local -n result=$member_var
-  begin_function
-    log_debug "Narrowing down $dim"
-    local -n derived_from=dim_${dim}_derived_from
-
-    local row type target row_array \
-      original_count=${#result[*]} new_count \
-
-    local -A value_set=()
-    array_to_set result value_set
-
-    begin_for derived_from_row in "${derived_from[@]}"; doo
-      row_array=( $derived_from_row )
-      target=$row_array
-      type=${target##*.}
-      case $type in
-        fun)
-          narrow_dim_fun || fail
-        ;;
-        tab)
-          local derive_table=${target%.*}
-          extract_from_derive_table || fail
-        ;;
-        *)
-          log_fatal "Unknown derived_from type: $type"
-          fail1
-        ;;
-      esac
-      if (( ${#value_set[*]} == 0 )); then
-        break
-      fi
-    end_for
-
-    set_to_array value_set result
-    if (( ${#result} > 1 )); then
-      sort_array result
-    fi
-    new_count=${#result[*]}
-    if [[ $new_count != $original_count ]]; then
-      log_debug "Narrowed down $dim from $original_count to $new_count"
-    fi
-
-  end_function
-  handle_return
-}
-
 # calling this will produce and end at least one coordinate row 
 # inputs:
 #   check_dims (may be empty)
@@ -4643,28 +4478,26 @@ calc_coordinates_next_dim() {
         progress_bar_next
 
         if [[ "${member:-}" ]]; then
-          ms=( $member )
-          narrow_dim $dim ms || fail
-          if [[ ! "$ms" ]]; then
-            log_fatal "$dim = $member conflicts with $conflict"
-            fail1
-          fi
-
-          m=$ms
+          ms=( "$member" )
         else
           ms=( "${members[@]}" )
-          narrow_dim $dim ms || fail
+        fi
 
-          if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
-            log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
-            fail1
-          fi
+        result_var=ms \
+        narrow_dim || fail
 
-          if [[ ! "$ms" ]]; then
-            log_fatal "$dim has no matching values that align with $conflict"
-            fail1
-          fi
+        if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
+          log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
+          fail1
+        fi
 
+        if [[ ! "$ms" ]]; then
+          log_fatal "$dim has no matching values that align with $conflict"
+          fail1
+        fi
+
+        if [[ "${#ms}" == 1 ]]; then
+          m=$ms
         fi
 
         local -n key_tables=dim_${dim}_key_tables
@@ -4676,9 +4509,9 @@ calc_coordinates_next_dim() {
         if [[ "${m:-}" ]]; then
           calc_coordinates_next_dim_member || fail
         else
-          for m in "${ms[@]}"; do
+          begin_for m in "${ms[@]}"; doo
             calc_coordinates_next_dim_member || fail
-          done; maybe_break
+          end_for
         fi
 
         log_show_vars='dim member'
