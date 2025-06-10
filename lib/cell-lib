@@ -2201,6 +2201,7 @@ narrow_dim() {
 
     local row type target row_array \
       original_count=${#result[*]} new_count \
+      original_first=${result:-} \
 
     local -A value_set=()
     array_to_set result value_set
@@ -2231,9 +2232,14 @@ narrow_dim() {
     if (( ${#result} > 1 )); then
       sort_array result
     fi
+
     new_count=${#result[*]}
-    if [[ $new_count != $original_count ]]; then
-      log_debug "Narrowed down $dim from $original_count to $new_count"
+    if [[ $new_count != $original_count || "$original_first" != $result ]]; then
+      local from=$original_count
+      if [[ "$original_first" == all ]]; then
+        from=all
+      fi
+      log_debug "Narrowed down $dim from $from to $new_count"
     fi
 
   end_function
@@ -2897,64 +2903,48 @@ dim_set_in_parameter() {
   return 0
 }
 
-build_context_support_dims_find_related_handle_dim() {
-  local log_show_vars=dim
-  begin_function
-
-    log_debug "Found reference to derived dim $dim (from $from_dim via $object)"
-
-    related_dims_set[$dim]=1
-
-    if [[ ! -v all_dims[$dim] ]]; then
-      log_fatal "Missing dim $dim"
-      fail1
-    fi
-
-    # perplexing why we need this here, but after too much debugging, this was the simplest solution
-    unfail
-
-    local -n dim_derived_from=dim_${dim}_derived_from
-    # recursive
-    build_context_support_dims_find_related || fail
-
-    if [[ ! -v shortest_path[$dim] 
-       || in_process_count -lt shortest_path_count[$dim] ]]; then
-       shortest_path_count[$dim]=$in_process_count
-       shortest_path[$dim]=$in_process
-    fi
-
-  end_function
-  handle_return
-}
-
 # inputs:
 #   dim
 #   dim_derived_from
 build_context_support_dims_find_related() {
-  local -I in_process in_process_count
   local log_show_vars=dim
 
   begin_function
-
-    in_process+="$dim "
-    (( in_process_count++ ))
 
     local row object type
     begin_for row in "${dim_derived_from[@]}"; doo
       local row_array=( $row )
       object=${row_array[0]}
       type=${row_array[1]}
-      local up_dim
-      begin_for up_dim in ${row_array[*]:2}; doo
-        if ! array_contains trunk_dims_expanded $up_dim \
-          && [[ " $in_process " != *" $up_dim "* \
-          && ! -v related_dims_set[$up_dim] ]] \
-          ; then
 
-          from_dim=$dim \
-          dim=$up_dim \
-          build_context_support_dims_find_related_handle_dim || fail
+      local parent_canopy=${canopy:-} canopy=${row_array[*]:2} \
+        up_dim parent_path \
+
+      begin_for up_dim in $canopy; doo
+
+        if [[ -v shortest_path[$dim] ]]; then
+          shortest_path[$up_dim]="${shortest_path[$dim]} ${parent_canopy[$dim]}"
+        else
+          shortest_path[$up_dim]=$dim
         fi
+
+        if [[ ! -v tried[$up_dim] ]]; then
+
+          log_debug "Found reference to derived dim $up_dim (from $dim via $object)"
+
+          tried[$up_dim]=1 \
+          parent_canopy[$up_dim]=$canopy \
+          related_dims_set[$up_dim]=1 \
+
+          if [[ ! -v all_dims[$up_dim] ]]; then
+            log_fatal "Missing dim $up_dim"
+            fail1
+          fi
+
+          next_level_dims[$up_dim]=1
+
+        fi
+
       end_for
     end_for
 
@@ -2966,29 +2956,43 @@ build_context_support_dims() {
   begin_function
 
     local dim dim_type=trunk_dims support_dim_depth=0 down_dim
+      anchors=${anchor_dims:-${default_anchor_dims:-}}
 
     local -A related_dims_set=() \
       support_dims_set=() \
       shortest_path=() \
       shortest_path_count=() \
+      tried=() \
+      next_level_dims=() \
 
-    begin_for dim in ${trunk_dims_expanded[*]}; doo
-      local -n dim_derived_from=dim_${dim}_derived_from
-      if [[ -v dim_derived_from ]]; then
-        log_debug "Finding related dims of $dim"
-        local current_depth=0
-        in_process= \
-        in_process_count=0 \
-        build_context_support_dims_find_related || fail
+    begin_for dim in ${trunk_dims_expanded[*]} $anchors; doo
+      if [[ ! -v tried[$dim] ]]; then
+        tried[$dim]=1
+        next_level_dims[$dim]=1
       fi
     end_for
+
+    local -A current_level_dims=()
+    begin_while (( ${#next_level_dims[*]} > 0 )); doo
+      add_to_set next_level_dims current_level_dims
+      next_level_dims=()
+      begin_for dim in ${!current_level_dims[*]}; doo
+        local -n dim_derived_from=dim_${dim}_derived_from
+        if [[ -v dim_derived_from ]]; then
+          log_debug "Finding related dims of $dim"
+          build_context_support_dims_find_related || fail
+        fi
+      end_for
+    end_while
 
     related_dims_expanded=( ${!related_dims_set[*]} )
     sort_array related_dims_expanded
 
     begin_for related_dim in ${related_dims_expanded[*]}; doo
       
-      if dim_set_in_parameter $related_dim; then
+      if dim_set_in_parameter $related_dim \
+        || [[ " ${anchor_dims:-${default_anchor_dims:-}} " == *" $related_dim "* ]] \
+        ; then
         #  not sure if this is needed
         #if [[ $type == *-to-one ]]; then
         #  support_dims_one_expanded+=( $dim )
@@ -2999,6 +3003,9 @@ build_context_support_dims() {
             support_dims_set[$d]=1
           fi
         done
+        if [[ " ${trunk_dims_expanded[*]} " != *" $related_dim "* ]]; then
+          support_dims_set[$related_dim]=1
+        fi
       fi
 
     end_for
@@ -3908,9 +3915,51 @@ read_dim() {
 }
 
 attempt_default() {
-  local dim=$1
+  local dim=$dim
   begin_function_lo
 
+    local problem
+    local -n dim_type=dim_${dim}_type
+
+    if function_exists dim_${dim}_default; then
+      dim_${dim}_default || fail
+
+      if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
+        var=values \
+        show_trace_dim_message "Default value taken from default function: dim_${dim}_default"
+      fi
+
+    fi
+
+    if [[ ! "${values:-}" ]] && function_exists dim_${dim}_expand; then
+      value= dim_${dim}_expand || fail
+      already_expanded=t
+
+      if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
+        if [[ -v dim_${dim}_default ]]; then
+          var=values \
+          show_trace_dim_message "Default value taken from default value: dim_${dim}_default"
+        else
+          var=values \
+          show_trace_dim_message "Default value taken from expand function: dim_${dim}_expand"
+        fi
+      fi
+
+    fi
+
+    if [[ "${values:-}" == ask ]]; then
+      read_dim values || fail
+      already_expanded=t
+    fi
+
+    if [[ ! "${values:-}" ]]; then
+
+      if [[ " $optional_dims " == *" $dim "* ]]; then
+        values=( $empty_member )
+      fi
+      already_expanded=t
+
+    fi
 
   end_function
   handle_return
@@ -4225,7 +4274,7 @@ calc_coordinates_next_unknown_dim() {
               expand_dim value values || fail
               already_expanded=t
             else
-              attempt_default $dim || fail
+              attempt_default || fail
             fi
           fi
 
