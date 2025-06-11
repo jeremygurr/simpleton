@@ -403,6 +403,7 @@ init_context() {
       ${!leaf_coordinate_*} \
       ${!sub_coordinate_*} \
       ${!tree_coordinate_*} \
+      ${!i_*} \
 
     declare -Ag all_dims=() \
       dim_shorts=() \
@@ -1726,7 +1727,7 @@ get_plural() {
   local -n target=$target_var
   if [[ $dim == *s ]]; then
     target=${dim}es
-  elif [[ $dim == *y ]]; then
+  elif [[ $dim == *y && ! $dim =~ [aeiou]y$ ]]; then
     target=${dim%y}ies
   else
     target=${dim}s
@@ -5255,6 +5256,30 @@ load_dim_caches() {
   handle_return
 }
 
+build_branch_seed_coords() {
+  begin_function
+    local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords \
+      seed_already_expanded=f \
+      clear_existing_coords=t \
+
+    if [[ -f $parent_coord_path ]]; then
+      source $parent_coord_path || fail
+      seed_already_expanded=t
+      clear_existing_coords=f
+    fi
+
+    local coord_type=branch_seed
+
+    calc_coordinates || fail
+    make_coord_index || fail
+
+    if [[ "${branch_seed_coordinate_data:-}" ]]; then
+      write_coordinates_to_shell_file $context_path-branch-coords || fail
+    fi
+  end_function
+  handle_return
+}
+
 build_context() {
   local cell_path=$1
   begin_function
@@ -5288,26 +5313,7 @@ build_context() {
 
     if [[ "${trunk_dims_expanded:-}" ]]; then
       if [[ ! -f $context_path-branch-coords ]]; then
-
-        local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords \
-          seed_already_expanded=f \
-          clear_existing_coords=t \
-
-        if [[ -f $parent_coord_path ]]; then
-          source $parent_coord_path || fail
-          seed_already_expanded=t
-          clear_existing_coords=f
-        fi
-
-        local coord_type=branch_seed
-
-        calc_coordinates || fail
-        make_coord_index || fail
-
-        if [[ "${branch_seed_coordinate_data:-}" ]]; then
-          write_coordinates_to_shell_file $context_path-branch-coords || fail
-        fi
-
+        build_branch_seed_coords || fail
       else
         source $context_path-branch-coords || fail
       fi
