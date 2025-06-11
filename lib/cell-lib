@@ -1633,6 +1633,7 @@ seed_coordinates() {
 
     local seed_table_rows=$(( seed_data_count / seed_field_count ))
 
+    target_form=tree \
     setup_coord_fields || fail
     if [[ $add_implicit_dims == t ]]; then
       local f p
@@ -1937,6 +1938,9 @@ extract_from_derive_table_find_row_indexes() {
 
   for (( column_index = 0; column_index < field_count; column_index++ )); do
     field=${derive_fields[$column_index]}
+    if [[ " $ignore_dims " == *" $field "* ]]; then
+      continue
+    fi
     if [[ $field == $dim ]]; then
       output_dim_index=$column_index
     else
@@ -2054,17 +2058,18 @@ extract_from_derive_table_check_row() {
 # if derive table is incomplete, will not change value_set
 # inputs:
 #   derive_table            name of var of derive table
-#   value_set               each valid value
+#   value_set               starting value set, defaults to all
 #   dim
+#   ignore_dims
 # outputs:
 #   value_set               the var out_set points to will contain a set of all matches
-#   derive_found
 extract_from_derive_table() {
   local derive_table=$derive_table
 
   begin_function
       
     rows_matched=0
+    local ignore_dims=${ignore_dims:-}
 
     local -n derive_fields=derive_table_${derive_table}_fields \
              derive_data=derive_table_${derive_table}_data \
@@ -2089,49 +2094,34 @@ extract_from_derive_table() {
     local row_count=$(( data_count / field_count )) \
       complete_table=t \
 
-    # if [[ $member_type == static ]]; then
-    #   local member_count=${#dim_members[*]}
-    #   if (( ${#index[*]} != member_count )); then
-    #     local column_index
-    #     for (( column_index = 0; column_index < field_count; column_index++ )); do
-    #       field=${derive_fields[$column_index]}
-    #       if [[ $field != $dim ]]; then
-    #         local -n ddim=d_$field
-    #         if [[ ! "${ddim:-}" ]]; then
-    #           ok_to_proceed=f
-    #           break
-    #         fi
-    #       fi
-    #     done
-    #   fi
-    # fi
+    local -A matching_rows=() new_value_set=()
+    matching_rows[all]=1
 
-    #if [[ $ok_to_proceed == t ]]; then
-      local -A matching_rows=() new_value_set=()
-      matching_rows[all]=1
+    extract_from_derive_table_find_row_indexes
+    maybe_break
 
-      extract_from_derive_table_find_row_indexes
-      maybe_break
-
-      if [[ $complete_table == t ]]; then
-        if [[ -v matching_rows[all] ]]; then
-          add_to_set index new_value_set
-        else
-          for value in "${!index[@]}"; do
-            local row_indexes=${index[$value]}
-            for row_index in $row_indexes; do
-              if [[ -v matching_rows[$row_index] ]]; then
-                new_value_set[$value]=1
-              fi
-            done
+    if [[ $complete_table == t ]]; then
+      if [[ -v matching_rows[all] ]]; then
+        add_to_set index new_value_set
+      else
+        for value in "${!index[@]}"; do
+          local row_indexes=${index[$value]}
+          for row_index in $row_indexes; do
+            if [[ -v matching_rows[$row_index] ]]; then
+              new_value_set[$value]=1
+            fi
           done
-        fi
+        done
+      fi
 
-        rows_matched=${#new_value_set[*]}
+      rows_matched=${#new_value_set[*]}
 
+      if [[ ! "${value_set[*]}" ]]; then
+        add_to_set new_value_set value_set
+      else
         intersect_with_all value_set new_value_set value_set
       fi
-    #fi
+    fi
 
     debug_return_vars=value_set
   end_function
