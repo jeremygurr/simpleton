@@ -1942,17 +1942,24 @@ extract_from_derive_table_find_row_indexes() {
     local -A new_matching_rows
 
     for (( column_index = 0; column_index < field_count; column_index++ )); do
+      zombie_fence
       field=${derive_fields[$column_index]}
       if [[ " $ignore_dims " == *" $field "* ]]; then
         continue
       fi
+      local -n dt_index=${full_table}_index_${field}
       if [[ $field == $dim ]]; then
         output_dim_index=$column_index
+        local -n members=dim_${dim}_members
+        local member_count=${#members[*]}
+        if (( ${#dt_index[*]} != member_count )); then
+          complete_table=f
+          break
+        fi
       else
         local -n ddim=d_$field
         if [[ "${ddim:-}" ]]; then
 
-          local -n dt_index=${full_table}_index_${field}
           if [[ ! -v dt_index ]]; then
             clear_set new_matching_rows
 
@@ -2007,7 +2014,6 @@ extract_from_derive_table_check_row() {
       value=${derive_data[$((data_index + column_index))]}
 
       log_show_vars='field value'
-      fence
 
       if [[ $field == $dim ]]; then
 
@@ -2118,6 +2124,7 @@ extract_from_derive_table() {
 
     extract_from_derive_table_find_row_indexes
     maybe_break
+    zombie_fence
 
     if [[ $complete_table == t ]]; then
       if [[ -v matching_rows[all] ]]; then
@@ -2545,64 +2552,6 @@ load_child_dims() {
   handle_return
 }
 
-set_dim_defaults() {
-  local default_value=$1; shift
-  local dims=$*
-
-  begin_function
-    local dim dims problem values
-    get_plural $dim dims
-    for dim in $dims; do
-      local -n ddim=d_$dim \
-        ddims=d_$dims \
-
-      # if function_exists dim_${dim}_default; then
-      #   dim_${dim}_default || fail
-
-      #   if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
-      #     var=values \
-      #     show_trace_dim_message "Default value taken from default function: dim_${dim}_default"
-      #   fi
-
-      # fi
-
-      # if [[ ! "${values:-}" ]] && function_exists dim_${dim}_expand; then
-      #   value= dim_${dim}_expand || fail
-
-      #   if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
-      #     if [[ -v dim_${dim}_default ]]; then
-      #       var=values \
-      #       show_trace_dim_message "Default value taken from default value: dim_${dim}_default"
-      #     else
-      #       var=values \
-      #       show_trace_dim_message "Default value taken from expand function: dim_${dim}_expand"
-      #     fi
-      #   fi
-
-      # fi
-
-      # if [[ "${values:-}" == ask ]]; then
-      #   read_dim values || fail
-      # fi
-
-      if [[ ! "${values:-}" ]]; then
-
-        if [[ " $optional_dims " == *" $dim "* ]]; then
-          values=( $empty_member )
-        elif [[ $dim_type == trunk_dims ]]; then
-          # not sure if we should do this
-          :
-        else
-          values=( all )
-        fi
-
-      fi
-
-    done
-  end_function
-  handle_return
-}
-
 setup_dims() {
   begin_function
 
@@ -2614,9 +2563,6 @@ setup_dims() {
     else
       expand_dims ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} || fail
     fi
-
-    #set_dim_defaults none "${trunk_dims_expanded[*]}" || fail
-    #set_dim_defaults all "${support_dims_expanded[*]}" || fail
 
   end_function
   handle_return
@@ -3395,7 +3341,6 @@ make_derive_cache() {
 
       local name code derive_path
       begin_for derive_path in $files; doo
-        fence
         name=${derive_path##*/}
         name=${name%.*}
         name=${name#derive_}
@@ -3415,8 +3360,6 @@ make_derive_cache() {
 
     local dim
     for dim in ${!all_dims[*]}; do
-
-      fence
 
       ignore_missing=t \
       write_vars_to_context \
@@ -3743,7 +3686,6 @@ check_table_row() {
     for (( f = 0; f < field_count; f++ )); do
 
       log_show_vars=f
-      fence
 
       local field=${table_fields[$f]}
       (( t = offset + f ))
@@ -4290,7 +4232,6 @@ calc_coordinates_next_unknown_dim() {
           get_plural $dim dims
 
           log_show_vars='dim phase'
-          fence
           log_debug "Finding values for $dim in phase $phase"
 
           local values=() already_expanded=f needs_narrowing=t
@@ -4599,7 +4540,6 @@ calc_coordinates_next_dim() {
         fi
 
         log_show_vars='dim member'
-        fence
 
         # if none of the members are valid, we just skip the row
         # if any are valid, they will have added their own rows already
