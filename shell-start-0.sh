@@ -428,7 +428,7 @@ colorize_path() {
 
 forge_add_subs() {
   local base=$1 from=${2:-$1}
-  begin_function_grip
+  begin_function_lo
 
     local file files short_path short_file colored_base
     colorize_path base colored_base
@@ -472,7 +472,7 @@ forge_add_subs() {
  
 forge_add_roots() {
   local path=$1
-  begin_function_grip
+  begin_function_lo
 
     if [[ $path == /*/*/* ]]; then
       forge_add_roots ${path%/*}
@@ -832,7 +832,7 @@ new() {
     d|down)
       type=down
     ;;
-    \?*|-h|--help)
+    ''|\?*|-h|--help)
       show_usage
       return 1
     ;;

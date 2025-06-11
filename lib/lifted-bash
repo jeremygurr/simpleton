@@ -320,13 +320,15 @@ debug_id_inc() {
     return 0
   fi
 
+  #echo -n .
+
   local debug_id_inc_start=${EPOCHREALTIME//./} diff
   if [[ -v lifted_breaker_time[$current_function] && $allow_breaker_update == t ]]; then
     (( diff = debug_id_inc_start - lifted_breaker_time[$current_function] )) || true
     if (( diff < grip )); then
-      if (( grip < default_grip )); then
-        echo "Opening breaker for $current_function because two events happened less than $grip microseconds apart: $diff" >&$fd_original_err
-      fi
+      #if (( grip < default_grip )); then
+      #  echo "Opening breaker for $current_function because two events happened less than $grip microseconds apart: $diff" >&$fd_original_err
+      #fi
       lifted_breaker_open[$current_function]=t
       #echo "Breakers open: ${!lifted_breaker_open[*]}"
       (( no_trace_depth-- )) || true
@@ -496,7 +498,9 @@ trace_time_summarize() {
 alias timebox_open='
   (( no_trace_depth++ )) || true
   timebox_stack+=( $timebox )
-  trace_time_open
+  if [[ $trace_time == t ]]; then
+    trace_time_open
+  fi
   (( no_trace_depth-- )) || true
 '
 
@@ -509,15 +513,13 @@ alias timebox_close='
 '
 
 alias trace_time_open='
-  if [[ $trace_time == t ]]; then
-    if [[ ! ${trace_time_fd:-} ]]; then
-      : ${trace_time_log:=/tmp/trace_time.log}
-      [[ -e $trace_time_log ]] && rm $trace_time_log
-      exec {trace_time_fd}<>$trace_time_log
-    fi
-    trace_time_start=${EPOCHREALTIME/./}
-    trace_time_start_debug_id=$fork_debug_id
+  if [[ ! ${trace_time_fd:-} ]]; then
+    : ${trace_time_log:=/tmp/trace_time.log}
+    [[ -e $trace_time_log ]] && rm $trace_time_log
+    exec {trace_time_fd}<>$trace_time_log
   fi
+  trace_time_start=${EPOCHREALTIME/./}
+  trace_time_start_debug_id=$fork_debug_id
 '
 
 alias trace_time_close='
@@ -528,13 +530,17 @@ alias trace_time_close='
   fi
 '
 
+if [[ "${no_debug:-f}" == f ]]; then
+
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 alias begin_function_hi='
   (( no_trace_depth++ )) || true
   local return_value=0 break_out=f function_level=2 repair_attempted=f current_function=${function_override:-${FUNCNAME:-unknown}} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
   write_to_log_and_save 
   (( log_depth_current++ )) || true
-  trace_time_open
+  if [[ $trace_time == t ]]; then
+    trace_time_open
+  fi
   struct_type=start debug_id_inc
   log_vars= log_show_vars=
   stack_debug_id[$stack_pos]=$fork_debug_id
@@ -549,11 +555,26 @@ alias begin_function_hi='
   (( no_trace_depth-- )) || true
 '
 
+else
+
+alias begin_function_hi='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=0 repair_attempted=f current_function= function_override= timebox_stack= trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=
+  while true; do
+  (( no_trace_depth-- )) || true
+'
+
+fi
+  
+if [[ "${no_debug:-f}" == f ]]; then
+
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 alias begin_function='
   (( no_trace_depth++ )) || true
   local return_value=0 break_out=f function_level=1 repair_attempted=f current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
-  trace_time_open
+  if [[ $trace_time == t ]]; then
+    trace_time_open
+  fi
   struct_type=start debug_id_inc
   log_vars= log_show_vars=
   stack_debug_id[$stack_pos]=$fork_debug_id
@@ -566,7 +587,20 @@ alias begin_function='
   fi
   (( no_trace_depth-- )) || true
 '
+
+else
+
+alias begin_function='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=0 repair_attempted=f current_function= function_override= timebox_stack= trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=
+  while true; do
+  (( no_trace_depth-- )) || true
+'
+
+fi
   
+if [[ "${no_debug:-f}" == f ]]; then
+
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 # This one switches between a low level and a mid level function, based on the grip variable
 alias begin_function_grip='
@@ -574,7 +608,9 @@ alias begin_function_grip='
   local return_value=0 break_out=f function_level=0 repair_attempted=f current_function=${function_override:-$FUNCNAME} function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=$(( ${#FUNCNAME[*]} - 1 ))
   if (( grip < default_grip )); then
     function_level=1
-    trace_time_open
+    if [[ $trace_time == t ]]; then
+      trace_time_open
+    fi
     struct_type=start debug_id_inc
     log_vars= log_show_vars=
     stack_debug_id[$stack_pos]=$fork_debug_id
@@ -590,6 +626,17 @@ alias begin_function_grip='
   fi
   (( no_trace_depth-- )) || true
 '
+  
+else
+
+alias begin_function_grip='
+  (( no_trace_depth++ ))
+  local return_value=0 break_out=f function_level=0 repair_attempted=f current_function= function_override= timebox_stack= trace_time_start trace_time_start_debug_id trace_time_stop time_dur stack_pos=
+  while true; do
+  (( no_trace_depth-- )) || true
+'
+
+fi
   
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 alias begin_function_lo='
@@ -659,8 +706,18 @@ alias         doo=do
 #   except unlike begin_function this may be placed anywhere within a function,
 #   providing a stopping point for debugging of larger blocks of code that otherwise
 #   can't be split up.
+if [[ "${no_debug:-f}" == f ]]; then
+
 alias fence='allow_breaker_update=f debug_id_inc; log_show_vars='
 alias fence_grip='(( grip < default_grip )) && allow_breaker_update=f debug_id_inc; log_show_vars='
+
+else
+
+alias fence=
+alias fence_grip=
+
+fi
+
 # Same as fence, but denotes that it is intended to be only for a brief debug session and should be removed before committing
 alias zombie_fence='allow_breaker_update=f debug_id_inc; log_show_vars='
 
