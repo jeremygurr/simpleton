@@ -2917,12 +2917,13 @@ build_context_support_dims_find_related() {
       object=${row_array[0]}
       type=${row_array[1]}
 
-      local parent_canopy=${canopy:-} canopy=${row_array[*]:2} \
-        up_dim parent_path \
+      local canopy=${row_array[*]:2} \
+        up_dim \
 
       begin_for up_dim in $canopy; doo
 
-        if [[ -v shortest_path[$dim] ]]; then
+        zombie_fence
+        if [[ -v parent_canopy[$dim] ]]; then
           shortest_path[$up_dim]="${shortest_path[$dim]} ${parent_canopy[$dim]}"
         else
           shortest_path[$up_dim]=$dim
@@ -2932,16 +2933,15 @@ build_context_support_dims_find_related() {
 
           log_debug "Found reference to derived dim $up_dim (from $dim via $object)"
 
-          tried[$up_dim]=1 \
-          parent_canopy[$up_dim]=$canopy \
-          related_dims_set[$up_dim]=1 \
-
           if [[ ! -v all_dims[$up_dim] ]]; then
             log_fatal "Missing dim $up_dim"
             fail1
           fi
 
-          next_level_dims[$up_dim]=1
+          tried[$up_dim]=1 \
+          parent_canopy[$up_dim]=$canopy \
+          related_dims_set[$up_dim]=1 \
+          next_level_dims[$up_dim]=1 \
 
         fi
 
@@ -2961,18 +2961,21 @@ build_context_support_dims() {
     local -A related_dims_set=() \
       support_dims_set=() \
       shortest_path=() \
-      shortest_path_count=() \
       tried=() \
       next_level_dims=() \
+      current_level_dims=() \
+      parent_canopy=() \
 
     begin_for dim in ${trunk_dims_expanded[*]} $anchors; doo
       if [[ ! -v tried[$dim] ]]; then
         tried[$dim]=1
+        if [[ " ${trunk_dims_expanded[*]} " != *" $dim "* ]]; then
+          related_dims_expanded[$dim]=1
+        fi
         next_level_dims[$dim]=1
       fi
     end_for
 
-    local -A current_level_dims=()
     begin_while (( ${#next_level_dims[*]} > 0 )); doo
       add_to_set next_level_dims current_level_dims
       next_level_dims=()
@@ -2985,13 +2988,15 @@ build_context_support_dims() {
       end_for
     end_while
 
+    fence
+
     related_dims_expanded=( ${!related_dims_set[*]} )
     sort_array related_dims_expanded
 
     begin_for related_dim in ${related_dims_expanded[*]}; doo
       
       if dim_set_in_parameter $related_dim \
-        || [[ " ${anchor_dims:-${default_anchor_dims:-}} " == *" $related_dim "* ]] \
+        || [[ " $anchors " == *" $related_dim "* ]] \
         ; then
         #  not sure if this is needed
         #if [[ $type == *-to-one ]]; then
@@ -3014,7 +3019,9 @@ build_context_support_dims() {
     sort_array support_dims_expanded
     #sort_array support_dims_one_expanded
     if [[ "${support_dims_expanded:-}" ]]; then
-      log_debug "Found support_dims: ${support_dims_expanded[*]}"
+      log_debug "Found support dims: ${support_dims_expanded[*]}"
+    else
+      log_debug "No support dims needed"
     fi
     write_vars_to_context related_dims_expanded support_dims_expanded || fail
 
