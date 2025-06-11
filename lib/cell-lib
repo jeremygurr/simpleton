@@ -244,11 +244,12 @@ load_arr_to_code() {
 
 # inputs:
 #   table     name of table variable prefix
+#   ignore_unknown_dims
 # outputs:
 #   ${table}_index_${field}   map of field value to spaced array of row indexes
 make_table_index() {
 
-  local table=$table
+  local table=$table ignore_unknown_dims=${ignore_unknown_dims:-f}
   begin_function
     local row_index \
       field_index \
@@ -281,17 +282,18 @@ make_table_index() {
 
       field=${table_fields[$field_index]}
 
-      local -n index=${table}_index_${field}
+      if [[ -v all_dims[$field] ]]; then
 
-      unset index
-      eval "declare -gA ${table}_index_${field}=()"
+        local -n index=${table}_index_${field}
 
-      begin_for (( row_index = 0; row_index < row_count; row_index++ )); doo
+        unset index
+        eval "declare -gA ${table}_index_${field}=()"
 
-        (( data_offset = row_index * field_count + field_index ))
-        value=${table_data[$data_offset]}
+        begin_for (( row_index = 0; row_index < row_count; row_index++ )); doo
 
-        if [[ -v all_dims[$field] ]]; then
+          (( data_offset = row_index * field_count + field_index ))
+          value=${table_data[$data_offset]}
+
           values=()
 
           dim=$field \
@@ -301,13 +303,13 @@ make_table_index() {
           for value in "${values[@]}"; do
             index[$value]+="$row_index "
           done
-        else
-          log_fatal "Unknown dim found in derive table $table: $field"
-          fail1
-          #index[$value]+="$row_index "
-        fi
 
-      end_for
+        end_for
+
+      elif [[ $ignore_unknown_dims == f ]]; then
+        log_fatal "Unknown dim found in derive table $table: $field"
+        fail1
+      fi
 
     end_for
 
@@ -701,6 +703,65 @@ load_dna_contents_update_cell() {
   handle_return
 }
 
+# this duplicates code from write_dna_tab_to_context on purpose for performance reasons
+# inputs:
+#   $1     full path to tab file. It is assumed existence check has already happened.
+#   $2     target var to store data in (includes prefix)
+load_dna_tab() {
+
+  begin_function_lo
+    local full_path=$1 name=$2
+
+    # must not indent data in case it's a multi-line string
+    eval "$(
+    awk '
+    NR == 1 { print "'$name'_fields=( " $0 " )"; print "'$name'_data=(" }
+    NR > 1 { print $0 }
+    END { print ")" }
+    ' $full_path
+    )" || fail
+
+  end_function
+  handle_return
+}
+
+# this duplicates code from write_dna_vtab_to_context on purpose for performance reasons
+# inputs:
+#   $1     full path to vtab file. It is assumed existence check has already happened.
+#   $2     target var to store data in (includes prefix)
+load_dna_vtab() {
+
+  begin_function_lo
+    local full_path=$1 name=$2
+
+    local -n fields=${name}_fields data=${name}_data
+
+    fields=( $(awk '{ print $1 }' $full_path) ) || fail
+    local field_count=${#fields[*]}
+    eval "local array=( $(<$full_path) )" || fail
+
+    local row_offset col_offset data_index array_index current_field_index=0 \
+      col_count=$(( ${#array[*]} / field_count )) \
+
+    for (( row_offset = 0; row_offset < ${#array[*]}; row_offset += col_count )); do
+      if [[ "${array[$row_offset]}" != ${fields[$current_field_index]} ]]; then
+        log_fatal "Bad data in file $full_path around line $current_field_index"
+        fail1
+      fi
+
+      for (( col_offset = 1; col_offset < col_count; col_offset++ )); do
+        (( array_index = row_offset + col_offset )) || true
+        (( data_index = ( col_offset - 1 ) * field_count + current_field_index ))
+        data[$data_index]=${array[$array_index]}
+      done
+
+      (( current_field_index++ )) || true
+    done; maybe_break
+
+  end_function
+  handle_return
+}
+
 # Will load the given derive table if not already loaded
 # Will not load indexes (those should have already been loaded from the table cache)
 # Will not calculate cardinality or key fields
@@ -842,65 +903,6 @@ maybe_write_newline_to_context() {
     fi
   fi
   last_type=$new_type
-}
-
-# this duplicates code from write_dna_tab_to_context on purpose for performance reasons
-# inputs:
-#   $1     full path to tab file. It is assumed existence check has already happened.
-#   $2     target var to store data in (includes prefix)
-load_dna_tab() {
-
-  begin_function_lo
-    local full_path=$1 name=$2
-
-    # must not indent data in case it's a multi-line string
-    eval "$(
-    awk '
-    NR == 1 { print "'$name'_fields=( " $0 " )"; print "'$name'_data=(" }
-    NR > 1 { print $0 }
-    END { print ")" }
-    ' $full_path
-    )" || fail
-
-  end_function
-  handle_return
-}
-
-# this duplicates code from write_dna_vtab_to_context on purpose for performance reasons
-# inputs:
-#   $1     full path to vtab file. It is assumed existence check has already happened.
-#   $2     target var to store data in (includes prefix)
-load_dna_vtab() {
-
-  begin_function_lo
-    local full_path=$1 name=$2
-
-    local -n fields=${name}_fields data=${name}_data
-
-    fields=( $(awk '{ print $1 }' $full_path) ) || fail
-    local field_count=${#fields[*]}
-    eval "local array=( $(<$full_path) )" || fail
-
-    local row_offset col_offset data_index array_index current_field_index=0 \
-      col_count=$(( ${#array[*]} / field_count )) \
-
-    for (( row_offset = 0; row_offset < ${#array[*]}; row_offset += col_count )); do
-      if [[ "${array[$row_offset]}" != ${fields[$current_field_index]} ]]; then
-        log_fatal "Bad data in file $full_path around line $current_field_index"
-        fail1
-      fi
-
-      for (( col_offset = 1; col_offset < col_count; col_offset++ )); do
-        (( array_index = row_offset + col_offset )) || true
-        (( data_index = ( col_offset - 1 ) * field_count + current_field_index ))
-        data[$data_index]=${array[$array_index]}
-      done
-
-      (( current_field_index++ )) || true
-    done; maybe_break
-
-  end_function
-  handle_return
 }
 
 # inputs:
@@ -1929,63 +1931,70 @@ expand_dims() {
 
 extract_from_derive_table_find_row_indexes() {
 
-  local row_indexes \
-    row_index_count \
-    column_index \
-    field \
+  begin_function
 
-  local -A new_matching_rows
+    local row_indexes \
+      row_index_count \
+      column_index \
+      field \
 
-  for (( column_index = 0; column_index < field_count; column_index++ )); do
-    field=${derive_fields[$column_index]}
-    if [[ " $ignore_dims " == *" $field "* ]]; then
-      continue
-    fi
-    if [[ $field == $dim ]]; then
-      output_dim_index=$column_index
-    else
-      local -n ddim=d_$field
-      if [[ "${ddim:-}" ]]; then
+    local -A new_matching_rows
 
-        local -n dt_index=derive_table_${derive_table}_index_${field}
-        clear_set new_matching_rows
-
-        if [[ -v dt_index[$ddim] ]]; then
-          row_indexes=( ${dt_index[$ddim]} )
-          array_to_set row_indexes new_matching_rows
-        else
-          # table is incomplete for this dim, meaning
-          # it doesn't contain all possible values for it
-          # so we can't use this table for deriving
-          complete_table=f
-          log_debug "No rows exist in $derive_table for $field = $ddim"
-          break
-        fi
-
-        if [[ -v dt_index[all] ]]; then
-          row_indexes=( ${dt_index[all]} )
-          array_to_set row_indexes new_matching_rows
-        fi
-
-        intersect_with_all matching_rows new_matching_rows matching_rows
-
-        if (( ${#matching_rows[*]} == 0 )); then
-          # Accoridng to the index, no values exist in this table which match the known dim value
-          log_debug "Couldn't find any rows in $derive_table which match all existing dims (last checked: $field = $ddim)"
-          value_set=()
-          abort
-        fi
-
-      else # ddim not defined for this field
-        #can_derive=f
-        #abort
-
-        # let's allow derivation even if we are missing some fields
-        :
+    for (( column_index = 0; column_index < field_count; column_index++ )); do
+      zombie_fence
+      field=${derive_fields[$column_index]}
+      if [[ " $ignore_dims " == *" $field "* ]]; then
+        continue
       fi
-    fi
-  done
+      if [[ $field == $dim ]]; then
+        output_dim_index=$column_index
+      else
+        local -n ddim=d_$field
+        if [[ "${ddim:-}" ]]; then
 
+          local -n dt_index=${full_table}_index_${field}
+          if [[ ! -v dt_index ]]; then
+            clear_set new_matching_rows
+
+            if [[ -v dt_index[$ddim] ]]; then
+              row_indexes=( ${dt_index[$ddim]} )
+              array_to_set row_indexes new_matching_rows
+            else
+              # table is incomplete for this dim, meaning
+              # it doesn't contain all possible values for it
+              # so we can't use this table for deriving
+              complete_table=f
+              log_debug "No rows exist in $full_table for $field = $ddim"
+              break
+            fi
+
+            if [[ -v dt_index[all] ]]; then
+              row_indexes=( ${dt_index[all]} )
+              array_to_set row_indexes new_matching_rows
+            fi
+
+            intersect_with_all matching_rows new_matching_rows matching_rows
+
+            if (( ${#matching_rows[*]} == 0 )); then
+              # Accoridng to the index, no values exist in this table which match the known dim value
+              log_debug "Couldn't find any rows in $full_table which match all existing dims (last checked: $field = $ddim)"
+              value_set=()
+              abort
+            fi
+          fi
+
+        else # ddim not defined for this field
+          #can_derive=f
+          #abort
+
+          # let's allow derivation even if we are missing some fields
+          :
+        fi
+      fi
+    done
+
+  end_function
+  handle_return
 }
 
 extract_from_derive_table_check_row() {
@@ -2058,24 +2067,34 @@ extract_from_derive_table_check_row() {
 # if derive table is incomplete, will not change value_set
 # inputs:
 #   derive_table            name of var of derive table
+#   full_table              auto generated if derive_table is given
 #   value_set               starting value set, defaults to all
 #   dim
 #   ignore_dims
 # outputs:
 #   value_set               the var out_set points to will contain a set of all matches
 extract_from_derive_table() {
-  local derive_table=$derive_table
+  local derive_table=${derive_table:-} full_table=${full_table:-}
 
   begin_function
       
     rows_matched=0
     local ignore_dims=${ignore_dims:-}
 
-    local -n derive_fields=derive_table_${derive_table}_fields \
-             derive_data=derive_table_${derive_table}_data \
+    if [[ ! "$full_table" ]]; then
+      if [[ "$derive_table" ]]; then
+        full_table=derive_table_${derive_table}
+      else
+        log_fatal "Internal error: either derive_table or full_table must be specified."
+        fail1
+      fi
+    fi
+
+    local -n derive_fields=${full_table}_fields \
+             derive_data=${full_table}_data \
 
     if [[ ! -v derive_data ]]; then
-      log_fatal "Missing derive table data for $derive_table"
+      log_fatal "Missing derive table data for $full_table"
       fail1
     fi
 
@@ -2087,7 +2106,7 @@ extract_from_derive_table() {
       row_index \
       output_dim_index \
 
-    local -n index=derive_table_${derive_table}_index_${dim} \
+    local -n index=${full_table}_index_${dim} \
       dim_members=dim_${dim}_members \
       member_type=dim_${dim}_member_type \
 
@@ -2915,7 +2934,6 @@ build_context_support_dims_find_related() {
 
       begin_for up_dim in $canopy; doo
 
-        zombie_fence
         new_shortest=( $next_level_row )
 
         local replace_shortest=t
