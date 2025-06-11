@@ -2906,6 +2906,7 @@ dim_set_in_parameter() {
 # inputs:
 #   dim
 #   dim_derived_from
+#   next_level_row
 build_context_support_dims_find_related() {
   local log_show_vars=dim
 
@@ -2919,14 +2920,24 @@ build_context_support_dims_find_related() {
 
       local canopy=${row_array[*]:2} \
         up_dim \
+        new_shortest \
+        old_shortest \
 
       begin_for up_dim in $canopy; doo
 
         zombie_fence
-        if [[ -v parent_canopy[$dim] ]]; then
-          shortest_path[$up_dim]="${shortest_path[$dim]} ${parent_canopy[$dim]}"
-        else
-          shortest_path[$up_dim]=$dim
+        new_shortest=( $next_level_row )
+
+        local replace_shortest=t
+        if [[ -v shortest_path[$up_dim] ]]; then
+          old_shortest=( ${shortest_path[$up_dim]} )
+          if (( ${#new_shortest[*]} >= ${#old_shortest[*]} )); then
+            replace_shortest=f
+          fi
+        fi
+
+        if [[ $replace_shortest == t ]]; then
+          shortest_path[$up_dim]=${new_shortest[*]}
         fi
 
         if [[ ! -v tried[$up_dim] ]]; then
@@ -2938,10 +2949,17 @@ build_context_support_dims_find_related() {
             fail1
           fi
 
+          local new_next_level_row=$next_level_row d
+          for d in $canopy; do
+            if [[ " $new_next_level_row " != *" $d "* && $d != $up_dim ]]; then
+              new_next_level_row+=" $d"
+            fi
+          done
+          new_next_level_row+=" $up_dim"
+
           tried[$up_dim]=1 \
-          parent_canopy[$up_dim]=$canopy \
           related_dims_set[$up_dim]=1 \
-          next_level_dims[$up_dim]=1 \
+          next_level_dims[$new_next_level_row]=1 \
 
         fi
 
@@ -2955,7 +2973,7 @@ build_context_support_dims_find_related() {
 build_context_support_dims() {
   begin_function
 
-    local dim dim_type=trunk_dims support_dim_depth=0 down_dim
+    local dim dim_parents next_level_row dim_type=trunk_dims support_dim_depth=0 down_dim
       anchors=${anchor_dims:-${default_anchor_dims:-}}
 
     local -A related_dims_set=() \
@@ -2964,14 +2982,13 @@ build_context_support_dims() {
       tried=() \
       next_level_dims=() \
       current_level_dims=() \
-      parent_canopy=() \
 
-    begin_for dim in ${trunk_dims_expanded[*]} $anchors; doo
+    begin_for dim in ${trunk_dims_expanded[*]}; doo
       if [[ ! -v tried[$dim] ]]; then
         tried[$dim]=1
-        if [[ " ${trunk_dims_expanded[*]} " != *" $dim "* ]]; then
-          related_dims_expanded[$dim]=1
-        fi
+        #if [[ " ${trunk_dims_expanded[*]} " != *" $dim "* ]]; then
+        #  related_dims_set[$dim]=1
+        #fi
         next_level_dims[$dim]=1
       fi
     end_for
@@ -2979,7 +2996,12 @@ build_context_support_dims() {
     begin_while (( ${#next_level_dims[*]} > 0 )); doo
       add_to_set next_level_dims current_level_dims
       next_level_dims=()
-      begin_for dim in ${!current_level_dims[*]}; doo
+      begin_for next_level_row in "${!current_level_dims[@]}"; doo
+        dim=${next_level_row##* }
+        dim_parents=${next_level_row% *}
+        if [[ "$dim" == "$dim_parents" ]]; then
+          dim_parents=
+        fi
         local -n dim_derived_from=dim_${dim}_derived_from
         if [[ -v dim_derived_from ]]; then
           log_debug "Finding related dims of $dim"
