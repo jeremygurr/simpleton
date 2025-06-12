@@ -816,10 +816,12 @@ new() {
     echo "Usage: new [clean] {type} {name of new cell}" >&2
     echo "  will create a new cell based cell of the current directory." >&2
     echo "  if type=clone, will do a simple clone of the parent cell." >&2
-    echo "  if type=up, will clone the cell and add the child cell as the upstream of the parent." >&2
-    echo "  if type=down, will clone the cell and add the parent cell as the upstream of the child." >&2
+    echo "  if type=up, will clone the cell and add the new cell as the upstream of the old cell." >&2
+    echo "  if type=down, will clone the cell and add the old cell as the upstream of the new cell." >&2
+    echo "  if type=validate, will clone the cell and add the new cell as a validator of the old cell." >&2
     echo "  name is the cell path of the new cell being created. Could include full work or seed path, or just path inside of the module." >&2
     echo "  if clean is specified, will delete any existing cell of the same name." >&2
+    echo "  can use single letter abbreviations for type" >&2
   }
 
   case $type in
@@ -831,6 +833,9 @@ new() {
     ;;
     d|down)
       type=down
+    ;;
+    v|validate)
+      type=validate
     ;;
     ''|\?*|-h|--help)
       show_usage
@@ -883,11 +888,16 @@ new() {
   mkdir -p $new_seed_path/.dna || return 1
   rsync -a $old_seed_path/.dna/ $new_seed_path/.dna/ || return 1
 
-  if [[ $type == up ]]; then
+  if [[ $type == up || $type == validate ]]; then
     local up_name=${new_seed_path#/*/*/}
     up_name=${up_name//\//-}
 
-    local target=$old_seed_path/.dna/up/$up_name
+    local target_folder=$old_seed_path/.dna/$type
+    if [[ ! -e $target_folder ]]; then
+      mkdir $target_folder || return 1
+    fi
+
+    local target=$target_folder/$up_name
     if [[ -e $target || -L $target ]]; then
       rm $target
     fi
