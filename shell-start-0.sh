@@ -199,12 +199,19 @@ walk() {
           walk_add_choice "d" "$path" "downstream cells"
         fi
 
+        path=$current_selection/.dna/validate
+        if [[ -d $path ]]; then
+          walk_add_choice "v" "$path" "validate cells"
+        fi
+
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == down ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == up-chosen ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == up ]]; then
+        walk_add_dirs $current_selection || return 1
+      elif [[ ${current_selection##*/} == validate ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == .dna ]]; then
         local work_cells= work_cell pw possibility
@@ -737,10 +744,11 @@ forge() {
             walk_filter=
           ;;
           rename)
-            local new_name=
+            local new_name= new_target
             read -p "New name: (leave empty to cancel) " new_name 
             if [[ "$new_name" ]]; then
-              mv $target ${target%/*}/$new_name
+              new_target=${target%.dna/*}.dna
+              mv $target $new_target/$new_name
             fi
           ;;
           view)

@@ -991,11 +991,37 @@ extract_simple_name_across_array() {
   return 0
 }
 
+auto_load_tab_vars() {
+  local var_name=$var_name
+  begin_function
+    local -n fields=${var_name}_fields data=${var_name}_data
+
+    local field_count=${#fields[*]} \
+      data_count=${#data[*]} \
+      field i expression \
+
+    if (( data_count == field_count )); then
+      for (( i = 0; i < data_count; i++ )); do
+        field=${fields[$i]}
+        value=${data[$i]}
+        shell_quote_var value
+        expression="$prefix$field=$value"
+        eval "$expression" || {
+          log_fail "Internal error evaluating tab expression: $expression"
+          fail1
+          }
+      done
+    fi
+  end_function
+  handle_return
+}
+
 # inputs:
-#   $1             full path to dna file
-#   prefix         optional prefix
-#   context_type   if empty, only loads the variable, if set, records to context
+#   $1                  full path to dna file
+#   prefix              optional prefix
+#   context_type        if empty, only loads the variable, if set, records to context
 #   context_file
+#   auto_load_tab_vars  if set to 't', and a table is loaded with only one row, the fields of that row get loaded as variables also
 load_dna_item() {
   begin_function
     local var_full_path=$1 prefix=${prefix:-} \
@@ -1003,6 +1029,7 @@ load_dna_item() {
       file_name \
       context_file=${context_file:-} \
       context_type=${context_type:-} \
+      auto_load_tab_vars=${auto_load_tab_vars:-f} \
 
     if [[ ! "$context_file" && $context_type ]]; then
       context_file=$context_path-$context_type.new
@@ -1019,14 +1046,14 @@ load_dna_item() {
     local var_name o code= load_type=var is_auto=f
     extract_simple_name file_name o var_name
 
-    if [[ $var_name == auto-* ]]; then
-      is_auto=t
-      var_name=${var_name#auto-}
-    fi
+    #if [[ $var_name == auto-* ]]; then
+    #  is_auto=t
+    #  var_name=${var_name#auto-}
+    #fi
 
-    if [[ $is_auto == t ]]; then
-      auto_loads+=( $var_name.$suffix )
-    fi
+    #if [[ $is_auto == t ]]; then
+    #  auto_loads+=( $var_name.$suffix )
+    #fi
 
     var_name=${var_name//-/_}
     var_name=$prefix$var_name
@@ -1047,6 +1074,9 @@ load_dna_item() {
           write_dna_tab_to_context $var_full_path $var_name || fail
         else
           load_dna_tab $var_full_path $var_name || fail
+          if [[ $auto_load_tab_vars == t ]]; then
+            auto_load_tab_vars || fail
+          fi
         fi
       ;;
       vtab)
@@ -1054,6 +1084,9 @@ load_dna_item() {
           write_dna_vtab_to_context $var_full_path $var_name || fail
         else
           load_dna_vtab $var_full_path $var_name || fail
+          if [[ $auto_load_tab_vars == t ]]; then
+            auto_load_tab_vars || fail
+          fi
         fi
       ;;
       *)
@@ -3107,11 +3140,19 @@ load_dna_contents_handle_dir() {
 }
  
 # if context_type is not set, then no context will be written
+# inputs:
+#   $1                  folder to load dna objects from
+#   prefix              prefix to append all var names with
+#   recursive           whether to descend into sub dirs
+#   ignore_unknown      if set to 'f', then unknown dna objects will throw an error
+#   context_type        which context file to write the variable to. If empty, no context file will be written
+#   auto_load_tab_vars  if set to 't', and a table is loaded with only one row, the fields of that row get loaded as variables also
 load_dna_contents() {
   local folder=$1 prefix=${prefix:-} \
     pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
     ignore_unknown=${ignore_unknown:-f} \
     context_type=${context_type:-} \
+    auto_load_tab_vars=${auto_load_tab_vars:-f} \
 
   begin_function
 
