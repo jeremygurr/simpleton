@@ -109,17 +109,125 @@ maybe_fix_choice() {
   handle_return
 }
 
+# inputs:
+#   up_chosen_path
+#   upstream
+#   upstream_name
+load_upstream_vars() {
+  begin_function
+
+    if [[ ! -d "${target_cell:-}" ]]; then
+      log_fatal "Internal error: missing target_cell $target_cell"
+    fi
+
+    update_successful=t
+    local export_path=$target_cell/export \
+      out_path=$target_cell \
+      prefix=${target_cell##*/}_ \
+      dna_roots= \
+      context_type= \
+
+#      auto_loads=() \
+
+    pass_thru=t \
+    recursive=f \
+    ignore_unknown=t \
+    auto_load_tab_vars=t \
+    load_dna_contents $out_path || fail
+
+    if [[ -d $export_path ]]; then
+      ignore_unknown=t \
+      pass_thru=t \
+      load_dna_contents $export_path || fail
+    fi
+
+    #  not sure this is relevant any more
+    #prefix=
+    #execute_auto_loads "${auto_loads[@]}" || fail
+
+    if [[ $update_successful == f ]]; then
+      break
+    fi
+
+  end_function
+
+  if failed || [[ $update_successful == f ]]; then
+    update_successful=f
+  fi
+
+  handle_return
+}
+
 # output:
 #   validation_says_already_done   left unset if there is no validation
 validate_cell() {
   begin_function
 
-    debug_start
-    if [[ $cell_is_leaf == t ]]; then
-      zombie "Validating"
-      #if [[ -v validate ]]; then
-      #validation_says_already_done=t
-      #fi
+    if [[ $cell_is_leaf == t && "${validate:-}" ]]; then
+      local target target_var target_cell real_cell
+      begin_for target in "${validate[@]}"; doo
+
+        target_var=${target%%,*}
+        target_var=${target_var//-/_}
+
+        local conditions=
+        if [[ $target_var != "$target" ]]; then
+          conditions=${target#*,}
+        fi
+
+        local target_cell=$validate_path/$target_var
+        if [[ ! -e $target_cell ]]; then
+          log_fatal "Internal error: Missing target_cell: $target_cell"
+          fail1
+        fi
+
+        real_cell=$(realpath $target_cell) || fail
+
+        local upstream_cell_link=$target_cell \
+          downstream_cell_name=${short_cell//\//_} \
+
+        fork execute_commands "$real_cell" update || fail
+
+        zombie_fence
+
+        load_upstream_vars || fail
+
+        zombie_fence
+
+        local post_function=validate_${target_var}_post
+        if function_exists $post_function; then
+          log_debug "Executing validation post function: $post_function"
+          $post_function || fail
+        elif [[ "$conditions" ]]; then
+          local condition key value negative
+          for condition in ${conditions//,/ }; do
+            key=${condition%%:*}
+            value=${condition#*:}
+            negative=f
+            if [[ $value == -* ]]; then
+              negative=t
+              value=${value#-}
+            fi
+            local -n up_var=${target_var}_$key
+            if [[ $negative == f ]]; then
+              if [[ "${up_var:-}" == "$value" ]]; then
+                validation_says_already_done=t
+              else
+                validation_says_already_done=f
+                break 2
+              fi
+            else
+              if [[ "${up_var:-}" != "$value" ]]; then
+                validation_says_already_done=t
+              else
+                validation_says_already_done=f
+                break 2
+              fi
+            fi
+          done
+        fi
+
+      end_for
     fi
   end_function
   handle_return
@@ -554,55 +662,6 @@ update_upstream() {
   handle_return
 }
 
-# inputs:
-#   up_chosen_path
-#   upstream
-#   upstream_name
-load_upstream_vars() {
-  begin_function
-
-    if [[ -d "${up_chosen_path:-}" ]]; then
-
-      update_successful=t
-      local export_path=$upstream/export \
-        out_path=$up_chosen_path/$upstream_name \
-        prefix=${upstream##*/}_ \
-        auto_loads=() \
-        dna_roots= \
-        context_type= \
-
-      pass_thru=t \
-      recursive=f \
-      ignore_unknown=t \
-      prefix=$upstream_name \
-      auto_load_tab_vars=t \
-      load_dna_contents $out_path || fail
-
-      if [[ -d $export_path ]]; then
-        ignore_unknown=t \
-        pass_thru=t \
-        load_dna_contents $export_path || fail
-      fi
-
-      #  not sure this is relevant any more
-      #prefix=
-      #execute_auto_loads "${auto_loads[@]}" || fail
-
-      if [[ $update_successful == f ]]; then
-        break
-      fi
-
-    fi
-
-  end_function
-
-  if failed || [[ $update_successful == f ]]; then
-    update_successful=f
-  fi
-
-  handle_return
-}
-
 update_upstreams() {
   local execute_update=${execute_update:-t}
   begin_function
@@ -633,7 +692,7 @@ update_upstreams() {
           fi
         fi
 
-        up_chosen_path=$orig_up_chosen_path
+        local target_cell=$orig_up_chosen_path
         load_upstream_vars || fail
 
       end_for
@@ -1711,7 +1770,7 @@ update_command() {
         fi
       fi
 
-      if [[ $update_successful == t && $validation_says_already_done == f ]]; then
+      if [[ $update_successful == t && ${validation_says_already_done:-f} == f ]]; then
         if [[ $cell_is_leaf == t ]]; then
           if function_exists update_op; then
             update_successful=

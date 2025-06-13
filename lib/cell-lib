@@ -504,6 +504,7 @@ init_context() {
     up_path=$cyto_path/up \
     up_chosen_path=$cyto_path/up-chosen \
     reactor_path=$cyto_path/reactors \
+    validate_path=$cyto_path/validate \
 
     lock_path=$context_path \
     replay_path=$job_path/pipe_replay \
@@ -684,6 +685,9 @@ execute_commands() {
         if [[ $command_modifies_upstream == t ]]; then
           if [[ -e $up_path ]]; then
             rm -rf $up_path || fail
+          fi
+          if [[ -e $validate_path ]]; then
+            rm -rf $validate_path || fail
           fi
           if [[ -e $up_chosen_path ]]; then
             rm -rf $up_chosen_path || fail
@@ -3206,7 +3210,7 @@ load_dna_contents() {
         item_name=${item_name#dna-}
       fi
 
-      if [[ "$item_name" == *:* ]]; then
+      if [[ "$item_name" == *:* && $item != */.dna/* ]]; then
         local filter filters=${item_name%:*}
         for filter in ${filters//:/ }; do
           if [[ $cell_path != */"$filter"/* && $cell_path != */"$filter" ]]; then
@@ -3218,6 +3222,8 @@ load_dna_contents() {
 
       extract_simple_name item_name ord item_name
       item_var=${item_name//-/_}
+      item_var=${item_var%%,*}
+      item_var=${item_var%%:*}
 
       local new_prefix= 
       if [[ "$current_var" && $dna_prefix == f ]]; then
@@ -5857,6 +5863,41 @@ make_cyto_up() {
   handle_return
 }
 
+make_cyto_validate_single() {
+  local validate_name=$1
+  begin_function
+
+    local validate_var=${validate_name//-/_} \
+      dep_path \
+
+    validate_var=${validate_var%%,*}
+    validate_var=${validate_var%%:*}
+    dep_path=$validate_path/$validate_var \
+
+    if [[ -d $dep_path ]]; then
+      rm -rf $dep_path || fail
+    fi
+
+    local -n choice_path=validate_${validate_var}_path
+    safe_link $choice_path $dep_path || fail
+
+  end_function
+  handle_return
+}
+
+make_cyto_validate() {
+  begin_function
+    if [[ ! -e $validate_path ]]; then
+      mkdir $validate_path || fail
+    fi
+    local validate_name o
+    begin_for validate_name in ${validate[*]}; doo
+      make_cyto_validate_single $validate_name || fail
+    end_for
+  end_function
+  handle_return
+}
+
 get_required_freshness() {
   required_freshness=${fresh:-${default_freshness:-}}
 
@@ -6064,12 +6105,18 @@ build_cyto() {
       build_context $cell_path || fail
     fi
 
-    if [[ "${up:-}" && ! -d $up_path && $cell_is_leaf == t ]]; then
-      make_cyto_up || fail
-    fi
+    if [[ $cell_is_leaf == t ]]; then
+      if [[ "${up:-}" && ! -d $up_path ]]; then
+        make_cyto_up || fail
+      fi
 
-    if [[ "${reactors:-}" && ! -d $reactor_path && $cell_is_leaf == t ]]; then
-      make_cyto_reactors || fail
+      if [[ "${validate:-}" && ! -d $validate_path ]]; then
+        make_cyto_validate || fail
+      fi
+
+      if [[ "${reactors:-}" && ! -d $reactor_path ]]; then
+        make_cyto_reactors || fail
+      fi
     fi
 
   end_function
