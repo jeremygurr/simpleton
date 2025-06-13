@@ -109,9 +109,25 @@ maybe_fix_choice() {
   handle_return
 }
 
+# output:
+#   validation_says_already_done   left unset if there is no validation
+validate_cell() {
+  begin_function
+
+    debug_start
+    if [[ $cell_is_leaf == t ]]; then
+      zombie "Validating"
+      #if [[ -v validate ]]; then
+      #validation_says_already_done=t
+      #fi
+    fi
+  end_function
+  handle_return
+}
+
 get_needs_update_internal() {
   local target_cell=$1
-  begin_function_lo
+  begin_function
 
     cell_is_outdated=f
 
@@ -1439,6 +1455,14 @@ update_self_retry_loop() {
           
         update_self || fail
 
+        if [[ $update_successful == t ]]; then
+          local validation_says_already_done
+          validate_cell || fail
+          if [[ ${validation_says_already_done:-t} == f ]]; then
+            update_successful=f
+          fi
+        fi
+
         [[ $can_retry == f \
         || $update_successful == t \
         || $attempt -ge $max_attempts \
@@ -1676,14 +1700,18 @@ update_command() {
       local color_upstream_found=f
       if [[ "$update_successful" != f ]]; then
         if [[ $current_mock == f ]]; then
-          update_upstreams || fail
+          local validation_says_already_done
+          validate_cell || fail
+          if [[ ${validation_says_already_done:-f} == f ]]; then
+            update_upstreams || fail
+          fi
           fence
         else
           update_successful=t
         fi
       fi
 
-      if [[ $update_successful == t ]]; then
+      if [[ $update_successful == t && $validation_says_already_done == f ]]; then
         if [[ $cell_is_leaf == t ]]; then
           if function_exists update_op; then
             update_successful=
