@@ -322,22 +322,31 @@ show_reactors() {
   handle_return
 }
 
-show_branch_members() {
+# output:
+#   pretty_value
+get_pretty_value() {
+  local dim_var=$dim_var value=$value
+  pretty_value=
+  local pretty_function_name=dim_${dim_var}_pretty
+  if function_exists $pretty_function_name; then
+    $pretty_function_name "$value" || fail
+  fi
+}
+
+show_branch_coordinate_members() {
   begin_function
     if [[ "${trunk_dims_expanded:-}" ]]; then
-      local i pretty_form=
+      local i
       begin_for (( i = 0; i < ${#trunk_dims_expanded[*]}; i++ )); doo
         dim_var=${trunk_dims_expanded[$i]}
         dim_var=${dim_var//-/_}
         local -n dim=d_$dim_var
-        local pretty_function_name=trunk_dims_${dim_var}_pretty
         local value=${dim:-}
-        if function_exists $pretty_function_name; then
-          local pretty_value=$value
-          $pretty_function_name "$value" || fail
+        local pretty_value
+        get_pretty_value
+        local pretty_form=
+        if [[ "${pretty_value:-}" ]]; then
           pretty_form=" ($pretty_value)"
-        else
-          pretty_form=
         fi
         if [[ "${value:-}" ]]; then
           if [[ $show_header == t ]]; then
@@ -351,6 +360,27 @@ show_branch_members() {
         fi
       end_for
     fi
+  end_function
+  handle_return
+}
+
+show_branch_members() {
+  begin_function
+    indent=$((indent-2)) out "${NL}Parent branches:"
+    local i dim_var value
+    for i in ${!branch_dims[*]}; do
+      dim_var=${branch_dims[$i]}
+      value=${branch_members[$i]}
+      local pretty_value
+      get_pretty_value
+
+      local pretty_form=
+      if [[ "${pretty_value:-}" ]]; then
+        pretty_form=" ($pretty_value)"
+      fi
+
+      out "$dim_var=$value$pretty_form"
+    done
   end_function
   handle_return
 }
@@ -376,7 +406,10 @@ show_cell_help() {
 
     setup_dims || fail
 
-    if [[ $cell_is_leaf == f ]]; then
+    local branch_coordinate_data=() \
+      branch_coordinate_fields=() \
+    
+    if [[ $cell_is_leaf == f ]] && (( command_detail > 0 )); then
       coord_limit=2 \
       calc_coords_branch || fail
     fi
@@ -385,7 +418,11 @@ show_cell_help() {
     local branch_coordinate_data_count=${#branch_coordinate_data[*]} \
       branch_coordinate_field_count=${#branch_coordinate_fields[*]} \
 
-    local branch_coordinate_rows=$(( branch_coordinate_data_count / branch_coordinate_field_count ))
+    local branch_coordinate_rows=0
+    if (( branch_coordinate_field_count > 0 )); then
+      branch_coordinate_rows=$(( branch_coordinate_data_count / branch_coordinate_field_count ))
+    fi
+
     if (( branch_coordinate_rows == 1 )); then
       target_dim_var_type=ddim \
       table=branch_coordinate \
@@ -404,6 +441,10 @@ show_cell_help() {
       out "$cell_description"
     else
       out "No description for this cell. Set cell_description variable in context file."
+    fi
+
+    if [[ "$branch_members" ]] && (( command_detail > -1 )); then
+      show_branch_members || fail
     fi
 
     local required=()
@@ -444,10 +485,9 @@ show_cell_help() {
       show_reactors || fail
     fi
 
-    debug_start
     local dim member show_header=t
     if (( ${branch_coordinate_rows:-0} == 1 )); then
-      show_branch_members || fail
+      show_branch_coordinate_members || fail
     fi
 
     local branch_folders branch_folder last_part full_member
