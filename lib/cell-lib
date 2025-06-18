@@ -2949,15 +2949,15 @@ build_context_support_dims_find_related() {
         new_shortest=( $next_level_row )
 
         local replace_shortest=t
-        if [[ -v shortest_path[$up_dim] ]]; then
-          old_shortest=( ${shortest_path[$up_dim]} )
+        if [[ -v shortest_path_to_dim[$up_dim] ]]; then
+          old_shortest=( ${shortest_path_to_dim[$up_dim]} )
           if (( ${#new_shortest[*]} >= ${#old_shortest[*]} )); then
             replace_shortest=f
           fi
         fi
 
         if [[ $replace_shortest == t ]]; then
-          shortest_path[$up_dim]=${new_shortest[*]}
+          shortest_path_to_dim[$up_dim]=${new_shortest[*]}
         fi
 
         if [[ ! -v tried[$up_dim] ]]; then
@@ -2990,7 +2990,7 @@ build_context_support_dims_find_related() {
   handle_return
 }
 
-build_context_support_dims() {
+build_context_related_dims() {
   begin_function
 
     local dim dim_parents next_level_row dim_type=trunk_dims support_dim_depth=0 down_dim
@@ -2998,7 +2998,7 @@ build_context_support_dims() {
 
     local -A related_dims_set=() \
       support_dims_set=() \
-      shortest_path=() \
+      shortest_path_to_dim=() \
       tried=() \
       next_level_dims=() \
       current_level_dims=() \
@@ -3006,9 +3006,6 @@ build_context_support_dims() {
     begin_for dim in ${trunk_dims_expanded[*]}; doo
       if [[ ! -v tried[$dim] ]]; then
         tried[$dim]=1
-        #if [[ " ${trunk_dims_expanded[*]} " != *" $dim "* ]]; then
-        #  related_dims_set[$dim]=1
-        #fi
         next_level_dims[$dim]=1
       fi
     end_for
@@ -3035,17 +3032,40 @@ build_context_support_dims() {
     related_dims_expanded=( ${!related_dims_set[*]} )
     sort_array related_dims_expanded
 
+    write_vars_to_context related_dims_expanded shortest_path_to_dim || fail
+
+  end_function
+  handle_return
+}
+
+get_dim_parameters() {
+  dim_parameters=
+  for related_dim in ${related_dims_expanded[*]}; do
+    if dim_set_in_parameter $related_dim; then
+      dim_parameters+="$related_dim "
+    fi
+  done
+}
+
+# inputs:
+#   target_dims               which dims to connect trunk dims to via support dims
+#   related_dims_expanded
+#   shortest_path_to_dim
+# outputs:
+#   support_dims_expanded
+get_support_dims() {
+  begin_function
+
+    local related_dim
     begin_for related_dim in ${related_dims_expanded[*]}; doo
       
-      if dim_set_in_parameter $related_dim \
-        || [[ " $anchors " == *" $related_dim "* ]] \
-        ; then
+      if [[ " $target_dims " == *" $related_dim "* ]]; then
         #  not sure if this is needed
         #if [[ $type == *-to-one ]]; then
         #  support_dims_one_expanded+=( $dim )
         #fi
         local d
-        for d in ${shortest_path[$related_dim]}; do
+        for d in ${shortest_path_to_dim[$related_dim]}; do
           if ! array_contains trunk_dims_expanded $d; then
             support_dims_set[$d]=1
           fi
@@ -3065,7 +3085,6 @@ build_context_support_dims() {
     else
       log_debug "No support dims needed"
     fi
-    write_vars_to_context related_dims_expanded support_dims_expanded || fail
 
   end_function
   handle_return
@@ -3124,7 +3143,7 @@ build_dim_info() {
 
     end_for
 
-    build_context_support_dims || fail
+    build_context_related_dims || fail
 
     local dim dims
     for dim_type in trunk_dims related_dims sub_dims control_props data_props; do
@@ -4036,12 +4055,10 @@ calc_coordinates_row_end() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Skipped row because of unresolvable dims: $unknown_dims"
       problem_message="Could not resolve dims: $unknown_dims"
-      progress_bar_nudge x
     else
       ignore_missing=t \
       calc_coordinates_add_row || fail
       problem_message=
-      progress_bar_nudge +
     fi
 
   end_function
@@ -4196,7 +4213,6 @@ calc_coordinates_next_unknown_dim_found() {
   begin_function
 
     resolved_dims+=" $dim"
-    progress_bar_nudge
 
     local -n \
       sdim=s_$dim \
@@ -4873,7 +4889,6 @@ calc_coordinates_refine_multi() {
       fail1
     fi
 
-    front_load=6 progress_bar_start # ${#matching_rows[*]}
     local row_index
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
       if [[ -v matching_rows[all] || -v matching_rows[$row_index] ]]; then
@@ -4885,12 +4900,15 @@ calc_coordinates_refine_multi() {
           expand_dims $check_dims || fail
         fi
 
-        calc_coordinates_next_dim || fail
-        log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
+        if coordinate_row_is_valid; then
+          calc_coordinates_next_dim || fail
+          log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
+        else
+          log_debug "Coordinate row $((row_index+1)) is invalid"
+        fi
 
       fi
     end_for
-    progress_bar_stop
 
   end_function
   handle_return
@@ -4935,9 +4953,7 @@ calc_coordinates_slow() {
         extra="seed of "
       fi
       log_debug "Calculating $extra$coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-      front_load=6 progress_bar_start $coordinate_fields_count
       calc_coordinates_next_dim || fail
-      progress_bar_stop
     fi
 
     coordinate_data=( "${new_coordinate_data[@]}" )
@@ -5284,8 +5300,14 @@ build_branch_seed_coords() {
       clear_existing_coords=f
     fi
 
-    local coord_type=branch_seed
+    local dim_parameters
+    get_dim_parameters || fail
 
+    local coord_type=branch_seed \
+      support_dims_expanded \
+      target_dims="${trunk_dims_expanded[*]} $dim_parameters $anchor_dims" \
+
+    get_support_dims || fail
     calc_coordinates || fail
     make_coord_index || fail
     zombie_fence
