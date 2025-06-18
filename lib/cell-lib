@@ -2260,6 +2260,7 @@ narrow_dim_fun() {
     $f_name || fail
     if [[ ${values:-f} == t ]]; then
       action=derive
+      derive_found=t
       $f_name || fail
       local -A new_values=()
       array_to_set values new_values
@@ -2270,10 +2271,11 @@ narrow_dim_fun() {
 }
 
 # inputs:
-#   $1   dim
-#   $2   name of array variable containing members
+#   $1           dim
+#   $2           name of array variable containing members
 # outputs:
-#   ($2) array variable
+#   ($2)         array variable
+#   derive_found
 narrow_dim() {
   local dim=$dim result_var=$result_var
   local -n result=$result_var
@@ -2298,6 +2300,7 @@ narrow_dim() {
         ;;
         tab)
           local derive_table=${target%.*}
+          derive_found=t
           extract_from_derive_table || fail
         ;;
         *)
@@ -2311,7 +2314,7 @@ narrow_dim() {
     end_for
 
     set_to_array value_set result
-    if (( ${#result} > 1 )); then
+    if (( ${#result[*]} > 1 )); then
       sort_array result
     fi
 
@@ -2356,6 +2359,7 @@ attempt_derive() {
     fi
     deriving+="$dim "
     derive_tried[$dim]=1
+    derive_found=f
 
     if [[ "${derived_from:-}" ]]; then
       result_var=values \
@@ -4273,13 +4277,12 @@ calc_coordinates_next_unknown_dim_found() {
         fail1
       fi
 
-      # not validating now
       # don't need to validate if in derive phase, since it's already proven valid by the derive
       #   process itself
-      #local needs_validation=f
-      #if [[ $phase == default ]]; then
-      #  needs_validation=t
-      #fi
+      local needs_validation=f
+      if [[ $phase == default ]]; then
+        needs_validation=t
+      fi
 
       # recursive
       phase=unknown \
@@ -4366,79 +4369,81 @@ calc_coordinates_next_unknown_dim() {
   handle_return
 }
 
-# not used now
 # inputs:
 #   dim
-#  calc_coords_validate_member() {
-#    local member=$1 log_show_vars='dim member'
-#    begin_function
-#  
-#      is_valid=t
-#      conflicting_values=()
-#  
-#      log_debug "Validating $dim = $member"
-#  
-#      # all needs to be permitted here in the case of a dim that doesn't have explicit members
-#      #   but where the user needs to communicate that all are acceptable based on derivation of others?
-#      if [[ "$member" == all ]]; then
-#        log_debug "Dim $dim is all, so it's valid"
-#        abort
-#      fi
-#  
-#      if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
-#        log_debug "Dim $dim is optional and missing, so it's valid"
-#        abort
-#      fi
-#  
-#      local values=() 
-#      local -A derive_tried=()
-#      deriving= \
-#      attempt_derive || fail
-#  
-#      if [[ $can_derive == t ]]; then
-#        if [[ ! "${values[0]:-}" ]]; then
-#          is_valid=f
-#        elif ! array_contains values "$member" && ! array_contains values all; then
-#          conflicting_values=( "${values[@]}" )
-#          is_valid=f
-#        fi
-#        log_debug "Dim $dim is not valid because it couldn't be derived from existing dims"
-#        abort
-#      fi
-#  
-#      #  should have already been set
-#      #eval "local d_$dim=\$member"
-#      local rd
-#      for rd in $resolved_dims; do
-#        if [[ $rd == $dim ]]; then
-#          continue
-#        fi
-#        local stop_after_first_match=t \
-#        deriving= \
-#        from_dim=$dim \
-#        dim=$rd \
-#        attempt_derive || fail
-#  
-#        if [[ $can_derive == t ]]; then
-#          if [[ ! "${values:-}" ]]; then
-#            is_valid=f
-#          else
-#            local -n rd_member=d_$rd
-#            if [[ "${rd_member:-}" ]] && ! array_contains values "$rd_member" && ! array_contains values all; then
-#              conflicting_values=( "${values[@]}" )
-#              is_valid=f
-#            fi
-#          fi
-#          log_debug "Dim $dim is not valid because $rd couldn't be derived from it"
-#          abort
-#        fi
-#      done
-#  
-#      log_debug "Dim $dim is valid"
-#  
-#    end_function
-#    handle_return
-#  }
+calc_coords_validate_member() {
+  local member=$1 log_show_vars='dim member'
+  begin_function
+
+    is_valid=t
+    conflicting_values=()
+
+    log_debug "Validating $dim = $member"
+
+    # all needs to be permitted here in the case of a dim that doesn't have explicit members
+    #   but where the user needs to communicate that all are acceptable based on derivation of others?
+    if [[ "$member" == all ]]; then
+      log_debug "Dim $dim is all, so it's valid"
+      abort
+    fi
+
+    if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
+      log_debug "Dim $dim is optional and missing, so it's valid"
+      abort
+    fi
+
+    local values=() derive_found=f
+    local -A derive_tried=()
+    deriving= \
+    derive_deep=f \
+    attempt_derive || fail
+
+    if [[ $derive_found == t ]]; then
+      if [[ ! "${values[0]:-}" ]]; then
+        is_valid=f
+      elif ! array_contains values "$member" && ! array_contains values all; then
+        conflicting_values=( "${values[@]}" )
+        is_valid=f
+      fi
+      log_debug "Dim $dim is not valid because it couldn't be derived from existing dims"
+      abort
+    fi
+
+    #  should have already been set
+    #eval "local d_$dim=\$member"
+
+    # only focussed on the one side for now, hopefully don't need this
+    #  local rd
+    #  for rd in $resolved_dims; do
+    #    if [[ $rd == $dim ]]; then
+    #      continue
+    #    fi
+    #    local stop_after_first_match=t \
+    #    deriving= \
+    #    from_dim=$dim \
+    #    dim=$rd \
+    #    attempt_derive || fail
+
+    #    if [[ $can_derive == t ]]; then
+    #      if [[ ! "${values:-}" ]]; then
+    #        is_valid=f
+    #      else
+    #        local -n rd_member=d_$rd
+    #        if [[ "${rd_member:-}" ]] && ! array_contains values "$rd_member" && ! array_contains values all; then
+    #          conflicting_values=( "${values[@]}" )
+    #          is_valid=f
+    #        fi
+    #      fi
+    #      log_debug "Dim $dim is not valid because $rd couldn't be derived from it"
+    #      abort
+    #    fi
+    #  done
+
+    log_debug "Dim $dim is valid"
+
+  end_function
+  handle_return
+}
 
 # inputs:
 #   dim            can't be empty
@@ -4492,19 +4497,15 @@ calc_coordinates_next_dim_member() {
     local -n member=d_$dim
     member=$m
     log_debug "Processing $dim = $member in phase $phase"
-    local validated_dims=${validated_dims:-} conflicting_values=() is_valid
+    local validated_dims=${validated_dims:-} conflicting_values=() is_valid=t
 
-    #  should not need validation now
-    #  instead, 
-    #if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
-    #  calc_coords_validate_member "$member" || fail
-    #  log_show_vars='dim member'
-    #  fence
-    #else
-    #  is_valid=t
-    #fi
+    if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
+      calc_coords_validate_member "$member" || fail
+      log_show_vars='dim member'
+      fence
+    fi
 
-    #if [[ $is_valid == t ]]; then
+    if [[ $is_valid == t ]]; then
 
       conflict=
       if [[ -v key_tables ]]; then
@@ -4536,13 +4537,13 @@ calc_coordinates_next_dim_member() {
       else
         log_debug "Row skipped because of cross dim conflict"
       fi
-    #else
-    #  local extra=
-    #  if [[ "${conflicting_values:-}" ]]; then
-    #    extra=" != ${conflicting_values[*]}"
-    #  fi
-    #  log_debug "Dim member doesn't fit row contraints: $dim: $member$extra, skipping row"
-    #fi
+    else
+      local extra=
+      if [[ "${conflicting_values:-}" ]]; then
+        extra=" != ${conflicting_values[*]}"
+      fi
+      log_debug "Dim member doesn't fit row contraints: $dim: $member$extra, skipping row"
+    fi
 
   end_function
   handle_return
@@ -4612,7 +4613,7 @@ calc_coordinates_next_dim() {
           fail1
         fi
 
-        if [[ "${#ms}" == 1 ]]; then
+        if [[ "${#ms[*]}" == 1 ]]; then
           m=$ms
         fi
 
@@ -4889,7 +4890,7 @@ calc_coordinates_refine_multi() {
       fail1
     fi
 
-    local row_index
+    local row_index needs_validation
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
       if [[ -v matching_rows[all] || -v matching_rows[$row_index] ]]; then
 
@@ -4900,12 +4901,9 @@ calc_coordinates_refine_multi() {
           expand_dims $check_dims || fail
         fi
 
-        if coordinate_row_is_valid; then
-          calc_coordinates_next_dim || fail
-          log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
-        else
-          log_debug "Coordinate row $((row_index+1)) is invalid"
-        fi
+        needs_validation=t
+        calc_coordinates_next_dim || fail
+        log_debug "Finished coordinate row $((row_index+1)) of $coordinate_rows"
 
       fi
     end_for
