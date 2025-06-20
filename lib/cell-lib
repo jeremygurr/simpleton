@@ -2227,7 +2227,7 @@ narrow_dim_fun() {
   begin_function
     local derived_from_dim all_dims_are_set=t
     local f_name=derive_function_$dim
-    local action=check values=() can_derive=f
+    local action=check values=() can_derive=f target_dim=$dim
     $f_name || fail
     if [[ $can_derive == t ]]; then
       action=derive
@@ -3405,16 +3405,18 @@ make_derive_cache_handle_function() {
         is_key=f
       fi
 
-      if [[ $is_key == t ]]; then
+      local -n derive_from=dim_${field}_derived_from \
+        key_functions=dim_${field}_key_functions \
 
-        local -n derive_from=dim_${field}_derived_from \
-          key_functions=dim_${field}_key_functions \
+      if [[ $is_key == t ]]; then
 
         other_fields=( ${fields[*]} )
         remove_array_element other_fields $field
         derive_from+=( "$name.fun ${other_fields[*]}" )
         key_functions+=( $name )
 
+      else
+        derive_from+=( "$name.fun ${keys[*]}" )
       fi
 
     done
@@ -4119,10 +4121,9 @@ calc_coordinates_dedup() {
 set_function_cross_dims_single() {
 
   begin_function
-    local -n derive_function=derive_function_${derive_fun}
 
-    local action=reverse fields=() values=() i field value
-    derive_function || fail
+    local action=derive fields=() values=() i field value
+    derive_function_$derive_fun || fail
 
     for (( i = 0; i < ${#fields[*]}; i++ )); do
 
@@ -4202,38 +4203,6 @@ set_table_cross_dims_single() {
       log_debug "Member ($member) doesn't exist in derive table ($derive_table)"
       conflict='(missing from table)'
     fi
-
-  end_function
-  handle_return
-}
-
-# input: 
-#   dim
-set_function_cross_dims() {
-  begin_function
-
-    local -n member=d_$dim 
-    local derive_fun
-
-    for derive_fun in $key_functions; do
-      set_function_cross_dims_single || fail
-    done
-
-  end_function
-  handle_return
-}
-
-# input: 
-#   dim
-set_table_cross_dims() {
-  begin_function
-
-    local -n member=d_$dim 
-    local derive_table
-
-    for derive_table in $key_tables; do
-      set_table_cross_dims_single || fail
-    done
 
   end_function
   handle_return
@@ -4537,6 +4506,56 @@ member_conflicts() {
   handle_return
 }
 
+# input: 
+#   dim
+#   member
+#   key_functions
+#   key_tables
+# output:
+#   {dims}
+#   conflict
+set_cross_dims_internal() {
+  begin_function
+
+    if [[ "${key_functions:-}" ]]; then
+      local derive_fun
+
+      for derive_fun in $key_functions; do
+        set_function_cross_dims_single || fail
+      done
+    fi
+
+    if [[ "${key_tables:-}" ]]; then
+      local derive_table
+
+      for derive_table in $key_tables; do
+        set_table_cross_dims_single || fail
+      done
+    fi
+
+  end_function
+  handle_return
+}
+
+# input: 
+#   dim
+#   member
+# output:
+#   {dims}
+#   conflict
+set_cross_dims() {
+  begin_function
+
+    conflict=
+    local -n key_tables=dim_${dim}_key_tables \
+      key_functions=dim_${dim}_key_functions \
+
+    set_cross_dims_internal || fail
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   dim
 #   m       member value
@@ -4561,13 +4580,7 @@ calc_coordinates_next_dim_member() {
 
       conflict=
 
-      if [[ "${key_functions:-}" ]]; then
-        set_function_cross_dims || fail
-      fi
-
-      if [[ "${key_tables:-}" ]]; then
-        set_table_cross_dims || fail
-      fi
+      set_cross_dims_internal || fail
 
       if [[ "$conflict" ]]; then
         local conflict_plural
@@ -5007,6 +5020,20 @@ calc_coordinates_slow() {
     if [[ $target_form == seed ]]; then
       prep_seed_dims || fail
     fi
+
+    local dim
+    for dim in ${!all_dims[*]}; do
+
+      local -n idim=i_$dim \
+        ddim=d_$dim \
+
+      if [[ "${idim:-}" ]]; then
+        ddim=$idim
+        member=$ddim \
+        set_cross_dims || fail
+      fi
+
+    done
 
     local total_coord_rows_added=0
     if (( coordinate_rows > 0 )); then
