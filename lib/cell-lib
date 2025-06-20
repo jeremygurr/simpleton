@@ -349,7 +349,7 @@ make_table_index() {
 
 # inputs:
 #   name
-load_derive_table_card_and_key() {
+load_derive_table_keys() {
   begin_function
 
     local -n table_fields=derive_table_${name}_fields \
@@ -381,17 +381,17 @@ load_derive_table_card_and_key() {
         key_fields+="$field "
       fi
 
-      local -n card_table=dim_${field}_card_table
+      #local -n card_table=dim_${field}_card_table
 
-      if [[ -v card_table ]]; then
-        local -n old_index=derive_table_${card_table}_index_${field}
-        local old_card=${#old_index[*]}
-        if (( card > old_card )); then
-          card_table=$name
-        fi
-      else
-        card_table=$name
-      fi
+      #if [[ -v card_table ]]; then
+      #  local -n old_index=derive_table_${card_table}_index_${field}
+      #  local old_card=${#old_index[*]}
+      #  if (( card > old_card )); then
+      #    card_table=$name
+      #  fi
+      #else
+      #  card_table=$name
+      #fi
 
       local -n dim_derive_tables=dim_${field}_derive_tables
       if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $name "* ]]; then
@@ -866,8 +866,6 @@ tab_get_derive_from() {
     for (( field_index = 0; field_index < field_count; field_index++ )); do
       field=${derive_table_fields[$field_index]}
 
-      derive_dims[$field]=1
-
       local -n index=derive_table_${name}_index_$field \
         derive_from=dim_${field}_derived_from \
 
@@ -893,33 +891,6 @@ tab_get_derive_from() {
 
       derive_from+=( "$name.tab $join$join2 $other_fields" )
 
-    done
-
-  end_function
-  handle_return
-}
-
-# inputs:
-#   name
-#   cache_path
-fun_get_derive_from() {
-  begin_function
-
-    local values=()
-
-    action=info \
-    derive_function_$name || fail
-
-    local -n derive_from=dim_${name}_derived_from
-
-    derive_from+=( "$name.fun ${values[*]}" )
-
-    local dim row=( ${values[*]} )
-    for dim in ${row[*]:1}; do
-      local -n dim_derive_functions=dim_${dim}_derive_functions
-      if [[ ! "${dim_derive_functions:-}" || " ${dim_derive_functions[*]} " != *" $name "* ]]; then
-        dim_derive_functions+=( $name )
-      fi
     done
 
   end_function
@@ -2256,9 +2227,9 @@ narrow_dim_fun() {
   begin_function
     local derived_from_dim all_dims_are_set=t
     local f_name=derive_function_$dim
-    local action=check values=()
+    local action=check values=() can_derive
     $f_name || fail
-    if [[ ${values:-f} == t ]]; then
+    if [[ $can_derive == t ]]; then
       action=derive
       derive_found=t
       $f_name || fail
@@ -3404,9 +3375,49 @@ make_derive_cache_handle_table() {
 
     fence
 
-    load_derive_table_card_and_key || fail
+    load_derive_table_keys || fail
 
     tab_get_derive_from || fail
+
+  end_function
+  handle_return
+}
+
+make_derive_cache_handle_function() {
+  begin_function
+
+    load_fun_to_code $derive_path derive_function_$name || fail
+    eval "$code" || fail
+    derive_functions+=( $name )
+    write_to_context fun code || fail
+
+    local keys=() fields=()
+
+    action=info \
+    derive_function_$name || fail
+
+    local field is_key other_fields
+    for field in ${fields[*]}; do
+
+      if [[ " ${keys[*]} " == *" $field "* ]]; then
+        is_key=t
+      else
+        is_key=f
+      fi
+
+      if [[ $is_key == t ]]; then
+
+        local -n derive_from=dim_${name}_derived_from \
+          key_functions=dim_${dim}_key_functions \
+
+        other_fields=( ${fields[*]} )
+        remove_array_element other_fields $field
+        derive_from+=( "$name.fun ${other_fields[*]}" )
+        dim_key_functions+=( $name )
+
+      fi
+
+    done
 
   end_function
   handle_return
@@ -3420,8 +3431,6 @@ make_derive_cache() {
 
     log_debug "Generating derive cache for $lib_dt_path"
     deriving_dims=t
-
-    local -A derive_dims=()
 
     if [[ -f $cache_path.new ]]; then
       rm $cache_path.new || fail
@@ -3444,11 +3453,7 @@ make_derive_cache() {
         name=${name%.*}
         name=${name#derive_}
         if [[ $type == fun ]]; then
-          load_fun_to_code $derive_path derive_function_$name || fail
-          eval "$code" || fail
-          derive_functions+=( $name )
-          write_to_context fun code || fail
-          fun_get_derive_from || fail
+          make_derive_cache_handle_function || fail
         else
           make_derive_cache_handle_table || fail
         fi
@@ -3462,10 +3467,12 @@ make_derive_cache() {
 
       ignore_missing=t \
       write_vars_to_context \
-        dim_${dim}_card_table \
         dim_${dim}_key_tables \
+        dim_${dim}_key_functions \
         dim_${dim}_derived_from \
         || fail
+
+#        dim_${dim}_card_table \
 
       local -n member_type=dim_${dim}_member_type \
         dim_members=dim_${dim}_members \
