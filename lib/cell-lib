@@ -2603,10 +2603,65 @@ load_child_dims() {
   handle_return
 }
 
+# inputs:
+#   target_dims               which dims to connect trunk dims to via support dims
+#   related_dims_expanded
+#   shortest_path_to_dim
+# outputs:
+#   support_dims_expanded
+get_support_dims() {
+  begin_function
+
+    local related_dim
+    local -A support_dims_set
+
+    begin_for related_dim in ${related_dims_expanded[*]}; doo
+      
+      if [[ " $target_dims " == *" $related_dim "* ]]; then
+        #  not sure if this is needed
+        #if [[ $type == *-to-one ]]; then
+        #  support_dims_one_expanded+=( $dim )
+        #fi
+        local d
+        for d in ${shortest_path_to_dim[$related_dim]}; do
+          if ! array_contains trunk_dims_expanded $d; then
+            support_dims_set[$d]=1
+          fi
+        done
+        if [[ " ${trunk_dims_expanded[*]} " != *" $related_dim "* ]]; then
+          support_dims_set[$related_dim]=1
+        fi
+      fi
+
+    end_for
+
+    support_dims_expanded=( ${!support_dims_set[*]} )
+    sort_array support_dims_expanded
+    #sort_array support_dims_one_expanded
+    if [[ "${support_dims_expanded:-}" ]]; then
+      log_debug "Found support dims: ${support_dims_expanded[*]}"
+    else
+      log_debug "No support dims needed"
+    fi
+
+  end_function
+  handle_return
+}
+
 setup_dims() {
   begin_function
 
+    calc_anchor_dims || fail
     prep_dims || fail
+
+    local dim_parameters
+    get_dim_parameters || fail
+
+    local coord_type=branch_seed \
+      target_dims="${trunk_dims_expanded[*]} $dim_parameters $anchor_dims" \
+
+    get_support_dims || fail
+
     load_child_dims || fail
     if [[ $cell_is_leaf == t ]]; then
       expand_dims ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} || fail
@@ -3030,49 +3085,6 @@ get_dim_parameters() {
       dim_parameters+="$related_dim "
     fi
   done
-}
-
-# inputs:
-#   target_dims               which dims to connect trunk dims to via support dims
-#   related_dims_expanded
-#   shortest_path_to_dim
-# outputs:
-#   support_dims_expanded
-get_support_dims() {
-  begin_function
-
-    local related_dim
-    begin_for related_dim in ${related_dims_expanded[*]}; doo
-      
-      if [[ " $target_dims " == *" $related_dim "* ]]; then
-        #  not sure if this is needed
-        #if [[ $type == *-to-one ]]; then
-        #  support_dims_one_expanded+=( $dim )
-        #fi
-        local d
-        for d in ${shortest_path_to_dim[$related_dim]}; do
-          if ! array_contains trunk_dims_expanded $d; then
-            support_dims_set[$d]=1
-          fi
-        done
-        if [[ " ${trunk_dims_expanded[*]} " != *" $related_dim "* ]]; then
-          support_dims_set[$related_dim]=1
-        fi
-      fi
-
-    end_for
-
-    support_dims_expanded=( ${!support_dims_set[*]} )
-    sort_array support_dims_expanded
-    #sort_array support_dims_one_expanded
-    if [[ "${support_dims_expanded:-}" ]]; then
-      log_debug "Found support dims: ${support_dims_expanded[*]}"
-    else
-      log_debug "No support dims needed"
-    fi
-
-  end_function
-  handle_return
 }
 
 build_dim_info_expand_group() {
@@ -5403,14 +5415,6 @@ build_branch_seed_coords() {
       clear_existing_coords=f
     fi
 
-    local dim_parameters
-    get_dim_parameters || fail
-
-    local coord_type=branch_seed \
-      support_dims_expanded \
-      target_dims="${trunk_dims_expanded[*]} $dim_parameters $anchor_dims" \
-
-    get_support_dims || fail
     calc_coordinates || fail
     make_coord_index || fail
     zombie_fence
@@ -5444,9 +5448,8 @@ build_context() {
       source $context_path-trunk || fail
     fi
 
-    calc_anchor_dims || fail
-
     setup_dims || fail
+
     if [[ ! -f $context_path-branch ]]; then
       build_context_branch || fail
     else
@@ -6356,7 +6359,7 @@ switch_context() {
           source $context_path-branch-coords || fail
         fi
 
-        calc_anchor_dims || fail
+        setup_dims || fail
 
         local problem_found=f
         broken_link_check || fail
