@@ -1806,6 +1806,7 @@ convert_table_to_dims() {
 
     if (( c_data_count >= c_fields_count * (row_index + 1) )); then
 
+      local value
       for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
         field=${c_fields[$field_index]}
 
@@ -1814,28 +1815,32 @@ convert_table_to_dims() {
         local -n sdim=s_$field sdims=s_$fields ddim=d_$field ddims=d_$fields
 
         (( data_offset = c_fields_count * row_index + field_index ))
-        case $target_dim_var_type in 
-          sdims)
-            sdims=${c_data[$data_offset]}
-            unset sdim ddim ddims
-          ;;
-          ddims)
-            ddims=${c_data[$data_offset]}
-            unset sdim sdims ddim
-          ;;
-          sdim)
-            sdim=${c_data[$data_offset]}
-            unset sdims ddim ddims
-          ;;
-          ddim)
-            ddim=${c_data[$data_offset]}
-            unset sdim sdims ddims
-          ;;
-          *)
-            log_fatal "Invalid target_dim_var_type: $target_dim_var_type"
-            fail1
-          ;;
-        esac
+        value=${c_data[$data_offset]}
+
+        if [[ "$value" ]]; then
+          case $target_dim_var_type in 
+            sdims)
+              sdims=$value
+              unset sdim ddim ddims
+            ;;
+            ddims)
+              ddims=$value
+              unset sdim sdims ddim
+            ;;
+            sdim)
+              sdim=$value
+              unset sdims ddim ddims
+            ;;
+            ddim)
+              ddim=$value
+              unset sdim sdims ddims
+            ;;
+            *)
+              log_fatal "Invalid target_dim_var_type: $target_dim_var_type"
+              fail1
+            ;;
+          esac
+        fi
 
       done; maybe_break
 
@@ -2241,7 +2246,9 @@ narrow_dim_fun() {
         field=${fields[$i]}
         if [[ $field == $dim ]]; then
           value=${values[$i]}
-          new_values[$value]=1
+          if [[ "$value" ]]; then
+            new_values[$value]=1
+          fi
           break
         fi
       done
@@ -5428,7 +5435,6 @@ build_branch_seed_coords() {
     local coord_type=branch_seed
     calc_coordinates || fail
     make_coord_index || fail
-    zombie_fence
 
     if [[ "${branch_seed_coordinate_data:-}" ]]; then
       write_coordinates_to_shell_file $context_path-branch-coords || fail
