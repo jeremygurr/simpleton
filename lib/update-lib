@@ -166,7 +166,7 @@ validate_cell() {
         target_var=${target%%,*}
         target_var=${target_var//-/_}
 
-        log_debug "Validating using $target_var"
+        log_verbose "Validating using $target_var"
 
         local conditions=
         if [[ $target_var != "$target" ]]; then
@@ -208,12 +208,12 @@ validate_cell() {
                 validation_says_already_done=t
                 touch $status_path/last-validate-good || fail
                 touch $status_path/last-validate-${target_var}-good || fail
-                log_debug "Validation good"
+                log_verbose "Validation good"
               else
                 validation_says_already_done=f
                 touch $status_path/last-validate-bad || fail
                 touch $status_path/last-validate-${target_var}-bad || fail
-                log_debug "Validation bad"
+                log_verbose "Validation bad"
                 break 2
               fi
             else
@@ -221,12 +221,12 @@ validate_cell() {
                 validation_says_already_done=t
                 touch $status_path/last-validate-good || fail
                 touch $status_path/last-validate-${target_var}-good || fail
-                log_debug "Validation good"
+                log_verbose "Validation good"
               else
                 validation_says_already_done=f
                 touch $status_path/last-validate-bad || fail
                 touch $status_path/last-validate-${target_var}-bad || fail
-                log_debug "Validation bad"
+                log_verbose "Validation bad"
                 break 2
               fi
             fi
@@ -1520,14 +1520,6 @@ update_self_retry_loop() {
           
         update_self || fail
 
-        if [[ $update_successful == t ]]; then
-          local validation_says_already_done
-          validate_cell || fail
-          if [[ ${validation_says_already_done:-t} == f ]]; then
-            update_successful=f
-          fi
-        fi
-
         [[ $can_retry == f \
         || $update_successful == t \
         || $attempt -ge $max_attempts \
@@ -1766,7 +1758,11 @@ update_command() {
       if [[ "$update_successful" != f ]]; then
         if [[ $current_mock == f ]]; then
           local validation_says_already_done
-          validate_cell || fail
+
+          if [[ $pre_validate == t ]]; then
+            validate_cell || fail
+          fi
+
           if [[ ${validation_says_already_done:-f} == f ]]; then
             update_upstreams || fail
           fi
@@ -1778,11 +1774,21 @@ update_command() {
 
       if [[ $update_successful == t && ${validation_says_already_done:-f} == f ]]; then
         if [[ $cell_is_leaf == t ]]; then
+
           if function_exists update_op; then
             update_successful=
             update_self_retry_loop || fail
-            check_results || fail
+            #check_results || fail
           fi
+
+          if [[ $update_successful == t && $post_validate == t ]]; then
+            local validation_says_already_done
+            validate_cell || fail
+            if [[ ${validation_says_already_done:-t} == f ]]; then
+              update_successful=f
+            fi
+          fi
+
         else
           if [[ "${child_dims:-}" ]]; then
             update_members || fail
