@@ -2004,11 +2004,14 @@ extract_from_derive_table_find_row_indexes() {
       local -n dt_index=${full_table}_index_${field}
       if [[ $field == $dim ]]; then
         output_dim_index=$column_index
-        local -n members=dim_${dim}_members
-        local member_count=${#members[*]}
-        if (( ${#dt_index[*]} != member_count )); then
-          complete_table=f
-          break
+        local -n member_type=dim_${dim}_member_type
+        if [[ $member_type == static ]]; then
+          local -n members=dim_${dim}_members
+          local member_count=${#members[*]}
+          if (( ${#dt_index[*]} != member_count )); then
+            complete_table=f
+            break
+          fi
         fi
       else
         local -n ddim=d_$field
@@ -3522,11 +3525,22 @@ make_derive_cache() {
         calc_missing_members || fail
       fi
 
-      if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
-        member_type=static
-      else
-        member_type=dynamic
-      fi
+      case ${member_type:-unset} in
+        static|dynamic)
+          :
+        ;;
+        unset)
+          if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
+            member_type=static
+          else
+            member_type=dynamic
+          fi
+        ;;
+        *)
+          log_fatal "Invalid value for member_type: $member_type defined for dim $dim"
+          fail1
+        ;;
+      esac
 
       write_vars_to_context dim_${dim}_member_type || fail
        
@@ -4710,8 +4724,6 @@ calc_coordinates_next_dim() {
       if [[ "${member:-}" || "${members:-}" ]]; then
         
         local m ms conflict
-        #local -n dim_type=dim_${dim}_type
-
         resolved_dims+=" $dim"
 
         if [[ "${member:-}" ]]; then
@@ -4722,6 +4734,7 @@ calc_coordinates_next_dim() {
 
         result_var=ms \
         narrow_dim || fail
+        needs_validation=f
 
         if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
           log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
