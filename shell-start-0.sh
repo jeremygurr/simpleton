@@ -569,6 +569,7 @@ forge() {
     }
 
     handle_walk_responses() {
+      local new_target
       if [[ "$response" == "*back*" ]]; then
         current_selection=${back_stack[-1]}
         unset back_stack[-1]
@@ -576,13 +577,15 @@ forge() {
         local new_name
         read -p "Name of new directory: " new_name
         if [[ "${new_name:-}" ]]; then
-          mkdir "$current_selection/$new_name"
+          new_target=${current_selection%/.dna/*}/.dna
+          mkdir "$new_target/$new_name"
         fi
       elif [[ "$response" == "*new-file*" ]]; then
         local new_name
         read -p "Name of new file: " new_name
         if [[ "${new_name:-}" ]]; then
-          edit "$current_selection/$new_name"
+          new_target=${current_selection%/.dna/*}/.dna
+          edit "$new_target/$new_name"
         fi
       elif [[ "$response" == "*expand*" ]]; then
         if [[ $link_expansion == f ]]; then
