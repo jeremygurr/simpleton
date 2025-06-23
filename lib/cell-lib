@@ -1828,6 +1828,11 @@ convert_table_to_dims() {
         value=${c_data[$data_offset]}
 
         if [[ "$value" ]]; then
+
+          if [[ "$value" == $empty_member ]]; then
+            value=
+          fi
+
           case $target_dim_var_type in 
             sdims)
               sdims=$value
@@ -1850,6 +1855,7 @@ convert_table_to_dims() {
               fail1
             ;;
           esac
+
         fi
 
       done; maybe_break
@@ -4210,10 +4216,18 @@ set_function_cross_dims_single() {
         conflict=$field
         break
       else
-        if [[ "$value" != all ]]; then
+        if [[ "$value" && "$value" != all \
+           && ! -v cross_dims_tried[$field] ]]; then
           log_debug "Cross dim set: $field=$value"
           ddim=$value
           validated_dims+=" $field"
+          cross_dims_tried[$field]=1
+
+          # recursive
+          dim=$field \
+          member=$value \
+          set_cross_dims || fail
+
         fi
       fi
 
@@ -4226,6 +4240,7 @@ set_function_cross_dims_single() {
 # inputs:
 #   derive_table
 #   dim
+#   member
 set_table_cross_dims_single() {
   begin_function
     local -n derive_fields=derive_table_${derive_table}_fields \
@@ -4262,10 +4277,18 @@ set_table_cross_dims_single() {
             conflict=$field
             break
           else
-            if [[ "$value" && "$value" != all ]]; then
+            if [[ "$value" && "$value" != all \
+               && ! -v cross_dims_tried[$field] ]]; then
               log_debug "Cross dim set: $field=$value"
               field_dim=$value
               validated_dims+=" $field"
+              cross_dims_tried[$field]=1
+
+              # recursive
+              dim=$field \
+              member=$value \
+              set_cross_dims || fail
+
             fi
           fi
         fi
@@ -5053,6 +5076,8 @@ calc_coordinates_refine_multi() {
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
       if [[ -v matching_rows[all] || -v matching_rows[$row_index] ]]; then
 
+        local -A cross_dims_tried=()
+
         table=${coord_type}_coordinate \
         convert_table_to_dims || fail
 
@@ -5091,6 +5116,7 @@ prep_seed_dims() {
 
 calc_coordinates_slow() {
   begin_function
+
     local row_index=${row_index:-} \
       check_dims="${coordinate_fields[*]}" \
       validated_dims= \
@@ -5101,6 +5127,7 @@ calc_coordinates_slow() {
 
     local dim
 
+    local -A cross_dims_tried=()
     begin_for dim in ${!all_dims[*]}; doo
 
       local -n idim=i_$dim \
@@ -5252,25 +5279,25 @@ calc_coordinates() {
       abort
     fi
 
-    if [[ ${xlr8:-f} == t ]]; then
-      local -n fields=${coord_type}_coordinate_fields
-      local dt dt_fields=
-      for dt in ${derive_tables[*]}; do
-        dt_fields+="${dt}_fields ${dt}_data "
-      done
-      local coord_fields="
-        coordinate_data
-        coordinate_count
-        coordinate_rows
-        coordinate_fields_count
-      "
-      local dim_fields
-      local dim_type=trunk_dims
-      xlr8_get_dim_fields ${trunk_dims_expanded[*]}
-      xlr8 load_coordinates $coord_fields $dim_fields $fields $dt_fields || fail
-    else
+    #if [[ ${xlr8:-f} == t ]]; then
+    #  local -n fields=${coord_type}_coordinate_fields
+    #  local dt dt_fields=
+    #  for dt in ${derive_tables[*]}; do
+    #    dt_fields+="${dt}_fields ${dt}_data "
+    #  done
+    #  local coord_fields="
+    #    coordinate_data
+    #    coordinate_count
+    #    coordinate_rows
+    #    coordinate_fields_count
+    #  "
+    #  local dim_fields
+    #  local dim_type=trunk_dims
+    #  xlr8_get_dim_fields ${trunk_dims_expanded[*]}
+    #  xlr8 load_coordinates $coord_fields $dim_fields $fields $dt_fields || fail
+    #else
       calc_coordinates_slow || fail
-    fi
+    #fi
 
     coordinate_count=${#coordinate_data[*]}
     coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
