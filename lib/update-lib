@@ -1693,10 +1693,32 @@ update_command() {
     fi
 
     if (( update_risk > risk_tolerance )); then
-      log_fatal "Risk too high"
-      log_fatal "The risk of updating $short_cell is too high for the specified tolerance ($update_risk > $risk_tolerance)."
-      log_fatal "Try a less risky strategy or increase the risk tolerance of this command (with the risk parameter)"
-      fail1
+
+      case $update_risk in
+        1)
+          echo "${YELLOW}There is a low amount of risk in updating this cell (level 1)." >&$fd_original_err
+        ;;
+        2)
+          echo "${YELLOW}There is a moderate amount of risk in updating this cell (level 2). Continuing without really knowing what you are doing could result in production outage." >&$fd_original_err
+        ;;
+        3)
+          echo "${RED}There is a high amount of risk in updating this cell (level 3). Continuing without really knowing what you are doing could result in severe production outage." >&$fd_original_err
+        ;;
+        *)
+          log_fatal "Internal error: Invalid risk level: $update_risk. Should be 0-3"
+          fail1
+        ;;
+      esac
+
+      local result
+      prompt_ynq "Are you sure you want to proceed?" result
+      case $result in
+        n|q)
+          echo "Update aboorted by user" >&$fd_original_err
+          fail1
+        ;;
+      esac
+
     fi
 
     if [[ "${upstream_cell_link:-}" ]]; then
