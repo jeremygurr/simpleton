@@ -4210,6 +4210,109 @@ calc_coordinates_dedup() {
 }
 
 # inputs:
+#   dim            Dim of the member being checked. can't be empty
+#   single_member  The member to be checked, if there is only one. may be empty
+#   multi_member   The name of array var containing members to be checked, if more than one.  may be empty
+#   target_member  what to check against. can't be empty
+# outputs:
+#   returns 0 if there are conflicts
+member_conflicts() {
+  if [[ "$single_member" ]]; then
+    if [[ "$single_member" != "$target_member" && "$target_member" != all && "$single_member" != all ]]; then
+      return 0
+    fi
+  elif [[ "$multi_member" ]]; then
+    local -n members=$multi_member
+    if [[ "${members:-}" ]]; then
+
+      local found=f new_values v
+      dim_var=$dim expand_dim_members $multi_member || return 0
+
+      for v in "${new_values[@]}"; do
+        if [[ "$v" == "$target_member" || "$target_member" == all || "$v" == all ]]; then
+          found=t
+          break
+        fi
+      done
+
+      if [[ $found == f ]]; then
+        return 0
+      fi
+
+    fi
+  fi
+  return 1
+}
+
+# inputs:
+#   derive_table
+#   dim
+#   member
+set_table_cross_dims_single() {
+  local member=$member dim=$dim derive_table=$derive_table
+  begin_function
+    local -n derive_fields=derive_table_${derive_table}_fields \
+             derive_data=derive_table_${derive_table}_data \
+
+    local field_count=${#derive_fields[*]} \
+      data_count=${#derive_data[*]} \
+      row_index data_index=0 column_index \
+      value= field \
+
+    local row_count=$((data_count / field_count))
+
+    local -n dt_index=derive_table_${derive_table}_index_${dim}
+    if [[ -v dt_index[$member] ]]; then
+      row_index=( ${dt_index[$member]} )
+      if (( ${#row_index[*]} > 1 )); then
+        log_fatal "Too many rows found in derive table matching cross dim: $row_index"
+        fail1
+      fi
+
+      for (( column_index = 0; column_index < field_count; column_index++ )); do
+        field=${derive_fields[$column_index]}
+        local fields
+        get_plural $field fields
+        if [[ $field != $dim && -v all_dims[$field] ]]; then
+          (( data_index = row_index * field_count + column_index ))
+          value=${derive_data[$data_index]}
+          local -n field_dim=d_$field
+          if dim=$field \
+             single_member="${field_dim:-}" \
+             multi_member=d_$fields \
+             target_member="$value" \
+             member_conflicts; then
+            conflict="$field = $value"
+            break
+          else
+            if [[ "$value" && "$value" != all \
+               && ! -v cross_dims_tried[$field] ]]; then
+              log_debug "Cross dim set: $field=$value"
+              field_dim=$value
+              validated_dims+=" $field"
+              cross_dims_tried[$field]=1
+
+              zombie_fence
+
+              # recursive
+              dim=$field \
+              member=$value \
+              set_cross_dims || fail
+
+            fi
+          fi
+        fi
+      done
+    else
+      log_debug "Member ($member) doesn't exist in derive table ($derive_table)"
+      conflict='(missing from table)'
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
 #   derive_fun
 #   dim
 set_function_cross_dims_single() {
@@ -4261,66 +4364,52 @@ set_function_cross_dims_single() {
   handle_return
 }
 
-# inputs:
-#   derive_table
+# input: 
 #   dim
 #   member
-set_table_cross_dims_single() {
+#   key_functions
+#   key_tables
+# output:
+#   {dims}
+#   conflict
+set_cross_dims_internal() {
+  local member=${member}
   begin_function
-    local -n derive_fields=derive_table_${derive_table}_fields \
-             derive_data=derive_table_${derive_table}_data \
 
-    local field_count=${#derive_fields[*]} \
-      data_count=${#derive_data[*]} \
-      row_index data_index=0 column_index \
-      value= field \
+    if [[ "${key_functions:-}" ]]; then
+      local derive_fun
 
-    local row_count=$((data_count / field_count))
-
-    local -n dt_index=derive_table_${derive_table}_index_${dim}
-    if [[ -v dt_index[$member] ]]; then
-      row_index=( ${dt_index[$member]} )
-      if (( ${#row_index[*]} > 1 )); then
-        log_fatal "Too many rows found in derive table matching cross dim: $row_index"
-        fail1
-      fi
-
-      for (( column_index = 0; column_index < field_count; column_index++ )); do
-        field=${derive_fields[$column_index]}
-        local fields
-        get_plural $field fields
-        if [[ $field != $dim && -v all_dims[$field] ]]; then
-          (( data_index = row_index * field_count + column_index ))
-          value=${derive_data[$data_index]}
-          local -n field_dim=d_$field
-          if dim=$field \
-             single_member="${field_dim:-}" \
-             multi_member=d_$fields \
-             target_member="$value" \
-             member_conflicts; then
-            conflict=$field
-            break
-          else
-            if [[ "$value" && "$value" != all \
-               && ! -v cross_dims_tried[$field] ]]; then
-              log_debug "Cross dim set: $field=$value"
-              field_dim=$value
-              validated_dims+=" $field"
-              cross_dims_tried[$field]=1
-
-              # recursive
-              dim=$field \
-              member=$value \
-              set_cross_dims || fail
-
-            fi
-          fi
-        fi
-      done
-    else
-      log_debug "Member ($member) doesn't exist in derive table ($derive_table)"
-      conflict='(missing from table)'
+      begin_for derive_fun in $key_functions; doo
+        set_function_cross_dims_single || fail
+      end_for
     fi
+
+    if [[ "${key_tables:-}" ]]; then
+      local derive_table
+
+      begin_for derive_table in $key_tables; doo
+        set_table_cross_dims_single || fail
+      end_for
+    fi
+
+  end_function
+  handle_return
+}
+
+# input: 
+#   dim
+#   member
+# output:
+#   {dims}
+#   conflict
+set_cross_dims() {
+  begin_function
+
+    conflict=
+    local -n key_tables=dim_${dim}_key_tables \
+      key_functions=dim_${dim}_key_functions \
+
+    set_cross_dims_internal || fail
 
   end_function
   handle_return
@@ -4534,19 +4623,25 @@ calc_coords_validate_member() {
 
     local values=() derive_found=f
     local -A derive_tried=()
+    derive_exactly_one=f \
     deriving= \
     derive_deep=f \
     attempt_derive || fail
 
     if [[ $derive_found == t ]]; then
+
       if [[ ! "${values[0]:-}" ]]; then
         is_valid=f
       elif ! array_contains values "$member" && ! array_contains values all; then
         conflicting_values=( "${values[@]}" )
         is_valid=f
       fi
-      log_debug "Dim $dim is not valid because it couldn't be derived from existing dims"
-      abort
+
+      if [[ $is_valid == f ]]; then
+        log_debug "Dim $dim is not valid because it couldn't be derived from existing dims"
+        abort
+      fi
+
     fi
 
     #  should have already been set
@@ -4580,96 +4675,6 @@ calc_coords_validate_member() {
     #  done
 
     log_debug "Dim $dim is valid"
-
-  end_function
-  handle_return
-}
-
-# inputs:
-#   dim            Dim of the member being checked. can't be empty
-#   single_member  The member to be checked, if there is only one. may be empty
-#   multi_member   The name of array var containing members to be checked, if more than one.  may be empty
-#   target_member  what to check against. can't be empty
-# outputs:
-#   returns 0 if there are conflicts
-member_conflicts() {
-  begin_function
-
-  if [[ "$single_member" ]]; then
-    if [[ "$single_member" != "$target_member" && "$target_member" != all && "$single_member" != all ]]; then
-      return 0
-    fi
-  elif [[ "$multi_member" ]]; then
-    local -n members=$multi_member
-    if [[ "${members:-}" ]]; then
-
-      local found=f new_values v
-      dim_var=$dim expand_dim_members $multi_member || return 0
-
-      for v in "${new_values[@]}"; do
-        if [[ "$v" == "$target_member" || "$target_member" == all || "$v" == all ]]; then
-          found=t
-          break
-        fi
-      done
-
-      if [[ $found == f ]]; then
-        return 0
-      fi
-
-    fi
-  fi
-  return 1
-
-  end_function
-  handle_return
-}
-
-# input: 
-#   dim
-#   member
-#   key_functions
-#   key_tables
-# output:
-#   {dims}
-#   conflict
-set_cross_dims_internal() {
-  begin_function
-
-    if [[ "${key_functions:-}" ]]; then
-      local derive_fun
-
-      begin_for derive_fun in $key_functions; doo
-        set_function_cross_dims_single || fail
-      end_for
-    fi
-
-    if [[ "${key_tables:-}" ]]; then
-      local derive_table
-
-      begin_for derive_table in $key_tables; doo
-        set_table_cross_dims_single || fail
-      end_for
-    fi
-
-  end_function
-  handle_return
-}
-
-# input: 
-#   dim
-#   member
-# output:
-#   {dims}
-#   conflict
-set_cross_dims() {
-  begin_function
-
-    conflict=
-    local -n key_tables=dim_${dim}_key_tables \
-      key_functions=dim_${dim}_key_functions \
-
-    set_cross_dims_internal || fail
 
   end_function
   handle_return
