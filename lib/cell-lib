@@ -448,6 +448,7 @@ init_context() {
 
     declare -Ag all_dims=() \
       dim_shorts=() \
+      required_dims=() \
 
     auto_loads=() \
     cell_expiration= \
@@ -2278,10 +2279,10 @@ narrow_dim_fun() {
 }
 
 # inputs:
-#   $1           dim
-#   $2           name of array variable containing members
+#   dim          
+#   result_var   name of array variable containing members
 # outputs:
-#   ($2)         array variable
+#   (result_var) array variable
 #   derive_found
 narrow_dim() {
   local dim=$dim result_var=$result_var
@@ -2674,6 +2675,15 @@ get_support_dims() {
   handle_return
 }
 
+add_required_dims() {
+  local dims=$* dim
+  for dim in $dims; do
+    if [[ " $optional_dims " != *" $dim "* ]]; then
+      required_dims[$dim]=1
+    fi
+  done
+}
+
 setup_dims() {
   begin_function
 
@@ -2690,8 +2700,16 @@ setup_dims() {
     if [[ $cell_is_leaf == t ]]; then
       expand_dims ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} || fail
       load_implicit_dims || fail
+      add_required_dims ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} || fail
     else
       expand_dims ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} || fail
+      add_required_dims ${trunk_dims_expanded[*]:-} || fail
+    fi
+
+    if (( ${#required_dims[*]} > 0 )); then
+      log_debug "Required dims: ${!required_dims[*]}"
+    else
+      log_debug "No dims required"
     fi
 
   end_function
@@ -3075,6 +3093,7 @@ build_context_related_dims() {
     end_for
 
     begin_while (( ${#next_level_dims[*]} > 0 )); doo
+      current_level_dims=()
       add_to_set next_level_dims current_level_dims
       next_level_dims=()
       begin_for next_level_row in "${!current_level_dims[@]}"; doo
@@ -4117,8 +4136,9 @@ attempt_default() {
 
     if [[ ! "${values:-}" ]]; then
 
-      if [[ " $optional_dims " == *" $dim "* ]]; then
+      if [[ ! -v required_dims[$dim] ]]; then
         values=( $empty_member )
+        needs_narrowing=f
       fi
       already_expanded=t
 
@@ -4131,15 +4151,13 @@ attempt_default() {
 calc_coordinates_row_end() {
   begin_function
 
-    if [[ "$optional_dims" ]]; then
-      local unknown_dim new_unknown_dims=
-      for unknown_dim in $unknown_dims; do
-        if [[ " $optional_dims " != *" $unknown_dim "* ]]; then
-          new_unknown_dims+="$unknown_dim "
-        fi
-      done
-      unknown_dims=${new_unknown_dims% }
-    fi
+    local unknown_dim new_unknown_dims=
+    for unknown_dim in $unknown_dims; do
+      if [[ -v required_dims[$unknown_dim] ]]; then
+        new_unknown_dims+="$unknown_dim "
+      fi
+    done
+    unknown_dims=${new_unknown_dims% }
 
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Skipped row because of unresolvable dims: $unknown_dims"
@@ -4402,7 +4420,7 @@ calc_coordinates_next_unknown_dim_found() {
       # don't need to validate if in derive phase, since it's already proven valid by the derive
       #   process itself
       local needs_validation=f
-      if [[ $phase == default ]]; then
+      if [[ $phase == default && "$m" != "$empty_member" ]]; then
         needs_validation=t
       fi
 
@@ -4509,7 +4527,7 @@ calc_coords_validate_member() {
       abort
     fi
 
-    if [[ " $optional_dims " == *" $dim "* && ( ! "$member" || $member == $empty_member ) ]]; then
+    if [[ ! -v required_dims[$dim] && ( ! "$member" || $member == $empty_member ) ]]; then
       log_debug "Dim $dim is optional and missing, so it's valid"
       abort
     fi
@@ -4684,28 +4702,31 @@ calc_coordinates_next_dim_member() {
 
       conflict=
 
-      set_cross_dims_internal || fail
+      if [[ "$member" != $empty_member ]]; then
+        set_cross_dims_internal || fail
 
-      if [[ "$conflict" ]]; then
-        local conflict_plural
-        if [[ "$conflict" =~ ^[a-zA-Z0-9_]+$ ]]; then
-          get_plural $conflict conflict_plural
-          local -n conflict_member=d_$conflict \
-            conflict_members=d_$conflict_plural
-          log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
-        else
-          log_debug "Conflict found for cross-dim $dim = $member $conflict"
+        if [[ "$conflict" ]]; then
+          local conflict_plural
+          if [[ "$conflict" =~ ^[a-zA-Z0-9_]+$ ]]; then
+            get_plural $conflict conflict_plural
+            local -n conflict_member=d_$conflict \
+              conflict_members=d_$conflict_plural
+            log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
+          else
+            log_debug "Conflict found for cross-dim $dim = $member $conflict"
+          fi
         fi
+
+        local d
+        for d in $validated_dims; do
+          if [[ $phase == unknown ]]; then
+            remove_word_from_string unknown_dims $d
+          else
+            remove_word_from_string check_dims $d
+          fi
+        done
+
       fi
-
-      local d
-      for d in $validated_dims; do
-        if [[ $phase == unknown ]]; then
-          remove_word_from_string unknown_dims $d
-        else
-          remove_word_from_string check_dims $d
-        fi
-      done
 
       validated_dims=
 
@@ -6460,9 +6481,9 @@ switch_context() {
         #  done
         #fi
 
-        if [[ -f $context_path-branch-coords ]]; then
-          source $context_path-branch-coords || fail
-        fi
+        #if [[ -f $context_path-branch-coords ]]; then
+        #  source $context_path-branch-coords || fail
+        #fi
 
         setup_dims || fail
 
