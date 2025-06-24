@@ -125,6 +125,22 @@ get_short_path() {
   short_path=$p
 }
 
+lib() {
+  local c=${PWD%/.lib}
+  while true; do
+    c=${c%/*}
+    if [[ -d $c/.lib ]]; then
+      echo "Found lib in $c"
+      cd $c/.lib
+      break
+    fi
+    if [[ "$c" != /*/* ]]; then
+      echo "Couldn't find lib."
+      break
+    fi
+  done
+}
+
 walk() {
 
   begin_function
