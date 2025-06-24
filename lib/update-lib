@@ -77,6 +77,29 @@ prep_upstream() {
   handle_return
 }
 
+maybe_fix_validate() {
+  local choice=$1
+  begin_function
+    if [[ ! -e "$choice" ]]; then
+
+      local invalid_dep=t
+
+      if [[ $invalid_dep == t ]]; then
+        rm -rf ${choice} || fail
+        make_cyto_validate_single ${choice##*/} || fail
+        invalid_dep=f
+      fi
+
+      if [[ $invalid_dep == t ]]; then
+        log_fatal "Internal error: Broken validation config: $target_var"
+        fail1
+      fi
+
+    fi
+  end_function
+  handle_return
+}
+
 maybe_fix_choice() {
   local choice=$1
   begin_function
@@ -173,10 +196,9 @@ validate_cell() {
           conditions=${target#*,}
         fi
 
-        local target_cell=$validate_path/$target_var
+        local target_cell=$validate_path/$target_var invalid_dep=f
         if [[ ! -e $target_cell ]]; then
-          log_fatal "Internal error: Missing target_cell: $target_cell"
-          fail1
+          maybe_fix_validate $target_cell || fail
         fi
 
         real_cell=$(realpath $target_cell) || fail
