@@ -207,6 +207,7 @@ validate_cell() {
           downstream_cell_name=${short_cell//\//_} \
           fresh=0 \
 
+        during_validation=t \
         fork execute_commands "$real_cell" update || fail
         load_upstream_vars || fail
 
@@ -230,12 +231,12 @@ validate_cell() {
                 validation_says_already_done=t
                 touch $status_path/last-validate-good || fail
                 touch $status_path/last-validate-${target_var}-good || fail
-                strong_log=t log_verbose "Validation good"
+                strong_log=t log_verbose "Validation result: done"
               else
                 validation_says_already_done=f
                 touch $status_path/last-validate-bad || fail
                 touch $status_path/last-validate-${target_var}-bad || fail
-                strong_log=t log_verbose "Validation bad"
+                strong_log=t log_verbose "Validation result: not done"
                 break 2
               fi
             else
@@ -243,12 +244,12 @@ validate_cell() {
                 validation_says_already_done=t
                 touch $status_path/last-validate-good || fail
                 touch $status_path/last-validate-${target_var}-good || fail
-                strong_log=t log_verbose "Validation good"
+                strong_log=t log_verbose "Validation result: done"
               else
                 validation_says_already_done=f
                 touch $status_path/last-validate-bad || fail
                 touch $status_path/last-validate-${target_var}-bad || fail
-                strong_log=t log_verbose "Validation bad"
+                strong_log=t log_verbose "Validation result: not done"
                 break 2
               fi
             fi
@@ -347,6 +348,15 @@ get_needs_update_internal() {
     then
       needs_update=t
       log_message="Needs update because cell always needs to update"
+      cell_is_outdated=t
+    elif [[ $required_freshness == 0 ]]
+    then
+      needs_update=t
+      if [[ ${cell_is_used_for_validation:-f} == t ]]; then
+        log_message="Needs update because this cell is being used for validation"
+      else
+        log_message="Needs update because refresh has been forced (fresh=0)"
+      fi
       cell_is_outdated=t
     elif get_is_stale $status_path || fail
          [[ $is_stale == t ]]
@@ -825,7 +835,6 @@ propagate_change_to_downstream2() {
         # can't combine these if statements or it will alter the else condition
         #   and break things
         if [[ -f $status_self/deps-up-to-date ]]; then
-          zombie_log "Deleted $status_self/deps-up-to-date"
           rm $status_self/deps-up-to-date || fail
           # recursive
           from_cell=$cell \
@@ -1565,7 +1574,6 @@ update_self_retry_loop() {
 
         if [[ $update_successful == t ]]; then
           touch $status_path/deps-up-to-date || fail
-          zombie_log "Set $status_path/deps-up-to-date"
         fi
 
       done
@@ -1814,7 +1822,6 @@ update_command() {
 
           if [[ $update_successful == t ]]; then
             touch $status_path/deps-up-to-date || fail
-            zombie_log "Set $status_path/deps-up-to-date"
           fi
 
         else
