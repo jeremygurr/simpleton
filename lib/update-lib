@@ -312,7 +312,9 @@ get_needs_update_internal() {
       done
     fi
 
-    local out_file= out_path= cell_is_leaf=f check_op_var=f data_props_expanded=()
+    local out_file= out_path= cell_is_leaf=f check_op_var=f \
+      data_props_expanded=() default_freshness= \
+
     source $check_context || fail
 
     local required_freshness x
@@ -805,17 +807,6 @@ update_prop_hash() {
   return 0
 }
 
-already_in_dep_stack() {
-  local find_dep=$1
-  local dep
-  for dep in ${dep_stack[*]}; do
-    if [[ $dep == $find_dep ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 propagate_change_to_downstream2() {
   begin_function
 
@@ -834,7 +825,7 @@ propagate_change_to_downstream2() {
     
     local status_self=$cell/.cyto/status
     
-    if already_in_dep_stack $cell; then
+    if array_contains dep_stack $cell; then
       abort
     fi
     dep_stack+=( $cell )
@@ -869,11 +860,13 @@ propagate_change_to_downstream() {
     if [[ -d $down_path ]]; then
       local dep_stack=( ${downstream_cell_stack[*]} )
       folders=( $(find1 $down_path -not -name '.*' -type d) ) || fail
+
       loop_over_var=folders \
       background=f \
-        par=f fork=f \
-        body=propagate_change_to_downstream2 \
-        parallel_loop || fail
+      par=f fork=f \
+      body=propagate_change_to_downstream2 \
+      parallel_loop || fail
+
     fi
 
   end_function
