@@ -215,9 +215,14 @@ walk() {
           walk_add_choice "d" "$path" "downstream cells"
         fi
 
-        path=$current_selection/.dna/validate
+        path=$current_selection/.cyto/validate
         if [[ -d $path ]]; then
           walk_add_choice "v" "$path" "validate cells"
+        else
+          path=$current_selection/.dna/validate
+          if [[ -d $path ]]; then
+            walk_add_choice "v" "$path" "validate cells"
+          fi
         fi
 
         walk_add_dirs $current_selection || return 1
