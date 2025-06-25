@@ -2495,6 +2495,7 @@ prep_dims() {
     local dim_var dims_var
     for dim_var in ${!all_dims[*]}; do
 
+      zombie_fence
       get_plural $dim_var dims_var
 
       # p_dims are what the user sets when putting parameters on the commandline (without the p_), or explicitly set in environemnt (with the p_)
@@ -2507,49 +2508,50 @@ prep_dims() {
         pdim=p_$dim_var pdims=p_$dims_var \
         idim=i_$dim_var idims=i_$dims_var \
 
-      if [[ $dim_var == *_* && ! "${pdim:-}" && ! "${pdims:-}" ]]; then
+      if [[ "${ddim:-}" || "${ddims:-}" ]]; then
+        unset pdim pdims sdim sdims
+        #  we need dims to have a non blank value to represent explicit emptiness (missing_member)
+        #[[ "${ddim:-}" == $empty_member ]] && ddim=
+        #[[ "${ddims:-}" == $empty_member ]] && ddims=()
+      else
 
-        local shorter_dim=$dim_var shorter_dims
+        if [[ $dim_var == *_* && ! "${pdim:-}" && ! "${pdims:-}" ]]; then
 
-        while [[ $shorter_dim == *_* ]]; do
+          local shorter_dim=$dim_var shorter_dims
 
-          shorter_dim=${shorter_dim#*_}
-          get_plural $shorter_dim shorter_dims
+          while [[ $shorter_dim == *_* ]]; do
 
-          if [[ ! -v dim_shorts[$shorter_dim] ]]; then
-            log_fatal "Internal error: dim_short[$shorter_dim] doesn't exist, and it should have already been set in build_dim_info"
-            fail1
-          fi
+            shorter_dim=${shorter_dim#*_}
+            get_plural $shorter_dim shorter_dims
 
-          local -n short_pdim=p_$shorter_dim \
-            short_pdims=p_$shorter_dims \
-
-          if [[ "${short_pdim:-}${short_pdims:-}" ]]; then
-
-            if [[ ${dim_shorts[$shorter_dim]} == *' '* ]]; then
-              log_fatal "Ambiguous dim: $dim_var. This could refer to any of: ${dim_shorts[$shorter_dim]}. Choose one specifically when setting this dim."
+            if [[ ! -v dim_shorts[$shorter_dim] ]]; then
+              log_fatal "Internal error: dim_short[$shorter_dim] doesn't exist, and it should have already been set in build_dim_info"
               fail1
             fi
 
-            if [[ "${short_pdim:-}" ]]; then
-              pdim=$short_pdim
-              zombie_log "Setting p_$dim_var=$short_pdim"
-              break
-            elif [[ "${short_pdims:-}" ]]; then
-              pdims=( "${short_pdims[@]}" )
-              break
+            local -n short_pdim=p_$shorter_dim \
+              short_pdims=p_$shorter_dims \
+
+            if [[ "${short_pdim:-}${short_pdims:-}" ]]; then
+
+              if [[ ${dim_shorts[$shorter_dim]} == *' '* ]]; then
+                log_fatal "Ambiguous dim: $dim_var. This could refer to any of: ${dim_shorts[$shorter_dim]}. Choose one specifically when setting this dim."
+                fail1
+              fi
+
+              if [[ "${short_pdim:-}" ]]; then
+                pdim=$short_pdim
+                zombie_log "Setting p_$dim_var=$short_pdim"
+                break
+              elif [[ "${short_pdims:-}" ]]; then
+                pdims=( "${short_pdims[@]}" )
+                break
+              fi
+
             fi
 
-          fi
-
-        done
-      fi
-
-      if [[ "${ddim:-}" || "${ddims:-}" ]]; then
-        unset pdim pdims sdim sdims
-        [[ "${ddim:-}" == $empty_member ]] && ddim=
-        [[ "${ddims:-}" == $empty_member ]] && ddims=()
-      else
+          done
+        fi
 
         # We do not support pulling from simple dim here
         # If we want to set an dim in env vars, it must be set with p_dim form
