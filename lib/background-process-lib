@@ -748,6 +748,7 @@ magic_shell_prompt='>=-=>'
 #   succeed_after (optional) will override shell_prompt check if set
 #   fail_after (optional) will override shell_prompt check if set
 #   interact (optional) allow for automatic reactions to command output
+#   allow_return_codes
 # output: 
 #   result
 #   command_successful
@@ -763,6 +764,7 @@ run_pipe_command() {
     fail_after=${fail_after:-} \
     interact=${interact:-} \
     silence_errors=${silence_errors:-f} \
+    allow_return_codes=${allow_return_codes:-} \
 
   local log_show_vars=command log_vars='pipe shell_prompt buffering'
   begin_function_hi
@@ -781,11 +783,25 @@ run_pipe_command() {
       escape_regex shell_prompt
       shell_prompt=${shell_prompt%%*($NL| |$TAB)}
       shell_prompt=${shell_prompt##*($NL| |$TAB)}
-      if [[ "$host_prompt" ]]; then
-        succeed_after="^0\ $host_prompt\ $shell_prompt"
+      succeed_after='^'
+
+      if [[ "$allow_return_codes" ]]; then
+        succeed_after+="(0"
+        local rc
+        for rc in $allow_return_codes; do
+          succeed_after+="|$rc"
+        done
+        succeed_after+=")"
       else
-        succeed_after="^0\ .*$shell_prompt"
+        succeed_after+="0"
       fi
+
+      if [[ "$host_prompt" ]]; then
+        succeed_after+="\ $host_prompt\ $shell_prompt"
+      else
+        succeed_after+="\ .*$shell_prompt"
+      fi
+
       fail_after="^[1-9][0-9]*\ .*$shell_prompt"
     fi
     to_var=result \
