@@ -189,7 +189,7 @@ validate_cell() {
         target_var=${target%%,*}
         target_var=${target_var//-/_}
 
-        log_verbose "Validating using $target_var"
+        strong_log=t log_verbose "Validating using $target_var"
 
         local conditions=
         if [[ $target_var != "$target" ]]; then
@@ -230,12 +230,12 @@ validate_cell() {
                 validation_says_already_done=t
                 touch $status_path/last-validate-good || fail
                 touch $status_path/last-validate-${target_var}-good || fail
-                log_verbose "Validation good"
+                strong_log=t log_verbose "Validation good"
               else
                 validation_says_already_done=f
                 touch $status_path/last-validate-bad || fail
                 touch $status_path/last-validate-${target_var}-bad || fail
-                log_verbose "Validation bad"
+                strong_log=t log_verbose "Validation bad"
                 break 2
               fi
             else
@@ -243,12 +243,12 @@ validate_cell() {
                 validation_says_already_done=t
                 touch $status_path/last-validate-good || fail
                 touch $status_path/last-validate-${target_var}-good || fail
-                log_verbose "Validation good"
+                strong_log=t log_verbose "Validation good"
               else
                 validation_says_already_done=f
                 touch $status_path/last-validate-bad || fail
                 touch $status_path/last-validate-${target_var}-bad || fail
-                log_verbose "Validation bad"
+                strong_log=t log_verbose "Validation bad"
                 break 2
               fi
             fi
@@ -699,7 +699,6 @@ update_upstream() {
 }
 
 update_upstreams() {
-  local execute_update=${execute_update:-t}
   begin_function
 
     update_successful=t
@@ -723,11 +722,9 @@ update_upstreams() {
           orig_up_chosen_path=$up_chosen_path \
           upstream_skipped=f \
 
-        if [[ $execute_update == t ]]; then
-          update_upstream $upstream || fail
-          if [[ $update_successful == f ]]; then
-            break
-          fi
+        update_upstream $upstream || fail
+        if [[ $update_successful == f ]]; then
+          break
         fi
 
         if [[ $upstream_skipped == f ]]; then
@@ -739,16 +736,9 @@ update_upstreams() {
 
     fi
 
-    if [[ $execute_update == t ]]; then
-      touch $status_path/deps-up-to-date || fail
-    fi
-
   end_function
 
   if failed || [[ $update_successful == f ]]; then
-    if [[ -f $status_path/deps-up-to-date ]]; then
-      rm $status_path/deps-up-to-date 
-    fi
     update_successful=f
   fi
 
@@ -835,6 +825,7 @@ propagate_change_to_downstream2() {
         # can't combine these if statements or it will alter the else condition
         #   and break things
         if [[ -f $status_self/deps-up-to-date ]]; then
+          zombie_log "Deleted $status_self/deps-up-to-date"
           rm $status_self/deps-up-to-date || fail
           # recursive
           from_cell=$cell \
@@ -1572,6 +1563,11 @@ update_self_retry_loop() {
 
         update_upstreams || fail
 
+        if [[ $update_successful == t ]]; then
+          touch $status_path/deps-up-to-date || fail
+          zombie_log "Set $status_path/deps-up-to-date"
+        fi
+
       done
     fi
 
@@ -1815,6 +1811,12 @@ update_command() {
           if [[ ${validation_says_already_done:-f} == f ]]; then
             update_upstreams || fail
           fi
+
+          if [[ $update_successful == t ]]; then
+            touch $status_path/deps-up-to-date || fail
+            zombie_log "Set $status_path/deps-up-to-date"
+          fi
+
         else
           update_successful=t
         fi
