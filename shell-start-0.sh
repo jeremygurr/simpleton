@@ -118,10 +118,10 @@ get_short_path() {
     p=${p#/seed/*/}
     o=$p
   fi
-  if [[ "$p" == */*/*/*/* ]]; then
-    p=${p%*/*/*/*/*}
-    p=${o#$p/}
-  fi
+  #if [[ "$p" == */*/*/*/* ]]; then
+  #  p=${p%*/*/*/*/*}
+  #  p=${o#$p/}
+  #fi
   short_path=$p
 }
 
