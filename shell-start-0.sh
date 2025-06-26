@@ -468,7 +468,6 @@ forge_add_subs() {
   local base=$1 from=${2:-$1}
   begin_function_lo
 
-    echo "forge_add_subs: base=$base from=$from"
     local file file1 file2 files short_path short_file colored_base
     colorize_path base colored_base
     get_short_path $colored_base
@@ -512,26 +511,11 @@ forge_add_choice() {
     short_path=$2 \
     short_file=$3 \
 
-  local wi=$walk_index
-
-  if [[ $digits_to_show == 1 ]]; then
-    if [[ "$wi" != ? ]]; then
-      wi=/
-    fi
-  else
-    if [[ "$wi" == ? ]]; then
-      wi=0$wi
-    elif [[ "$wi" == ???* ]]; then
-      wi=/
-    fi
-  fi
-
   if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
     return 0
   fi
 
-  walk_add_choice "$walk_index" "$current_action $file" "$short_path $wi $current_action $short_file"
-  (( walk_index++ ))
+  walk_add_choice_i "$current_action $file" "$short_path" "$current_action $short_file"
 }
 
 forge_add_dims() {

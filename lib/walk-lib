@@ -7,39 +7,57 @@ walk_get_choice() {
   local i=$1
   key=${choices[$i]}
   response=${choices[$((i+1))]}
-  message=${choices[$((i+2))]}
+  message1=${choices[$((i+2))]}
+  message2=${choices[$((i+3))]}
 }
 
 walk_get_hidden_choice() {
   local i=$1
   key=${hidden_choices[$i]}
   response=${hidden_choices[$((i+1))]}
-  message=${hidden_choices[$((i+2))]}
+  message1=${hidden_choices[$((i+2))]}
+  message2=${hidden_choices[$((i+3))]}
 }
 
 walk_menu_output() {
-  local key response message
-  for (( i = 0; i < ${#choices[*]}; i+=3 )); do
+  local key response message1 message2 
+
+  for (( i = 0; i < ${#choices[*]}; i+=4 )); do
     walk_get_choice $i
     if [[ $digits_to_show == 1 ]]; then
       if [[ "$key" != ? ]]; then
         key=/
       fi
     else
-      if [[ "$key" == ? ]]; then
+      if [[ "$key" == ? && "$key" =~ [0-9] ]]; then
         key=0$key
       elif [[ "$key" == ???* ]]; then
         key=/
       fi
     fi
-    echo "$key $message"
+
+    echo -n "$key $message1"
+    if [[ "$message2" ]]; then
+      echo -n " $key $message2"
+    fi
+    echo
+
   done
 }
 
 walk_menu() {
 
   local prompt=${prompt:-Choose:} \
-    i choice key message output
+    i choice key message output \
+    choice_count=${#choices[*]} \
+
+  (( choice_count /= 4 ))
+  echo "choice_count=$choice_count"
+  if (( choice_count < 10 )); then
+    digits_to_show=1
+  else
+    digits_to_show=2
+  fi
 
   output=$(walk_menu_output) 
   if [[ "$output" ]]; then
@@ -69,7 +87,7 @@ walk_menu() {
     echo -n "$CLEAR_SCREEN$prompt"
   fi
 
-  for (( i = 0; i < ${#choices[*]}; i+=3 )); do
+  for (( i = 0; i < ${#choices[*]}; i+=4 )); do
     walk_get_choice $i
     if [[ "$key" == "$input" || "0$key" == "$input" || "$key" == enter && "$input" == '' ]]; then
       found=t
@@ -78,7 +96,7 @@ walk_menu() {
   done
 
   if [[ $found == f ]]; then
-    for (( i = 0; i < ${#hidden_choices[*]}; i+=3 )); do
+    for (( i = 0; i < ${#hidden_choices[*]}; i+=4 )); do
       walk_get_hidden_choice $i
       if [[ "$key" == "$input" || "$key" == enter && "$input" == '' ]]; then
         found=t
@@ -88,7 +106,7 @@ walk_menu() {
   fi
 
   if [[ $found == t ]]; then
-    echo "$message"
+    echo "$message2"
   else
     echo "Invalid key: $input"
     response=
@@ -97,20 +115,16 @@ walk_menu() {
 }
  
 walk_add_choice() {
-  local hidden=${hidden:-f} key=$1 response=$2 message=${3:-$2}
+  local hidden=${hidden:-f} key=$1 response=$2 message1=${3:-$2} message2=${4:-}
   if [[ $hidden == f ]]; then
-    choices+=( "$key" "$response" "$message" )
+    choices+=( "$key" "$response" "$message1" "$message2" )
   else
-    hidden_choices+=( "$key" "$response" "$message" )
+    hidden_choices+=( "$key" "$response" "$message1" "$message2" )
   fi
 }
 
 walk_add_choice_i() {
-  local wi=$walk_index
-  if [[ $digits_to_show == 2 && $wi == ? ]]; then
-    wi=0$wi
-  fi
-  walk_add_choice "$wi" "$1" "${2:-$1}"
+  walk_add_choice "$walk_index" "$1" "${2:-$1}" "${3:-}"
   (( walk_index++ ))
 }
 
@@ -185,7 +199,7 @@ walk_execute() {
         if [[ "${hidden_choices:-}" ]]; then
           echo "${NL}Hidden commands:"
           local h
-          for (( i = 0; i < ${#hidden_choices[*]}; i+=3 )); do
+          for (( i = 0; i < ${#hidden_choices[*]}; i+=4 )); do
             walk_get_hidden_choice $i
             echo "$key $message"
           done | column -tl 2 | indent
