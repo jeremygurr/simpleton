@@ -41,6 +41,7 @@ alias plant='cell plant'
 alias mock='cell mock'
 alias dim='cell dim'
 alias up='cell up'
+alias validator='cell validator'
 alias ?='cell . ?'
 alias ??='cell . ??'
 alias safe='cell safe'
@@ -696,19 +697,7 @@ forge() {
         local choice
         while true; do
 
-          echo "c copy item to target dir (use t command to set destination)"
-          echo "C copy contents of item to target dir (use t command to set destination)"
-          echo "d delete"
-          echo "D duplicate"
-          echo "i info"
-          echo "g go"
-          echo "l link to target dir (use t command to set destination)"
-          echo "m move to target dir (use t command to set destination)"
-          echo "q cancel action change"
-          echo "r rename"
-          echo "v view file"
-
-          read -n1 -sp "Choose action: " choice
+          read -n1 -sp "Choose action (? = list actions): " choice
           case "$choice" in
             c)
               echo "copy"
@@ -730,11 +719,11 @@ forge() {
               current_action=duplicate
               break
             ;;
-            i)
-              echo "info"
-              current_action=info
-              break
-            ;;
+            #i)
+            #  echo "info"
+            #  current_action=info
+            #  break
+            #;;
             g)
               echo "go"
               current_action=go
@@ -763,6 +752,19 @@ forge() {
               echo "view"
               current_action=view
               break
+            ;;
+            \?)
+              echo "c copy item to target dir (use t command to set destination)"
+              echo "C copy contents of item to target dir (use t command to set destination)"
+              echo "d delete"
+              echo "D duplicate"
+              #echo "i info"
+              echo "g go"
+              echo "l link to target dir (use t command to set destination)"
+              echo "m move to target dir (use t command to set destination)"
+              echo "q cancel action change"
+              echo "r rename"
+              echo "v view file"
             ;;
             *)
               echo "Invalid action"
