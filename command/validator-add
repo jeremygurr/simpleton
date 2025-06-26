@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+
+select_validator() {
+  local starting_folder=$1
+  begin_function
+
+    echo "Choose validator to add."
+
+    walk_init || fail
+
+    show_selection() {
+      local extra=
+      if [[ -f $current_selection/.member ]]; then
+        extra=" $(<$current_selection/.member)"
+        if (( ${#extra} > 60 )); then
+          extra=" ${extra:0:60}..."
+        fi
+      fi
+
+      local highlight=$'\033[1;33m' \
+        reset=$'\033[0m'
+      echo "$highlight$hbar_equals$NL$(short_path $current_selection)$reset$extra"
+    }
+
+    adjust_choices() {
+      if [[ -d $current_selection/.. ]]; then
+        hidden=f walk_add_choice "." "$current_selection/.." ".."
+      fi
+
+      if [[ $current_selection == *:* ]]; then
+        path=${current_selection%%:*}
+        path=${path%/*}
+        walk_add_choice "t" "$path" "trunk"
+      fi
+
+      walk_add_dirs $current_selection || return 1
+      return 0
+    }
+
+    handle_walk_responses() {
+      if [[ -d "$response" ]]; then
+        current_selection="$(unrealpath $response)"
+      fi
+    }
+
+    local result= \
+      prompt="Choose a validator cell (press enter to accept current choice): " \
+
+    validator=
+    walk_execute $starting_folder || fail
+    if [[ "$result" ]]; then
+      validator=$result
+    else 
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
+validator_add_command() {
+  begin_function
+
+    local choices=${choices:-${choice:-}} name=${name:-}
+
+    if [[ ! "${seed_path:-}" ]]; then
+      load_branch_info || fail
+      find_seed_path $cell_path || fail
+    else
+      cell_path=/work${seed_path#/seed}
+    fi
+
+    if [[ ! "${seed_path:-}" || ! -e $seed_path ]]; then
+      log_fatal "Couldn't find seed path. You must either run this command in a work cell, or in a seed cell"
+      fail1
+    fi
+
+    local dna_path=$seed_path/.dna
+
+    if [[ ! "$choices" ]]; then
+      local validator=${cell_path#/*/*/}
+      validator=${cell_path%/$validator}
+      select_validator $validator || fail
+      choices=$validator
+    fi
+
+    if [[ ! "$choices" ]]; then
+      log_fatal "You must specify which cells to provide as choices with the choices var"
+      fail1
+    fi
+
+    if [[ "$choices" == *:* ]]; then
+      log_warn "It's usually incorrect to add a branch of a trunk. Usually the branch will be determined by the dims of this cell."
+    fi
+
+    local before
+    if [[ ! "$name" ]]; then
+      if [[ "$choices" == *\ * ]]; then
+        log_fatal "You must specify the name of the validator to add with the name var if you include more than one choice"
+        fail1
+      fi
+      choices=${choices%/}
+      name=${choices#/*/*/}
+      while [[ $name == */*:* ]]; do
+        name=${name%/*:*}
+      done
+      name=${name//\//-}
+    fi
+
+    local multiple_choices=f
+    if [[ "$choices" == *\ * ]]; then
+      multiple_choices=t
+    fi
+
+    local validator=$dna_path/up/$name
+
+    if [[ -e $validator ]]; then
+      log_fatal "A validator already exists with this name: $name"
+      fail1
+    fi
+
+    if [[ $multiple_choices == t ]]; then
+
+      mkdir -p $validator/choices || fail
+
+      begin_for choice in $choices; doo
+        choice=$(realpath $choice)
+        if [[ ! -d $choice/.dna ]]; then
+          log_fatal "$choice doesn't exist or is not a cell"
+          fail1
+        fi
+        before=${choice%/*/*/*}
+        local target=${choice#$before/}
+        target=${target//\//-}
+        safe_link $choice $validator/choices/$target || fail
+      end_for
+
+    else
+      mkdir -p ${validator%/*} || fail
+      choice=$(realpath $choices)
+      if [[ ! -d $choice/.dna ]]; then
+        log_fatal "$choice doesn't exist or is not a cell"
+        fail1
+      fi
+      safe_link $choice $validator || fail
+    fi
+
+    log_info "Validator has been added."
+
+    command_successful=t
+
+  end_function
+  handle_return
+}
+

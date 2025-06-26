@@ -224,13 +224,13 @@ walk() {
           walk_add_choice "d" "$path" "downstream cells"
         fi
 
-        path=$current_selection/.cyto/validate
+        path=$current_selection/.cyto/validator
         if [[ -d $path ]]; then
-          walk_add_choice "v" "$path" "validate cells"
+          walk_add_choice "v" "$path" "validator cells"
         else
-          path=$current_selection/.dna/validate
+          path=$current_selection/.dna/validator
           if [[ -d $path ]]; then
-            walk_add_choice "v" "$path" "validate cells"
+            walk_add_choice "v" "$path" "validator cells"
           fi
         fi
 
@@ -241,7 +241,7 @@ walk() {
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == up ]]; then
         walk_add_dirs $current_selection || return 1
-      elif [[ ${current_selection##*/} == validate ]]; then
+      elif [[ ${current_selection##*/} == validator ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == .dna ]]; then
         local work_cells= work_cell pw possibility
@@ -910,7 +910,7 @@ new() {
     echo "  if type=clone, will do a simple clone of the parent cell." >&2
     echo "  if type=up, will clone the cell and add the new cell as the upstream of the old cell." >&2
     echo "  if type=down, will clone the cell and add the old cell as the upstream of the new cell." >&2
-    echo "  if type=validate, will clone the cell and add the new cell as a validator of the old cell." >&2
+    echo "  if type=validator, will clone the cell and add the new cell as a validator of the old cell." >&2
     echo "  name is the cell path of the new cell being created. Could include full work or seed path, or just path inside of the module." >&2
     echo "  if clean is specified, will delete any existing cell of the same name." >&2
     echo "  can use single letter abbreviations for type" >&2
@@ -926,8 +926,8 @@ new() {
     d|down)
       type=down
     ;;
-    v|validate)
-      type=validate
+    v|validator)
+      type=validator
     ;;
     ''|\?*|-h|--help)
       show_usage
@@ -980,7 +980,7 @@ new() {
   mkdir -p $new_seed_path/.dna || return 1
   rsync -a $old_seed_path/.dna/ $new_seed_path/.dna/ || return 1
 
-  if [[ $type == up || $type == validate ]]; then
+  if [[ $type == up || $type == validator ]]; then
     local up_name=${new_seed_path#/*/*/}
     up_name=${up_name//\//-}
 
