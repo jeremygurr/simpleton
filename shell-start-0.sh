@@ -468,7 +468,8 @@ forge_add_subs() {
   local base=$1 from=${2:-$1}
   begin_function_lo
 
-    local file files short_path short_file colored_base
+    echo "forge_add_subs: base=$base from=$from"
+    local file file1 file2 files short_path short_file colored_base
     colorize_path base colored_base
     get_short_path $colored_base
     files=$(find1 $from | sort -g)
@@ -476,12 +477,15 @@ forge_add_subs() {
       colorize_path file short_file
       short_file=${short_file#$base/}
 
+      file2=${file#$base/}
+      file1=${file%/$file2}
+
       if [[ ! "${walk_filter:-}" || "$short_path $short_file" == *"$walk_filter"* ]]; then
         if [[ -d $file ]]; then
           short_file+=/
         fi
 
-        forge_add_choice "$file" "$short_path" "$short_file"
+        forge_add_choice "$file1 $file2" "$short_path" "$short_file"
       fi
 
       if [[ -d $file
@@ -538,7 +542,7 @@ forge_add_dims() {
       abort
     fi
 
-    local lib_path= lib_path_color short_path short_file file file_color file_part
+    local lib_path= file1 file2 lib_path_color short_path short_file file file_color file_part
     find_lib $current_selection
     if [[ $lib_path ]]; then
       for file_part in dim derive; do
@@ -548,7 +552,9 @@ forge_add_dims() {
         if [[ -d $file ]]; then
           colorize_path file file_color
           short_file=${file_color#$lib_path/}
-          forge_add_choice "$file" "$short_path" "$short_file"
+          file1=$lib_path
+          file2=$file_part
+          forge_add_choice "$file1 $file2" "$short_path" "$short_file"
         fi
       done
 
@@ -559,7 +565,9 @@ forge_add_dims() {
           for dim in $(<$file); do
             dim_path=$lib_path/dim/$dim
             if [[ -d $dim_path ]]; then
-              forge_add_choice "$dim_path" "$dim_type" "$dim"
+              file1=$lib_path/dim
+              file2=$dim
+              forge_add_choice "$file1 $file2" "$dim_type" "$dim"
             fi
           done
         fi
@@ -778,7 +786,11 @@ forge() {
           esac
         done
       elif [[ "$response" == *" "* ]]; then
-        read action target <<<$response
+
+        local target target1 target2
+        read action target1 target2 <<<$response
+        target=$target1/$target2
+
         case $action in
           copy)
             if [[ "${action_target:-}" ]]; then
@@ -807,11 +819,11 @@ forge() {
             read -p "New name: (leave empty to cancel) " new_name 
             if [[ "$new_name" ]]; then
               if [[ -d $target ]]; then
-                echo rsync -av $target/ ${target%/*}/$new_name/
-                rsync -av $target/ ${target%/*}/$new_name/
+                echo rsync -av $target/ $target1/$new_name/
+                rsync -av $target/ $target1/$new_name/
               else
-                echo rsync -av $target ${target%/*}/$new_name
-                rsync -av $target ${target%/*}/$new_name
+                echo rsync -av $target $target1/$new_name
+                rsync -av $target $target1/$new_name
               fi
             fi
           ;;
@@ -836,11 +848,11 @@ forge() {
             fi
           ;;
           rename)
-            local new_name= new_target
+            local new_name=
             read -p "New name: (leave empty to cancel) " new_name 
             if [[ "$new_name" ]]; then
-              new_target=${target%.dna/*}.dna
-              mv $target $new_target/$new_name
+              echo mv $target $target1/$new_name
+              mv $target $target1/$new_name
             fi
           ;;
           view)
