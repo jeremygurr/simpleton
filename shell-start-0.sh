@@ -125,20 +125,29 @@ get_short_path() {
   short_path=$p
 }
 
-lib() {
-  local c=${PWD%/.lib}
+find_lib(){
+  local c=${1%/.lib}
   while true; do
     c=${c%/*}
     if [[ -d $c/.lib ]]; then
-      echo "Found lib in $c"
-      cd $c/.lib
+      lib_path=$c/.lib
       break
     fi
     if [[ "$c" != /*/* ]]; then
-      echo "Couldn't find lib."
       break
     fi
   done
+}
+
+lib() {
+  local lib_path=
+  find_lib $PWD
+  if [[ "$lib_path" ]]; then
+    echo "Found lib in $lib_path"
+    cd $lib_path || return 1
+  else
+    echo "Couldn't find lib."
+  fi
 }
 
 walk() {
@@ -498,6 +507,62 @@ forge_add_subs() {
   handle_return
 }
  
+forge_add_choice() {
+  local file=$1 \
+    short_path=$2 \
+    short_file=$3 \
+
+  local wi=$walk_index
+  if [[ $wi != ? ]]; then
+    wi=/
+  fi
+  if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
+    return 0
+  fi
+  walk_add_choice "$walk_index" "$current_action $file" "$short_path $wi $current_action $short_file"
+  (( walk_index++ ))
+}
+
+forge_add_dims() {
+  local base=$1 from=${2:-$1}
+  begin_function_lo
+
+    if [[ $current_selection == */.lib* ]]; then
+      abort
+    fi
+
+    local lib_path= lib_path_color short_path short_file file file_color file_part
+    find_lib $current_selection
+    if [[ $lib_path ]]; then
+      for file_part in dim derive; do
+        colorize_path lib_path lib_path_color
+        get_short_path $lib_path_color
+        file=$lib_path/$file_part
+        if [[ -d $file ]]; then
+          colorize_path file file_color
+          short_file=${file_color#$lib_path/}
+          forge_add_choice "$file" "$short_path" "$short_file"
+        fi
+      done
+
+      local dim_type dim dim_path
+      for dim_type in trunk_dims sub_dims control_props data_props; do
+        file=$current_selection/.dna/$dim_type.arr
+        if [[ -f $file ]]; then
+          for dim in $(<$file); do
+            dim_path=$lib_path/dim/$dim
+            if [[ -d $dim_path ]]; then
+              forge_add_choice "$dim_path" "$dim_type" "$dim"
+            fi
+          done
+        fi
+      done
+    fi
+
+  end_function
+  handle_return
+}
+ 
 forge_add_roots() {
   local path=$1
   begin_function_lo
@@ -520,7 +585,7 @@ forge() {
 
     walk_init || fail
     local back_stack=() \
-      current_action=edit \
+      current_action=go \
       link_expansion=f \
       add_roots=f \
 
@@ -570,21 +635,12 @@ forge() {
       hidden=t walk_add_choice "x" "*expand*" "- Toggle link expansion"
 
       local path
-      #if [[ -d $current_selection/.dna ]]; then
-      #  if [[ $current_selection == *:* ]]; then
-      #    path=${current_selection%%:*}
-      #    path=${path%/*}
-      #    walk_add_choice "t" "$path" "trunk"
-      #  fi
-      #fi
 
       if [[ $add_roots == t ]]; then
         forge_add_roots ${current_selection%/*} || fail
       fi
       forge_add_subs $current_selection || fail
-
-      #display_prefix='. ' \
-      #walk_add_dirs $current_selection
+      forge_add_dims $current_selection || fail
 
       return 0
     }
@@ -594,6 +650,7 @@ forge() {
       if [[ "$response" == "*back*" ]]; then
         current_selection=${back_stack[-1]}
         unset back_stack[-1]
+        walk_filter=
       elif [[ "$response" == "*new-dir*" ]]; then
         local new_name
         read -p "Name of new directory: " new_name
@@ -643,7 +700,6 @@ forge() {
           echo "C copy contents of item to target dir (use t command to set destination)"
           echo "d delete"
           echo "D duplicate"
-          echo "e edit"
           echo "i info"
           echo "g go"
           echo "l link to target dir (use t command to set destination)"
@@ -672,11 +728,6 @@ forge() {
             D)
               echo "duplicate"
               current_action=duplicate
-              break
-            ;;
-            e)
-              echo "edit"
-              current_action=edit
               break
             ;;
             i)
@@ -756,16 +807,25 @@ forge() {
               fi
             fi
           ;;
-          edit)
-            edit "$target"
-          ;;
           go)
-            back_stack+=( $current_selection )
             if [[ -f $target ]]; then
-              target=${target%/*}
+              edit "$target"
+            else
+              back_stack+=( $current_selection )
+
+              if [[ -f $target ]]; then
+                target=${target%/*}
+              fi
+
+              target=$(realpath $target)
+
+              if [[ $target != /seed/* ]]; then
+                target=/seed${target#/work}
+              fi
+
+              current_selection=$target
+              walk_filter=
             fi
-            current_selection=$target
-            walk_filter=
           ;;
           rename)
             local new_name= new_target
