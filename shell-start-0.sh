@@ -552,6 +552,8 @@ forge_add_dims() {
               file1=$lib_path/dim
               file2=$dim
               forge_add_choice "$file1 $file2" "$dim_type" "$dim"
+            else
+              echo "${YELLOW}Warning: dim doesn't exist: $dim (defined in $dim_type)$RESET"
             fi
           done
         fi
