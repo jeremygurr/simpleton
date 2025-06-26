@@ -795,7 +795,6 @@ forge() {
           copy)
             if [[ "${action_target:-}" ]]; then
               echo rsync -av $target $action_target/
-              #pause
               rsync -av $target $action_target/
             else
               echo "No target has been set. Go to the target dir and use the 't' command to set the target."
@@ -804,13 +803,13 @@ forge() {
           copy-contents)
             if [[ "${action_target:-}" ]]; then
               echo rsync -av $target/ $action_target/
-              #pause
               rsync -av $target/ $action_target/
             else
               echo "No target has been set. Go to the target dir and use the 't' command to set the target."
             fi
           ;;
           delete)
+            echo rm -rf "$target"
             rm -rf "$target"
             #recursive=t remove_empty_parents ${target%/*}
           ;;
