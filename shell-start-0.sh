@@ -481,12 +481,7 @@ forge_add_subs() {
           short_file+=/
         fi
 
-        local wi=$walk_index
-        if [[ $wi != ? ]]; then
-          wi=/
-        fi
-        walk_add_choice "$walk_index" "$current_action $file" "$short_path $wi $current_action $short_file"
-        (( walk_index++ ))
+        forge_add_choice "$file" "$short_path" "$short_file"
       fi
 
       if [[ -d $file
@@ -514,12 +509,23 @@ forge_add_choice() {
     short_file=$3 \
 
   local wi=$walk_index
-  if [[ $wi != ? ]]; then
-    wi=/
+
+  if [[ $digits_to_show == 1 ]]; then
+    if [[ "$wi" != ? ]]; then
+      wi=/
+    fi
+  else
+    if [[ "$wi" == ? ]]; then
+      wi=0$wi
+    elif [[ "$wi" == ???* ]]; then
+      wi=/
+    fi
   fi
+
   if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
     return 0
   fi
+
   walk_add_choice "$walk_index" "$current_action $file" "$short_path $wi $current_action $short_file"
   (( walk_index++ ))
 }
@@ -1096,7 +1102,7 @@ window() {
     echo "$line"
   fi
 }
-alias wi=window
+#alias win=window
 
 # inputs: 
 #   $1  path to search for broken links
