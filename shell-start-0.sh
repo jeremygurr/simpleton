@@ -654,16 +654,18 @@ forge() {
         walk_filter=
       elif [[ "$response" == "*new-dir*" ]]; then
         local new_name
+        new_target=${current_selection}
+        echo "New directory will be created here: $new_target"
         read -p "Name of new directory: " new_name
         if [[ "${new_name:-}" ]]; then
-          new_target=${current_selection}
           mkdir "$new_target/$new_name"
         fi
       elif [[ "$response" == "*new-file*" ]]; then
         local new_name
+        new_target=${current_selection}
+        echo "New file will be created here: $new_target"
         read -p "Name of new file: " new_name
         if [[ "${new_name:-}" ]]; then
-          new_target=${current_selection}
           edit "$new_target/$new_name"
         fi
       elif [[ "$response" == "*expand*" ]]; then
