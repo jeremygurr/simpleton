@@ -509,10 +509,9 @@ init_context() {
       aggregate_op \
 
     context_path=$cyto_path/context \
-    dna_key_path=$dna_path/key \
+    context_path=$cyto_path/context \
     down_path=$cyto_path/down \
     job_path=$cyto_path/job \
-    key_path=$cyto_path/key \
     req_path=$cyto_path/req \
     status_path=$cyto_path/status \
     tmp_path=$cyto_path/tmp \
@@ -5867,12 +5866,30 @@ for_each_member() {
 cell_decrypt_file() {
   local from_file=$1 to_file=$2 user=${safe_user:-$USER} \
     user_private_key=${user_private_key:-~/.ssh/id_rsa} \
+    ignore_failure=${ignore_failure:-f} \
 
   begin_function
-    if [[ ! "$key_path" ]]; then
-      log_fatal "No key path was found. Use 'cell safe key add' to create the first key."
-      fail1
+
+    if [[ ! "$key_path" || ! -d "$key_path" ]]; then
+      if [[ $ignore_failure == f ]]; then
+        log_fatal "No key path was found. Use 'cell safe key add' to create the first key."
+        fail1
+      else
+        log_warn "Could not decrypt file $from_file because key_path doesn't exist"
+        abort
+      fi
     fi
+
+    if [[ ! -f $key_path/$user.key ]]; then
+      if [[ $ignore_failure == f ]]; then
+        log_fatal "No key was found for user $user in key_path $key_path. Use 'cell safe key add' to create a key for this user."
+        fail1
+      else
+        log_warn "Could not decrypt file $from_file because user $user doesn't have a key"
+        abort
+      fi
+    fi
+
     validate_user_key $key_path/$user.key || fail
 
     if [[ ! -d $tmp_path ]]; then
@@ -5884,6 +5901,7 @@ cell_decrypt_file() {
     extract_master_key $key_path/$user.key $mk_path || fail
     master_key=$mk_path \
     simple_decrypt $from_file $to_file || fail
+
   end_function
   handle_return
 }
@@ -5955,6 +5973,7 @@ plant_seed_internal() {
           fi
         elif [[ $cell_is_leaf == t && ! -e $target && $x_part != .* ]]; then
           if [[ $x == *.safe ]]; then
+            ignore_failure=t \
             cell_decrypt_file $x ${target%.safe} || fail
           else
             cp -a $x $to/ || fail
