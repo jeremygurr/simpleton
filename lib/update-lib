@@ -179,8 +179,11 @@ load_upstream_vars() {
   handle_return
 }
 
+# inputs:
+#   validate_type (pre or post)
 # output:
 #   validation_says_already_done   left unset if there is no validation
+#
 validate_cell() {
   begin_function
 
@@ -191,7 +194,7 @@ validate_cell() {
         target_var=${target%%,*}
         target_var=${target_var//-/_}
 
-        strong_log=t log_verbose "Validating using $target_var"
+        strong_log=t log_verbose "$validate_type-validating using $target_var (from $short_cell)"
 
         local conditions=
         if [[ $target_var != "$target" ]]; then
@@ -201,6 +204,12 @@ validate_cell() {
         local target_cell=$validator_path/$target_var invalid_dep=f
         if [[ ! -e $target_cell ]]; then
           maybe_fix_validator $target_cell || fail
+        fi
+
+        local prep_function=validator_${target_var}_prep
+        if function_exists $prep_function; then
+          log_debug "Executing validate prep: $prep_function"
+          $prep_function || fail
         fi
 
         real_cell=$(realpath $target_cell) || fail
@@ -1815,6 +1824,7 @@ update_command() {
           local validation_says_already_done
 
           if [[ $pre_validate == t ]]; then
+            validate_type=Pre \
             validate_cell || fail
           fi
 
@@ -1841,6 +1851,7 @@ update_command() {
 
           if [[ $update_successful == t && $post_validate == t ]]; then
             local validation_says_already_done
+            validate_type=Post \
             validate_cell || fail
             if [[ ${validation_says_already_done:-t} == f ]]; then
               update_successful=f
