@@ -6,6 +6,7 @@ background_process_lib_loaded=t
 update_replay_hash() {
   pipe_replay_hash_command=$command
   pipe_replay_hash=$(echo -n "$command" | sha1sum | awk '{print $1}')
+  zombie_log "update_replay_hash: $command -> $pipe_replay_hash"
   debug_return_vars=pipe_replay_hash
 }
 
@@ -158,7 +159,7 @@ to_background_process() {
 
   local log_show_vars='from pipe_replay timeout_to' \
     log_vars='pipe'
-  begin_function_hi
+  begin_function
 
     if [[ ! "${pipe_replay_state:-}" ]]; then
       log_fatal "to_background_process was called without running start_background_process first"
@@ -204,6 +205,7 @@ from_background_process__record_line() {
     recording)
       echo "$line" >>$current_replay_file-out || return 1
       log_debug "Recording line to replay file: $line" || fail
+      zombie_log "Recording line to replay file: $line -> $current_replay_file-out" || fail
     ;;
     replaying)
       log_debug "Replaying line: $line" || fail
@@ -218,7 +220,7 @@ from_background_process__record_line() {
 }
 
 get_replay_file() {
-  begin_function_lo
+  begin_function
     replay_changed=f
     if [[ "${replay_pipe:-}" ]]; then
       if [[ ! "${current_replay_file:-}" ]]; then
@@ -398,7 +400,7 @@ flush_background_process() {
     line char
 
   local log_show_vars='pipe timeout buffering'
-  begin_function_hi
+  begin_function
 
     local t=${timeout//./}
     if (( t > 0 )); then
@@ -410,7 +412,7 @@ flush_background_process() {
     get_replay_file || fail
 
     if [[ $pipe_replay_state == replaying ]]; then
-      if [[ $replay_changed == t ]]; then
+      if [[ $replay_changed == t || ! "${back_fd:-}" ]]; then
         local back_fd
         log_debug "Replaying background interaction from $current_replay_file-out" || fail
         exec {back_fd}<>$current_replay_file-out || fail
@@ -422,6 +424,12 @@ flush_background_process() {
         log_debug "Waiting for background job output" || fail
       exec {back_fd}<>$pipe_out || fail
       defer "exec $back_fd>&-"
+    fi
+
+    if [[ ! "${back_fd:-}" ]]; then
+      log_fatal "Interal error: back_fd not defined in flush_background_process"
+      zombie_debug
+      fail1
     fi
 
     line=
