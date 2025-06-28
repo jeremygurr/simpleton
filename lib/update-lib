@@ -40,6 +40,7 @@ write_output_row() {
 
 # inputs: 
 #   upstream
+#   upstream_var
 prep_upstream() {
   local log_show_vars=^upstream
   begin_function
@@ -67,77 +68,14 @@ prep_upstream() {
       $prep_function || fail
     fi
 
-    if [[ ! -d $up_chosen_path ]]; then
-      mkdir $up_chosen_path || fail
-    fi
-      
-    chosen_target_link=$up_chosen_path/$upstream_name
+    chosen_target_link=$up_choices_path/$upstream_name
 
-  end_function
-  handle_return
-}
-
-maybe_fix_validator() {
-  local choice=$1
-  begin_function
-    if [[ ! -e "$choice" ]]; then
-
-      local invalid_dep=t
-
-      if [[ $invalid_dep == t ]]; then
-        rm -rf ${choice} || fail
-        up_name=${choice##*/} \
-        make_cyto_validator_single || fail
-        invalid_dep=f
-      fi
-
-      if [[ $invalid_dep == t ]]; then
-        log_fatal "Internal error: Broken validation config: $target_var"
-        fail1
-      fi
-
-    fi
-  end_function
-  handle_return
-}
-
-maybe_fix_choice() {
-  local choice=$1
-  begin_function
-    if [[ ! -e "$choice" ]]; then
-      local choice_target trunk_cell invalid_dep=f
-      choice_target=$(realpath $choice 2>/dev/null) || invalid_dep=t
-      if [[ $invalid_dep == f ]]; then
-        get_trunk_cell $choice_target || fail
-        if [[ ! -e $trunk_cell ]]; then
-          invalid_dep=t
-        fi
-      fi
-
-      if [[ $invalid_dep == t ]]; then
-        rm -rf ${choice%/choices/*} || fail
-        up_name=${choice##*/} \
-        make_cyto_up_single ${choice##*/} || fail
-        choice_target=$(realpath $choice 2>/dev/null) || invalid_dep=t
-        get_trunk_cell $choice_target || fail
-        invalid_dep=f
-      fi
-
-      if [[ $invalid_dep == f ]]; then
-        safe_link $trunk_cell $choice || fail
-      else
-        log_fatal "Invalid upstream link in $upstream/choices: ${choice##*/}. Maybe try a clean build."
-        fail1
-      fi
-    fi
   end_function
   handle_return
 }
 
 # inputs:
-#   up_chosen_path
-#   upstream
-#   upstream_name
+#   target_cell
 load_upstream_vars() {
   begin_function
 
@@ -203,7 +141,9 @@ validate_cell() {
 
         local target_cell=$validator_path/$target_var invalid_dep=f
         if [[ ! -e $target_cell ]]; then
-          maybe_fix_validator $target_cell || fail
+          up_cell_type=validator \
+          up_cell=$target_cell \
+          maybe_fix_up || fail
         fi
 
         local prep_function=validator_${target_var}_prep
@@ -451,147 +391,12 @@ get_needs_update() {
   handle_return
 }
 
-update_upstream_choose_multi() {
-  begin_function
-    local anchor_dims=
-
-    if [[ "$chosen" ]]; then
-      if [[ -e "$chosen/.dna" ]]; then
-        upstream_cell_link=$chosen
-        cell_path=$(realpath $chosen) || fail
-        get_needs_update $cell_path || fail
-      else
-        needs_update=t
-      fi
-      if [[ $needs_update == t ]]; then
-        chosen=
-      fi
-    fi
-
-    # This must be separate from the previous if block because chosen may have been unset in the
-    #   previous block.
-    if [[ ! "$chosen" ]]; then
-      begin_for choice in "${choices[@]}"; doo
-        maybe_fix_choice $choice || fail
-        needs_update=
-        cell_path=$(realpath $choice) || fail
-        get_needs_update $cell_path || fail
-        if [[ $needs_update == f ]]; then
-          chosen=$choice
-          break
-        fi
-      end_for
-      if [[ ! "$chosen" ]]; then
-        chosen=${choices[0]}
-      fi
-    fi
-
-  end_function
-  handle_return
-}
-
-repair_update_upstream_choose() {
-  if [[ $problem == no_choices ]]; then
-    rm -rf $up_path || return 1
-    make_cyto_up || return 1
-    problem=
-    repair_successful=t
-  fi
-  return 0
-}
-
-# needs_update is guaranteed to be set after this completes successfully
-# returns: chosen needs_update
-update_upstream_choose() {
-
-  local log_show_vars=^upstream problem=
-  begin_function
-
-    local choices
-    if [[ -d $upstream/choices ]]; then
-      choices=( $(find1 $upstream/choices -not -name ".*" | sort -g) ) || fail
-    else
-      choices=( $upstream )
-    fi
-
-    if [[ ! "${choices:-}" ]]; then
-      log_fatal "No choices defined for upstream $upstream"
-      problem=no_choices
-      fail1
-    fi
-
-    local choice short_up=${upstream##*/} short_choice
-    short_up=${short_up//-/_}
-    local -n actual_choices=${short_up}_choices
-    if [[ "${actual_choices:-}" ]]; then
-
-      local new_choices=() actual_choice short_choices=
-
-      for choice in ${choices[*]}; do
-        short_choice="${choice##*/} "
-        short_choices+="$short_choice "
-      done
-
-      for actual_choice in $actual_choices; do
-
-        local found=f
-
-        for choice in ${choices[*]}; do
-          short_choice="${choice##*/} "
-          if [[ $short_choice == $actual_choices ]]; then
-            found=t
-            new_choices+=( $choice )
-            break
-          fi
-        done
-
-        if [[ $found == f ]]; then
-          log_fatal "Invalid choice for ${short_up}_choices. Must be one of: $short_choices"
-          fail1
-        fi
-
-      done
-
-      choices=( "${new_choices[@]}" )
-
-    fi
-
-    chosen=
-    if [[ -e "$chosen_target_link" ]]; then
-      chosen=$(readlink $chosen_target_link) || fail
-      if [[ ${chosen##*/} != ${choices##*/} ]]; then
-        chosen=
-      fi
-    fi
-
-    needs_update=
-    if (( ${#choices[*]} == 1 )) ; then
-      chosen=$choices
-      maybe_fix_choice $chosen || fail
-    else # more than one choice available
-      update_upstream_choose_multi
-    fi
-
-    if [[ ! -e $chosen_target_link ]]; then
-      safe_link $chosen $chosen_target_link || fail
-    fi
-    upstream_cell_link=$chosen
-    cell_path=$(realpath $chosen) || fail
-    anchor_dims=
-    get_needs_update $cell_path || fail
-
-  end_function
-  local log_return_vars=chosen
-  handle_return
-
-}
-
 update_upstream_get_locks() {
   local log_show_vars=^upstream
   begin_function
 
     local lock 
-    local -r export_path=$upstream/chosen/export
+    local -r export_path=$upstream/export
     if [[ -d $export_path ]]; then
 
       local shared_locks
@@ -616,41 +421,9 @@ update_upstream_get_locks() {
   handle_return
 }
 
-repair_update_upstream() {
-  # check for duplicate dims
-  if [[ "${up_cell:-}" && "${chosen_target_link:-}" ]]; then
-    local -A dims_found
-    local cyto_up_link=$(readlink $chosen_target_link 2>/dev/null) || return 1
-    local remaining=$up_cell part dim dup_found=f
-    while [[ $remaining == *:* && $remaining == */* ]]; do
-      part=${remaining##*/}
-      remaining=${remaining%/$part}
-      if [[ "$part" == *:* ]]; then
-        dim=${part%%:*}
-        if [[ "${dims_found[$dim]:-}" ]]; then
-          dup_found=t
-          break
-        fi
-        dims_found[$dim]=1
-      fi
-    done
-    if [[ $dup_found == t ]]; then
-      log_debug "Auto repairing duplicate dim upstream link"
-      if [[ -L $cyto_up_link ]]; then
-        rm $cyto_up_link || return 1
-      fi
-      if [[ -L $chosen_target_link ]]; then
-        rm $chosen_target_link || return 1
-      fi
-      repair_successful=t
-    fi
-  fi
-
-  return 0
-}
-
 # inputs: 
 #   upstream: a folder in .dna/up
+#   upstream_name
 update_upstream() {
 
   local original_cell_path=${cell_path:-} \
@@ -660,14 +433,13 @@ update_upstream() {
   begin_function
 
     local needs_update=t upstream_cell_link= \
-      chosen= anchor_dims= \
-      chosen_target_link \
+      anchor_dims= \
       required_freshness= fresh= \
       default_freshness= \
       risk_tolerance=$risk_tolerance \
       command_history=${command_history:-} \
+      upstream_var=${upstream_name//-/_} \
 
-    local upstream_name=${upstream##*/.cyto/up/}
     local cell_path=${upstream%/.cyto/up/$upstream_name}
     if [[ $cell_path == $upstream ]]; then
       log_fatal "Invalid upstream: $upstream, it should be within .cyto/up"
@@ -675,7 +447,7 @@ update_upstream() {
     fi
 
     local cyto_path=$cell_path/.cyto
-    local up_path=$cyto_path/up up_chosen_path=$cyto_path/up-chosen
+    local up_path=$cyto_path/up
 
     log_debug "Updating upstream $upstream_name"
 
@@ -683,7 +455,16 @@ update_upstream() {
     prep_upstream || fail
 
     if [[ $needs_update == t ]]; then
-      update_upstream_choose || fail
+      
+      up_cell_type=up \
+      up_cell=$upstream \
+      maybe_fix_up || fail
+
+      upstream_cell_link=$upstream
+      up_cell_path=$(realpath $upstream) || fail
+      anchor_dims=
+      get_needs_update $up_cell_path || fail
+
     else
       log_debug "Skipping update of upstream $upstream_name because prep function set needs_update=f"
       upstream_skipped=t
@@ -691,11 +472,10 @@ update_upstream() {
 
     if [[ $needs_update == t ]]; then
 
-      local up_cell
-      up_cell=$(realpath $chosen) || fail
-
+      local short_cell
+      get_short_cell $cell_path
       downstream_cell_name=${short_cell//\//_} \
-      fork execute_commands "$up_cell" update || fail
+      fork execute_commands "$up_cell_path" update || fail
 
       if [[ $something_changed == t ]]; then
         previous_upstream_changed=t
@@ -711,7 +491,7 @@ update_upstream() {
     
     update_upstream_get_locks || fail
 
-    if [[ -f $chosen_target_link/color.var ]]; then
+    if [[ -f $upstream/color.var ]]; then
       color_upstream_found=t
     fi
 
@@ -739,9 +519,7 @@ update_upstreams() {
 
         upstream=$up_path/$upstream_name
 
-        local upstream_var=${upstream_name//-/_} \
-          orig_up_chosen_path=$up_chosen_path \
-          upstream_skipped=f \
+        local upstream_skipped=f
 
         update_upstream $upstream || fail
         if [[ $update_successful == f ]]; then
@@ -749,7 +527,7 @@ update_upstreams() {
         fi
 
         if [[ $upstream_skipped == f ]]; then
-          local target_cell=$orig_up_chosen_path/$upstream_name
+          local target_cell=$upstream
           load_upstream_vars || fail
         fi
 
@@ -1393,7 +1171,7 @@ update_handle_color() {
       color=green problem_detail=
 
       for up_name in ${up[*]}; do
-        path=${up_chosen_path}/$up_name
+        path=${up_path}/$up_name
         up_color=
         up_problem=
         if [[ -f $path/color.var ]]; then
@@ -1540,7 +1318,7 @@ update_self_retry_loop() {
 
     if [[ $can_update == t ]]; then
 
-      local attempt=1 reactors_left=( ${reactors[*]:-} )
+      local attempt=1 reactors_left=( ${reactor[*]:-} )
       local max_attempts=$((max_attempts + ${#reactors_left[*]}))
       while true; do
 
