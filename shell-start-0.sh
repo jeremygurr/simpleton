@@ -35,6 +35,7 @@ alias clean='cell clean'
 alias clean0='cell clean0'
 alias clean1='cell clean1'
 alias clean2='cell clean2'
+alias clean-all='cell /work/one-data clean'
 alias status='cell status'
 alias reactor='cell reactor'
 alias plant='cell plant'
@@ -210,7 +211,7 @@ walk() {
           walk_add_choice "U" "$path" "dna upstream cells"
         fi
 
-        path=$current_selection/.cyto/up-chosen
+        path=$current_selection/.cyto/up
         if [[ -d $path ]]; then
           walk_add_choice "u" "$path" "upstream cells"
         else
@@ -235,10 +236,20 @@ walk() {
           fi
         fi
 
+        path=$current_selection/.cyto/reactor
+        if [[ -d $path ]]; then
+          walk_add_choice "r" "$path" "reactor cells"
+        else
+          path=$current_selection/.dna/reactor
+          if [[ -d $path ]]; then
+            walk_add_choice "r" "$path" "reactor cells"
+          fi
+        fi
+
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == down ]]; then
         walk_add_dirs $current_selection || return 1
-      elif [[ ${current_selection##*/} == up-chosen ]]; then
+      elif [[ ${current_selection##*/} == up ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == up ]]; then
         walk_add_dirs $current_selection || return 1

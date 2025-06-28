@@ -6288,6 +6288,11 @@ make_cyto_up_single() {
       choice_path=$cyto_path/$up_cell_type-choices/$up_name \
       choice_var \
 
+    if [[ ! "$up_name" ]]; then
+      log_fatal "Internal error: Missing up_name"
+      fail1
+    fi
+
     up_var=${up_var%%,*}
     if [[ -d $chosen_path ]]; then
       rm -rf $chosen_path || fail
@@ -6302,11 +6307,20 @@ make_cyto_up_single() {
         extract_simple_name choice_name o choice_name
         choice_var=${choice_name//-/_}
         local -n from_cell=${up_cell_type}_${up_var}_choices_${choice_var}_path
+        if [[ ! -v from_cell ]]; then
+          log_fatal "Internal error: Var ${up_cell_type}_${up_var}_choices_${choice_var}_path isn't set."
+          fail1
+        fi
         safe_link $from_cell $choice_path/$choice_name || fail
       end_for
 
     else
+      mkdir -p $cyto_path/$up_cell_type || fail
       local -n from_cell=${up_cell_type}_${up_var}_path
+      if [[ ! -v from_cell ]]; then
+        log_fatal "Internal error: Var ${up_cell_type}_${up_var}_path isn't set."
+        fail1
+      fi
       safe_link $from_cell $chosen_path || fail
     fi
 
@@ -6332,6 +6346,11 @@ make_cyto_up() {
 #   up_cell
 maybe_fix_up() {
   begin_function
+    if [[ ! "${up_cell:-}" ]]; then
+      log_fatal "Internal error: up_cell not passed into maybe_fix_up"
+      fail1
+    fi
+
     if [[ ! -e "$up_cell" ]]; then
 
       local invalid_dep=t
@@ -6351,6 +6370,16 @@ maybe_fix_up() {
 #   up_cell
 execute_up() {
   begin_function
+    if [[ ! "${up_cell:-}" ]]; then
+      log_fatal "Internal error: up_cell was not passed into execute_up"
+      fail1
+    fi
+
+    if [[ ! "${up_cell_type:-}" ]]; then
+      log_fatal "Internal error: up_cell_type was not passed into execute_up"
+      fail1
+    fi
+
     local up_name=${up_cell##*/}
     log_debug "Checking $up_cell_type $up_name"
 
@@ -6365,8 +6394,6 @@ execute_up() {
 
     if [[ $needs_update == t ]]; then
       
-      up_cell_type=up \
-      up_cell=$up_cell \
       maybe_fix_up || fail
 
       local up_cell_path=$(realpath $up_cell) || fail
@@ -6383,6 +6410,7 @@ execute_up() {
 
       local short_cell
       get_short_cell $cell_path
+      upstream_cell_link=$up_cell \
       downstream_cell_name=${short_cell//\//_} \
       fork execute_commands "$up_cell_path" update || fail
 
