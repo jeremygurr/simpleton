@@ -6346,6 +6346,69 @@ maybe_fix_up() {
   handle_return
 }
 
+# inputs:
+#   up_cell_type
+#   up_cell
+execute_up() {
+  begin_function
+    local up_name=${up_cell##*/}
+    log_debug "Checking $up_cell_type $up_name"
+
+    local needs_update=t \
+      up_var=${up_name//-/_} \
+
+    local prep_function=${up_cell_type}_${up_var}_prep
+    if function_exists $prep_function; then
+      log_debug "Executing prep function: $prep_function"
+      $prep_function || fail
+    fi
+
+    if [[ $needs_update == t ]]; then
+      
+      up_cell_type=up \
+      up_cell=$up_cell \
+      maybe_fix_up || fail
+
+      local up_cell_path=$(realpath $up_cell) || fail
+
+      upstream_cell_link=$up_cell \
+      anchor_dims= \
+      get_needs_update $up_cell_path || fail
+
+    else
+      log_debug "Skipping update of upstream $up_name because prep function set needs_update=f"
+    fi
+
+    if [[ $needs_update == t ]]; then
+
+      local short_cell
+      get_short_cell $cell_path
+      downstream_cell_name=${short_cell//\//_} \
+      fork execute_commands "$up_cell_path" update || fail
+
+      if [[ $something_changed == t ]]; then
+        previous_upstream_changed=t
+      fi
+
+      if [[ $update_successful == f ]]; then
+        break
+      fi
+
+      target_cell=$up_cell \
+      load_upstream_vars || fail
+
+      local post_function=${up_cell_type}_${up_var}_post
+      if function_exists $post_function; then
+        log_debug "Executing post function: $post_function"
+        $post_function || fail
+      fi
+      
+    fi
+
+  end_function
+  handle_return
+}
+
 build_cyto() {
   local cell_path=$1
 

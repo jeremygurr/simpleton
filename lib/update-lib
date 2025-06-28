@@ -48,27 +48,12 @@ prep_upstream() {
     # down_fresh may be used by prep script to propagate freshness requirements to upstream
     down_fresh=$required_freshness
 
-    # This may be overridden by upstream prep file to customize how failure of this upstream is handled
-    handle_upstream_result() {
-      if [[ $update_successful == f ]]; then
-        log_error "Failed to update upstream cell $upstream"
-      fi
-    }
-
     # Don't inherit parent's freshness requirements, 
     #   only what upstream prep explicitly states
     # extra_dims includes dimensions that need to be promoted in upstream that don't
     #   exist in branch_dims
     fresh=$down_fresh required_freshness= default_freshness= extra_dims=
-
-    local prep_function=up_${upstream_var}_prep
-    if function_exists $prep_function; then
-      log_debug "Executing upstream prep: $prep_function"
-      get_required_freshness || fail
-      $prep_function || fail
-    fi
-
-    chosen_target_link=$up_choices_path/$upstream_name
+    get_required_freshness || fail
 
   end_function
   handle_return
@@ -140,33 +125,14 @@ validate_cell() {
         fi
 
         local target_cell=$validator_path/$target_var invalid_dep=f
-        if [[ ! -e $target_cell ]]; then
-          up_cell_type=validator \
-          up_cell=$target_cell \
-          maybe_fix_up || fail
-        fi
-
-        local prep_function=validator_${target_var}_prep
-        if function_exists $prep_function; then
-          log_debug "Executing validate prep: $prep_function"
-          $prep_function || fail
-        fi
-
-        real_cell=$(realpath $target_cell) || fail
-
-        local upstream_cell_link=$target_cell \
-          downstream_cell_name=${short_cell//\//_} \
-          fresh=0 \
 
         during_validation=t \
-        fork execute_commands "$real_cell" update || fail
-        load_upstream_vars || fail
+        fresh=0 \
+        up_cell_type=validator \
+        up_cell=$target_cell \
+        execute_op || fail
 
-        local post_function=validator_${target_var}_post
-        if function_exists $post_function; then
-          log_debug "Executing validation post function: $post_function"
-          $post_function || fail
-        elif [[ "$conditions" ]]; then
+        if [[ "$conditions" ]]; then
           local condition key value negative
           for condition in ${conditions//,/ }; do
             key=${condition%%:*}
@@ -449,47 +415,48 @@ update_upstream() {
     local cyto_path=$cell_path/.cyto
     local up_path=$cyto_path/up
 
-    log_debug "Updating upstream $upstream_name"
-
     localize
     prep_upstream || fail
 
-    if [[ $needs_update == t ]]; then
-      
-      up_cell_type=up \
-      up_cell=$upstream \
-      maybe_fix_up || fail
+    up_cell_type=up \
+    up_cell=
+    execute_up || fail
 
-      upstream_cell_link=$upstream
-      up_cell_path=$(realpath $upstream) || fail
-      anchor_dims=
-      get_needs_update $up_cell_path || fail
+    #if [[ $needs_update == t ]]; then
+    #  
+    #  up_cell_type=up \
+    #  up_cell=$upstream \
+    #  maybe_fix_up || fail
 
-    else
-      log_debug "Skipping update of upstream $upstream_name because prep function set needs_update=f"
-      upstream_skipped=t
-    fi
+    #  upstream_cell_link=$upstream
+    #  up_cell_path=$(realpath $upstream) || fail
+    #  anchor_dims=
+    #  get_needs_update $up_cell_path || fail
 
-    if [[ $needs_update == t ]]; then
+    #else
+    #  log_debug "Skipping update of upstream $upstream_name because prep function set needs_update=f"
+    #  upstream_skipped=t
+    #fi
 
-      local short_cell
-      get_short_cell $cell_path
-      downstream_cell_name=${short_cell//\//_} \
-      fork execute_commands "$up_cell_path" update || fail
+    #if [[ $needs_update == t ]]; then
 
-      if [[ $something_changed == t ]]; then
-        previous_upstream_changed=t
-      fi
+    #  local short_cell
+    #  get_short_cell $cell_path
+    #  downstream_cell_name=${short_cell//\//_} \
+    #  fork execute_commands "$up_cell_path" update || fail
 
-      handle_upstream_result || fail
+    #  if [[ $something_changed == t ]]; then
+    #    previous_upstream_changed=t
+    #  fi
 
-      if [[ $update_successful == f ]]; then
-        break
-      fi
+    #  if [[ $update_successful == f ]]; then
+    #    break
+    #  fi
 
-    fi
-    
-    update_upstream_get_locks || fail
+    #fi
+
+    #  IGNORE this until we are ready for full parallel implementation
+    #update_upstream_get_locks || fail
 
     if [[ -f $upstream/color.var ]]; then
       color_upstream_found=t
@@ -519,16 +486,9 @@ update_upstreams() {
 
         upstream=$up_path/$upstream_name
 
-        local upstream_skipped=f
-
         update_upstream $upstream || fail
         if [[ $update_successful == f ]]; then
           break
-        fi
-
-        if [[ $upstream_skipped == f ]]; then
-          local target_cell=$upstream
-          load_upstream_vars || fail
         fi
 
       end_for
@@ -1347,7 +1307,9 @@ update_self_retry_loop() {
           reactors_left=( ${reactors_left[*]:1} )
           local reactor_cell=${reactor_path}/$reactor
 
-          fork execute_commands $(realpath $reactor_cell) update || fail
+          up_cell_type=reactor \
+          up_cell=$reactor_cell \
+          execute_up || fail
 
         else
 

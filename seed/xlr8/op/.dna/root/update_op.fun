@@ -1,6 +1,6 @@
 : ${source_paths:=src} ${target_path:=target}
 
-lib_src=$up_chosen_path/lib-base/src
+lib_src=$up_path/lib-base/src
 
 if [[ ! -d $lib_src ]]; then
   log_fatal "Missing upstream lib-base source. Should be here: $lib_src"
