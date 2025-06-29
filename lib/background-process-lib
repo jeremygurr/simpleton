@@ -4,59 +4,65 @@ type -t background_process_lib_loaded >/dev/null && return 0
 background_process_lib_loaded=t
 
 update_replay_hash() {
+  if [[ "$command" == echo* ]]; then
+    zombie_debug
+  fi
   pipe_replay_hash_command=$command
   pipe_replay_hash=$(echo -n "$command" | sha1sum | awk '{print $1}')
   debug_return_vars=pipe_replay_hash
 }
 
+pipe_replay=${pipe_replay:-${replay:-f}}
+# pipe_replay may be: replaying recording disabled
+
+if [[ $pipe_replay == t ]]; then
+  pipe_replay_state=replaying
+elif [[ $pipe_replay == m ]]; then
+  pipe_replay_state=replay_unless_missing
+else
+  pipe_replay_state=${pipe_replay_state:-recording}
+fi
+
+#  deprecated: should not need this any more
 # This can be used directly if a background process is already running
-prep_background_communication() {
-  local command=$1
-  begin_function
-
-    if [[ ! "${pipe_replay_state:-}" ]]; then
-      pipe_replay=${pipe_replay:-${replay:-f}}
-      # pipe_replay may be: replaying recording disabled
-
-      if [[ $pipe_replay == t ]]; then
-        pipe_replay_state=replaying
-      elif [[ $pipe_replay == m ]]; then
-        pipe_replay_state=replay_unless_missing
-      else
-        pipe_replay_state=${pipe_replay_state:-recording}
-      fi
-
-      pipe_replay_hash=none
-      update_replay_hash "$command" || fail
-      case $pipe_replay_state in
-        recording)
-          log_debug "Recording $command responses" || fail
-        ;;
-        replay_unless_missing)
-          log_verbose "Replaying pre-recorded $command responses, unless they are missing" || fail
-        ;;
-        replaying)
-          log_verbose "Replaying pre-recorded $command responses" || fail
-        ;;
-        disabled)
-          :
-        ;;
-        *)
-          log_fatal "Unknown pipe_replay_state: $pipe_replay_state"
-          fail1
-        ;;
-      esac
-
-    fi
-
-  end_function
-  handle_return
-}
+#prep_background_communication() {
+#  local command=$1
+#  begin_function
+#
+#    if [[ ! "${pipe_replay_state:-}" ]]; then
+#
+#      pipe_replay_hash=none
+#      update_replay_hash "$command" || fail
+#      case $pipe_replay_state in
+#        recording)
+#          log_debug "Recording $command responses" || fail
+#        ;;
+#        replay_unless_missing)
+#          log_verbose "Replaying pre-recorded $command responses, unless they are missing" || fail
+#        ;;
+#        replaying)
+#          log_verbose "Replaying pre-recorded $command responses" || fail
+#        ;;
+#        disabled)
+#          :
+#        ;;
+#        *)
+#          log_fatal "Unknown pipe_replay_state: $pipe_replay_state"
+#          fail1
+#        ;;
+#      esac
+#
+#    fi
+#
+#  end_function
+#  handle_return
+#}
 
 start_background_process() {
-  local command="$*" 
+  local command=$1 command_essense=${2:-$1} 
   begin_function
-    prep_background_communication "$command" || fail
+    #prep_background_communication "$command" || fail
+    update_replay_hash "$command_essense" || fail
     case $pipe_replay_state in
       recording|disabled|replay_unless_missing)
         log_and_run "$command" || fail
@@ -207,11 +213,15 @@ from_background_process__record_line() {
 
   case $effective_replay_state in
     recording)
-      echo "$line" >>$current_replay_file-out || return 1
-      log_debug "Recording line to replay file: $line" || fail
+      if [[ "$current_replay_file" ]]; then
+        echo "$line" >>$current_replay_file-out || return 1
+        log_debug "Recording line to replay file: $line"
+      else
+        log_debug "Skipping recording of line to file since current_replay_file is empty"
+      fi
     ;;
     replaying)
-      log_debug "Replaying line: $line" || fail
+      log_debug "Replaying line: $line"
     ;;
   esac
 
@@ -224,8 +234,11 @@ from_background_process__record_line() {
 
 get_replay_file() {
   begin_function
+
     replay_changed=f
     effective_replay_state=$pipe_replay_state
+    previous_replay_file=${current_replay_file:-}
+
     if [[ "${replay_pipe:-}" ]]; then
       if [[ ! "${current_replay_file:-}" ]]; then
         if [[ -p $replay_pipe ]]; then
@@ -236,13 +249,9 @@ get_replay_file() {
           fail1
         fi
       fi
-    else
+    elif [[ "${pipe_replay_hash:-}" ]]; then
 
-      previous_replay_file=${current_replay_file:-}
       current_replay_file=$replay_path/pipe_replay.$pipe_replay_hash
-      if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
-        replay_changed=t
-      fi
 
       if [[ $pipe_replay_state == recording 
          || $pipe_replay_state == replay_unless_missing
@@ -258,15 +267,11 @@ get_replay_file() {
           mkdir -p $replay_path || fail
         fi
 
-        replay_counter=${replay_counter:-0}
         if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
           if [[ -e "$current_replay_file-out" ]]; then
             rm $current_replay_file-out || fail
           fi
           echo "$pipe_replay_hash_command" >$current_replay_file-in
-          (( replay_counter++ ))
-          local replay_counter_file=$replay_path/pipe_replay-$replay_counter
-          ln -sf $current_replay_file-in $replay_counter_file || true
         fi
 
       elif [[ $pipe_replay_state == replaying ]]; then
@@ -276,6 +281,14 @@ get_replay_file() {
           fail1
         fi
       fi
+
+    else
+      log_debug "No pipe_replay_hash so not setting current_replay_file"
+      current_replay_file=
+    fi
+
+    if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
+      replay_changed=t
     fi
 
     if [[ $effective_replay_state == replay_unless_missing ]]; then
@@ -418,6 +431,11 @@ flush_background_process() {
 
   local log_show_vars='pipe timeout buffering'
   begin_function
+
+    if [[ $pipe_replay_state == replaying ]]; then
+      log_debug "Skipping flush because we are replaying"
+      break
+    fi
 
     local t=${timeout//./}
     if (( t > 0 )); then
@@ -794,10 +812,11 @@ run_pipe_command() {
 
     timed_out=f failed=f command_successful=f
 
+    pipe_replay_hash=
     timeout=$flush_time buffering=char flush_background_process || fail
 
     from_var=command \
-      to_background_process || fail
+    to_background_process || fail
 
     if [[ $timed_out == t ]]; then
       break
