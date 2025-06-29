@@ -1061,14 +1061,18 @@ new() {
 
 # saves existing dir before changing to the given dir
 cd() {
+
   local target=${1:-} old=$PWD
   if [[ ! "$target" ]]; then
     target=$HOME
   fi
+
   target=$(unrealpath "$target") || return 1
-  if [[ -f "$target" ]]; then
-    vim "$target"
-  elif [[ ! -d "$target" ]]; then
+  if [[ -f "$target" || ! -e "$target" ]]; then
+    target=${target%/*}
+  fi
+
+  if [[ ! -d "$target" ]]; then
     echo "Error: target doesn't exist or is not a folder: $target" >&2
     return 1
   else
