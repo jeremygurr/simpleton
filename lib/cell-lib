@@ -437,6 +437,7 @@ init_context() {
       ${!tree_coordinate_*} \
       ${!i_*} \
       ${!validator*} \
+      ${!reactor*} \
 
     unset ${!dim_*} \
       ${!derive_table*} \
@@ -447,6 +448,7 @@ init_context() {
       ${!tree_coordinate_*} \
       ${!i_*} \
       ${!validator*} \
+      ${!reactor*} \
 
     declare -Ag all_dims=() \
       dim_shorts=() \
@@ -3381,19 +3383,6 @@ load_dna_contents() {
   handle_return
 }
 
-build_context_reactors() {
-  begin_function_lo
-    reactor_groups=
-    local ord
-    for ord in ${reactors_ord[*]:-}; do
-      reactor_groups+="$ord "
-    done
-    reactor_groups=( $(echo "${reactor_groups% }" | sed 's/ /\n/g' | sort -gu) )
-    write_vars_to_context reactor_groups || fail
-  end_function
-  handle_return
-}
-
 load_parent_context() {
   local path=$1
   begin_function
@@ -3462,8 +3451,6 @@ build_context_trunk_dna() {
 
       cat $context_path-$context_type.new2 >>$context_path-$context_type.new || fail
       rm $context_path-$context_type.new2 || fail
-
-      build_context_reactors || fail
 
     elif [[ -f $dna_path ]]; then
       safe_link $dna_path $context_path-$context_type.new || fail
@@ -6392,15 +6379,25 @@ execute_up() {
       $prep_function || fail
     fi
 
+    local up_cell_path \
+      short_cell \
+      upstream_cell_link \
+      downstream_cell_name \
+
+    up_cell_path=$(realpath $up_cell) || fail
+
+    if [[ $up_cell_type == up ]]; then
+      upstream_cell_link=$up_cell
+      get_short_cell $cell_path
+      downstream_cell_name=${short_cell//\//_}
+    fi
+
     if [[ $needs_update == t ]]; then
       
       maybe_fix_up || fail
 
-      local up_cell_path=$(realpath $up_cell) || fail
-
       needs_update=
 
-      upstream_cell_link=$up_cell \
       anchor_dims= \
       get_needs_update $up_cell_path || fail
 
@@ -6410,10 +6407,6 @@ execute_up() {
 
     if [[ $needs_update == t ]]; then
 
-      local short_cell
-      get_short_cell $cell_path
-      upstream_cell_link=$up_cell \
-      downstream_cell_name=${short_cell//\//_} \
       fork execute_commands "$up_cell_path" update || fail
 
       if [[ $something_changed == t ]]; then

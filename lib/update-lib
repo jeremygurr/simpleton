@@ -431,42 +431,6 @@ update_upstream() {
     up_cell=$upstream \
     execute_up || fail
 
-    #if [[ $needs_update == t ]]; then
-    #  
-    #  up_cell_type=up \
-    #  up_cell=$upstream \
-    #  maybe_fix_up || fail
-
-    #  upstream_cell_link=$upstream
-    #  up_cell_path=$(realpath $upstream) || fail
-    #  anchor_dims=
-    #  get_needs_update $up_cell_path || fail
-
-    #else
-    #  log_debug "Skipping update of upstream $upstream_name because prep function set needs_update=f"
-    #  upstream_skipped=t
-    #fi
-
-    #if [[ $needs_update == t ]]; then
-
-    #  local short_cell
-    #  get_short_cell $cell_path
-    #  downstream_cell_name=${short_cell//\//_} \
-    #  fork execute_commands "$up_cell_path" update || fail
-
-    #  if [[ $something_changed == t ]]; then
-    #    previous_upstream_changed=t
-    #  fi
-
-    #  if [[ $update_successful == f ]]; then
-    #    break
-    #  fi
-
-    #fi
-
-    #  IGNORE this until we are ready for full parallel implementation
-    #update_upstream_get_locks || fail
-
     if [[ -f $upstream/color.var ]]; then
       color_upstream_found=t
     fi
@@ -1274,6 +1238,68 @@ update_self() {
   handle_return
 }
 
+update_reactor() {
+  local r=$1
+  begin_function
+
+    log_verbose "Executing reactor $r (from $short_cell)"
+    local reactor_cell=$reactor_path/$r
+
+    up_cell_type=reactor \
+    up_cell=$reactor_cell \
+    execute_up || fail
+
+  end_function
+  handle_return
+}
+
+update_reactors() {
+  begin_function
+    local r
+    begin_for r in ${reactor[*]}; doo
+
+      local conditions= execute_reactor=t
+      if [[ $r == *,* ]]; then
+        conditions=${r#*,}
+        r=${r%%,*}
+
+        local condition key expected_value negative all_conditions_match=t
+        for condition in ${conditions//,/ }; do
+          key=${condition%%:*}
+          expected_value=${condition#*:}
+          negative=f
+          if [[ $expected_value == -* ]]; then
+            negative=t
+            expected_value=${expected_value#-}
+          fi
+
+          local -n current_value=$key
+          if [[ "${current_value:-}" == "$expected_value"
+             && $negative == t
+             ]]; then
+            all_conditions_match=f
+            break
+          elif [[ "${current_value:-}" != "$expected_value"
+             && $negative == f
+             ]]; then
+            all_conditions_match=f
+            break
+          fi
+        done
+
+        execute_reactor=$all_conditions_match
+
+      fi
+
+      if [[ $execute_reactor == t ]]; then
+        update_reactor $r || fail
+      fi
+
+    end_for
+  end_function
+  handle_return
+}
+
 update_self_retry_loop() {
   begin_function
 
@@ -1287,8 +1313,11 @@ update_self_retry_loop() {
 
     if [[ $can_update == t ]]; then
 
-      local attempt=1 reactors_left=( ${reactor[*]:-} )
-      local max_attempts=$((max_attempts + ${#reactors_left[*]}))
+      local attempt=1 \
+        max_attempts=$max_attempts \
+        pre_react=${force:-} \
+        r \
+
       while true; do
 
         local attempt_string=
@@ -1301,33 +1330,36 @@ update_self_retry_loop() {
           can_retry=t
         fi
           
+        for r in $pre_react; do
+          if [[ "${reactors:-}" ]]; then
+            if [[ " ${reactors[*]} " == *" $r "* ]]; then
+              update_reactor $r || fail
+            else
+              log_fatal "Invalid reactor: $r. Must be one of: ${reactors[*]}"
+              fail1
+            fi
+          else
+            log_fatal "Invalid reactor: $r. No reactors are defined for this cell."
+            fail1
+          fi
+        done
+
         update_self || fail
+
+        if [[ "${reactor:-}" ]]; then
+          update_reactors || fail
+        fi
 
         [[ $can_retry == f \
         || $update_successful == t \
         || $attempt -ge $max_attempts \
-        && ! "${reactors_left:-}" \
         ]] && break
 
-        if [[ "${reactors_left:-}" ]]; then
+        log_info "Waiting $delay seconds before trying again" 
+        sleep $delay
+        (( delay *= retry_scale )) || true
+        (( delay > retry_delay_max )) && delay=$retry_delay_max
 
-          local reactor=${reactors_left[0]}
-          log_verbose "Executing reactor $reactor"
-          reactors_left=( ${reactors_left[*]:1} )
-          local reactor_cell=${reactor_path}/$reactor
-
-          up_cell_type=reactor \
-          up_cell=$reactor_cell \
-          execute_up || fail
-
-        else
-
-          log_info "Waiting $delay seconds before trying again" 
-          sleep $delay
-          (( delay *= retry_scale )) || true
-          (( delay > retry_delay_max )) && delay=$retry_delay_max
-
-        fi
         (( attempt++ ))
 
         update_upstreams || fail
