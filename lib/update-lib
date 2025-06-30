@@ -1255,8 +1255,16 @@ update_reactor() {
 
 update_reactors() {
   begin_function
-    local r
+    local r r_short
     begin_for r in ${reactor[*]}; doo
+
+      r_short=${r%%,*}
+      if [[ " ${pre_react:-} " == *" $r "*
+         || " ${pre_react:-} " == *" "*"-$r "*
+         ]]; then
+        log_debug "Skipping reactor $r because pre_react already was run for it"
+        continue
+      fi
 
       local conditions= execute_reactor=t
       if [[ $r == *,* ]]; then
@@ -1292,7 +1300,12 @@ update_reactors() {
       fi
 
       if [[ $execute_reactor == t ]]; then
+        local update_successful=f
         update_reactor $r || fail
+        if [[ $update_successful == f ]]; then
+          log_fatal "Failed to update reactor $r (from $short_cell)"
+          fail1
+        fi
       fi
 
     end_for
@@ -1315,8 +1328,6 @@ update_self_retry_loop() {
 
       local attempt=1 \
         max_attempts=$max_attempts \
-        pre_react=${force:-} \
-        r \
 
       while true; do
 
@@ -1330,21 +1341,16 @@ update_self_retry_loop() {
           can_retry=t
         fi
           
-        for r in $pre_react; do
-          if [[ "${reactors:-}" ]]; then
-            if [[ " ${reactors[*]} " == *" $r "* ]]; then
-              update_reactor $r || fail
-            else
-              log_fatal "Invalid reactor: $r. Must be one of: ${reactors[*]}"
-              fail1
-            fi
-          else
-            log_fatal "Invalid reactor: $r. No reactors are defined for this cell."
-            fail1
-          fi
-        done
-
         update_self || fail
+
+        if [[ $update_successful == t && $post_validate == t ]]; then
+          local validation_says_already_done
+          validate_type=Post \
+          validate_cell || fail
+          if [[ ${validation_says_already_done:-t} == f ]]; then
+            update_successful=f
+          fi
+        fi
 
         if [[ "${reactor:-}" ]]; then
           update_reactors || fail
@@ -1604,7 +1610,24 @@ update_command() {
       local color_upstream_found=f
       if [[ "$update_successful" != f ]]; then
         if [[ $current_mock == f ]]; then
-          local validation_says_already_done
+          local validation_says_already_done \
+            pre_react=${pre_react:-} \
+            r \
+
+          if [[ "${reactor:-}" ]]; then
+            begin_for r in $pre_react; doo
+              if [[ " ${reactor_short[*]} " == *" $r "*
+                || " ${reactor_short[*]} " == *" "*"-$r "*
+                ]]; then
+                local update_successful=f
+                update_reactor $r || fail
+                if [[ $update_successful == f ]]; then
+                  log_fatal "Failed to update reactor $r as pre_react (from $short_cell)"
+                  fail1
+                fi
+              fi
+            end_for
+          fi
 
           if [[ $pre_validate == t ]]; then
             validate_type=Pre \
@@ -1630,15 +1653,6 @@ update_command() {
           if function_exists update_op; then
             update_successful=
             update_self_retry_loop || fail
-          fi
-
-          if [[ $update_successful == t && $post_validate == t ]]; then
-            local validation_says_already_done
-            validate_type=Post \
-            validate_cell || fail
-            if [[ ${validation_says_already_done:-t} == f ]]; then
-              update_successful=f
-            fi
           fi
 
         else
