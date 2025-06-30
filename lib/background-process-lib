@@ -305,6 +305,7 @@ from_background_process__check_line() {
       begin_for ((i=0; i < succeed_after_count; i++)); doo
         if [[ "$line" =~ ${succeed_after[$i]} ]]; then
           log_debug "Succeeded after [${succeed_after[$i]}]" || fail
+          succeed_string=$line
           succeeded=t
           abort
         fi
@@ -315,6 +316,7 @@ from_background_process__check_line() {
       begin_for ((i=0; i < succeed_after_count; i++)); doo
         if [[ "$line" =~ ${fail_after[$i]} ]]; then
           log_debug "Failed after [${fail_after[$i]}]" || fail
+          fail_string=$line
           failed=t
           abort
         fi
@@ -685,6 +687,8 @@ handle_char_buffering() {
 # output:
 #   timed_out 
 #   failed
+#   succeed_string
+#   fail_string
 # will flush output at end
 from_background_process() {
   local log_vars='pipe interact pipe_replay' \
@@ -734,6 +738,8 @@ from_background_process() {
       defer "exec $back_fd>&-"
     fi
 
+    succeed_string= fail_string=
+
     if [[ $buffering == line ]]; then
       handle_line_buffering || fail
     elif [[ $buffering == burst ]]; then
@@ -781,15 +787,16 @@ magic_shell_prompt='>=-=>'
 #   pipe
 #   command
 #   timeout
-#   flush_time (optional)
-#   shell_prompt (optional)
-#   succeed_after (optional) will override shell_prompt check if set
-#   fail_after (optional) will override shell_prompt check if set
-#   interact (optional) allow for automatic reactions to command output
-#   allow_return_codes
+#   flush_time 
+#   shell_prompt 
+#   succeed_after        will override shell_prompt check if set
+#   fail_after           will override shell_prompt check if set
+#   interact             allow for automatic reactions to command output
+#   allow_return_codes   if set to all, will not fail if any code is received
 # output: 
 #   result
 #   command_successful
+#   return_code
 # will flush output at end
 run_pipe_command() {
   local pipe=$pipe \
@@ -803,6 +810,8 @@ run_pipe_command() {
     interact=${interact:-} \
     silence_errors=${silence_errors:-f} \
     allow_return_codes=${allow_return_codes:-} \
+    succeed_string= \
+    fail_string= \
 
   local log_show_vars=command log_vars='pipe shell_prompt buffering'
   begin_function_hi
@@ -819,21 +828,24 @@ run_pipe_command() {
       break
     fi
 
+    escape_regex shell_prompt
+    shell_prompt=${shell_prompt%%*($NL| |$TAB)}
+    shell_prompt=${shell_prompt##*($NL| |$TAB)}
+
     if [[ ! "$succeed_after" && ! "$fail_after" ]]; then
-      escape_regex shell_prompt
-      shell_prompt=${shell_prompt%%*($NL| |$TAB)}
-      shell_prompt=${shell_prompt##*($NL| |$TAB)}
       succeed_after='^'
 
-      if [[ "$allow_return_codes" ]]; then
-        succeed_after+="(0"
+      if [[ "$allow_return_codes" == all ]]; then
+        succeed_after=
+      elif [[ "$allow_return_codes" ]]; then
+        succeed_after+="\\[(0"
         local rc
         for rc in $allow_return_codes; do
           succeed_after+="|$rc"
         done
-        succeed_after+=")"
+        succeed_after+=")\\]"
       else
-        succeed_after+="0"
+        succeed_after+="\\[0\\]"
       fi
 
       if [[ "$host_prompt" ]]; then
@@ -842,8 +854,9 @@ run_pipe_command() {
         succeed_after+="\ .*$shell_prompt"
       fi
 
-      fail_after="^[1-9][0-9]*\ .*$shell_prompt"
+      fail_after="^\\[[1-9][0-9]+\\]\ .*$shell_prompt"
     fi
+
     to_var=result \
       from_background_process || fail
 
@@ -866,6 +879,10 @@ run_pipe_command() {
     fi
   elif [[ "$succeeded" == t ]]; then
     log_debug "Command execution successful"
+    return_code=
+    if [[ "$succeed_string" =~ \[([0-9]+)\]\ .*$shell_prompt ]]; then
+      return_code=${BASH_REMATCH[1]}
+    fi
     command_successful=t
   else 
     log_debug "Output ended before success criteria was met"
