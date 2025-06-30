@@ -2922,6 +2922,12 @@ execute_command() {
       cell_close_log_file || fail
     fi
 
+    if [[ $command_successful == t ]]; then
+      log_info "Command successful: $cell_command $cell_path"
+    else
+      log_info "Command failed: $cell_command $cell_path"
+    fi
+
   end_function
 
   if failed; then
@@ -6368,90 +6374,6 @@ maybe_fix_up() {
       invalid_dep=f
 
     fi
-  end_function
-  handle_return
-}
-
-# inputs:
-#   up_cell_type
-#   up_cell
-execute_up() {
-  begin_function
-    if [[ ! "${up_cell:-}" ]]; then
-      log_fatal "Internal error: up_cell was not passed into execute_up"
-      fail1
-    fi
-
-    if [[ ! "${up_cell_type:-}" ]]; then
-      log_fatal "Internal error: up_cell_type was not passed into execute_up"
-      fail1
-    fi
-
-    local up_name=${up_cell##*/}
-    log_debug "Checking $up_cell_type $up_name"
-
-    local needs_update=t \
-      up_var=${up_name//-/_} \
-
-    local prep_function=${up_cell_type}_${up_var}_prep
-    if function_exists $prep_function; then
-      log_debug "Executing prep function: $prep_function"
-      $prep_function || fail
-    fi
-
-    local up_cell_path \
-      short_cell \
-      upstream_cell_link \
-      downstream_cell_name \
-
-    up_cell_path=$(realpath $up_cell) || fail
-    if [[ $up_cell_path == */.cyto/* ]]; then
-      log_fatal "Internal error: up_cell_path is in cyto: $up_cell_path"
-      fail1
-    fi
-
-    if [[ $up_cell_type == up ]]; then
-      upstream_cell_link=$up_cell
-      get_short_cell $cell_path
-      downstream_cell_name=${short_cell//\//_}
-    fi
-
-    if [[ $needs_update == t ]]; then
-      
-      maybe_fix_up || fail
-
-      needs_update=
-
-      anchor_dims= \
-      get_needs_update $up_cell_path || fail
-
-    else
-      log_debug "Skipping update of upstream $up_name because prep function set needs_update=f"
-    fi
-
-    if [[ $needs_update == t ]]; then
-
-      fork execute_commands "$up_cell_path" update || fail
-
-      if [[ $something_changed == t ]]; then
-        previous_upstream_changed=t
-      fi
-
-      if [[ $update_successful == f ]]; then
-        break
-      fi
-
-    fi
-
-    target_cell=$up_cell \
-    load_upstream_vars || fail
-
-    local post_function=${up_cell_type}_${up_var}_post
-    if function_exists $post_function; then
-      log_debug "Executing post function: $post_function"
-      $post_function || fail
-    fi
-    
   end_function
   handle_return
 }

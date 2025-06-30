@@ -68,7 +68,6 @@ load_upstream_vars() {
       log_fatal "Internal error: missing target_cell $target_cell"
     fi
 
-    update_successful=t
     local export_path=$target_cell/export \
       out_path=$target_cell \
       prefix=${target_cell##*/}_ \
@@ -89,16 +88,97 @@ load_upstream_vars() {
       load_dna_contents $export_path || fail
     fi
 
-    if [[ $update_successful == f ]]; then
-      break
-    fi
-
   end_function
 
-  if failed || [[ $update_successful == f ]]; then
+  if failed; then
     update_successful=f
   fi
 
+  handle_return
+}
+
+# inputs:
+#   up_cell_type
+#   up_cell
+execute_up() {
+  begin_function
+    if [[ ! "${up_cell:-}" ]]; then
+      log_fatal "Internal error: up_cell was not passed into execute_up"
+      fail1
+    fi
+
+    if [[ ! "${up_cell_type:-}" ]]; then
+      log_fatal "Internal error: up_cell_type was not passed into execute_up"
+      fail1
+    fi
+
+    local up_name=${up_cell##*/}
+    log_debug "Checking $up_cell_type $up_name"
+
+    local needs_update=t \
+      up_var=${up_name//-/_} \
+
+    local prep_function=${up_cell_type}_${up_var}_prep
+    if function_exists $prep_function; then
+      log_debug "Executing prep function: $prep_function"
+      $prep_function || fail
+    fi
+
+    local up_cell_path \
+      short_cell \
+      upstream_cell_link \
+      downstream_cell_name \
+
+    up_cell_path=$(realpath $up_cell) || fail
+    if [[ $up_cell_path == */.cyto/* ]]; then
+      log_fatal "Internal error: up_cell_path is in cyto: $up_cell_path"
+      fail1
+    fi
+
+    if [[ $up_cell_type == up ]]; then
+      upstream_cell_link=$up_cell
+      get_short_cell $cell_path
+      downstream_cell_name=${short_cell//\//_}
+    fi
+
+    if [[ $needs_update == t ]]; then
+      
+      maybe_fix_up || fail
+
+      needs_update=
+
+      anchor_dims= \
+      get_needs_update $up_cell_path || fail
+
+    else
+      log_debug "Skipping update of upstream $up_name because prep function set needs_update=f"
+    fi
+
+    if [[ $needs_update == t ]]; then
+
+      fork execute_commands "$up_cell_path" update || fail
+
+      if [[ $something_changed == t ]]; then
+        previous_upstream_changed=t
+      fi
+
+      #  upstream vars and post function may want to react to the failed state
+      #if [[ $update_successful == f ]]; then
+      #  break
+      #fi
+
+    fi
+
+    target_cell=$up_cell \
+    load_upstream_vars || fail
+
+    local post_function=${up_cell_type}_${up_var}_post
+    if function_exists $post_function; then
+      log_debug "Executing post function: $post_function"
+      $post_function || fail
+    fi
+    
+  end_function
   handle_return
 }
 
@@ -431,10 +511,6 @@ update_upstream() {
     up_cell=$upstream \
     execute_up || fail
 
-    if [[ -f $upstream/out_color.var ]]; then
-      color_upstream_found=t
-    fi
-
   end_function
   handle_return
 }
@@ -470,7 +546,7 @@ update_upstreams() {
 
   end_function
 
-  if failed || [[ $update_successful == f ]]; then
+  if failed; then
     update_successful=f
   fi
 
@@ -1006,6 +1082,7 @@ update_self_move_out_path() {
   handle_return
 }
 
+# not used at the moment
 get_max_color() {
   begin_function_lo
     local a=$1 b=$2
@@ -1095,47 +1172,6 @@ write_row_to_output_tab() {
   handle_return
 }
 
-update_handle_color() {
-  begin_function
-
-    if [[ $missing == t ]]; then
-      # aggregate upstream results
-      local up_name path up_color up_problem max_color
-      color=green problem_detail=
-
-      for up_name in ${up[*]}; do
-        path=${up_path}/$up_name
-        up_color=
-        up_problem=
-        if [[ -f $path/out_color.var ]]; then
-          up_color=$(<$path/out_color.var)
-          get_max_color "$up_color" "$color" || fail
-          color=$max_color
-          if [[ -f $path/problem_detail.var ]]; then
-            up_problem=$(<$path/problem_detail.var)
-            if [[ "$problem_detail" ]]; then
-              problem_detail+=" $up_problem"
-            else
-              problem_detail=$up_problem
-            fi
-          fi
-        fi
-      done
-      maybe_break
-
-    fi
-
-    echo "$color" >$cell_path/out_color.var || fail
-    if [[ "${problem_detail:-}" ]]; then
-      echo "$problem_detail" >$cell_path/problem_detail.var || fail
-    fi
-
-    write_fields_to_output_tab color problem_detail || fail
-    write_row_to_output_tab "$color" "$problem_detail" || fail
-  end_function
-  handle_return
-}
-
 update_self() {
   local log_vars='short_cell'
   begin_function
@@ -1145,9 +1181,9 @@ update_self() {
     update_successful=
     can_retry=t
 
-    local reuse_existing_out=${reuse_existing_out:-t}
+    local reuse_existing_out=${reuse_existing_out:-t} \
+      original_out_path=$out_path out_path=$out_path \
 
-    local original_out_path=$out_path out_path=$out_path
     if [[ $reuse_existing_out == f ]]; then
       if [[ -d $out_path.new ]]; then
         rm -rf $out_path.new || fail
@@ -1162,19 +1198,14 @@ update_self() {
     fi
 
     local missing=t
-    tee_output_to_log || fail
+    #tee_output_to_log || fail
     if [[ $current_mock == f ]]; then
       localize
-      local color problem_detail
 
       ignore_missing=t execute_op update || {
         log_fatal "Internal error while executing update operator."
         fail1
       }
-
-      if [[ $color_upstream_found == t || "${color:-}" ]]; then
-        update_handle_color || fail
-      fi
 
       local raws raw_path part
       if [[ -e $out_path ]]; then
@@ -1234,7 +1265,7 @@ update_self() {
     fi
 
   end_function
-  untee_output  # in case update failed and block was exited early
+  #untee_output  # in case update failed and block was exited early
   handle_return
 }
 
@@ -1320,88 +1351,59 @@ update_self_retry_loop() {
     delay=$retry_delay \
     can_update=t \
 
-    if [[ "$update_successful" ]]; then
-      can_update=f
-    fi
+    local attempt=1 \
+      max_attempts=$max_attempts \
 
-    if [[ $can_update == t ]]; then
+    while true; do
 
-      local attempt=1 \
-        max_attempts=$max_attempts \
+      local attempt_string=
+      if (( max_attempts > 1 )); then
+        attempt_string=", attempt $attempt of $max_attempts"
+      fi
 
-      while true; do
+      update_successful=t
+      can_retry=f
+      if (( attempt < max_attempts )); then
+        can_retry=t
+      fi
+        
+      update_upstreams || fail
 
-        local attempt_string=
-        if (( max_attempts > 1 )); then
-          attempt_string=", attempt $attempt of $max_attempts"
-        fi
-
-        can_retry=f
-        if (( attempt < max_attempts )); then
-          can_retry=t
-        fi
-          
+      if [[ $update_successful == t ]]; then
+        touch $status_path/deps-up-to-date || fail
         update_self || fail
+      fi
 
-        if [[ $update_successful == t && $post_validate == t ]]; then
-          local validation_says_already_done
-          validate_type=Post \
-          validate_cell || fail
-          if [[ ${validation_says_already_done:-t} == f ]]; then
-            update_successful=f
-          fi
-        fi
-
-        if [[ "${reactor:-}" ]]; then
-          update_reactors || fail
-        fi
-
-        [[ $can_retry == f \
-        || $update_successful == t \
-        || $attempt -ge $max_attempts \
-        ]] && break
-
-        log_info "Waiting $delay seconds before trying again" 
-        sleep $delay
-        (( delay *= retry_scale )) || true
-        (( delay > retry_delay_max )) && delay=$retry_delay_max
-
-        (( attempt++ ))
-
-        update_upstreams || fail
-
-        if [[ $update_successful == t ]]; then
-          touch $status_path/deps-up-to-date || fail
-        fi
-
-      done
-    fi
-
-    update_successful=${update_successful:-t}
-
-  end_function
-  handle_return
-}
-
-check_results() {
-  begin_function
-
-    if [[ $can_update == t ]]; then
       if [[ $update_successful == t && $post_validate == t ]]; then
-        log_debug "Post validating"
-        local data_valid=f
-        can_retry=f
-        execute_op check || return 1
-        if [[ $data_valid == f ]]; then
-          log_warn "Data is not valid"
+        local validation_says_already_done
+        validate_type=Post \
+        validate_cell || fail
+        if [[ ${validation_says_already_done:-t} == f ]]; then
           update_successful=f
-        else
-          log_debug "Data is valid"
         fi
       fi
-    else
-      update_successful=t
-    fi
+
+      zombie_fence
+
+      if [[ "${reactor:-}" ]]; then
+        update_reactors || fail
+      fi
+
+      [[ $can_retry == f \
+      || $update_successful == t \
+      || $attempt -ge $max_attempts \
+      ]] && break
+
+      log_info "Waiting $delay seconds before trying again" 
+      sleep $delay
+      (( delay *= retry_scale )) || true
+      (( delay > retry_delay_max )) && delay=$retry_delay_max
+
+      (( attempt++ ))
+
+      zombie_fence
+
+    done
 
   end_function
   handle_return
@@ -1607,12 +1609,13 @@ update_command() {
       pre_update || fail
       deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
 
-      local color_upstream_found=f
       if [[ "$update_successful" != f ]]; then
         if [[ $current_mock == f ]]; then
           local validation_says_already_done \
             pre_react=${pre_react:-} \
             r \
+
+          zombie_debug
 
           if [[ "${reactor:-}" ]]; then
             begin_for r in $pre_react; doo
@@ -1622,25 +1625,20 @@ update_command() {
                 local update_successful=f
                 update_reactor $r || fail
                 if [[ $update_successful == f ]]; then
-                  log_fatal "Failed to update reactor $r as pre_react (from $short_cell)"
-                  fail1
+                  log_warn "Failed to update reactor $r as pre_react (from $short_cell)"
                 fi
               fi
             end_for
           fi
+
+          zombie_fence
 
           if [[ $pre_validate == t ]]; then
             validate_type=Pre \
             validate_cell || fail
           fi
 
-          if [[ ${validation_says_already_done:-f} == f ]]; then
-            update_upstreams || fail
-          fi
-
-          if [[ $update_successful == t ]]; then
-            touch $status_path/deps-up-to-date || fail
-          fi
+          zombie_fence
 
         else
           update_successful=t
@@ -1650,10 +1648,14 @@ update_command() {
       if [[ $update_successful == t && ${validation_says_already_done:-f} == f ]]; then
         if [[ $cell_is_leaf == t ]]; then
 
+          zombie_fence
+
           if function_exists update_op; then
             update_successful=
             update_self_retry_loop || fail
           fi
+
+          zombie_fence
 
         else
           if [[ "${child_dims:-}" ]]; then
