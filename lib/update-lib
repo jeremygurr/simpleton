@@ -682,7 +682,6 @@ repair_pre_update() {
 pre_update() {
   begin_function
 
-    update_successful= \
     something_changed=f \
     member_count=0 \
     cell_locks= \
@@ -939,7 +938,7 @@ update_member() {
         log_error "Failed to update member cell $member"
         reply_to_caller "update_successful=f" || fail
       else 
-        update_successful=
+        update_successful=t
       fi
     fi
 
@@ -954,12 +953,12 @@ update_members() {
   begin_function
 
     local dim=${child_dims[0]}
-    update_successful=
+    update_successful=t
     par=t fork=f function=update_member for_each_member $dim || fail
 
     if [[ ${update_successful:=t} == f ]]; then
-      log_fatal "Failed to update some member(s)"
-      fail1
+      log_warn "Failed to update some member(s)"
+      #fail1
     fi
 
   end_function
@@ -1491,7 +1490,7 @@ update_command() {
       needs_update=${needs_update:-} \
       needs_inner=f \
 
-    update_successful=f
+    update_successful=t
 
     if [[ "${refresh:-f}" == t ]]; then
       refresh=f
@@ -1513,7 +1512,6 @@ update_command() {
     fi
 
     if [[ ${branches_only:-f} == t && $cell_is_leaf == t ]]; then
-      update_successful=t
       abort
     fi
 
@@ -1609,13 +1607,13 @@ update_command() {
       pre_update || fail
       deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
 
-      if [[ "$update_successful" != f ]]; then
-        if [[ $current_mock == f ]]; then
+      if [[ "$update_successful" == t ]]; then
+        if [[ $current_mock == f && $cell_is_leaf == t ]]; then
           local validation_says_already_done \
             pre_react=${pre_react:-} \
             r \
 
-          zombie_debug
+          #zombie_debug
 
           if [[ "${reactor:-}" ]]; then
             begin_for r in $pre_react; doo
@@ -1660,7 +1658,9 @@ update_command() {
         else
           if [[ "${child_dims:-}" ]]; then
             update_members || fail
-            update_aggregation || fail
+            if [[ $update_successful == t ]]; then
+              update_aggregation || fail
+            fi
           else
             log_fatal "Internal error: cell is not a leaf, yet it doesn't have child dims?"
             fail1
