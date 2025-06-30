@@ -530,8 +530,9 @@ handle_line_buffering() {
 
 handle_burst_buffering() {
   begin_function
+    timeout_total_ms=0 
     local short_timeout_ms=${short_timeout_ms:-100} long_timeout_ms=${long_timeout_ms:-1000} \
-      timeout_total_ms=0 complete_line partial_line= loop_done=f target_timeout_ms
+      complete_line partial_line= loop_done=f target_timeout_ms
 
     local current_timeout_ms=$short_timeout_ms \
       current_timeout short_timeout long_timeout rc
@@ -740,6 +741,7 @@ from_background_process() {
 
     succeed_string= fail_string=
 
+    local timeout_total_ms=
     if [[ $buffering == line ]]; then
       handle_line_buffering || fail
     elif [[ $buffering == burst ]]; then
@@ -751,7 +753,13 @@ from_background_process() {
       fail1
     fi
 
+    waited_for_s=0
     if [[ $timed_out == t ]]; then
+      if [[ "$timeout_total_ms" ]]; then
+        waited_for_s=${timeout_total_ms%???}
+      else
+        waited_for_s=$timeout
+      fi
       if [[ "$line" ]]; then
         from_background_process__record_line || fail
         line=

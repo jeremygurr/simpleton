@@ -251,9 +251,9 @@ walk() {
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == up ]]; then
         walk_add_dirs $current_selection || return 1
-      elif [[ ${current_selection##*/} == up ]]; then
-        walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == validator ]]; then
+        walk_add_dirs $current_selection || return 1
+      elif [[ ${current_selection##*/} == reactor ]]; then
         walk_add_dirs $current_selection || return 1
       elif [[ ${current_selection##*/} == .dna ]]; then
         local work_cells= work_cell pw possibility
