@@ -634,7 +634,7 @@ forge() {
 
     adjust_choices() {
       if [[ -d $current_selection/.. ]]; then
-        hidden=t walk_add_choice "." "*up*" "cd .."
+        hidden=t walk_add_choice "." "*up*" "- Go up a folder"
       fi
 
       hidden=t walk_add_choice "a" "*action*" "- Change action"
@@ -663,7 +663,11 @@ forge() {
       local new_target
       if [[ "$response" == "*back*" ]]; then
         current_selection=${back_stack[-1]}
-        unset back_stack[-1]
+        if [[ -v back_stack[-1] ]]; then
+          unset back_stack[-1]
+        else
+          echo "Back stack is empty"
+        fi
         walk_filter=
       elif [[ "$response" == "*new-dir*" ]]; then
         local new_name
@@ -705,6 +709,9 @@ forge() {
         else
           add_roots=t
         fi
+      elif [[ "$response" == "*up*" ]]; then
+        back_stack+=( $current_selection )
+        current_selection=${current_selection%/*}
       elif [[ "$response" == *action* ]]; then
         local choice
         while true; do
