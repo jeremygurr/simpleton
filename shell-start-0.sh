@@ -634,7 +634,7 @@ forge() {
 
     adjust_choices() {
       if [[ -d $current_selection/.. ]]; then
-        hidden=t walk_add_choice "." "$current_selection/.." "cd .."
+        hidden=t walk_add_choice "." "*up*" "cd .."
       fi
 
       hidden=t walk_add_choice "a" "*action*" "- Change action"
