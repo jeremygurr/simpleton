@@ -303,12 +303,48 @@ show_upstream_recursive() {
   handle_return
 }
 
+show_validator_single() {
+  local validator_name=$1 validator_path=$2 validator_conditions=$3
+  begin_function
+    local message="$validator_name"
+    if (( command_detail > -1 )); then
+      message+=": $validator_path"
+      if [[ "$validator_conditions" ]]; then
+        message+=" (considered valid if: $validator_conditions)"
+      fi
+    fi
+    out "$message"
+  end_function
+  handle_return
+}
+
+show_validators() {
+  begin_function
+    local validator_name_plus validator_name validator_var validator_conditions
+    begin_for validator_name_plus in ${validator[*]}; doo
+      validator_name=${validator_name_plus%%,*}
+      validator_conditions=${validator_name_plus#$validator_name,}
+      if [[ $validator_conditions == $validator_name_plus ]]; then
+        validator_conditions=
+      fi
+      validator_var=${validator_name//-/_}
+      local -n validator_path=validator_${validator_var}_path
+      show_validator_single $validator_name $validator_path "$validator_conditions" || fail
+    end_for
+  end_function
+  handle_return
+}
+
+
 show_reactor_single() {
-  local reactor_name=$1 reactor_path=$2
+  local reactor_name=$1 reactor_path=$2 reactor_conditions=$3
   begin_function
     local message="$reactor_name"
     if (( command_detail > -1 )); then
       message+=": $reactor_path"
+      if [[ "$reactor_conditions" ]]; then
+        message+=" (will execute after update if: $reactor_conditions)"
+      fi
     fi
     out "$message"
   end_function
@@ -317,11 +353,16 @@ show_reactor_single() {
 
 show_reactors() {
   begin_function
-    local reactor_name
-    begin_for reactor_name in ${reactor[*]}; doo
-      local reactor_var=${reactor_name//-/_}
+    local reactor_name_plus reactor_name reactor_var reactor_conditions
+    begin_for reactor_name_plus in ${reactor[*]}; doo
+      reactor_name=${reactor_name_plus%%,*}
+      reactor_conditions=${reactor_name_plus#$reactor_name,}
+      if [[ $reactor_conditions == $reactor_name_plus ]]; then
+        reactor_conditions=
+      fi
+      reactor_var=${reactor_name//-/_}
       local -n reactor_path=reactor_${reactor_var}_path
-      show_reactor_single $reactor_name $reactor_path || fail
+      show_reactor_single $reactor_name $reactor_path "$reactor_conditions" || fail
     end_for
   end_function
   handle_return
@@ -488,8 +529,13 @@ show_cell_help() {
     fi
 
     if [[ "${reactor:-}" ]]; then
-      indent=$((indent-2)) out "${NL}Reactors:"
+      indent=$((indent-2)) out "${NL}Reactors: (are run after update operator if conditions are met)"
       show_reactors || fail
+    fi
+
+    if [[ "${validator:-}" ]]; then
+      indent=$((indent-2)) out "${NL}Validators: (are run before upstreams are run and after the update operator completes)"
+      show_validators || fail
     fi
 
     local dim member show_header=t
