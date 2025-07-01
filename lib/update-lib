@@ -97,26 +97,8 @@ load_upstream_vars() {
   handle_return
 }
 
-# inputs:
-#   up_cell_type
-#   up_cell
-execute_up() {
+execute_up_inner() {
   begin_function
-    if [[ ! "${up_cell:-}" ]]; then
-      log_fatal "Internal error: up_cell was not passed into execute_up"
-      fail1
-    fi
-
-    if [[ ! "${up_cell_type:-}" ]]; then
-      log_fatal "Internal error: up_cell_type was not passed into execute_up"
-      fail1
-    fi
-
-    local up_name=${up_cell##*/}
-    log_debug "Checking $up_cell_type $up_name"
-
-    local needs_update=t \
-      up_var=${up_name//-/_} \
 
     local all_prep_function=${up_cell_type}_all_prep
     if function_exists $all_prep_function; then
@@ -169,19 +151,37 @@ execute_up() {
     fi
 
     if [[ $needs_update == t ]]; then
-
-      fork execute_commands "$up_cell_path" update || fail
-
-      if [[ $something_changed == t ]]; then
-        previous_upstream_changed=t
-      fi
-
-      #  upstream vars and post function may want to react to the failed state
-      #if [[ $update_successful == f ]]; then
-      #  break
-      #fi
-
+      execute_commands "$up_cell_path" update || fail
     fi
+
+    reply_to_caller "needs_update=$needs_update"
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   up_cell_type
+#   up_cell
+execute_up() {
+  begin_function
+    if [[ ! "${up_cell:-}" ]]; then
+      log_fatal "Internal error: up_cell was not passed into execute_up"
+      fail1
+    fi
+
+    if [[ ! "${up_cell_type:-}" ]]; then
+      log_fatal "Internal error: up_cell_type was not passed into execute_up"
+      fail1
+    fi
+
+    local up_name=${up_cell##*/}
+    log_debug "Checking $up_cell_type $up_name"
+
+    local needs_update=t \
+      up_var=${up_name//-/_} \
+
+    fork execute_up_inner || fail
 
     target_cell=$up_cell \
     load_upstream_vars || fail
@@ -569,7 +569,7 @@ update_upstreams() {
 
     if [[ -d "${up_path:-}" ]]; then
 
-      local previous_upstream_changed=f upstream upstreams \
+      local upstream upstreams \
         top_level_command=f
 
       # This will eventually be done in parallel
@@ -977,7 +977,7 @@ update_member() {
       fork execute_commands $member_path update || fail
 
       if [[ $update_successful == f ]]; then
-        log_error "Failed to update member cell $member_path"
+        #log_error "Failed to update member cell $member_path"
         reply_to_caller "update_successful=f" || fail
       else 
         update_successful=t
