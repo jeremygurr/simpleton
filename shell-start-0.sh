@@ -600,6 +600,8 @@ forge() {
       current_action=go \
       link_expansion=f \
       add_roots=f \
+      copy_list=() \
+      copy_type=copy \
 
     show_selection() {
       local extra= branches=() branch member \
@@ -703,9 +705,6 @@ forge() {
         else
           add_roots=t
         fi
-      elif [[ "$response" == "*target*" ]]; then
-        echo "Setting target of copy/move/link commands to $current_selection"
-        action_target=$current_selection
       elif [[ "$response" == *action* ]]; then
         local choice
         while true; do
@@ -713,13 +712,17 @@ forge() {
           read -n1 -sp "Choose action (? = list actions): " choice
           case "$choice" in
             c)
-              echo "copy"
+              echo "add item to copy list"
               current_action=copy
+              copy_list=()
+              copy_type=copy
               break
             ;;
             C)
-              echo "copy-contents"
+              echo "add item to copy-contents list"
               current_action=copy-contents
+              copy_list=()
+              copy_type=copy-contents
               break
             ;;
             d)
@@ -748,8 +751,10 @@ forge() {
               break
             ;;
             m)
-              echo "move"
+              echo "add item to move list"
               current_action=move
+              copy_list=()
+              copy_type=move
               break
             ;;
             q)
@@ -761,14 +766,19 @@ forge() {
               current_action=rename
               break
             ;;
+            t)
+              echo "$copy_type to"
+              current_action=to
+              break
+            ;;
             v)
               echo "view"
               current_action=view
               break
             ;;
             \?)
-              echo "c copy item to target dir (use t command to set destination)"
-              echo "C copy contents of item to target dir (use t command to set destination)"
+              echo "c copy item to target dir (select items to copy, then use t command to set destination)"
+              echo "C copy contents of item to target dir (select folders to copy from, then use t command to set destination folder))"
               echo "d delete"
               echo "D duplicate"
               #echo "i info"
@@ -791,21 +801,9 @@ forge() {
         target=$target1/$target2
 
         case $action in
-          copy)
-            if [[ "${action_target:-}" ]]; then
-              echo rsync -av $target $action_target/
-              rsync -av $target $action_target/
-            else
-              echo "No target has been set. Go to the target dir and use the 't' command to set the target."
-            fi
-          ;;
-          copy-contents)
-            if [[ "${action_target:-}" ]]; then
-              echo rsync -av $target/ $action_target/
-              rsync -av $target/ $action_target/
-            else
-              echo "No target has been set. Go to the target dir and use the 't' command to set the target."
-            fi
+          copy|copy-contents|move)
+            echo "Added $target to $copy_type list"
+            copy_list+=( "$target" )
           ;;
           delete)
             echo rm -rf "$target"
@@ -852,6 +850,25 @@ forge() {
               echo mv $target $target1/$new_name
               mv $target $target1/$new_name
             fi
+          ;;
+          to)
+            local from
+            case $copy_type in
+              copy)
+                for from in "${copy_list[@]}"; do
+                  echo rsync -av $from $target
+                  rsync -av $from $target
+                done
+              ;;
+              copy-contents)
+              ;;
+              move)
+              ;;
+              *)
+                echo "Internal error: invalid copy_type: $copy_type"
+                return 1
+              ;; 
+            esac
           ;;
           view)
             echo "Viewing $target"
