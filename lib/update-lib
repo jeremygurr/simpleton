@@ -222,17 +222,34 @@ validate_cell() {
         target_name=${target%%,*}
         target_var=${target_name//-/_}
 
-        strong_log=t log_verbose "$validate_type-validating using $target_var (from $short_cell)"
+        strong_log=t log_verbose "${validate_type^}-validating using $target_var (from $short_cell)"
 
         local conditions=
         if [[ $target_var != "$target" ]]; then
           conditions=${target#*,}
         fi
 
-        local target_cell=$validator_path/$target_name invalid_dep=f
+        local target_cell=$validator_path/$target_name \
+          invalid_dep=f \
+          fresh \
+
+        case $validate_type in
+          pre)
+            # If we just ran these cells a few minutes ago, no need to run them again
+            fresh=5m
+          ;;
+          post)
+            # However, for post-validation, it is assumed that a change in the current cell
+            # will impact the valdation, and so that always needs to be fresh
+            fresh=0
+          ;;
+          *)
+            log_fatal "Internal error: Invalid validate_type: $validate_type. It should be either pre or post"
+            fail1
+          ;;
+        esac
 
         during_validation=t \
-        fresh=0 \
         up_cell_type=validator \
         up_cell=$target_cell \
         execute_up || fail
@@ -1400,7 +1417,7 @@ update_self_retry_loop() {
 
       if [[ $update_successful == t && $post_validate == t ]]; then
         local validation_says_already_done
-        validate_type=Post \
+        validate_type=post \
         validate_cell || fail
         if [[ ${validation_says_already_done:-t} == f ]]; then
           update_successful=f
@@ -1649,7 +1666,7 @@ update_command() {
           fi
 
           if [[ $pre_validate == t ]]; then
-            validate_type=Pre \
+            validate_type=pre \
             validate_cell || fail
           fi
 
