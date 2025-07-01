@@ -27,7 +27,7 @@ set history=100
 set wildignore+=*\\tmp\\*,*.swp,*.swo,*.zip,.git,.cabal-sandbox
 set wildmode=longest,list,full
 set wildmenu
-set nowrap
+set wrap
 set nowrapscan
 set softtabstop=2
 set shiftwidth=2
