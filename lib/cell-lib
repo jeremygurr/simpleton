@@ -4652,26 +4652,25 @@ calc_coordinates_next_unknown_dim() {
           log_show_vars='dim phase'
           log_debug "Finding values for $dim in phase $phase"
 
-          local values=() already_expanded=f needs_narrowing=t
+          local values=() already_expanded=f \
+            needs_narrowing=t \
+            derive_exactly_one=t \
+
+          if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+            derive_exactly_one=f
+          fi
+
           if [[ $phase == derive ]]; then
             deriving= \
             attempt_derive || fail
             needs_narrowing=f
-          elif [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
-            local new_values=()
-            values=all
-            dim_var=$dim \
-            expand_dim_members values
-            values=( "${new_values[@]}" )
+          elif [[ $derive_exactly_one == f \
+               || $target_form == seed ]]; then
+            local value=all
+            expand_dim value values || fail
             already_expanded=t
           else
-            if [[ $target_form == seed ]]; then
-              local value=all
-              expand_dim value values || fail
-              already_expanded=t
-            else
-              attempt_default || fail
-            fi
+            attempt_default || fail
           fi
 
           if [[ "${values:-}" ]]; then
@@ -6328,6 +6327,11 @@ load_post_context_dynamic_vars() {
       end_for
 
     end_for
+
+    if [[ "${all_if_blank:-}" ]]; then
+      all_if_blank=( $all_if_blank )
+      all_if_blank=${all_if_blank[*]}
+    fi
 
   end_function
   handle_return
