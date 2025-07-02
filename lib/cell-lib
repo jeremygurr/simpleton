@@ -277,11 +277,14 @@ load_arr_to_code() {
 # inputs:
 #   table     name of table variable prefix
 #   ignore_unknown_dims
+#   include_implicit_dims
 # outputs:
 #   ${table}_index_${field}   map of field value to spaced array of row indexes
 make_table_index() {
 
-  local table=$table ignore_unknown_dims=${ignore_unknown_dims:-f}
+  local table=$table ignore_unknown_dims=${ignore_unknown_dims:-f} \
+    include_implicit_dims=${include_implicit_dims:-f} \
+
   begin_function
     local row_index \
       field_index \
@@ -314,7 +317,7 @@ make_table_index() {
 
       field=${table_fields[$field_index]}
 
-      if [[ -v all_dims[$field] ]]; then
+      if [[ -v all_dims[$field] || $include_implicit_dims == t ]]; then
 
         local -n index=${table}_index_${field}
 
@@ -326,15 +329,24 @@ make_table_index() {
           (( data_offset = row_index * field_count + field_index ))
           value=${table_data[$data_offset]}
 
-          values=()
+          if [[ -v all_dims[$field] ]]; then
+            values=()
 
-          dim=$field \
-          ignore_problems=t \
-          expand_dim || fail
+            dim=$field \
+            ignore_problems=t \
+            expand_dim || fail
 
-          for value in "${values[@]}"; do
-            index[$value]+="$row_index "
-          done
+            for value in "${values[@]}"; do
+              if [[ "$value" ]]; then
+                index[$value]+="$row_index "
+              fi
+            done
+
+          else
+            if [[ "$value" ]]; then
+              index[$value]+="$row_index "
+            fi
+          fi
 
         end_for
 
@@ -1897,7 +1909,8 @@ convert_table_to_dims() {
 #   $1               name of input var
 #   $2               name of output var
 #   ignore_problems
-# output: values 
+# output: 
+#   values 
 expand_dim() {
   local in_var=${1:-value} out_var=${2:-values} \
     ignore_problems=${ignore_problems:-f} \
