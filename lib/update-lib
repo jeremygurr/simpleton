@@ -251,6 +251,8 @@ validate_cell() {
           ;;
         esac
 
+        local validation_message= validation_object= validation_result=
+
         during_validation=t \
         up_cell_type=validator \
         up_cell=$target_cell \
@@ -267,7 +269,7 @@ validate_cell() {
               negative=t
               value=${value#-}
             fi
-            local -n up_var=${target_var}_$key
+            local -n up_var=validator_${target_var}_$key
             if [[ $negative == f ]]; then
               if [[ "${up_var:-}" == "$value" ]]; then
                 validation_says_already_done=t
@@ -285,14 +287,37 @@ validate_cell() {
             fi
           done
 
+          local -n up_validation_message=validator_${target_var}_validation_message
+          local -n up_validation_object=validator_${target_var}_validation_object
+          local -n up_validation_result=validator_${target_var}_validation_result
+
+          if [[ ! "${up_validation_message:-}" ]]; then
+            if [[ "${up_validation_object:-}" ]]; then
+              validation_message=$up_validation_object
+              if [[ "${up_validation_result:-}" ]]; then
+                validation_message+=" $up_validation_result"
+              fi
+            else
+              if [[ "${up_validation_result:-}" ]]; then
+                validation_message+="$up_validation_result"
+              fi
+            fi
+          else
+            validation_message=$up_validation_message
+          fi
+
+          if [[ "$validation_message" ]]; then
+            validation_message=" ($validation_message)"
+          fi
+
           if [[ $validation_says_already_done == t ]]; then
             touch $status_path/last-validation-good || fail
             touch $status_path/last-validation-${target_var}-good || fail
-            strong_log=t log_verbose "Validation result: DONE"
+            strong_log=t log_verbose "Validation result: DONE$validation_message"
           else
             touch $status_path/last-validation-bad || fail
             touch $status_path/last-validation-${target_var}-bad || fail
-            strong_log=t log_verbose "Validation result: NOT DONE"
+            strong_log=t log_verbose "Validation result: NOT DONE$validation_message"
             break
           fi
 
@@ -1348,12 +1373,14 @@ update_reactors() {
     begin_for r in ${reactor[*]}; doo
 
       r_short=${r%%,*}
-      if [[ " ${pre_react:-} " == *" $r "*
-         || " ${pre_react:-} " == *" "*"-$r "*
-         ]]; then
-        log_debug "Skipping reactor $r because pre_react already was run for it"
-        continue
-      fi
+      for pr in ${pre_react:-}; do
+        if [[ $r_short == $pr
+           || $r_short == *-$pr
+           ]]; then
+          log_debug "Skipping reactor $r_short because pre_react already was run for it"
+          continue 2
+        fi
+      done
 
       local conditions= execute_reactor=t
       if [[ $r == *,* ]]; then
@@ -1679,6 +1706,7 @@ update_command() {
                   update_reactor $rs || fail
                   if [[ $update_successful == f ]]; then
                     log_warn "Failed to update reactor $rs as pre_react (from $short_cell)"
+                    update_successful=t
                   fi
                 fi
               end_for
