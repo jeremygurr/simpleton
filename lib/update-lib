@@ -240,8 +240,9 @@ validate_cell() {
 
         case $validate_type in
           pre)
-            # If we just ran these cells a few minutes ago, no need to run them again
-            fresh=5m
+            # This also needs to run every time, because there are common cases where a change just
+            # ran which could have affected this.
+            fresh=0
           ;;
           post)
             # However, for post-validation, it is assumed that a change in the current cell
@@ -600,11 +601,13 @@ update_upstreams() {
   begin_function
 
     update_successful=t
-    if [[ "${last_upstream_updated:-}" == "${up_path:-}" ]]; then
-      abort
-    else
-      last_upstream_updated=${up_path:-}
-    fi
+
+    #  upstreams are repeatedly updated when retries are happening
+    #if [[ "${last_upstream_updated:-}" == "${up_path:-}" ]]; then
+    #  abort
+    #else
+    #  last_upstream_updated=${up_path:-}
+    #fi
 
     if [[ -d "${up_path:-}" ]]; then
 
@@ -1432,8 +1435,7 @@ update_reactors() {
         update_successful=f
         update_reactor $r || fail
         if [[ $update_successful == f ]]; then
-          log_fatal "Failed to update reactor $r (from $short_cell)"
-          fail1
+          log_warn "Failed to update reactor $r (from $short_cell)"
         fi
       fi
 
@@ -1481,13 +1483,18 @@ update_self_retry_loop() {
         fi
       fi
 
+      local prev_success=$update_successful
       if [[ "${reactor:-}" ]]; then
         update_reactors || fail
       fi
 
+      if [[ $prev_success == f ]]; then
+        # don't allow a successful reactor to override the success of the cell
+        update_successful=f
+      fi
+
       [[ $can_retry == f \
       || $update_successful == t \
-      || $attempt -ge $max_attempts \
       ]] && break
 
       log_info "Waiting $delay seconds before trying again" 
@@ -1738,9 +1745,7 @@ update_command() {
 
       if [[ $update_successful == t && ${validation_says_already_done:-f} == f ]]; then
         if [[ $cell_is_leaf == t ]]; then
-
           update_self_retry_loop || fail
-
         else
           if [[ "${child_dims:-}" ]]; then
             update_members || fail
