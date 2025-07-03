@@ -1054,6 +1054,7 @@ new() {
   done
 
   cd $closest || return 1
+
   plant || return 1
 
   cd $new_work_path || return 1
