@@ -52,6 +52,7 @@ alias f=forge
 alias sp='source /etc/profile'
 alias ls='ls --color=auto'
 alias l='ls --color=auto -l'
+alias ltr='ls --color=auto -ltr'
 alias ll='ls --color=auto -la'
 alias rmr='rm -rf'
 alias u='builtin cd ..'
