@@ -69,6 +69,101 @@ start_background_process() {
   handle_return
 }
 
+get_replay_file() {
+  local side=$side
+  begin_function
+
+    replay_changed=f
+    effective_replay_state=$pipe_replay_state
+    previous_replay_file=${current_replay_file:-}
+
+    if [[ "${replay_pipe:-}" ]]; then
+      if [[ ! "${current_replay_file:-}" ]]; then
+        if [[ -p $replay_pipe ]]; then
+          log_warn "Using manually specified replay file: $replay_pipe. This should be a fifo used for testing that the user is feeding data into."
+          current_replay_file=$replay_pipe
+        else
+          log_fatal "Given replay file doesn't exist: $replay_pipe"
+          fail1
+        fi
+      fi
+    elif [[ "${pipe_replay_hash:-}" ]]; then
+
+      current_replay_file=$replay_path/pipe_replay.$pipe_replay_hash
+
+      echo "$pipe_replay_hash_command" >$current_replay_file-in || fail
+      if [[ $pipe_replay_state == recording 
+         || $pipe_replay_state == replay_unless_missing
+         && ! -f "$current_replay_file-out"
+         ]]; then
+
+        if [[ $pipe_replay_state == replay_unless_missing ]]; then
+          log_warn "Replay file doesn't yet exist, so recording new file: $current_replay_file"
+          effective_replay_state=recording
+        fi
+
+        if [[ ! -d $replay_path ]]; then
+          mkdir -p $replay_path || fail
+        fi
+
+        if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
+          if [[ -e "$current_replay_file-out" ]]; then
+            rm $current_replay_file-out || fail
+          fi
+        fi
+
+      elif [[ $pipe_replay_state == replaying ]]; then
+        if [[ $side == from && ! -f $current_replay_file-out ]]; then
+          log_warn "Replay file doesn't exist: $current_replay_file-out ."
+          local response
+          prompt_ynq "Would you like to give a manual / simulated response?" response <&$fd_original_in 2>&$fd_original_err
+          case $response in 
+            y)
+              if [[ -f ${current_replay_file}-in ]]; then
+
+                echo "Enter response to this command:" >&$fd_original_err
+                cat ${current_replay_file}-in || fail
+                echo "End with a line patterned after the following special prompt if simulating a normal shell interaction," >&$fd_original_err
+                echo "(replacing 0 with return code and replacing the host name): [0] ${host_prompt:-hvgploaodk13} >=-=>" >&$fd_original_err
+                echo "End with control-C" >&$fd_original_err
+
+                trap - EXIT
+                cat <&$fd_original_in >${current_replay_file}-out || fail
+                setup_exit_trap
+
+              else
+                echo "Input replay file doesn't exist. Can't proceed." >&$fd_original_err
+                fail1
+              fi 
+            ;;
+            *)
+              log_fatal "Can't proceed without the replay file. Either rerun without replay=t so real ssh requests will be made, or create simulated files."
+              log_fatal "This means a complete recording doesn't exist for the given set of commands, so this needs to be re-executed in recording mode before replaying."
+              log_fatal "You CAN create this file and put in a test response if desired."
+              fail1
+            ;;
+          esac
+        fi
+      fi
+
+    else
+      log_debug "No pipe_replay_hash so not setting current_replay_file"
+      current_replay_file=
+    fi
+
+    if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
+      replay_changed=t
+    fi
+
+    if [[ $effective_replay_state == replay_unless_missing ]]; then
+      effective_replay_state=replaying
+    fi
+
+  end_function
+  debug_return_vars=current_replay_file
+  handle_return
+}
+
 # should not be called outside of to_background_process
 # input:
 #   line             command to send to pipe
@@ -98,6 +193,7 @@ to_background_process_single() {
       case $pipe_replay_state in recording|replaying|replay_unless_missing)
         update_replay_hash "$command" || fail
       esac
+      side=to \
       get_replay_file || fail
 
       case $effective_replay_state in recording|disabled)
@@ -122,6 +218,7 @@ to_background_process_single() {
       case $pipe_replay_state in recording|replaying|replay_unless_missing)
         update_replay_hash "$command" || fail
       esac
+      side=to \
       get_replay_file || fail
 
       case $effective_replay_state in recording|disabled)
@@ -229,75 +326,6 @@ from_background_process__record_line() {
   return 0
 }
 
-get_replay_file() {
-  begin_function
-
-    replay_changed=f
-    effective_replay_state=$pipe_replay_state
-    previous_replay_file=${current_replay_file:-}
-
-    if [[ "${replay_pipe:-}" ]]; then
-      if [[ ! "${current_replay_file:-}" ]]; then
-        if [[ -p $replay_pipe ]]; then
-          log_warn "Using manually specified replay file: $replay_pipe. This should be a fifo used for testing that the user is feeding data into."
-          current_replay_file=$replay_pipe
-        else
-          log_fatal "Given replay file doesn't exist: $replay_pipe"
-          fail1
-        fi
-      fi
-    elif [[ "${pipe_replay_hash:-}" ]]; then
-
-      current_replay_file=$replay_path/pipe_replay.$pipe_replay_hash
-
-      if [[ $pipe_replay_state == recording 
-         || $pipe_replay_state == replay_unless_missing
-         && ! -f "$current_replay_file-out"
-         ]]; then
-
-        if [[ $pipe_replay_state == replay_unless_missing ]]; then
-          log_warn "Replay file doesn't yet exist, so recording new file: $current_replay_file"
-          effective_replay_state=recording
-        fi
-
-        if [[ ! -d $replay_path ]]; then
-          mkdir -p $replay_path || fail
-        fi
-
-        if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
-          if [[ -e "$current_replay_file-out" ]]; then
-            rm $current_replay_file-out || fail
-          fi
-          echo "$pipe_replay_hash_command" >$current_replay_file-in
-        fi
-
-      elif [[ $pipe_replay_state == replaying ]]; then
-        if [[ ! -f $current_replay_file-out ]]; then
-          log_fatal "Replay file doesn't exist: $current_replay_file-out ."
-          log_fatal "This means a complete recording doesn't exist for the given set of commands, so this needs to be re-executed in recording mode before replaying."
-          log_fatal "You CAN create this file and put in a test response if desired."
-          fail1
-        fi
-      fi
-
-    else
-      log_debug "No pipe_replay_hash so not setting current_replay_file"
-      current_replay_file=
-    fi
-
-    if [[ "$previous_replay_file" != "$current_replay_file" ]]; then
-      replay_changed=t
-    fi
-
-    if [[ $effective_replay_state == replay_unless_missing ]]; then
-      effective_replay_state=replaying
-    fi
-
-  end_function
-  debug_return_vars=current_replay_file
-  handle_return
-}
-
 # sets found or failed
 from_background_process__check_line() {
   begin_function
@@ -332,6 +360,7 @@ from_background_process__check_line() {
           output=${output//\\n/$NL}
           from_var=output to_background_process || fail
           interacted=t
+          side=from \
           get_replay_file || fail
           if [[ $effective_replay_state == replaying && $replay_changed == t ]]; then
             undefer "exec $back_fd>&-" || fail
@@ -444,6 +473,7 @@ flush_background_process() {
       log_debug "Flushing background output with no timeout" || fail
     fi
 
+    side=flush \
     get_replay_file || fail
 
     if [[ $effective_replay_state == replaying ]]; then
@@ -474,6 +504,7 @@ flush_background_process() {
             line+=$char
           else
             log_debug "Flushing: $line" || fail
+            effective_replay_state=none \
             from_background_process__record_line || fail
             line=
           fi
@@ -482,6 +513,7 @@ flush_background_process() {
       line|burst)
         while IFS= read -r -t $timeout -u $back_fd -r line; [[ "${line:-}" ]]; do
           log_debug "Flushing: $line" || fail
+          effective_replay_state=none \
           from_background_process__record_line || fail
           line=
         done
@@ -723,6 +755,7 @@ from_background_process() {
 
     from_background_process__prep || fail
 
+    side=from \
     get_replay_file || fail
 
     if [[ $effective_replay_state == replaying ]]; then
