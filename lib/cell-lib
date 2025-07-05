@@ -2723,6 +2723,9 @@ find_path_to_dim() {
     local -n derived_from=dim_${target_dim}_derived_from
     local row_array derived_from_row target type required_dims optional_dims
 
+    local history=${history:-}
+    history+="$target_dim "
+
     add_to_set extra_dims_needed old_extra_dims_needed
 
     begin_for derived_from_row in "${derived_from[@]}"; doo
@@ -2747,25 +2750,48 @@ find_path_to_dim() {
 
         if [[ $resolved == f ]]; then
 
-          find_path_to_dim $required_dim || fail
-
-          if [[ $path_found == f ]]; then
+          if [[ " $history " != *" $required_dim "* ]]; then
+            find_path_to_dim $required_dim || fail
+            if [[ $path_found == f ]]; then
+              all_required_set=f
+              break
+            fi
             path_found=f
-            all_required_set=f
-            break
           fi
 
         fi
 
       done
 
-      # TODO handle optional dims
-
       if [[ $all_required_set == t ]]; then
+
         path_found=t
         array_to_set required_dims extra_dims_needed
+
+        local optional_dim
+        for optional_dim in ${optional_dims[*]}; do
+
+          resolved=f
+
+          if [[ -v ${resolved_dims[$optional_dim]} ]]; then
+            resolved=t
+          elif any_dim_is_set $optional_dim; then
+            resolved_dim[$optional_dim]=1
+            resolved=t
+          fi
+
+          if [[ $resolved == f ]]; then
+            if [[ " $history " != *" $optional_dim "* ]]; then
+              find_path_to_dim $optional_dim || fail
+              # we don't really care if a path was found for optionals
+            fi
+          fi
+
+        done
+
         array_to_set optional_dims extra_dims_needed
         succeed
+
       else
         clear_set extra_dims_needed
         add_to_set old_extra_dims_needed extra_dims_needed
@@ -2820,6 +2846,7 @@ get_support_dims() {
 
         extra_dims_needed=()
         path_found=f
+        local history=
         find_path_to_dim $dim || fail
         if [[ $path_found == t ]]; then
           add_to_set extra_dims_needed support_dims_set || fail
