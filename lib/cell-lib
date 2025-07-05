@@ -2716,41 +2716,64 @@ load_child_dims() {
   handle_return
 }
 
+find_path_to_dim() {
+  local target_dim=$1
+  begin_function
+    local -n derived_from=dim_${target_dim}_derived_from
+    local row_array derived_from_row target type
+    begin_for derived_from_row in "${derived_from[@]}"; doo
+      row_array=( $derived_from_row )
+      target=$row_array
+      type=${target##*.}
+      case $type in
+        fun)
+          local derive_fun=${target%.*}
+          narrow_dim_fun || fail
+        ;;
+        tab)
+          local derive_table=${target%.*}
+          derive_found=t
+          extract_from_derive_table || fail
+        ;;
+        *)
+          log_fatal "Unknown derived_from type: $type"
+          fail1
+        ;;
+      esac
+      if (( ${#value_set[*]} == 0 )); then
+        break
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+# assumes dims are already expanded (only d_ forms)
 # inputs:
 #   target_dims               which dims to connect trunk dims to via support dims
-#   related_dims_expanded
-#   shortest_path_to_dim
 # outputs:
 #   support_dims_expanded
 get_support_dims() {
   begin_function
 
-    local related_dim
-    local -A support_dims_set
+    local -A support_dims_set \
+      resolved_dims
 
-    begin_for related_dim in ${related_dims_expanded[*]}; doo
+    begin_for dim in $target_dims; doo
       
-      if [[ " $target_dims " == *" $related_dim "* ]]; then
-        #  not sure if this is needed
-        #if [[ $type == *-to-one ]]; then
-        #  support_dims_one_expanded+=( $dim )
-        #fi
-        local d
-        for d in ${shortest_path_to_dim[$related_dim]}; do
-          if ! array_contains trunk_dims_expanded $d; then
-            support_dims_set[$d]=1
-          fi
-        done
-        if [[ " ${trunk_dims_expanded[*]} " != *" $related_dim "* ]]; then
-          support_dims_set[$related_dim]=1
+      if [[ ! -v resolved_dims[$dim] ]]; then
+        if any_dim_is_set $dim; then
+          resolved_dims[$dim]=1
+          continue
         fi
+
+        find_path_to_dim $dim || fail
       fi
 
     end_for
 
     support_dims_expanded=( ${!support_dims_set[*]} )
     sort_array support_dims_expanded
-    #sort_array support_dims_one_expanded
     if [[ "${support_dims_expanded:-}" ]]; then
       log_debug "Found support dims: ${support_dims_expanded[*]}"
     else
@@ -2804,6 +2827,35 @@ clear_dims() {
   handle_return
 }
 
+dim_set_in_parameter() {
+  local long_dim=$1 dim=${2:-$1} dims
+  get_plural $dim dims
+
+  local -n pdim=p_$dim pdims=p_$dims
+
+  if [[ "${pdim:-}${pdims:-}" && ${dim_shorts[$dim]} == $long_dim ]]; then
+    return 0
+  fi
+
+  if [[ $dim == *_* ]]; then
+    dim_set_in_parameter $long_dim ${dim#*_} || return 1
+  else
+    return 1
+  fi
+
+  return 0
+}
+
+get_dim_parameters() {
+  dim_parameters=
+  local dim
+  for dim in ${related_dims[*]}; do
+    if dim_set_in_parameter $dim; then
+      dim_parameters+="$dim "
+    fi
+  done
+}
+
 setup_dims() {
   begin_function
 
@@ -2813,16 +2865,18 @@ setup_dims() {
 
     local target_dims="${trunk_dims_expanded[*]} $dim_parameters $anchor_dims"
 
-    get_support_dims || fail
-
     load_child_dims || fail
     if [[ $cell_is_leaf == t ]]; then
       expand_dims ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} || fail
       load_implicit_dims || fail
       add_required_dims ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} || fail
     else
-      expand_dims ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} || fail
+      expand_dims ${trunk_dims_expanded[*]:-} ${dim_parameters[*]:-} $anchor_dims || fail
       add_required_dims ${trunk_dims_expanded[*]:-} || fail
+    fi
+
+    if [[ ! "${support_dims_expanded:-}" ]]; then
+      get_support_dims || fail
     fi
 
     if (( ${#required_dims[*]} > 0 )); then
@@ -3127,23 +3181,6 @@ build_dim_info_single() {
   handle_return
 }
 
-dim_set_in_parameter() {
-  local long_dim=$1 dim=${2:-$1}
-  local -n pdim=p_$dim
-
-  if [[ -v pdim && ${dim_shorts[$dim]} == $long_dim ]]; then
-    return 0
-  fi
-
-  if [[ $dim == *_* ]]; then
-    dim_set_in_parameter $long_dim ${dim#*_} || return 1
-  else
-    return 1
-  fi
-
-  return 0
-}
-
 # inputs:
 #   dim
 #   dim_derived_from
@@ -3269,15 +3306,6 @@ build_context_related_dims() {
   handle_return
 }
 
-get_dim_parameters() {
-  dim_parameters=
-  for related_dim in ${related_dims_expanded[*]}; do
-    if dim_set_in_parameter $related_dim; then
-      dim_parameters+="$related_dim "
-    fi
-  done
-}
-
 build_dim_info_expand_group() {
   local dim=$1
   begin_function
@@ -3360,6 +3388,12 @@ build_dim_info() {
       for dim in "${dim_array[@]}"; do
 
         local -n dt=dim_${dim}_type
+
+        if [[ "${dt:-}" ]]; then
+          log_fatal "Dim $dim was defined as a $dim_type, but it is also defined as a $dt. A dim can only be of one type. Fix the dna definition for this cell."
+          fail1
+        fi
+
         dt=$dim_type
 
         get_plural $dim dims
