@@ -2719,13 +2719,15 @@ load_child_dims() {
 find_path_to_dim() {
   local target_dim=$1
   begin_function
-    local -A new_extra_dims_needed=()
+    local -A old_extra_dims_needed
     local -n derived_from=dim_${target_dim}_derived_from
     local row_array derived_from_row target type required_dims optional_dims
+
+    add_to_set extra_dims_needed old_extra_dims_needed
+
     begin_for derived_from_row in "${derived_from[@]}"; doo
 
       row_array=( $derived_from_row )
-      target=$row_array
       required_dims=${row_array[1]}
       required_dims=( ${required_dims//,/ } )
       optional_dims=${row_array[2]}
@@ -2744,9 +2746,15 @@ find_path_to_dim() {
         fi
 
         if [[ $resolved == f ]]; then
-          # TODO attempt recursion
-          all_required_set=f
-          # TODO if failed, add to potentials
+
+          find_path_to_dim $required_dim || fail
+
+          if [[ $path_found == f ]]; then
+            path_found=f
+            all_required_set=f
+            break
+          fi
+
         fi
 
       done
@@ -2755,17 +2763,16 @@ find_path_to_dim() {
 
       if [[ $all_required_set == t ]]; then
         path_found=t
-        # TODO this is a set
-        extra_dims_needed+="${required_dims[*]} ${optional_dims[*]}"
-
-        # TODO move new_extra_dims_needed to extra_dims_needed
+        array_to_set required_dims extra_dims_needed
+        array_to_set optional_dims extra_dims_needed
         succeed
       else
-        # TODO
-        extra_dims_needed=()
+        clear_set extra_dims_needed
+        add_to_set old_extra_dims_needed extra_dims_needed
       fi
 
       #  don't think we need this
+      #target=$row_array
       #type=${target##*.}
       #case $type in
       #  fun)
@@ -2801,7 +2808,6 @@ get_support_dims() {
     local -A support_dims_set \
       resolved_dims \
       extra_dims_needed \
-      potentials \
 
     local dim path_found
     begin_for dim in $target_dims; doo
@@ -2813,18 +2819,14 @@ get_support_dims() {
         fi
 
         extra_dims_needed=()
-        potentials=()
         path_found=f
         find_path_to_dim $dim || fail
         if [[ $path_found == t ]]; then
           add_to_set extra_dims_needed support_dims_set || fail
         else
-          log_fatal "Could not resolve dim $dim."
-          if (( ${#potentials} > 0 )); then
-            log_fatal "Either provide this dim value or other dims which can be used to derive this, such as one of these: ${!potentials[*]}"
-          else
-            log_fatal "No other dims were found which could be used to derive this, so either the user needs to provide this dim value or another cell."
-          fi
+          log_fatal "Could not resolve dim $dim." \
+            "Either provide this dim value or other dims which can be used" \
+            "to derive this."
           fail1
         fi
       fi
