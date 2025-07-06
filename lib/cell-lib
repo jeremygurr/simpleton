@@ -385,8 +385,77 @@ make_table_index() {
   handle_return
 }
 
+get_compound_cardinality() {
+ begin_function
+   compound_cardinality=0
+   .....
+ end_function
+ handle_return
+}
+
 # inputs:
 #   name
+load_derive_table_compound_keys() {
+  begin_function
+
+    local field
+
+    local start_of_key=0; found=f
+    while (( start_of_key < field_count )); do
+      found=f
+
+      # find start field of the compound key, can't be a key
+      while (( start_of_key < field_count )); do
+
+        field=${table_fields[$start_of_key]}
+        if [[ " $key_fields " != *" $field "* ]]; then
+          found=t
+          break
+        fi
+
+        (( start_of_key++ )) || true
+
+      done
+
+      local end_of_key=$(( start_of_key + 1 )) compound_cardinality
+      local -A composite_values=()
+      if [[ $found == t ]]; then
+
+        # find end field of the compound key, can't be a key, and the fields
+        # which are part of this must form a key
+        while (( end_of_key < field_count )); do
+
+          field=${table_fields[$end_of_key]}
+          if [[ " $key_fields " == *" $field "* ]]; then
+            # could not find a compound key before hitting the next simple key
+            break
+          fi
+          
+          get_compound_cardinality || fail
+          if (( compound_cardinality == row_count )); then
+            # we found a compound key
+            local field_index
+            for (( field_index = start_of_key; field_index <= end_of_key; field_index++ )); do
+              field=${table_fields[$field_index]}
+              key_fields+="$field,"
+            done
+            key_fields+=" "
+            break
+          fi
+
+          (( end_of_key++ )) || true
+          
+        done
+
+      fi
+
+      (( start_of_key = end_of_key + 1 )) || true
+    done
+
+  end_function
+  handle_return
+}
+
 load_derive_table_simple_keys() {
   begin_function
 
@@ -419,8 +488,6 @@ load_derive_table_simple_keys() {
       fi
 
     done
-
-    write_vars_to_context derive_table_${name}_key_fields || fail
 
   end_function
   handle_return
@@ -921,27 +988,27 @@ tab_get_derive_from() {
       local -n index=derive_table_${name}_index_$field \
         derive_from=dim_${field}_derived_from \
 
-      index_card=${#index[*]}
-      if (( index_card == row_count )); then
-        join=one-
-        is_key=t
-      else
-        join=many-
-        is_key=f
-      fi
+      #index_card=${#index[*]}
+      #if (( index_card == row_count )); then
+      #  join=one-
+      #  is_key=t
+      #else
+      #  join=many-
+      #  is_key=f
+      #fi
 
       other_fields="${table_fields[*]}"
       remove_word_from_string other_fields $field
 
-      join2=to-many
-      for other_field in $other_fields; do
-        if [[ " $key_fields " == *" $other_field "* ]]; then
-          join2=to-one
-          break
-        fi
-      done
+      #join2=to-many
+      #for other_field in $other_fields; do
+      #  if [[ " $key_fields " == *" $other_field "* ]]; then
+      #    join2=to-one
+      #    break
+      #  fi
+      #done
 
-      derive_from+=( "$name.tab $join$join2 $other_fields" )
+      derive_from+=( "$name.tab $required_fields $optional_fields" )
 
     done
 
@@ -3701,7 +3768,14 @@ make_derive_cache_handle_table() {
     local field_count=${#table_fields[*]} \
       data_count=${#table_data[*]} \
 
+    local row_count
+    (( row_count = data_count / field_count ))
+
     load_derive_table_simple_keys || fail
+    load_derive_table_compound_keys || fail
+
+    write_vars_to_context derive_table_${name}_key_fields || fail
+
     tab_get_derive_from || fail
 
   end_function
