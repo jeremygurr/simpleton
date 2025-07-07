@@ -386,11 +386,19 @@ make_table_index() {
 }
 
 get_compound_cardinality() {
- begin_function
-   compound_cardinality=0
-   .....
- end_function
- handle_return
+  compound_cardinality=0
+  local row compound_value field_index field data_index
+  local -A possibilities
+  for (( row = 0; row < row_count; row++ )); do
+    compound_value=
+    for (( field_index = start_of_key; field_index <= end_of_key; field_index++ )); do
+      (( data_index = row * field_count + field_index ))
+      value=${table_data[$data_index]}
+      compound_value+="$value "
+    done
+    possibilities[$compound_value]=1
+  done
+  compound_cardinality=${#possibilities[*]}
 }
 
 # inputs:
@@ -404,20 +412,28 @@ load_derive_table_compound_keys() {
     while (( start_of_key < field_count )); do
       found=f
 
-      # find start field of the compound key, can't be a key
-      while (( start_of_key < field_count )); do
+      local end_of_key compound_cardinality
 
-        field=${table_fields[$start_of_key]}
-        if [[ " $key_fields " != *" $field "* ]]; then
-          found=t
-          break
-        fi
+      if [[ "${key_fields:-}" ]]; then
+        # find start field of the compound key, can't be a key
+        while (( start_of_key < field_count )); do
 
-        (( start_of_key++ )) || true
+          field=${table_fields[$start_of_key]}
+          if [[ " $key_fields " != *" $field "* ]]; then
+            found=t
+            break
+          fi
 
-      done
+          (( start_of_key++ )) || true
 
-      local end_of_key=$(( start_of_key + 1 )) compound_cardinality
+        done
+
+      else
+        found=t
+      fi
+
+      end_of_key=$(( start_of_key + 1 ))
+
       local -A composite_values=()
       if [[ $found == t ]]; then
 
@@ -426,7 +442,7 @@ load_derive_table_compound_keys() {
         while (( end_of_key < field_count )); do
 
           field=${table_fields[$end_of_key]}
-          if [[ " $key_fields " == *" $field "* ]]; then
+          if [[ "${key_fields:-}" && " $key_fields " == *" $field "* ]]; then
             # could not find a compound key before hitting the next simple key
             break
           fi
@@ -439,7 +455,7 @@ load_derive_table_compound_keys() {
               field=${table_fields[$field_index]}
               key_fields+="$field,"
             done
-            key_fields+=" "
+            key_fields="${key_fields%,} "
             break
           fi
 
@@ -451,6 +467,7 @@ load_derive_table_compound_keys() {
 
       (( start_of_key = end_of_key + 1 )) || true
     done
+    key_fields=${key_fields% }
 
   end_function
   handle_return
@@ -2929,7 +2946,8 @@ get_support_dims() {
 add_required_dims() {
   local dims=$* dim
   for dim in $dims; do
-    if [[ " $optional_dims " != *" $dim "* ]]; then
+    local -n default_value=dim_${dim}_default
+    if [[ " $optional_dims " != *" $dim "* && ! "${default_value:-}" ]]; then
       required_dims[$dim]=1
     fi
   done
@@ -3001,11 +3019,10 @@ get_dim_parameters() {
 setup_dims() {
   begin_function
 
+    required_dims=()
     calc_anchor_dims || fail
     get_dim_parameters || fail
     prep_dims || fail
-
-    local target_dims="${trunk_dims_expanded[*]} $dim_parameters $anchor_dims"
 
     load_child_dims || fail
     if [[ $cell_is_leaf == t ]]; then
@@ -3017,14 +3034,19 @@ setup_dims() {
       add_required_dims ${trunk_dims_expanded[*]:-} || fail
     fi
 
-    if [[ ! "${support_dims_expanded:-}" ]]; then
-      get_support_dims || fail
+    if [[ "${anchor_dims:-}" ]]; then
+      add_required_dims $anchor_dims
     fi
 
     if (( ${#required_dims[*]} > 0 )); then
       log_debug "Required dims: ${!required_dims[*]}"
     else
       log_debug "No dims required"
+    fi
+
+    if [[ ! "${support_dims_expanded:-}" ]]; then
+      target_dims="${!required_dims[*]}" \
+      get_support_dims || fail
     fi
 
   end_function
@@ -3828,20 +3850,20 @@ make_derive_cache_handle_function() {
     for derived_dim in ${fields[*]}; do
 
       local -n derive_from=dim_${derived_dim}_derived_from \
-        key_functions=dim_${field}_key_functions \
+        key_functions=dim_${derived_dim}_key_functions \
 
       for key_field_group in $keys; do
 
         local required_dims=$key_field_group \
           optional_dims= \
 
-        if [[ $required_dims == */* ]]; then
+        if [[ "$required_dims" == */* ]]; then
           optional_dims=${required_dims#*/}
           required_dims=${required_dims%/*}
         fi
 
-        if [[ ,${required_dims}, != *,${derived_dim},* 
-           && ,${optional_dims}, != *,${derived_dim},* 
+        if [[ ",${required_dims}," != *",${derived_dim},"* 
+           && ",${optional_dims}," != *",${derived_dim},"* 
            ]]; then
 
           tool=${name}.fun \
