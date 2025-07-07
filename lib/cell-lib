@@ -961,7 +961,15 @@ load_derive_table() {
 }
 
 add_derive_from() {
-  derive_from+=( "$tool $required_dims $optional_dims" )
+
+  local required_dims=$required_dims optional_dims=${optional_dims:-} result
+
+  result=$required_dims
+  if [[ "$optional_dims" ]]; then
+    result+="/$optional_dims"
+  fi
+  derive_from+=( "$tool $result" )
+
 }
 
 # inputs:
@@ -2347,11 +2355,19 @@ fetch_column_from_table() {
 
 narrow_dim_fun() {
   begin_function
-    local derived_from_dim all_dims_are_set=t
-    local f_name=derive_function_$derive_fun
-    local action=check values=() can_derive=f target_dim=$dim
-    $f_name || fail
+
+    local f_name=derive_function_$derive_fun \
+      can_derive=f \
+      action=check \
+      values=() \
+      target_dim=$dim \
+
+    if [[ $phase == derive_optional_functions ]] || all_dims_are_set $optional_dims; then
+      $f_name || fail
+    fi
+
     if [[ $can_derive == t ]]; then
+
       action=derive
       derive_found=t
       $f_name || fail
@@ -2369,7 +2385,9 @@ narrow_dim_fun() {
         fi
       done
       intersect_with_all new_values value_set value_set
+
     fi
+    
   end_function
   handle_return
 }
@@ -2377,11 +2395,15 @@ narrow_dim_fun() {
 # inputs:
 #   dim          
 #   result_var   name of array variable containing members
+#   phase
 # outputs:
 #   (result_var) array variable
 #   derive_found
 narrow_dim() {
-  local dim=$dim result_var=$result_var
+
+  local dim=$dim result_var=$result_var \
+    phase=${phase:-derive_optional_functions} \
+
   local -n result=$result_var
   begin_function
     log_debug "Narrowing down $dim"
@@ -2400,7 +2422,15 @@ narrow_dim() {
       type=${target##*.}
       case $type in
         fun)
-          local derive_fun=${target%.*}
+          local derive_fun=${target%.*} \
+            required_dims=${row_array[1]} \
+            optional_dims \
+
+          if [[ "$required_dims" == */* ]]; then
+            optional_dims=${required_dims#*/}
+            required_dims=${required_dims%/*}
+          fi
+
           narrow_dim_fun || fail
         ;;
         tab)
@@ -2440,6 +2470,7 @@ narrow_dim() {
 #   dim 
 #   from_dim        optional, will only look for ways to derive 'dim' from 'from_dim'
 #   deriving        list of dims we are in the process of deriving, to avoid infinite loops
+#   phase
 #   skip_dims       should be set to blank when starting. Is use to avoid failing to derive the same
 #                   dim multiple times.
 # output:
@@ -2754,8 +2785,10 @@ find_path_to_dim() {
       row_array=( $derived_from_row )
       required_dims=${row_array[1]}
       required_dims=( ${required_dims//,/ } )
-      optional_dims=${row_array[2]}
-      optional_dims=( ${optional_dims//,/ } )
+      if [[ "$required_dims" == */* ]]; then
+        optional_dims=${required_dims#*/}
+        required_dims=${required_dims%/*}
+      fi
 
       local required_dim all_required_set=t resolved
       for required_dim in ${required_dims[*]}; do
@@ -3760,6 +3793,24 @@ make_derive_cache_handle_table() {
   handle_return
 }
 
+# used in derive function definitions to make adding to the key structure
+# abstracted and more standardized
+add_key() {
+
+  local required_fields=$required_fields \
+    optional_fields=${optional_fields:-} \
+    result \
+
+  result+="$required_fields"
+  if [[ "$optional_fields" ]]; then
+    result+="/$optional_fields"
+  fi
+
+  result=${result// /,}
+  keys+=( $result )
+
+}
+
 make_derive_cache_handle_function() {
   begin_function
 
@@ -3773,27 +3824,40 @@ make_derive_cache_handle_function() {
     action=info \
     derive_function_$name || fail
 
-    local field is_key other_fields
-    for field in ${fields[*]}; do
+    local derived_dim is_key other_fields
+    for derived_dim in ${fields[*]}; do
 
-      if [[ " ${keys[*]} " == *" $field "* ]]; then
+      local -n derive_from=dim_${derived_dim}_derived_from \
+        key_functions=dim_${field}_key_functions \
+
+      for key_field_group in $keys; do
+
+        local required_dims=$key_field_group \
+          optional_dims= \
+
+        if [[ $required_dims == */* ]]; then
+          optional_dims=${required_dims#*/}
+          required_dims=${required_dims%/*}
+        fi
+
+        if [[ ,${required_dims}, != *,${derived_dim},* 
+           && ,${optional_dims}, != *,${derived_dim},* 
+           ]]; then
+
+          tool=${name}.fun \
+          add_derive_from || fail
+
+        fi
+      done
+
+      if [[ " ${keys[*]} " == *" $derived_dim "* ]]; then
         is_key=t
       else
         is_key=f
       fi
 
-      local -n derive_from=dim_${field}_derived_from \
-        key_functions=dim_${field}_key_functions \
-
       if [[ $is_key == t ]]; then
-
-        other_fields=( ${fields[*]} )
-        remove_array_element other_fields $field
-        derive_from+=( "$name.fun ${other_fields[*]}" )
         key_functions+=( $name )
-
-      else
-        derive_from+=( "$name.fun ${keys[*]}" )
       fi
 
     done
@@ -4338,20 +4402,6 @@ show_trace_dim_message() {
   echo " ${DIM_DEBUG_COLOR}debug_id=$fork_debug_id $dim=$show_val$RESET $message" >&$fd_original_err
 }
 
-attempt_derive_from_function() {
-  local function_name=$function_name
-  if function_exists dim_${dim}_$function_name; then
-    # This should be set to t in the derive function if requirements are met
-
-    dim_${dim}_$function_name || return 1
-    if [[ " $trace_dims " == *" $dim "* && "$values" ]]; then
-      var=values \
-      show_trace_dim_message "Derived from derive function: dim_${dim}_$function_name"
-    fi
-  fi
-  return 0
-}
-
 # input:
 #   dim
 #   dim_type
@@ -4846,7 +4896,7 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=()
-      for phase in derive default; do
+      for phase in derive derive_optional_functions default; do
         for dim in $unknown_dims; do
 
           needs_narrowing=t
@@ -4866,6 +4916,11 @@ calc_coordinates_next_unknown_dim() {
           fi
 
           if [[ $phase == derive ]]; then
+            deriving= \
+            attempt_derive || fail
+            needs_narrowing=f
+          elif [[ $phase == derive_optional_functions ]]; then
+            # The attempt_derive function must change behavior based on phase
             deriving= \
             attempt_derive || fail
             needs_narrowing=f
@@ -4924,6 +4979,7 @@ calc_coords_validate_member() {
     derive_exactly_one=f \
     deriving= \
     derive_deep=f \
+    phase=derive_optional_functions \
     attempt_derive || fail
 
     if [[ $derive_found == t ]]; then
