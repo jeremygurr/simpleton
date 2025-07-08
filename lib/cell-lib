@@ -1604,6 +1604,8 @@ display_coordinates_horizontal() {
 # inputs:
 #   $1          full path of file to write to
 #   skip_dims   (optional) dims to skip
+# output:
+#   c_rows
 display_coordinates() {
   local coord_type=$coord_type skip_dims=${skip_dims:-}
   begin_function
@@ -1616,7 +1618,7 @@ display_coordinates() {
     local c_fields_count=${#c_fields[*]} \
       c_count=${#c_data[*]} \
 
-    local c_rows=$(( c_count / c_fields_count ))
+    c_rows=$(( c_count / c_fields_count ))
 
     if [[ ! "{c_fields:-}" || c_rows -eq 0 ]]; then
       log_fatal "No $coord_type coordinates found"
@@ -4764,6 +4766,7 @@ member_conflicts() {
 #   derive_table
 #   dim
 #   member
+#   allow_dims
 set_table_cross_dims_single() {
   local member=$member dim=$dim derive_table=$derive_table
   begin_function
@@ -4786,7 +4789,13 @@ set_table_cross_dims_single() {
       fi
 
       for (( column_index = 0; column_index < field_count; column_index++ )); do
+
         field=${derive_fields[$column_index]}
+
+        if [[ " $allow_dims " != *" $field "* ]]; then
+          continue
+        fi
+
         local fields
         get_plural $field fields
         if [[ $field != $dim && -v all_dims[$field] ]]; then
@@ -4816,6 +4825,7 @@ set_table_cross_dims_single() {
             fi
           fi
         fi
+      
       done
     else
       log_debug "Member ($member) doesn't exist in derive table ($derive_table)"
@@ -4831,6 +4841,7 @@ set_table_cross_dims_single() {
 #   derive_fun
 #   dim
 #   member
+#   allow_dims
 set_function_cross_dims_single() {
 
   begin_function
@@ -4841,6 +4852,10 @@ set_function_cross_dims_single() {
     begin_for (( i = 0; i < ${#fields[*]}; i++ )); doo
 
       field=${fields[$i]}
+
+      if [[ " $allow_dims " != *" $field "* ]]; then
+        continue
+      fi
 
       if [[ ! -v values[$i] ]]; then
         log_fatal "Missing value for field $field in derive function $derive_fun"
@@ -4885,6 +4900,7 @@ set_function_cross_dims_single() {
 #   member
 #   key_functions
 #   key_tables
+#   allow_dims
 # output:
 #   {dims}
 #   conflict
@@ -4915,6 +4931,7 @@ set_cross_dims_internal() {
 # input: 
 #   dim
 #   member
+#   allow_dims
 # output:
 #   {dims}
 #   conflict
@@ -5225,6 +5242,7 @@ calc_coordinates_next_dim_member() {
       conflict=
 
       if [[ "$member" != $empty_member ]]; then
+        allow_dims=${coordinate_fields[*]} \
         set_cross_dims_internal || fail
 
         if [[ "$conflict" ]]; then
@@ -5696,6 +5714,7 @@ calc_coordinates_slow() {
 
       if [[ "${ddim:-}" && $ddim != $empty_member ]]; then
         member=$ddim \
+        allow_dims=${coordinate_fields[*]} \
         set_cross_dims || fail
       fi
 
