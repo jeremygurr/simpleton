@@ -2552,13 +2552,17 @@ attempt_derive() {
       values=()
     fi
 
-    if [[ $derive_exactly_one == t && ${#values[*]} -gt 1 ]]; then
-      log_debug "Derive of $dim failed, too many possibilities"
-      values=()
-    elif [[ ! "${values:-}" ]]; then
-      log_debug "Derive of $dim failed, no possibilities found"
+    if [[ $derive_found == t ]]; then
+      if [[ $derive_exactly_one == t && ${#values[*]} -gt 1 ]]; then
+        log_debug "Derive of $dim failed, too many possibilities"
+        values=()
+      elif [[ ! "${values:-}" ]]; then
+        log_debug "Derive of $dim failed, no possibilities found"
+      else
+        log_debug "Derive of $dim successful: ${values[*]:0:30}"
+      fi
     else
-      log_debug "Derive of $dim successful: ${values[*]:0:30}"
+      log_debug "No derive options found for $dim for this phase"
     fi
 
   end_function
@@ -2985,6 +2989,13 @@ get_support_dims() {
       fi
 
     end_for
+
+    local anchor_dim
+    for anchor_dim in $anchor_dims; do
+      if [[ " ${trunk_dims_expanded[*]} " != *" $anchor_dim "* ]]; then
+        support_dims_set[$anchor_dim]=1
+      fi
+    done
 
     support_dims_expanded=( ${!support_dims_set[*]} )
     sort_array support_dims_expanded
@@ -5000,12 +5011,8 @@ calc_coordinates_next_unknown_dim() {
             derive_exactly_one=f
           fi
 
-          if [[ $phase == derive ]]; then
-            deriving= \
-            attempt_derive || fail
-            needs_narrowing=f
-          elif [[ $phase == derive_optional_functions ]]; then
-            # The attempt_derive function must change behavior based on phase
+          if [[ $phase == derive \
+             || $phase == derive_optional_functions ]]; then
             deriving= \
             attempt_derive || fail
             needs_narrowing=f
@@ -5288,7 +5295,9 @@ calc_coordinates_next_dim() {
 
       else # no members
         log_debug "Dim unknown: $dim"
-        unknown_dims+="$dim "
+        if [[ " $unknown_dims " != *" $dim "* ]]; then
+          unknown_dims+="$dim "
+        fi
         calc_coordinates_next_dim || fail
       fi
 
