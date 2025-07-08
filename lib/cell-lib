@@ -2370,6 +2370,22 @@ fetch_column_from_table() {
 
 }
 
+clear_empty_vars() {
+  local d
+  for d in $*; do
+    local -n v=$d
+    if [[ -v v ]]; then
+      if [[ "${v:-}" == _ ]]; then
+        if is_array v; then
+          v=()
+        else
+          v=
+        fi
+      fi
+    fi
+  done
+}
+
 narrow_dim_fun() {
   begin_function
 
@@ -2378,6 +2394,18 @@ narrow_dim_fun() {
       action=check \
       values=() \
       target_dim=$dim \
+      d p \
+      dims_to_localize \
+      required_dims=${required_dims:-} \
+      optional_dims=${optional_dims:-}
+
+    for d in ${required_dims//,/ } ${optional_dims//,/ }; do
+      get_plural $d p
+      dims_to_localize+="d_$d d_$p "
+    done
+
+    local -I $dims_to_localize || fail
+    clear_empty_vars $dims_to_localize
 
     if [[ $phase == derive_optional_functions ]] \
        || all_dims_are_set ${optional_dims:-}; then
@@ -2827,14 +2855,14 @@ find_path_to_dim() {
     path_found=f
     local history=${history:-}
     history+="$target_dim "
-    zombie_log "history: $history"
-    zombie_log "extra_dims_needed: ${!extra_dims_needed[*]}"
+    #zombie_log "history: $history"
+    #zombie_log "extra_dims_needed: ${!extra_dims_needed[*]}"
 
     add_to_set extra_dims_needed old_extra_dims_needed
 
     begin_for derived_from_row in "${derived_from[@]}"; doo
 
-      zombie_log "Checking row: $derived_from_row"
+      #zombie_log "Checking row: $derived_from_row"
       row_array=( $derived_from_row )
       required_dims=${row_array[1]}
       if [[ "$required_dims" == */* ]]; then
@@ -2847,19 +2875,19 @@ find_path_to_dim() {
       local required_dim all_required_set=t resolved
       for required_dim in ${required_dims[*]}; do
 
-        zombie_fence
-        zombie_log "checking required_dim: $required_dim"
+        #zombie_fence
+        #zombie_log "checking required_dim: $required_dim"
         resolved=f
 
         if [[ -v resolved_dims[$required_dim] ]]; then
-          zombie_log "$required_dim was previously resolved"
+          #zombie_log "$required_dim was previously resolved"
           resolved=t
         elif [[ -v dead_ends[$required_dim] ]]; then
-          zombie_log "$required_dim is a dead end"
+          #zombie_log "$required_dim is a dead end"
           all_required_set=f
           break
         elif any_dim_is_set $required_dim; then
-          zombie_log "$required_dim is currently defined"
+          #zombie_log "$required_dim is currently defined"
           resolved_dims[$required_dim]=1
           resolved=t
         fi
@@ -2869,41 +2897,41 @@ find_path_to_dim() {
           if [[ " $history " != *" $required_dim "* ]]; then
             find_path_to_dim $required_dim || fail
             if [[ $path_found == f ]]; then
-              zombie_log "failed to find path to required dim $required_dim"
+              #zombie_log "failed to find path to required dim $required_dim"
               all_required_set=f
               break
             fi
-            zombie_log "path found to $required_dim. Adding it to extra_dims_needed"
+            #zombie_log "path found to $required_dim. Adding it to extra_dims_needed"
             extra_dims_needed[$required_dim]=1
           else
             all_required_set=f
           fi
 
         else
-          zombie_log "dim already resolved"
+          #zombie_log "dim already resolved"
           :
         fi
 
       done
 
-      zombie_log "history: $history"
+      #zombie_log "history: $history"
       if [[ $all_required_set == t ]]; then
 
         local optional_dim
         for optional_dim in ${optional_dims[*]}; do
 
-          zombie_fence
-          zombie_log "checking optional_dims: $optional_dim"
+          #zombie_fence
+          #zombie_log "checking optional_dims: $optional_dim"
           resolved=f
 
           if [[ -v resolved_dims[$optional_dim] ]]; then
-            zombie_log "$optional_dim was previously resolved"
+            #zombie_log "$optional_dim was previously resolved"
             resolved=t
           elif [[ -v dead_ends[$optional_dim] ]]; then
-            zombie_log "$optional_dim is a dead end"
+            #zombie_log "$optional_dim is a dead end"
             continue
           elif any_dim_is_set $optional_dim; then
-            zombie_log "$optional_dim is currently defined"
+            #zombie_log "$optional_dim is currently defined"
             resolved_dim[$optional_dim]=1
             resolved=t
           fi
@@ -2912,15 +2940,15 @@ find_path_to_dim() {
             if [[ " $history " != *" $optional_dim "* ]]; then
               find_path_to_dim $optional_dim || fail
               if [[ $path_found == t ]]; then
-                zombie_log "path found to $optional_dim. Adding it to extra_dims_needed"
+                #zombie_log "path found to $optional_dim. Adding it to extra_dims_needed"
                 extra_dims_needed[$optional_dim]=1
               else
-                zombie_log "failed to find path to optional dim $optional_dim"
+                #zombie_log "failed to find path to optional dim $optional_dim"
                 :
               fi
             fi
           else
-            zombie_log "dim already resolved"
+            #zombie_log "dim already resolved"
             :
           fi
 
@@ -2932,14 +2960,14 @@ find_path_to_dim() {
       else
         clear_set extra_dims_needed
         add_to_set old_extra_dims_needed extra_dims_needed
-        zombie_log "Resetting extra_dims_needed because not all required paths were found."
-        zombie_log "extra_dims_needed: ${!extra_dims_needed[*]}"
+        #zombie_log "Resetting extra_dims_needed because not all required paths were found."
+        #zombie_log "extra_dims_needed: ${!extra_dims_needed[*]}"
       fi
 
     end_for
 
     if [[ $path_found == f ]]; then
-      zombie_log "dead end added: $target_dim"
+      #zombie_log "dead end added: $target_dim"
       dead_ends[$target_dim]=1
     fi
 
@@ -2971,11 +2999,11 @@ get_support_dims() {
 
         extra_dims_needed=()
         local history=
-        zombie_log "Searching for support dims for $dim"
+        #zombie_log "Searching for support dims for $dim"
         find_path_to_dim $dim || fail
         if [[ $path_found == t ]]; then
           if [[ "${#extra_dims_needed[*]}" ]]; then
-            strong_log=t zombie_log "Path to $dim found: ${!extra_dims_needed[*]}"
+            #strong_log=t zombie_log "Path to $dim found: ${!extra_dims_needed[*]}"
             add_to_set extra_dims_needed support_dims_set || fail
           fi
         else
@@ -3903,10 +3931,6 @@ add_key() {
 
 make_derive_cache_handle_function() {
   begin_function
-
-    #if [[ $name == gsr ]]; then
-    #  zombie_debug
-    #fi
 
     load_fun_to_code $derive_path derive_function_$name || fail
     eval "$code" || fail
