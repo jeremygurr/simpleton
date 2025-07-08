@@ -2448,9 +2448,22 @@ narrow_dim() {
             required_dims=${required_dims%/*}
           fi
 
+          if [[ "$optional_dims" \
+             && $phase != derive_optional_functions \
+             ]]; then
+            continue
+          elif [[ ! "$optional_dims" \
+             && $phase == derive_optional_functions \
+             ]]; then
+            continue
+          fi
+
           narrow_dim_fun || fail
         ;;
         tab)
+          if [[ $phase == derive_optional_functions ]]; then
+            continue
+          fi
           local derive_table=${target%.*}
           derive_found=t
           extract_from_derive_table || fail
@@ -2508,11 +2521,25 @@ attempt_derive() {
     local -n derived_from=dim_${dim}_derived_from
     values=( all )
 
-    if [[ " $deriving " == *" $dim "* || -v derive_tried[$dim] ]]; then
+    if [[ " $deriving " == *" $dim "* ]]; then
       abort
     fi
+
+    if [[ $phase == derive ]]; then
+      if [[ -v derive_tried[$dim] ]]; then
+        abort
+      else
+        derive_tried[$dim]=1
+      fi
+    else
+      if [[ -v derive_optional_tried[$dim] ]]; then
+        abort
+      else
+        derive_optional_tried[$dim]=1
+      fi
+    fi
+
     deriving+="$dim "
-    derive_tried[$dim]=1
     derive_found=f
 
     if [[ "${derived_from:-}" ]]; then
@@ -2812,10 +2839,10 @@ find_path_to_dim() {
 
         resolved=f
 
-        if [[ -v ${resolved_dims[$required_dim]} ]]; then
+        if [[ -v resolved_dims[$required_dim] ]]; then
           resolved=t
         elif any_dim_is_set $required_dim; then
-          resolved_dim[$required_dim]=1
+          resolved_dims[$required_dim]=1
           resolved=t
         fi
 
@@ -2827,6 +2854,7 @@ find_path_to_dim() {
               all_required_set=f
               break
             fi
+            extra_dims_needed[$required_dim]=1
             path_found=f
           fi
 
@@ -2837,7 +2865,6 @@ find_path_to_dim() {
       if [[ $all_required_set == t ]]; then
 
         path_found=t
-        array_to_set required_dims extra_dims_needed
 
         local optional_dim
         for optional_dim in ${optional_dims[*]}; do
@@ -2854,40 +2881,23 @@ find_path_to_dim() {
           if [[ $resolved == f ]]; then
             if [[ " $history " != *" $optional_dim "* ]]; then
               find_path_to_dim $optional_dim || fail
-              # we don't really care if a path was found for optionals
+              if [[ $path_found == f ]]; then
+                all_required_set=f
+                break
+              else
+                extra_dims_needed[$optional_dim]=1
+              fi
             fi
           fi
 
         done
 
-        array_to_set optional_dims extra_dims_needed
         succeed
 
       else
         clear_set extra_dims_needed
         add_to_set old_extra_dims_needed extra_dims_needed
       fi
-
-      #  don't think we need this
-      #target=$row_array
-      #type=${target##*.}
-      #case $type in
-      #  fun)
-      #    local derive_fun=${target%.*}
-      #    local f_name=derive_function_$derive_fun
-      #    local action=check values=() can_derive=f target_dim=$dim
-      #    $f_name || fail
-      #  ;;
-      #  tab)
-      #    local derive_table=${target%.*}
-      #    derive_found=t
-      #    extract_from_derive_table || fail
-      #  ;;
-      #  *)
-      #    log_fatal "Unknown derived_from type: $type"
-      #    fail1
-      #  ;;
-      #esac
 
     end_for
   end_function
@@ -3038,8 +3048,12 @@ setup_dims() {
       add_required_dims $anchor_dims
     fi
 
-    if (( ${#required_dims[*]} > 0 )); then
-      log_debug "Required dims: ${!required_dims[*]}"
+    local required_dims_array=()
+    set_to_array required_dims required_dims_array
+    sort_array required_dims_array
+
+    if (( ${#required_dims_array[*]} > 0 )); then
+      log_debug "Required dims: ${required_dims_array[*]}"
     else
       log_debug "No dims required"
     fi
@@ -4917,7 +4931,7 @@ calc_coordinates_next_unknown_dim() {
     local dim_index
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
-      local -A derive_tried=()
+      local -A derive_tried=() derive_optional_tried=()
       for phase in derive derive_optional_functions default; do
         for dim in $unknown_dims; do
 
@@ -4997,7 +5011,7 @@ calc_coords_validate_member() {
     fi
 
     local values=() derive_found=f
-    local -A derive_tried=()
+    local -A derive_optional_tried=()
     derive_exactly_one=f \
     deriving= \
     derive_deep=f \
