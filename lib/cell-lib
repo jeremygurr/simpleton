@@ -2153,51 +2153,37 @@ extract_from_derive_table_find_row_indexes() {
         if [[ ${member_type:-dynamic} == static ]]; then
           local -n members=dim_${dim}_members
           local member_count=${#members[*]}
-          if (( ${#dt_index[*]} != member_count )); then
-            complete_table=f
-            break
+          if (( ${#dt_index[*]} == member_count )); then
+            complete_table=t
           fi
         fi
       else
         local -n ddim=d_$field
         if [[ "${ddim:-}" ]]; then
 
-          if [[ ! -v dt_index ]]; then
-            clear_set new_matching_rows
-
-            if [[ -v dt_index[$ddim] ]]; then
-              row_indexes=( ${dt_index[$ddim]} )
-              array_to_set row_indexes new_matching_rows
-            else
-              # table is incomplete for this dim, meaning
-              # it doesn't contain all possible values for it
-              # so we can't use this table for deriving
-              complete_table=f
-              log_debug "No rows exist in $full_table for $field = $ddim"
-              break
-            fi
-
-            if [[ -v dt_index[all] ]]; then
-              row_indexes=( ${dt_index[all]} )
-              array_to_set row_indexes new_matching_rows
-            fi
-
-            intersect_with_all matching_rows new_matching_rows matching_rows
-
-            if (( ${#matching_rows[*]} == 0 )); then
-              # Accoridng to the index, no values exist in this table which match the known dim value
-              log_debug "Couldn't find any rows in $full_table which match all existing dims (last checked: $field = $ddim)"
-              value_set=()
-              abort
-            fi
+          if [[ -v dt_index[$ddim] ]]; then
+            row_indexes=( ${dt_index[$ddim]} )
+            array_to_set row_indexes new_matching_rows
+          else
+            matching_rows=()
+            log_debug "No rows exist in $full_table for $field = $ddim"
+            break
           fi
 
-        else # ddim not defined for this field
-          #can_derive=f
-          #abort
+          if [[ -v dt_index[all] ]]; then
+            row_indexes=( ${dt_index[all]} )
+            array_to_set row_indexes new_matching_rows
+          fi
 
-          # let's allow derivation even if we are missing some fields
-          :
+          intersect_with_all matching_rows new_matching_rows matching_rows
+
+          if (( ${#matching_rows[*]} == 0 )); then
+            # Accoridng to the index, no values exist in this table which match the known dim value
+            log_debug "Couldn't find any rows in $full_table which match all existing dims (last checked: $field = $ddim)"
+            matching_rows=()
+            break
+          fi
+
         fi
       fi
     done
@@ -2319,15 +2305,15 @@ extract_from_derive_table() {
       member_type=dim_${dim}_member_type \
 
     local row_count=$(( data_count / field_count )) \
-      complete_table=t \
+      complete_table=f \
 
     local -A matching_rows=() new_value_set=()
     matching_rows[all]=1
 
     extract_from_derive_table_find_row_indexes
-    maybe_break
 
     if [[ $complete_table == t ]]; then
+
       if [[ -v matching_rows[all] ]]; then
         add_to_set index new_value_set
       else
@@ -2343,11 +2329,8 @@ extract_from_derive_table() {
 
       rows_matched=${#new_value_set[*]}
 
-      if [[ ! "${value_set[*]}" ]]; then
-        add_to_set new_value_set value_set
-      else
-        intersect_with_all value_set new_value_set value_set
-      fi
+      intersect_with_all value_set new_value_set value_set
+
     fi
 
     debug_return_vars=value_set
@@ -5145,6 +5128,7 @@ calc_coordinates_next_unknown_dim() {
 
           if [[ $phase == derive \
              || $phase == derive_optional_functions ]]; then
+            derive_exactly_one=f \
             deriving= \
             attempt_derive || fail
             needs_narrowing=f
