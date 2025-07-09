@@ -2849,6 +2849,103 @@ load_child_dims() {
   handle_return
 }
 
+find_path_to_dim_required_dims() {
+  begin_function
+    local required_dim 
+    for required_dim in ${required_dims[*]}; do
+
+      if [[ " $history " == *" $required_dim "* ]]; then
+        all_required_set=f
+        reason="loop was found to $required_dim"
+        loop_found=t
+        break
+      fi
+
+      resolved=f
+
+      if [[ -v resolved_dims[$required_dim] ]]; then
+        resolved=t
+      elif [[ -v dead_ends[$required_dim] ]]; then
+        all_required_set=f
+        reason="$required_dim is a dead end"
+        break
+      elif any_dim_is_set $required_dim; then
+        resolved_dims[$required_dim]=1
+        resolved=t
+      fi
+
+      if [[ $resolved == f ]]; then
+
+        find_path_to_dim $required_dim || fail
+
+        if [[ $loop_found == t ]]; then
+          break
+        fi
+
+        if [[ $path_found == f ]]; then
+          if [[ " ${all_if_blank:-} " == *" $required_dim "* ]]; then
+            resolved_dims[$required_dim]=1
+            resolved=t
+          else
+            reason="could not find path to $required_dim"
+            all_required_set=f
+            break
+          fi
+        fi
+
+        extra_dims_needed[$required_dim]=1
+
+      else
+        :
+      fi
+
+    done
+  end_function
+  handle_return
+}
+
+find_path_to_dim_optional_dims() {
+  begin_function
+    local optional_dim
+    for optional_dim in ${optional_dims[*]}; do
+
+      if [[ " $history " == *" $optional_dim "* ]]; then
+        loop_found=t
+        path_found=f
+        abort
+      fi
+
+      resolved=f
+
+      if [[ -v resolved_dims[$optional_dim] ]]; then
+        resolved=t
+      elif [[ -v dead_ends[$optional_dim] ]]; then
+        continue
+      elif any_dim_is_set $optional_dim \
+        || [[ " ${all_if_blank:-} " == *" $optional_dim "* ]]; then
+        resolved_dims[$optional_dim]=1
+        resolved=t
+      fi
+
+      if [[ $resolved == f ]]; then
+        find_path_to_dim $optional_dim || fail
+
+        if [[ $loop_found == t ]]; then
+          loop_found=f
+          continue
+        fi
+
+        if [[ $path_found == t ]]; then
+          extra_dims_needed[$optional_dim]=1
+        fi
+
+      fi
+
+    done
+  end_function
+  handle_return
+}
+
 find_path_to_dim() {
   local target_dim=$1
   begin_function
@@ -2864,10 +2961,6 @@ find_path_to_dim() {
 
     begin_for derived_from_row in "${derived_from[@]}"; doo
 
-      #zombie_log "Checking row: $derived_from_row"
-      #zombie_log "history: $history"
-      #zombie_log "extra_dims_needed: ${!extra_dims_needed[*]}"
-
       loop_found=f
 
       row_array=( $derived_from_row )
@@ -2879,137 +2972,25 @@ find_path_to_dim() {
       fi
       required_dims=( ${required_dims//,/ } )
 
-      local required_dim all_required_set=t resolved reason=unknown
-      for required_dim in ${required_dims[*]}; do
+      local all_required_set=t resolved reason=unknown
 
-        #zombie_fence
+      find_path_to_dim_required_dims || fail
+      if [[ $loop_found == t ]]; then
+        continue
+      fi
 
-        if [[ " $history " == *" $required_dim "* ]]; then
-          #zombie_log "Loop found for required dim $required_dim, aborting row"
-          all_required_set=f
-          reason="loop was found to $required_dim"
-          loop_found=t
-          break
-        fi
-
-        #zombie_log "checking required_dim: $required_dim"
-        resolved=f
-
-        if [[ -v resolved_dims[$required_dim] ]]; then
-          #zombie_log "$required_dim was previously resolved"
-          resolved=t
-        elif [[ -v dead_ends[$required_dim] ]]; then
-          #zombie_log "$required_dim is a dead end"
-          all_required_set=f
-          reason="$required_dim is a dead end"
-          break
-        elif any_dim_is_set $required_dim; then
-          #zombie_log "$required_dim is currently defined"
-          resolved_dims[$required_dim]=1
-          resolved=t
-        fi
-
-        if [[ $resolved == f ]]; then
-
-          find_path_to_dim $required_dim || fail
-
-          if [[ $loop_found == t ]]; then
-            #zombie_log "Loop found, so skipping this row"
-            continue 2
-          fi
-
-          if [[ $path_found == f ]]; then
-            if [[ " ${all_if_blank:-} " == *" $required_dim "* ]]; then
-              #zombie_log "$required_dim is currently defined"
-              resolved_dims[$required_dim]=1
-              resolved=t
-            else
-              #zombie_log "failed to find path to required dim $required_dim"
-              reason="could not find path to $required_dim"
-              all_required_set=f
-              break
-            fi
-          fi
-
-          #zombie_log "path found to $required_dim. Adding it to extra_dims_needed"
-          extra_dims_needed[$required_dim]=1
-
-        else
-          #zombie_log "dim already resolved"
-          :
-        fi
-
-      done
-
-      #zombie_log "history: $history"
       if [[ $all_required_set == t ]]; then
-
-        local optional_dim
-        for optional_dim in ${optional_dims[*]}; do
-
-          #zombie_fence
-
-          if [[ " $history " == *" $optional_dim "* ]]; then
-            #zombie_log "Loop found for optional dim $optional_dim, aborting row"
-            loop_found=t
-            path_found=f
-            abort
-          fi
-
-          #zombie_log "checking optional_dims: $optional_dim"
-          resolved=f
-
-          if [[ -v resolved_dims[$optional_dim] ]]; then
-            #zombie_log "$optional_dim was previously resolved"
-            resolved=t
-          elif [[ -v dead_ends[$optional_dim] ]]; then
-            #zombie_log "$optional_dim is a dead end"
-            continue
-          elif any_dim_is_set $optional_dim \
-            || [[ " ${all_if_blank:-} " == *" $optional_dim "* ]]; then
-            #zombie_log "$optional_dim is currently defined"
-            resolved_dims[$optional_dim]=1
-            resolved=t
-          fi
-
-          if [[ $resolved == f ]]; then
-            find_path_to_dim $optional_dim || fail
-
-            if [[ $loop_found == t ]]; then
-              #zombie_log "Loop found, ignoring since it's optional"
-              loop_found=f
-              continue
-            fi
-
-            if [[ $path_found == t ]]; then
-              #zombie_log "path found to $optional_dim. Adding it to extra_dims_needed"
-              extra_dims_needed[$optional_dim]=1
-            else
-              #zombie_log "failed to find path to optional dim $optional_dim"
-              :
-            fi
-
-          else
-            #zombie_log "dim already resolved"
-            :
-          fi
-
-        done
-
+        find_path_to_dim_optional_dims || fail
         path_found=t
         abort
-
       else
         clear_set extra_dims_needed
         add_to_set old_extra_dims_needed extra_dims_needed
-        #zombie_log "Resetting extra_dims_needed because $reason"
-        #zombie_log "extra_dims_needed: ${!extra_dims_needed[*]}"
       fi
 
     end_for
 
     if [[ $path_found == f && $loop_found == f ]]; then
-      #zombie_log "dead end added: $target_dim"
       dead_ends[$target_dim]=1
     fi
 
@@ -3036,19 +3017,25 @@ get_support_dims() {
     begin_for dim in $target_dims; doo
       
       if [[ ! -v resolved_dims[$dim] ]]; then
-        if any_dim_is_set $dim \
-          || [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+
+        if any_dim_is_set $dim; then
           resolved_dims[$dim]=1
           continue
         fi
 
+        #  this doesn't work because all_if_blank prevents
+        #  support dims needed to derive non-blank results
+        #if any_dim_is_set $dim \
+        #  || [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+        #  resolved_dims[$dim]=1
+        #  continue
+        #fi
+
         extra_dims_needed=()
         local history= loop_found=f
-        #zombie_log "Searching for support dims for $dim"
         find_path_to_dim $dim || fail
         if [[ $path_found == t ]]; then
           if [[ "${#extra_dims_needed[*]}" ]]; then
-            #strong_log=t zombie_log "Path to $dim found: ${!extra_dims_needed[*]}"
             add_to_set extra_dims_needed support_dims_set || fail
           fi
         else
