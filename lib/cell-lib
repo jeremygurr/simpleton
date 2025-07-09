@@ -1660,8 +1660,12 @@ display_coordinates() {
 # inputs:
 #   $1          full path of file to write to
 #   skip_dims   (optional) dims to skip
+#   keep_dims   (optional) dims to keep
 write_coordinates_to_tab_file() {
-  local coord_type=$coord_type target_file=$1 skip_dims=${skip_dims:-}
+  local coord_type=$coord_type target_file=$1 \
+    skip_dims=${skip_dims:-} \
+    keep_dims=${keep_dims:-} \
+
   begin_function
 
     if [[ -f $target_file ]]; then
@@ -1688,8 +1692,10 @@ write_coordinates_to_tab_file() {
 
     for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
       field=${c_fields[$field_index]}
-      if [[ " $skip_dims " != *" $field "* ]]; then
-        line+="$field "
+      if [[ ! "$keep_dims" || " $keep_dims " == *" $field "* ]]; then
+        if [[ " $skip_dims " != *" $field "* ]]; then
+          line+="$field "
+        fi
       fi
     done
     echo "${line% }" >>$target_file || fail
@@ -1699,10 +1705,12 @@ write_coordinates_to_tab_file() {
       for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
         (( data_offset = row_index * c_fields_count + field_index ))
         field=${c_fields[$field_index]}
-        if [[ " $skip_dims " != *" $field "* ]]; then
-          value=${c_data[$data_offset]}
-          shell_quote_var value
-          line+="$value "
+        if [[ ! "$keep_dims" || " $keep_dims " == *" $field "* ]]; then
+          if [[ " $skip_dims " != *" $field "* ]]; then
+            value=${c_data[$data_offset]}
+            shell_quote_var value
+            line+="$value "
+          fi
         fi
       done
 
@@ -1718,8 +1726,12 @@ write_coordinates_to_tab_file() {
 # inputs:
 #   $1          full path of file to write to
 #   skip_dims   (optional) dims to skip
+#   keep_dims   (optional) dims to keep
 write_coordinates_to_vtab_file() {
-  local coord_type=$coord_type target_file=$1 skip_dims=${skip_dims:-}
+  local coord_type=$coord_type target_file=$1 \
+    skip_dims=${skip_dims:-} \
+    keep_dims=${keep_dims:-} \
+
   begin_function
 
     if [[ -f $target_file ]]; then
@@ -1747,14 +1759,16 @@ write_coordinates_to_vtab_file() {
     for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
       field=${c_fields[$field_index]}
       line=
-      if [[ " $skip_dims " != *" $field "* ]]; then
-        line+="$field "
-        for (( row_index = 0; row_index < c_rows; row_index++ )); do
-          (( data_offset = row_index * c_fields_count + field_index ))
-          value=${c_data[$data_offset]}
-          shell_quote_var value
-          line+="$value "
-        done
+      if [[ ! "$keep_dims" || " $keep_dims " == *" $field "* ]]; then
+        if [[ " $skip_dims " != *" $field "* ]]; then
+          line+="$field "
+          for (( row_index = 0; row_index < c_rows; row_index++ )); do
+            (( data_offset = row_index * c_fields_count + field_index ))
+            value=${c_data[$data_offset]}
+            shell_quote_var value
+            line+="$value "
+          done
+        fi
       fi
       echo "${line% }" >>$target_file || fail
     done; maybe_break
