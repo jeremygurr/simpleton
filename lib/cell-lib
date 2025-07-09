@@ -602,6 +602,7 @@ init_context() {
     shuffle_chance=100 \
     sub_dims=() \
     sub_dims_expanded=() \
+    support_dims=() \
     support_dims_expanded=() \
     support_dims_one_expanded=() \
     trunk_dims=() \
@@ -2902,8 +2903,7 @@ find_path_to_dim() {
           all_required_set=f
           reason="$required_dim is a dead end"
           break
-        elif any_dim_is_set $required_dim \
-          || [[ " ${all_if_blank:-} " == *" $required_dim "* ]]; then
+        elif any_dim_is_set $required_dim; then
           #zombie_log "$required_dim is currently defined"
           resolved_dims[$required_dim]=1
           resolved=t
@@ -2912,17 +2912,25 @@ find_path_to_dim() {
         if [[ $resolved == f ]]; then
 
           find_path_to_dim $required_dim || fail
+
           if [[ $loop_found == t ]]; then
             #zombie_log "Loop found, so skipping this row"
             continue 2
           fi
 
           if [[ $path_found == f ]]; then
-            #zombie_log "failed to find path to required dim $required_dim"
-            reason="could not find path to $required_dim"
-            all_required_set=f
-            break
+            if [[ " ${all_if_blank:-} " == *" $required_dim "* ]]; then
+              #zombie_log "$required_dim is currently defined"
+              resolved_dims[$required_dim]=1
+              resolved=t
+            else
+              #zombie_log "failed to find path to required dim $required_dim"
+              reason="could not find path to $required_dim"
+              all_required_set=f
+              break
+            fi
           fi
+
           #zombie_log "path found to $required_dim. Adding it to extra_dims_needed"
           extra_dims_needed[$required_dim]=1
 
@@ -3022,6 +3030,8 @@ get_support_dims() {
       extra_dims_needed \
       dead_ends \
 
+    log_debug "Finding support dims for $target_dims"
+
     local dim path_found
     begin_for dim in $target_dims; doo
       
@@ -3059,12 +3069,6 @@ get_support_dims() {
     done
 
     support_dims_expanded=( ${!support_dims_set[*]} )
-    sort_array support_dims_expanded
-    if [[ "${support_dims_expanded:-}" ]]; then
-      log_debug "Found support dims: ${support_dims_expanded[*]}"
-    else
-      log_debug "No support dims needed"
-    fi
 
   end_function
   handle_return
@@ -3144,6 +3148,44 @@ get_dim_parameters() {
   done
 }
 
+expand_dim_array() {
+  begin_function
+    local dim_type
+    begin_for dim_type in $*; doo
+      local -n dim_array=$dim_type expanded_array=${dim_type}_expanded
+
+      begin_for dim in "${dim_array[@]}"; doo
+
+        if [[ "$dim" == *" "* ]]; then
+          log_fatal "Dim ($dim) has spaces in it's name. Most likely multiple dims are defined in a single line of an .arr file in dna. Each dim should be on separate lines."
+          fail1
+        fi
+
+        if [[ $dim == _* ]]; then
+          build_dim_info_expand_group $dim || fail
+        else
+
+          if [[ ! "$dim" =~ ^[a-zA-Z0-9_]+$ ]]; then
+            log_fatal "Invalid dim name: [$dim] in $dim_type"
+            fail1
+          fi
+
+          if [[ $dim == d_* ]]; then
+            log_fatal "Dims should not be named with d_ prefix: $dim in $dim_type"
+            fail1
+          fi
+
+          expanded_array+=( $dim )
+
+        fi
+
+      end_for
+
+    end_for
+  end_function
+  handle_return
+}
+
 setup_dims() {
   begin_function
 
@@ -3184,8 +3226,27 @@ setup_dims() {
     fi
 
     if [[ ! "${support_dims_expanded:-}" ]]; then
-      target_dims="${!required_dims[*]}" \
-      get_support_dims || fail
+      if [[ "${support_dims:-}" ]]; then
+        expand_dim_array support_dims || fail
+        local new_supports=() support_dim
+        for support_dim in ${support_dims_expanded[*]}; do
+          if [[ " ${trunk_dims_expanded[*]} " != *" $support_dim "* ]]; then
+            new_supports+=( $support_dim )
+          fi
+        done
+        support_dims_expanded=( ${new_supports[*]} )
+
+      else
+        target_dims="${!required_dims[*]}" \
+        get_support_dims || fail
+      fi
+    fi
+
+    if [[ "${support_dims_expanded:-}" ]]; then
+      sort_array support_dims_expanded
+      log_debug "Found support dims: ${support_dims_expanded[*]}"
+    else
+      log_debug "No support dims needed"
     fi
 
   end_function
@@ -3648,40 +3709,9 @@ build_dim_info() {
     localize_dims=
     localize_reverse_dims=
 
-    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
-
-      local -n dim_array=${dim_type} expanded_array=${dim_type}_expanded
-      expanded_array=()
-
-      begin_for dim in "${dim_array[@]}"; doo
-
-        if [[ "$dim" == *" "* ]]; then
-          log_fatal "Dim ($dim) has spaces in it's name. Most likely multiple dims are defined in a single line of an .arr file in dna. Each dim should be on separate lines."
-          fail1
-        fi
-
-        if [[ $dim == _* ]]; then
-          build_dim_info_expand_group $dim || fail
-        else
-
-          if [[ ! "$dim" =~ ^[a-zA-Z0-9_]+$ ]]; then
-            log_fatal "Invalid dim name: [$dim] in $dim_type"
-            fail1
-          fi
-
-          if [[ $dim == d_* ]]; then
-            log_fatal "Dims should not be named with d_ prefix: $dim in $dim_type"
-            fail1
-          fi
-
-          expanded_array+=( $dim )
-
-        fi
-
-      end_for
-
+    expand_dim_array trunk_dims sub_dims control_props data_props || fail
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo 
       write_vars_to_context ${dim_type}_expanded || fail
-
     end_for
 
     build_context_related_dims || fail
