@@ -343,7 +343,8 @@ make_table_index() {
 
       if [[ -v all_dims[$field] || $include_implicit_dims == t ]]; then
 
-        local -n index=${table}_index_${field}
+        local -n index=${table}_index_${field} \
+          index_multi=${table}_index_multi_${field} \
 
         unset index
         eval "declare -gA ${table}_index_${field}=()"
@@ -360,13 +361,21 @@ make_table_index() {
             ignore_problems=t \
             expand_dim || fail
 
+            local count=0
             for value in "${values[@]}"; do
               if [[ "$value" ]]; then
                 index[$value]+="$row_index "
+                (( count++ )) || true
+                if (( count == 2 )); then
+                  index_multi=t
+                fi
               fi
             done
 
           else
+            if [[ "$value" == all ]]; then
+              index_multi=t
+            fi
             if [[ "$value" ]]; then
               index[$value]+="$row_index "
             fi
@@ -1011,11 +1020,11 @@ tab_get_derive_from() {
       local -n \
         derive_from=dim_${derived_dim}_derived_from \
         narrow_from=dim_${derived_dim}_narrowed_from \
-        index=derive_table_${name}_index_$derived_dim \
+        index_multi=derive_table_${name}_index_multi_$derived_dim \
 
       for key_field_group in $key_fields; do
         if [[ ,${key_field_group}, != *,${derived_dim},* \
-           && ! -v index[all]
+           && ${index_multi:-f} == f
            ]]; then
 
           tool=${name}.tab \
@@ -1486,7 +1495,10 @@ write_index_to_context() {
     for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
 
       field=${c_fields[$field_index]}
-      local -n table_index=${table}_index_${field}
+
+      local -n table_index=${table}_index_${field} \
+        index_multi=${table}_index_multi_${field} \
+
       if [[ ! "${!table_index[*]}" ]]; then
         log_fatal "Internal error: Missing index ${table}_index_${field}"
         fail1
@@ -1501,6 +1513,10 @@ write_index_to_context() {
       done
 
       echo ")$NL" >>$context_file || fail
+
+      if [[ -v index_multi ]]; then
+        echo "${table}_index_multi_${field}=$index_multi" >>$context_file || fail
+      fi
 
     done
 
@@ -2461,6 +2477,7 @@ narrow_dim_fun() {
 #   dim          
 #   result_var   name of array variable containing members
 #   phase
+#   use_narrow_from
 # outputs:
 #   (result_var) array variable
 #   derive_found
@@ -2468,6 +2485,7 @@ narrow_dim() {
 
   local dim=$dim result_var=$result_var \
     phase=${phase:-derive_optional_functions} \
+    use_narrow_from=${use_narrow_from:-f} \
 
   local -n result=$result_var
   begin_function
