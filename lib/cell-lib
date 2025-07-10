@@ -2898,6 +2898,7 @@ load_child_dims() {
 
 find_path_to_dim_narrow() {
   local target_dim=$1
+  local log_show_vars=target_dim
   begin_function
 
     local -A old_extra_dims_needed
@@ -2940,6 +2941,7 @@ find_path_to_dim_narrow() {
 }
 
 find_path_to_dim_required_dims() {
+  local log_show_vars='target_dim from_row'
   begin_function
     local required_dim 
     begin_for required_dim in ${required_dims[*]}; doo
@@ -2981,6 +2983,7 @@ find_path_to_dim_required_dims() {
 }
 
 find_path_to_dim_optional_dims() {
+  local log_show_vars='target_dim from_row'
   begin_function
     local optional_dim
     begin_for optional_dim in ${optional_dims[*]}; doo
@@ -3015,12 +3018,13 @@ find_path_to_dim_optional_dims() {
 }
 
 find_path_to_dim() {
-  local target_dim=$1
+  local target_dim=$1 
+  local log_show_vars=target_dim
   begin_function
     local -A old_extra_dims_needed
     local -n derived_from=dim_${target_dim}_derived_from
 
-    local row_array derived_from_row target \
+    local row_array from_row target \
       type required_dims optional_dims \
       any_loops_found=f \
       non_loop_found=f \
@@ -3032,9 +3036,9 @@ find_path_to_dim() {
     add_to_set extra_dims_needed old_extra_dims_needed
 
     local dim
-    begin_for derived_from_row in "${derived_from[@]}"; doo
+    begin_for from_row in "${derived_from[@]}"; doo
 
-      row_array=( $derived_from_row )
+      row_array=( $from_row )
       required_dims=${row_array[1]}
       if [[ "$required_dims" == */* ]]; then
         optional_dims=${required_dims#*/}
@@ -3045,7 +3049,7 @@ find_path_to_dim() {
 
       for dim in ${required_dims[*]} ${optional_dims[*]}; do
         if [[ " $history " == *" $dim "* ]]; then
-          # loop detected, can't use this derived_from_row
+          # loop detected, can't use this from_row
           any_loops_found=t
           continue 2
         fi
@@ -3060,7 +3064,7 @@ find_path_to_dim() {
       if [[ $all_required_set == t ]]; then
         find_path_to_dim_optional_dims || fail
         path_found=t
-        abort
+        break
       else
         clear_set extra_dims_needed
         add_to_set old_extra_dims_needed extra_dims_needed
@@ -3068,8 +3072,11 @@ find_path_to_dim() {
 
     end_for
 
-    #if [[ $path_found == f && $any_loops_found == f ]]; then
-    if [[ $path_found == f && $non_loop_found == t ]]; then
+    if [[ " ${all_if_blank:-} " == *" $target_dim "* ]]; then
+      path_found=t
+      resolved_dims[$target_dim]=1
+      resolved=t
+    elif [[ $path_found == f && $non_loop_found == t ]]; then
       dead_ends[$target_dim]=1
     fi
 
