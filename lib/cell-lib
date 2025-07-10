@@ -2465,16 +2465,25 @@ narrow_dim() {
   local -n result=$result_var
   begin_function
     log_debug "Narrowing down $dim"
-    local -n derived_from=dim_${dim}_derived_from
+    local -n \
+      derive_from=dim_${dim}_derived_from \
+      narrow_from=dim_${dim}_narrowed_from \
 
     local row type target row_array \
       original_count=${#result[*]} new_count \
       original_first=${result:-} \
+      array_from \
 
     local -A value_set=()
     array_to_set result value_set
 
-    begin_for derived_from_row in "${derived_from[@]}"; doo
+    if [[ $use_narrow_from == t ]]; then
+      array_from=( "${narrow_from[@]}" )
+    else
+      array_from=( "${derive_from[@]}" )
+    fi
+
+    begin_for derived_from_row in "${array_from[@]}"; doo
       row_array=( $derived_from_row )
       target=$row_array
       type=${target##*.}
@@ -2496,6 +2505,8 @@ narrow_dim() {
           elif [[ ! "${optional_dims:-}" \
              && $phase == derive_optional_functions \
              ]]; then
+            continue
+          elif [[ $use_narrow_from == t ]]; then
             continue
           fi
 
@@ -2555,6 +2566,7 @@ attempt_derive() {
     deriving=${deriving:-} \
     derive_deep=${derive_deep:-t} \
     derive_exactly_one=${derive_exactly_one:-t} \
+    use_narrow_from=${use_narrow_from:-f} \
 
   log_show_vars='dim from_dim'
   begin_function
@@ -2858,10 +2870,53 @@ load_child_dims() {
   handle_return
 }
 
+find_path_to_dim_narrow() {
+  local target_dim=$1
+  begin_function
+
+    local -A old_extra_dims_needed
+    local -n \
+      narrow_from=dim_${target_dim}_narrowed_from \
+
+    local row_array narrow_from_row target \
+      type required_dims optional_dims \
+      any_loops_found=f \
+      non_loop_found=f \
+
+    path_found=f
+    local history=${history:-}
+    history+="$target_dim "
+
+    add_to_set extra_dims_needed old_extra_dims_needed
+
+    local dim
+    begin_for narrow_from_row in "${narrow_from[@]}"; doo
+
+      row_array=( $narrow_from_row )
+      optional_dims=${row_array[1]}
+      optional_dims=${optional_dims//,/ }
+
+      for dim in ${optional_dims[*]}; do
+        if [[ " $history " == *" $dim "* ]]; then
+          # loop detected, can't use this narrow_from_row
+          any_loops_found=t
+          continue 2
+        fi
+      done
+
+      non_loop_found=t
+      local resolved
+      find_path_to_dim_optional_dims || fail
+
+    end_for
+  end_function
+  handle_return
+}
+
 find_path_to_dim_required_dims() {
   begin_function
     local required_dim 
-    for required_dim in ${required_dims[*]}; do
+    begin_for required_dim in ${required_dims[*]}; doo
 
       resolved=f
 
@@ -2894,7 +2949,7 @@ find_path_to_dim_required_dims() {
 
       fi
 
-    done
+    end_for
   end_function
   handle_return
 }
@@ -2902,7 +2957,7 @@ find_path_to_dim_required_dims() {
 find_path_to_dim_optional_dims() {
   begin_function
     local optional_dim
-    for optional_dim in ${optional_dims[*]}; do
+    begin_for optional_dim in ${optional_dims[*]}; doo
 
       resolved=f
 
@@ -2928,7 +2983,7 @@ find_path_to_dim_optional_dims() {
 
       fi
 
-    done
+    end_for
   end_function
   handle_return
 }
@@ -2939,7 +2994,6 @@ find_path_to_dim() {
     local -A old_extra_dims_needed
     local -n \
       derived_from=dim_${target_dim}_derived_from \
-      narrow_from=dim_${derived_dim}_narrowed_from \
 
     local row_array derived_from_row target \
       type required_dims optional_dims \
@@ -4024,7 +4078,7 @@ make_derive_cache_handle_function() {
           target_dims= \
           is_key=f \
 
-        if [[ "$required_dims" == *->* ]]; then
+        if [[ "$required_dims" == *'->'* ]]; then
           target_dims=${required_dims#*->}
           required_dims=${required_dims%->*}
         else
@@ -5110,7 +5164,7 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=()
-      for phase in derive derive_optional_functions default; do
+      for phase in derive narrow default derive_optional_functions; do
         for dim in $unknown_dims; do
 
           needs_narrowing=t
@@ -5131,8 +5185,13 @@ calc_coordinates_next_unknown_dim() {
 
           if [[ $phase == derive \
              || $phase == derive_optional_functions ]]; then
+            deriving= \
+            attempt_derive || fail
+            needs_narrowing=f
+          elif [[ $phase == narrow ]]; then
             derive_exactly_one=f \
             deriving= \
+            use_narrow_from=t \
             attempt_derive || fail
             needs_narrowing=f
           elif [[ $derive_exactly_one == f \
@@ -5140,8 +5199,11 @@ calc_coordinates_next_unknown_dim() {
             local value=all
             expand_dim value values || fail
             already_expanded=t
-          else
+          elif [[ $phase == default ]]; then
             attempt_default || fail
+          else
+            log_fatal "Internal error: invalid phase: $phase"
+            fail1
           fi
 
           if [[ "${values:-}" ]]; then
