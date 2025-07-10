@@ -2962,7 +2962,7 @@ find_path_to_dim_narrow() {
     begin_for from_row in "${narrow_from[@]}"; doo
 
       local log_show_vars=target_dim
-      zombie_fence
+      grip_fence
 
       row_array=( $from_row )
       optional_dims=${row_array[1]}
@@ -3017,8 +3017,15 @@ find_path_to_dim_required_dims() {
         find_path_to_dim $required_dim || fail
 
         if [[ $path_found == f ]]; then
-          all_required_set=f
-          break
+          if [[ " ${all_if_blank:-} " != *" $required_dim "* ]]; then
+            all_required_set=f
+            break
+          else
+            find_path_to_dim_narrow $required_dim || fail
+            if [[ $path_found == t ]]; then
+              resolve_dim $target_dim
+            fi
+          fi
         fi
 
         extra_dims_needed[$required_dim]=1
@@ -3057,7 +3064,7 @@ find_path_to_dim() {
     begin_for from_row in "${derived_from[@]}"; doo
 
       local log_show_vars=target_dim
-      zombie_fence
+      grip_fence
 
       row_array=( $from_row )
       required_dims=${row_array[1]}
@@ -3095,6 +3102,9 @@ find_path_to_dim() {
 
     if [[ $path_found == f && $allow_narrowing == t ]]; then
       find_path_to_dim_narrow $target_dim || fail
+      if [[ $path_found == t ]]; then
+        resolve_dim $target_dim
+      fi
     fi
 
 #    if [[ " ${all_if_blank:-} " == *" $target_dim "* && $any_loops_found == f ]]; then
@@ -3105,13 +3115,19 @@ find_path_to_dim() {
 #      resolved_dims[$target_dim]=1
 #      resolved=t
 
-    if [[ $path_found == f && $any_loops_found == f ]]; then
-      if [[ $allow_narrowing == t ]]; then
-        resolve_dim $target_dim
-        extra_dims_needed[$target_dim]=1
-      else
+    if [[ $path_found == f \
+       && $allow_narrowing == f \
+       && $any_loops_found == f \
+       ]]; then
+      #if [[ $allow_narrowing == t ]]; then
+      #  resolve_dim $target_dim
+      #  extra_dims_needed[$target_dim]=1
+      #else
+        if [[ $target_dim == host_group ]]; then
+          zombie_debug
+        fi
         dead_ends[$target_dim]=1
-      fi
+      #fi
     fi
 
   end_function
@@ -3171,12 +3187,13 @@ get_support_dims() {
 
       if [[ " ${trunk_dims_expanded[*]} " != *" $dim "* ]]; then
         support_dims_set[$dim]=1
+      else
+        unset support_dims_set[$dim]
       fi
 
     end_for
 
     support_dims_expanded=( ${!support_dims_set[*]} )
-    pause
 
   end_function
   handle_return
@@ -3356,6 +3373,8 @@ setup_dims() {
     else
       log_debug "No support dims needed"
     fi
+
+    zombie_pause
 
   end_function
   handle_return
