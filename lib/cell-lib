@@ -2422,7 +2422,6 @@ narrow_dim_fun() {
 
     local f_name=derive_function_$derive_fun \
       can_derive=f \
-      action=check \
       values=() \
       target_dim=$dim \
       d p \
@@ -2440,7 +2439,9 @@ narrow_dim_fun() {
 
     if [[ $phase == derive_optional_functions ]] \
        || all_dims_are_set ${optional_dims:-}; then
-      $f_name || fail
+      if all_dims_are_set $required_dims; then
+        can_derive=t
+      fi
     fi
 
     if [[ $can_derive == t ]]; then
@@ -2449,6 +2450,11 @@ narrow_dim_fun() {
       derive_found=t
       $f_name || fail
       local -A new_values=()
+
+      if [[ ! "${fields:-}" || ! "${values:-}" ]]; then
+        log_fatal "Error is derive function $derive_fun: not returning fields and values arrays"
+        fail1
+      fi
 
       local field i value
       for (( i = 0; i < ${#fields[*]}; i++ )); do
@@ -2604,18 +2610,28 @@ attempt_derive() {
 
     if [[ $phase == derive ]]; then
       if [[ -v derive_tried[$dim] ]]; then
-        value=()
+        values=()
         abort
       else
         derive_tried[$dim]=1
       fi
-    else
+    elif [[ $phase == derive_optional_functions ]]; then
       if [[ -v derive_optional_tried[$dim] ]]; then
-        value=()
+        values=()
         abort
       else
         derive_optional_tried[$dim]=1
       fi
+    elif [[ $phase == narrow ]]; then
+      if [[ -v narrow_tried[$dim] ]]; then
+        values=()
+        abort
+      else
+        narrow_tried[$dim]=1
+      fi
+    else
+      log_fatal "Unknown phase $phase"
+      fail1
     fi
 
     deriving+="$dim "
@@ -4165,7 +4181,9 @@ make_derive_cache_handle_function() {
 
         fi
 
-        if [[ "$required_dims" == "$derived_dim" ]]; then
+        if [[ "$required_dims" == "$derived_dim" \
+           && ! "$optional_dims" \
+           ]]; then
           is_key=t
         fi
 
@@ -5227,7 +5245,7 @@ calc_coordinates_next_unknown_dim() {
     local dim_index
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
-      local -A derive_tried=() derive_optional_tried=()
+      local -A derive_tried=() derive_optional_tried=() narrow_tried=()
       for phase in derive narrow default derive_optional_functions; do
         for dim in $unknown_dims; do
 
