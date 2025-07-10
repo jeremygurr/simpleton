@@ -753,11 +753,11 @@ forge() {
               current_action=go
               break
             ;;
-            l)
-              echo "link"
-              current_action=link
-              break
-            ;;
+            #l)
+            #  echo "link"
+            #  current_action=link
+            #  break
+            #;;
             m)
               echo "add item to move list"
               current_action=move
@@ -791,10 +791,11 @@ forge() {
               echo "D duplicate"
               #echo "i info"
               echo "g go"
-              echo "l link to target dir (use t command to set destination)"
-              echo "m move to target dir (use t command to set destination)"
+              #echo "l link to target dir (use t command to set destination)"
+              echo "m move item to target dir (select items to copy, then use t command to set destination)"
               echo "q cancel action change"
               echo "r rename"
+              echo "t move/copy items in copy list to the given target folder"
               echo "v view file"
             ;;
             *)
