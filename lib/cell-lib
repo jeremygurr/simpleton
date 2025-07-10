@@ -1011,10 +1011,6 @@ tab_get_derive_from() {
       key_field_group \
       tool=${name}.tab \
 
-    if [[ $name == component ]]; then
-      zombie_debug
-    fi
-
     for (( derived_index = 0; derived_index < field_count; derived_index++ )); do
       derived_dim=${table_fields[$derived_index]}
       local -n \
@@ -2596,7 +2592,10 @@ attempt_derive() {
   log_show_vars='dim from_dim'
   begin_function
 
-    local -n derived_from=dim_${dim}_derived_from
+    local -n \
+      derived_from=dim_${dim}_derived_from \
+      narrow_from=dim_${dim}_narrowed_from \
+
     values=( all )
 
     if [[ " $deriving " == *" $dim "* ]]; then
@@ -2620,7 +2619,9 @@ attempt_derive() {
     deriving+="$dim "
     derive_found=f
 
-    if [[ "${derived_from:-}" ]]; then
+    if [[ "${derived_from:-}" \
+       || $use_narrow_from == t 
+       && "${narrow_from:-}" ]]; then
       result_var=values \
       narrow_dim || fail
     fi
@@ -3017,8 +3018,7 @@ find_path_to_dim() {
   local target_dim=$1
   begin_function
     local -A old_extra_dims_needed
-    local -n \
-      derived_from=dim_${target_dim}_derived_from \
+    local -n derived_from=dim_${target_dim}_derived_from
 
     local row_array derived_from_row target \
       type required_dims optional_dims \
@@ -3125,14 +3125,11 @@ get_support_dims() {
         fi
       fi
 
-    end_for
-
-    local anchor_dim
-    for anchor_dim in $anchor_dims; do
-      if [[ " ${trunk_dims_expanded[*]} " != *" $anchor_dim "* ]]; then
+      if [[ " ${trunk_dims_expanded[*]} " != *" $dim "* ]]; then
         support_dims_set[$anchor_dim]=1
       fi
-    done
+
+    end_for
 
     support_dims_expanded=( ${!support_dims_set[*]} )
 
@@ -3303,7 +3300,7 @@ setup_dims() {
         support_dims_expanded=( ${new_supports[*]} )
 
       else
-        target_dims="${!required_dims[*]}" \
+        target_dims="${required_dims_array[*]}" \
         get_support_dims || fail
       fi
     fi
@@ -4922,7 +4919,7 @@ set_table_cross_dims_single() {
           else
             if [[ "$value" && "$value" != all \
                && ! -v cross_dims_tried[$field] ]]; then
-              log_debug "Cross dim set: $dim=$member -> $field=$value"
+              log_debug "Cross dim set: $dim=$member -> $field=$value (via derive table $derive_table)"
               field_dim=$value
               validated_dims+=" $field"
               cross_dims_tried[$field]=1
@@ -4986,7 +4983,7 @@ set_function_cross_dims_single() {
       else
         if [[ "$value" && "$value" != all \
            && ! -v cross_dims_tried[$field] ]]; then
-          log_debug "Cross dim set: $dim=$member -> $field=$value"
+          log_debug "Cross dim set: $dim=$member -> $field=$value (via derive function $derive_fun"
           ddim=$value
           validated_dims+=" $field"
           cross_dims_tried[$field]=1
