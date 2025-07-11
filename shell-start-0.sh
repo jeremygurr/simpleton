@@ -738,11 +738,6 @@ forge() {
               current_action=delete
               break
             ;;
-            D)
-              echo "duplicate"
-              current_action=duplicate
-              break
-            ;;
             #i)
             #  echo "info"
             #  current_action=info
@@ -763,6 +758,11 @@ forge() {
               current_action=move
               copy_list=()
               copy_type=move
+              break
+            ;;
+            n)
+              echo "new"
+              current_action=new
               break
             ;;
             q)
@@ -788,11 +788,11 @@ forge() {
               echo "c copy item to target dir (select items to copy, then use t command to set destination)"
               echo "C copy contents of item to target dir (select folders to copy from, then use t command to set destination folder))"
               echo "d delete"
-              echo "D duplicate"
               #echo "i info"
               echo "g go"
               #echo "l link to target dir (use t command to set destination)"
               echo "m move item to target dir (select items to copy, then use t command to set destination)"
+              echo "n create a new instance by cloning the chosen item (clones a file/dim/cell intelligently)"
               echo "q cancel action change"
               echo "r rename"
               echo "t move/copy items in copy list to the given target folder"
@@ -815,22 +815,29 @@ forge() {
             copy_list+=( "$target" )
           ;;
           delete)
-            echo rm -rf "$target"
-            rm -rf "$target"
-            #recursive=t remove_empty_parents ${target%/*}
-          ;;
-          duplicate)
-            local new_name=
-            read -p "New name: (leave empty to cancel) " new_name 
-            if [[ "$new_name" ]]; then
-              if [[ -d $target ]]; then
-                echo rsync -av $target/ $target1/$new_name/
-                rsync -av $target/ $target1/$new_name/
-              else
-                echo rsync -av $target $target1/$new_name
-                rsync -av $target $target1/$new_name
-              fi
+            if [[ "$target" == */.lib/dim/* && -d "$target" \
+               && -d "$current_selection/.dna" \
+               ]]; then
+              local dim_type dim
+              for dim_type in trunk_dims sub_dims control_props data_props; do
+                file=$current_selection/.dna/$dim_type.arr
+                if [[ -f $file ]]; then
+                  for dim in $(<$file); do
+                    if [[ $dim == $target2 ]]; then
+                      echo "Removing dim from $file"
+                      sed -i "/^$dim\$/d" $file
+                    fi
+                  done
+                fi
+              done
+            elif [[ -f "$target" ]]; then
+              echo rm "$target"
+              rm "$target"
+            elif [[ -d "$target" ]]; then
+              echo rm -rf "$target"
+              rm -rf "$target"
             fi
+            #recursive=t remove_empty_parents ${target%/*}
           ;;
           go)
             if [[ -f $target ]]; then
@@ -850,6 +857,47 @@ forge() {
 
               current_selection=$target
               walk_filter=
+            fi
+          ;;
+          new)
+            local new_name=
+            if [[ "$target" == */.lib/dim/* && -d "$target" ]]; then
+              echo "Cloning a dim"
+              read -p "New dim name: (leave empty to cancel) " new_name 
+              echo rsync -av $target/ $target1/$new_name/
+              rsync -av $target/ $target1/$new_name/
+
+              local dim_type dim
+              for dim_type in trunk_dims sub_dims control_props data_props; do
+                file=$current_selection/.dna/$dim_type.arr
+                if [[ -f $file ]]; then
+                  for dim in $(<$file); do
+                    if [[ $dim == $target2 ]]; then
+                      echo "Adding new dim to $file"
+                      echo $new_name >>$file
+                      break
+                    fi
+                  done
+                fi
+              done
+
+            elif [[ "$target" == */.dna || -d "$target/.dna" ]]; then
+              echo "Cloning a cell"
+              echo "Not implemented yet"
+            elif [[ -f "$target" ]]; then
+              echo "Cloning a file"
+              read -p "New name: (leave empty to cancel) " new_name 
+              if [[ "$new_name" ]]; then
+                if [[ -d $target ]]; then
+                  echo rsync -av $target/ $target1/$new_name/
+                  rsync -av $target/ $target1/$new_name/
+                else
+                  echo rsync -av $target $target1/$new_name
+                  rsync -av $target $target1/$new_name
+                fi
+              fi
+            else
+              echo "I don't know how to handle this object type yet"
             fi
           ;;
           rename)
