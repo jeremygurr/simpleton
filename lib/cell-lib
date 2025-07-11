@@ -596,7 +596,7 @@ init_context() {
     max_attempts=1 \
     max_pause=60000 \
     min_pause=250 \
-    optional_dims= \
+    all_optional_dims= \
     out_file= \
     out_path= \
     post_validate=${validate:-t} \
@@ -2856,9 +2856,9 @@ prep_dims() {
       fi
 
       local -n is_optional=dim_${dim_var}_is_optional
-      if [[ ${is_optional:-} == t && " $optional_dims " != *" $dim_var "* ]]; then
-        optional_dims+=" $dim_var"
-        optional_dims=${optional_dims# }
+      if [[ ${is_optional:-} == t && " $all_optional_dims " != *" $dim_var "* ]]; then
+        all_optional_dims+=" $dim_var"
+        all_optional_dims=${all_optional_dims# }
       fi
 
     done
@@ -2958,7 +2958,7 @@ find_path_to_dim_narrow() {
     local -A old_extra_dims_needed
     local -n narrow_from=dim_${target_dim}_narrowed_from
 
-    local row_array narrow_from_row target \
+    local row_array target \
       type required_dims optional_dims \
       any_loops_found=f \
       non_loop_found=f \
@@ -2972,7 +2972,7 @@ find_path_to_dim_narrow() {
 
     add_to_set extra_dims_needed old_extra_dims_needed
 
-    local dim
+    local dim from_row
     begin_for from_row in "${narrow_from[@]}"; doo
 
       local log_show_vars=target_dim
@@ -3009,6 +3009,15 @@ find_path_to_dim_narrow() {
   handle_return
 }
 
+is_dim_required() {
+  local dim=$1
+  local -n default_value=dim_${dim}_default
+  [[ " $all_optional_dims " != *" $dim "* \
+  && ! "${default_value:-}" \
+  && " ${all_if_blank:-} " != *" $dim "* \
+  ]]
+}
+
 find_path_to_dim_required_dims() {
   local log_show_vars='target_dim from_row'
   begin_function
@@ -3031,14 +3040,24 @@ find_path_to_dim_required_dims() {
         find_path_to_dim $required_dim || fail
 
         if [[ $path_found == f ]]; then
-          if [[ " ${all_if_blank:-} " != *" $required_dim "* ]]; then
+
+          if is_dim_required $required_dim; then
+
             all_required_set=f
             break
+
           else
-            find_path_to_dim_narrow $required_dim || fail
-            if [[ $path_found == t ]]; then
-              resolve_dim $target_dim
+
+            if [[ " ${all_if_blank:-} " != *" $required_dim "* ]]; then
+              find_path_to_dim_narrow $required_dim || fail
+            else
+              path_found=t
             fi
+
+            if [[ $path_found == t ]]; then
+              resolve_dim $required_dim
+            fi
+
           fi
         fi
 
@@ -3058,7 +3077,7 @@ find_path_to_dim() {
     local -A old_extra_dims_needed
     local -n derived_from=dim_${target_dim}_derived_from
 
-    local row_array from_row target \
+    local row_array target \
       type required_dims optional_dims \
       any_loops_found=f \
       non_loop_found=f \
@@ -3074,7 +3093,7 @@ find_path_to_dim() {
       allow_narrowing=t
     fi
 
-    local dim
+    local dim from_row
     begin_for from_row in "${derived_from[@]}"; doo
 
       local log_show_vars=target_dim
@@ -3114,8 +3133,10 @@ find_path_to_dim() {
 
     end_for
 
-    if [[ $path_found == f && $allow_narrowing == t ]]; then
-      find_path_to_dim_narrow $target_dim || fail
+    if [[ $path_found == f ]]; then
+      if [[ $allow_narrowing == t ]]; then
+        find_path_to_dim_narrow $target_dim || fail
+      fi
       if [[ $path_found == t ]]; then
         resolve_dim $target_dim
       fi
@@ -3203,7 +3224,7 @@ add_required_dims() {
   local dims=$* dim
   for dim in $dims; do
     local -n default_value=dim_${dim}_default
-    if [[ " $optional_dims " != *" $dim "* && ! "${default_value:-}" ]]; then
+    if [[ " $all_optional_dims " != *" $dim "* && ! "${default_value:-}" ]]; then
       required_dims[$dim]=1
     fi
   done
