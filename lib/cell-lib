@@ -2762,7 +2762,7 @@ prep_dims() {
   begin_function
 
     local dim_var dims_var
-    for dim_var in ${!all_dims[*]}; do
+    for dim_var in ${related_dims_expanded[*]}; do
 
       grip_fence
       get_plural $dim_var dims_var
@@ -3665,24 +3665,6 @@ build_dim_info_single() {
 
     local -n members=dim_${dim}_members
 
-    local shorter_dim=$dim shorter_dims
-
-    dim_shorts[$dim]=$dim
-    while [[ $shorter_dim == *_* ]]; do
-
-      shorter_dim=${shorter_dim#*_}
-      get_plural $shorter_dim shorter_dims
-      if [[ ! -v dim_shorts[$shorter_dim] ]]; then
-        dim_shorts[$shorter_dim]=$dim
-      else
-        # Allow exact dim name to override all abbreviations
-        if [[ "${dim_shorts[$shorter_dim]}" != $shorter_dim ]]; then
-          dim_shorts[$shorter_dim]+=" $dim"
-        fi
-      fi
-
-    done
-
     if ! function_exists expand_function; then
       build_context_expand || fail
     fi
@@ -3717,18 +3699,6 @@ build_context_support_dims_find_related() {
       begin_for up_dim in $canopy; doo
 
         new_shortest=( $next_level_row )
-
-        local replace_shortest=t
-        if [[ -v shortest_path_to_dim[$up_dim] ]]; then
-          old_shortest=( ${shortest_path_to_dim[$up_dim]} )
-          if (( ${#new_shortest[*]} >= ${#old_shortest[*]} )); then
-            replace_shortest=f
-          fi
-        fi
-
-        if [[ $replace_shortest == t ]]; then
-          shortest_path_to_dim[$up_dim]=${new_shortest[*]}
-        fi
 
         if [[ ! -v tried[$up_dim] ]]; then
 
@@ -3768,7 +3738,6 @@ build_context_related_dims() {
 
     local -A related_dims_set=() \
       support_dims_set=() \
-      shortest_path_to_dim=() \
       tried=() \
       next_level_dims=() \
       current_level_dims=() \
@@ -3813,7 +3782,7 @@ build_context_related_dims() {
       log_debug "Related dims found: ${related_dims_expanded[*]}"
     fi
 
-    write_vars_to_context related_dims_expanded shortest_path_to_dim || fail
+    write_vars_to_context related_dims_expanded || fail
 
   end_function
   handle_return
@@ -3883,11 +3852,31 @@ build_dim_info() {
         localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
         write_vars_to_context dim_${dim}_type || fail
 
+        local shorter_dim=$dim shorter_dims
+
+        dim_shorts[$dim]=$dim
+        while [[ $shorter_dim == *_* ]]; do
+
+          shorter_dim=${shorter_dim#*_}
+          get_plural $shorter_dim shorter_dims
+          if [[ ! -v dim_shorts[$shorter_dim] ]]; then
+            dim_shorts[$shorter_dim]=$dim
+            dim_shorts[$shorter_dims]=$dims
+          else
+            # Allow exact dim name to override all abbreviations
+            if [[ "${dim_shorts[$shorter_dim]}" != $shorter_dim ]]; then
+              dim_shorts[$shorter_dim]+=" $dim"
+              dim_shorts[$shorter_dims]+=" $dims"
+            fi
+          fi
+
+        done
+
       done
 
     done
 
-    write_vars_to_context localize_dims localize_reverse_dims || fail
+    write_vars_to_context localize_dims localize_reverse_dims dim_shorts || fail
 
   end_function
   handle_return
@@ -4611,9 +4600,15 @@ check_table_row() {
       (( t = offset + f ))
       local expected_value=${table_data[$t]}
 
-      if [[ -v all_dims[$field] ]]; then
-        check_table_field $field
-      fi
+      local shorter_field=$field prefix
+      while true; do
+        check_table_field $shorter_field
+        if [[ $shorter_field != *_* || $is_valid == f ]]; then
+          break
+        fi
+        prefix=${shorter_field%%_*}
+        shorter_field=${shorter_field#${prefix}_}
+      done
 
       if [[ $is_valid == f ]]; then
         break
