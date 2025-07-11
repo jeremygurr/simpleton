@@ -2347,7 +2347,7 @@ extract_from_derive_table() {
 
     extract_from_derive_table_find_row_indexes
 
-    if [[ $complete_table == t || $skip_if_incomplete == f ]]; then
+    if [[ $complete_table == t || $skip_if_incomplete == t ]]; then
 
       if [[ -v matching_rows[all] ]]; then
         add_to_set index new_value_set
@@ -2490,7 +2490,7 @@ narrow_dim_fun() {
 narrow_dim() {
 
   local dim=$dim result_var=$result_var \
-    phase=${phase:-derive_optional_functions} \
+    phase=${phase:-all} \
     use_narrow_from=${use_narrow_from:-f} \
 
   local -n result=$result_var
@@ -2531,6 +2531,7 @@ narrow_dim() {
 
           if [[ "${optional_dims:-}" \
              && $phase != derive_optional_functions \
+             && $phase != all \
              ]]; then
             continue
           elif [[ ! "${optional_dims:-}" \
@@ -2599,6 +2600,7 @@ attempt_derive() {
     derive_deep=${derive_deep:-t} \
     derive_exactly_one=${derive_exactly_one:-t} \
     use_narrow_from=${use_narrow_from:-f} \
+    use_derive_from=${use_derive_from:-t} \
 
   log_show_vars='dim from_dim'
   begin_function
@@ -2613,39 +2615,48 @@ attempt_derive() {
       abort
     fi
 
-    if [[ $phase == derive ]]; then
-      if [[ -v derive_tried[$dim] ]]; then
-        values=()
-        abort
+    if [[ $phase != all ]]; then
+      if [[ $phase == derive ]]; then
+        if [[ -v derive_tried[$dim] ]]; then
+          values=()
+          abort
+        else
+          derive_tried[$dim]=1
+        fi
+      elif [[ $phase == derive_optional_functions ]]; then
+        if [[ -v derive_optional_tried[$dim] ]]; then
+          values=()
+          abort
+        else
+          derive_optional_tried[$dim]=1
+        fi
+      elif [[ $phase == narrow ]]; then
+        if [[ -v narrow_tried[$dim] ]]; then
+          values=()
+          abort
+        else
+          narrow_tried[$dim]=1
+        fi
       else
-        derive_tried[$dim]=1
+        log_fatal "Unknown phase $phase"
+        fail1
       fi
-    elif [[ $phase == derive_optional_functions ]]; then
-      if [[ -v derive_optional_tried[$dim] ]]; then
-        values=()
-        abort
-      else
-        derive_optional_tried[$dim]=1
-      fi
-    elif [[ $phase == narrow ]]; then
-      if [[ -v narrow_tried[$dim] ]]; then
-        values=()
-        abort
-      else
-        narrow_tried[$dim]=1
-      fi
-    else
-      log_fatal "Unknown phase $phase"
-      fail1
     fi
 
     deriving+="$dim "
     derive_found=f
 
-    if [[ "${derived_from:-}" \
-       || $use_narrow_from == t 
+    if [[ $use_derive_from == t 
+       && "${derive_from:-}" ]]; then
+      result_var=values \
+      use_narrow_from=f \
+      narrow_dim || fail
+    fi
+
+    if [[ $use_narrow_from == t 
        && "${narrow_from:-}" ]]; then
       result_var=values \
+      use_narrow_from=t \
       narrow_dim || fail
     fi
 
@@ -5294,7 +5305,7 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
-      for phase in derive narrow default derive_optional_functions; do
+      for phase in derive default derive_optional_functions narrow; do
         for dim in $unknown_dims; do
 
           needs_narrowing=t
@@ -5318,12 +5329,6 @@ calc_coordinates_next_unknown_dim() {
             deriving= \
             attempt_derive || fail
             needs_narrowing=f
-          elif [[ $phase == narrow ]]; then
-            derive_exactly_one=f \
-            deriving= \
-            use_narrow_from=t \
-            attempt_derive || fail
-            needs_narrowing=f
           elif [[ $derive_exactly_one == f \
                || $target_form == seed ]]; then
             local value=all
@@ -5331,6 +5336,12 @@ calc_coordinates_next_unknown_dim() {
             already_expanded=t
           elif [[ $phase == default ]]; then
             attempt_default || fail
+          elif [[ $phase == narrow ]]; then
+            derive_exactly_one=f \
+            deriving= \
+            use_narrow_from=t \
+            attempt_derive || fail
+            needs_narrowing=f
           else
             log_fatal "Internal error: invalid phase: $phase"
             fail1
@@ -5378,11 +5389,11 @@ calc_coords_validate_member() {
     fi
 
     local values=() derive_found=f
-    local -A derive_optional_tried=()
     derive_exactly_one=f \
     deriving= \
     derive_deep=f \
-    phase=derive_optional_functions \
+    use_narrow_from=t \
+    phase=all \
     attempt_derive || fail
 
     if [[ $derive_found == t ]]; then
@@ -5400,36 +5411,6 @@ calc_coords_validate_member() {
       fi
 
     fi
-
-    #  should have already been set
-    #eval "local d_$dim=\$member"
-
-    # only focussed on the one side for now, hopefully don't need this
-    #  local rd
-    #  for rd in $resolved_dims; do
-    #    if [[ $rd == $dim ]]; then
-    #      continue
-    #    fi
-    #    local stop_after_first_match=t \
-    #    deriving= \
-    #    from_dim=$dim \
-    #    dim=$rd \
-    #    attempt_derive || fail
-
-    #    if [[ $can_derive == t ]]; then
-    #      if [[ ! "${values:-}" ]]; then
-    #        is_valid=f
-    #      else
-    #        local -n rd_member=d_$rd
-    #        if [[ "${rd_member:-}" ]] && ! array_contains values "$rd_member" && ! array_contains values all; then
-    #          conflicting_values=( "${values[@]}" )
-    #          is_valid=f
-    #        fi
-    #      fi
-    #      log_debug "Dim $dim is not valid because $rd couldn't be derived from it"
-    #      abort
-    #    fi
-    #  done
 
     log_debug "Dim $dim is valid"
 
