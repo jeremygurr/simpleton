@@ -2923,6 +2923,7 @@ resolve_dim() {
   local dim=$1
   resolved_dims[$dim]=1
   resolved=t
+  not_required[$dim]=1
 }
 
 find_path_to_dim_optional_dims() {
@@ -3028,6 +3029,7 @@ find_path_to_dim_required_dims() {
     local required_dim 
     begin_for required_dim in ${required_dims[*]}; doo
 
+      grip_fence
       resolved=f
 
       if [[ -v resolved_dims[$required_dim] ]]; then
@@ -3052,7 +3054,9 @@ find_path_to_dim_required_dims() {
 
           else
 
-            if [[ " ${all_if_blank:-} " != *" $required_dim "* ]]; then
+            not_required[$required_dim]=1
+
+            if [[ " ${all_if_blank:-} " == *" $required_dim "* ]]; then
               find_path_to_dim_narrow $required_dim || fail
             else
               path_found=t
@@ -3086,6 +3090,7 @@ find_path_to_dim() {
       any_loops_found=f \
       non_loop_found=f \
       allow_narrowing=${allow_narrowing:-f} \
+      previous_unresolved_log=$unresolved_log \
 
     path_found=f
     local history=${history:-}
@@ -3125,6 +3130,19 @@ find_path_to_dim() {
       local all_required_set=t resolved
 
       find_path_to_dim_required_dims || fail
+
+      local log_result="  $target_dim <- "
+      local d
+      for d in ${required_dims[*]}; do
+        if [[ -v not_required[$d] ]]; then
+          log_result+="${GREEN}"
+        else
+          log_result+="${RED}"
+        fi
+        log_result+="$d "
+      done
+
+      unresolved_log="${log_result% }$RESET$NL$unresolved_log"
 
       if [[ $all_required_set == t ]]; then
         find_path_to_dim_optional_dims || fail
@@ -3171,6 +3189,7 @@ get_support_dims() {
       resolved_dims \
       extra_dims_needed \
       dead_ends \
+      not_required \
 
     log_debug "Finding support dims for $target_dims"
 
@@ -3195,7 +3214,7 @@ get_support_dims() {
         #fi
 
         extra_dims_needed=()
-        local history= loop_found=f
+        local history= loop_found=f unresolved_log=
         find_path_to_dim $dim || fail
         if [[ $path_found == t ]]; then
           if (( "${#extra_dims_needed[*]}" > 0 )); then
@@ -3206,6 +3225,10 @@ get_support_dims() {
           log_fatal "Could not resolve dim $dim." \
             "Either provide this dim value or other dims which can be used" \
             "to derive this. Or add it to the all_if_blank var."
+          if [[ "$unresolved_log" ]] && log_level_at_least debug; then
+            echo "Dim dependencies: (red dims are missing) " >&$fd_original_err
+            echo "$unresolved_log" >&$fd_original_err
+          fi
           fail1
         fi
       fi
