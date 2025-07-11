@@ -15,8 +15,8 @@ set +o histexpand
 
 complete -r # remove built-in shell completion since it currently has problems
 
-if [[ -e /tmp/prompt_name ]]; then
-  prompt_name=$(</tmp/prompt_name)
+if [[ -e /home/prompt_name ]]; then
+  prompt_name=$(</home/prompt_name)
   prompt_name=${prompt_name%%*( )}
 fi
 
