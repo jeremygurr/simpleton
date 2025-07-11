@@ -689,10 +689,11 @@ alias incomplete='echo "Not implemented yet." >&2; start_frame=1 stack_trace; fa
 
 log_and_run() {
 
-  local prefix= command=$* \
+  local command=$* \
     out_to_file=${out_to_file:-} \
     err_to_file=${err_to_file:-} \
     level=${level:-verbose} \
+    log_path=${log_path:-${cell_path:-/tmp}/log}
 
   case $level in
     off|fatal|error|warn|info|verbose|debug|trace|all)
@@ -702,13 +703,6 @@ log_and_run() {
     ;;
   esac
 
-  if [[ $pretend == t ]]; then
-    prefix="PRETEND: "
-  fi
-
-  local $snapshot_source_location_locals
-  offset=1 snapshot_source_location
-
   if [[ "$out_to_file" ]]; then
     command+=" >>$out_to_file"
   fi
@@ -717,13 +711,14 @@ log_and_run() {
     command+=" 2>>$err_to_file"
   fi
 
-  simpler_write_to_log $level command "$prefix$command" || fail
+  log_$level "$command"
+  if [[ "${log_path:-}" ]]; then
+    echo "$command" >>$log_path || return 1
+  fi
 
-  if [[ $pretend != t ]]; then
-    eval "$command" || return 1
-    if [[ "${!:-}" ]]; then
-      pid=$!
-    fi
+  eval "$command" || return 1
+  if [[ "${!:-}" ]]; then
+    pid=$!
   fi
 
   return 0
