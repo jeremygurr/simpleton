@@ -1432,7 +1432,7 @@ build_context_expand_members() {
     local -n members=dim_${dim}_members \
       member_type=dim_${dim}_member_type \
 
-    if [[ -v members ]] && array_contains members \$_in; then
+    if [[ -v members ]] && array_contains members \"\$_in\"; then
       _out=( \"\$_in\" )
     elif [[ ! -v member_type || \$member_type == dynamic ]]; then
       _out=( \"\$_in\" )
@@ -3331,13 +3331,39 @@ dim_set_in_parameter() {
 
 # must have related_dims resolved first
 get_dim_parameters() {
-  dim_parameters=
-  local dim
-  for dim in ${related_dims_expanded[*]} ${trunk_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-}; do
-    if dim_set_in_parameter $dim; then
-      dim_parameters+="$dim "
-    fi
-  done
+  begin_function
+    dim_parameters=
+    local dim
+    begin_for dim in ${related_dims_expanded[*]} ${trunk_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-}; doo
+      if dim_set_in_parameter $dim; then
+
+        local dims
+        get_plural $dim dims
+        local -n pdim=p_$dim pdims=p_$dims
+        local problem values
+
+        if [[ "${pdim:-}" ]]; then
+          pdims=$pdim
+        fi
+
+        pdims=( $pdims )
+
+        local value
+        for value in "${pdims[@]}"; do
+          dim_${dim}_expand value || fail1
+
+          if [[ "$problem" ]]; then
+            log_fatal "$problem"
+            fail1
+          fi
+        done
+
+        dim_parameters+="$dim "
+
+      fi
+    end_for
+  end_function
+  handle_return
 }
 
 expand_dim_array() {
@@ -4886,10 +4912,10 @@ attempt_default() {
 
     if [[ ! "${values:-}" ]]; then
 
-      if [[ ! -v required_dims[$dim] ]]; then
-        values=( $empty_member )
-        needs_narrowing=f
-      fi
+      #if [[ ! -v required_dims[$dim] ]]; then
+      #  values=( $empty_member )
+      #  needs_narrowing=f
+      #fi
       already_expanded=t
 
     fi
@@ -6331,7 +6357,8 @@ build_context() {
       source $context_path-trunk || fail
     fi
 
-    setup_dims || fail
+    #  maybe not needed any more
+    #setup_dims || fail
 
     if [[ ! -f $context_path-branch ]]; then
       build_context_branch || fail
@@ -6376,7 +6403,7 @@ build_context() {
     fi
 
     local dim_type dim
-    for dim_type in trunk_dims support_dims sub_dims control_props data_props; do
+    for dim_type in trunk_dims sub_dims control_props data_props; do
       local -n dim_array=${dim_type}_expanded
       for dim in ${dim_array[*]}; do
         local -n dt=dim_${dim}_type

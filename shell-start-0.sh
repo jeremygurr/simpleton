@@ -1144,6 +1144,7 @@ cd() {
 
   target=$(unrealpath "$target") || return 1
   if [[ -f "$target" || ! -e "$target" ]]; then
+    echo "Directory doesn't exist: $target, trying parent" >&2
     target=${target%/*}
   fi
 
