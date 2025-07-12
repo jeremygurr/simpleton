@@ -2301,6 +2301,7 @@ extract_from_derive_table_check_row() {
 #   ignore_dims
 # outputs:
 #   value_set               the var out_set points to will contain a set of all matches
+#   derive_found
 extract_from_derive_table() {
   local derive_table=${derive_table:-} full_table=${full_table:-} \
     skip_if_incomplete=${skip_if_incomplete:-f} \
@@ -2334,13 +2335,15 @@ extract_from_derive_table() {
       invalid=f \
       row_index \
       output_dim_index \
+      complete_table \
 
     local -n index=${full_table}_index_${dim} \
       dim_members=dim_${dim}_members \
       member_type=dim_${dim}_member_type \
 
     local row_count=$(( data_count / field_count )) \
-      complete_table=f \
+
+    complete_table=f
 
     local -A matching_rows=() new_value_set=()
     matching_rows[all]=1
@@ -2361,6 +2364,8 @@ extract_from_derive_table() {
           done
         done
       fi
+
+      derive_found=t
 
       rows_matched=${#new_value_set[*]}
 
@@ -2549,7 +2554,6 @@ narrow_dim() {
             continue
           fi
           local derive_table=${target%.*}
-          derive_found=t
           skip_if_incomplete=t \
           extract_from_derive_table || fail
         ;;
@@ -5308,7 +5312,7 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
-      for phase in derive default derive_optional_functions narrow; do
+      for phase in default derive derive_optional_functions narrow; do
         for dim in $unknown_dims; do
 
           grip_fence
@@ -5328,7 +5332,9 @@ calc_coordinates_next_unknown_dim() {
             derive_exactly_one=f
           fi
 
-          if [[ $phase == derive \
+          if [[ $phase == default ]]; then
+            attempt_default || fail
+          elif [[ $phase == derive \
              || $phase == derive_optional_functions ]]; then
             deriving= \
             attempt_derive || fail
@@ -5338,8 +5344,6 @@ calc_coordinates_next_unknown_dim() {
             local value=all
             expand_dim value values || fail
             already_expanded=t
-          elif [[ $phase == default ]]; then
-            attempt_default || fail
           elif [[ $phase == narrow ]]; then
             derive_exactly_one=f \
             deriving= \
