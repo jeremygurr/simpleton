@@ -3276,6 +3276,36 @@ add_required_dims() {
   done
 }
 
+clear_dims() {
+  local dims=$* dim_var dims_var
+  begin_function
+    for dim_var in $dims; do
+
+      while true; do
+        get_plural $dim_var dims_var
+
+        local -n \
+          ddim=d_$dim_var ddims=d_$dims_var \
+          sdim=s_$dim_var sdims=s_$dims_var \
+          pdim=p_$dim_var pdims=p_$dims_var \
+
+        ddim= ddims=()
+        sdim= sdims=()
+        pdim= pdims=()
+
+
+        if [[ $dim_var == *_* ]]; then
+          dim_var=${dim_var#*_}
+        else
+          break
+        fi
+      done
+
+    done
+  end_function
+  handle_return
+}
+
 pass_dims() {
   local dims_to_pass=$* dims_to_clear=
   begin_function
@@ -3289,27 +3319,9 @@ pass_dims() {
   handle_return
 }
 
-clear_dims() {
-  local dims=$* dim_var dims_var
-  begin_function
-    for dim_var in $dims; do
-
-      get_plural $dim_var dims_var
-
-      local -n \
-        ddim=d_$dim_var ddims=d_$dims_var \
-        sdim=s_$dim_var sdims=s_$dims_var \
-        pdim=p_$dim_var pdims=p_$dims_var \
-
-      ddim= ddims=()
-      sdim= sdims=()
-      pdim= pdims=()
-
-    done
-  end_function
-  handle_return
-}
-
+# returns:
+#   short_dim
+#   (return code)  0 if a parameter sets this dim
 dim_set_in_parameter() {
   local long_dim=$1 dim=${2:-$1} dims
   get_plural $dim dims
@@ -3317,6 +3329,7 @@ dim_set_in_parameter() {
   local -n pdim=p_$dim pdims=p_$dims
 
   if [[ "${pdim:-}${pdims:-}" && ${dim_shorts[$dim]} == $long_dim ]]; then
+    short_dim=$dim
     return 0
   fi
 
@@ -3333,13 +3346,25 @@ dim_set_in_parameter() {
 get_dim_parameters() {
   begin_function
     dim_parameters=
-    local dim
+    local dim short_dim
     begin_for dim in ${related_dims_expanded[*]} ${trunk_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-}; doo
       if dim_set_in_parameter $dim; then
 
-        local dims
-        get_plural $dim dims
-        local -n pdim=p_$dim pdims=p_$dims
+        local short_dims
+        get_plural $short_dim short_dims
+        local -n short_pdim=p_$short_dim short_pdims=p_$short_dims \
+          pdim=p_$short_dim pdims=p_$short_dims \
+
+        if [[ "${short_pdim:-}" && ! "${pdim:-}" ]]; then
+          pdim=$short_pdim
+          short_pdim=
+        fi
+
+        if [[ "${short_pdims:-}" && ! "${pdims:-}" ]]; then
+          pdims=$short_pdims
+          short_pdims=
+        fi
+
         local problem values
 
         if [[ "${pdim:-}" ]]; then
