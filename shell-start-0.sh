@@ -738,6 +738,11 @@ forge() {
               current_action=delete
               break
             ;;
+            D)
+              echo "duplicate"
+              current_action=duplicate
+              break
+            ;;
             #i)
             #  echo "info"
             #  current_action=info
@@ -788,6 +793,7 @@ forge() {
               echo "c copy item to target dir (select items to copy, then use t command to set destination)"
               echo "C copy contents of item to target dir (select folders to copy from, then use t command to set destination folder))"
               echo "d delete"
+              echo "D duplicate"
               #echo "i info"
               echo "g go"
               #echo "l link to target dir (use t command to set destination)"
@@ -838,6 +844,19 @@ forge() {
               rm -rf "$target"
             fi
             #recursive=t remove_empty_parents ${target%/*}
+          ;;
+          duplicate)
+            local new_name=
+            read -p "New name: (leave empty to cancel) " new_name 
+            if [[ "$new_name" ]]; then
+              if [[ -d $target ]]; then
+                echo rsync $target/ $target1/$new_name/
+                rsync $target/ $target1/$new_name/
+              else
+                echo rsync $target $target1/$new_name
+                rsync $target $target1/$new_name
+              fi
+            fi
           ;;
           go)
             if [[ -f $target ]]; then

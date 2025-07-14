@@ -1586,6 +1586,45 @@ get_dep_member() {
   return 0
 }
 
+show_coordinates() {
+  begin_function
+    if [[ ${show_dims:-f} == t \
+       || ${confirm_dims:-t} == t \
+       || ${confirm_dims:-t} == a \
+       ]]; then
+      if [[ $top_level_command == t \
+         || ${confirm_dims:-t} == a \
+         || ${show_dims:-f} == a
+         ]]; then
+
+        if [[ $short_cell != ${coords_displayed_for_cell:-none}* ]] \
+          || log_level_at_least verbose \
+          ; then
+          local c_rows=
+          coord_type=branch \
+          display_coordinates || fail
+          coords_displayed_for_cell=$short_cell
+          if [[ ${confirm_dims:-t} == a \
+             || $top_level_command == t \
+             && ${confirm_dims:-t} == t \
+             ]]; then
+            local result
+            prompt_ynq "Should we proceed to update with these $c_rows coordinates?" result
+            case $result in
+              n|q)
+                echo "Update aboorted by user" >&$fd_original_err
+                fail1
+              ;;
+            esac
+          fi
+        fi
+
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 update_command() {
   begin_function
 
@@ -1673,32 +1712,7 @@ update_command() {
       fence
 
       if [[ -v branch_coordinate_data ]]; then
-        if [[ ${show_dims:-f} == t \
-           || ${confirm_dims:-t} == t \
-           || ${confirm_dims:-t} == a \
-           ]]; then
-          if [[ $top_level_command == t \
-             || ${confirm_dims:-t} == a \
-             || ${show_dims:-f} == a
-             ]]; then
-            local c_rows=
-            coord_type=branch \
-            display_coordinates || fail
-            if [[ ${confirm_dims:-t} == a \
-               || $top_level_command == t \
-               && ${confirm_dims:-t} == t \
-               ]]; then
-              local result
-              prompt_ynq "Should we proceed to update with these $c_rows coordinates?" result
-              case $result in
-                n|q)
-                  echo "Update aboorted by user" >&$fd_original_err
-                  fail1
-                ;;
-              esac
-            fi
-          fi
-        fi
+        show_coordinates || fail
       fi
 
       if [[ $cell_is_leaf == t ]]; then
