@@ -568,6 +568,7 @@ init_context() {
     declare -Ag all_dims=() \
       dim_shorts=() \
       required_dims=() \
+      compound_dims=() \
 
     all_if_blank= \
     auto_loads=() \
@@ -1931,21 +1932,6 @@ append_coords_to_file() {
   handle_return
 }
 
-get_plural() {
-  local dim=$1
-  local target_var=${2:-plural}
-  local -n target=$target_var
-  if [[ $dim == *s ]]; then
-    target=${dim}es
-  elif [[ $dim == *y && ! $dim =~ [aeiou]y$ ]]; then
-    target=${dim%y}ies
-  else
-    target=${dim}s
-  fi
-  debug_return_vars=$target_var
-  return 0
-}
-
 # inputs:
 #   table                  variable name containing the table, without _fields or _data
 #   row_index              defaults to 0
@@ -1980,6 +1966,7 @@ convert_table_to_dims() {
       for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
         field=${c_fields[$field_index]}
 
+        get_unplural $field field
         get_plural $field fields
 
         local -n sdim=s_$field sdims=s_$fields ddim=d_$field ddims=d_$fields
@@ -2004,10 +1991,20 @@ convert_table_to_dims() {
                 ddims=( $value )
               ;;
               sdim)
-                sdim=$value
+                if [[ -v compound_dims[$field] ]]; then
+                  log_fatal "Internal error in convert_table_to_dims: Can't assign a plural dim to a singular"
+                  fail1
+                else
+                  sdim=$value
+                fi
               ;;
               ddim)
-                ddim=$value
+                if [[ -v compound_dims[$field] ]]; then
+                  log_fatal "Internal error in convert_table_to_dims: Can't assign a plural dim to a singular"
+                  fail1
+                else
+                  ddim=$value
+                fi
               ;;
               *)
                 log_fatal "Invalid target_dim_var_type: $target_dim_var_types"
@@ -2102,6 +2099,7 @@ expand_dims() {
     local dim_var dim_var plural
     for dim_var in $to_expand; do
 
+      get_unplural $dim_var dim_var
       local dims_var
       get_plural $dim_var dims_var
       local -n \
@@ -3334,6 +3332,7 @@ pass_dims() {
 #   (return code)  0 if a parameter sets this dim
 dim_set_in_parameter() {
   local long_dim=$1 dim=${2:-$1} dims
+  get_unplural $dim dim
   get_plural $dim dims
 
   local -n pdim=p_$dim pdims=p_$dims
@@ -3865,12 +3864,17 @@ build_context_related_dims() {
     array_to_set control_props_expanded target_dims
     array_to_set data_props_expanded    target_dims
 
+    local -A new_target_dims
     begin_for dim in ${!target_dims[*]}; doo
       if [[ ! -v tried[$dim] ]]; then
         tried[$dim]=1
         next_level_dims[$dim]=1
       fi
+      get_unplural $dim dim
+      new_target_dims[$dim]=1
     end_for
+    target_dims=()
+    add_to_set new_target_dims target_dims
 
     begin_while (( ${#next_level_dims[*]} > 0 )); doo
       current_level_dims=()
@@ -3949,17 +3953,24 @@ build_dim_info() {
     build_context_related_dims || fail
 
     local dim dims
+    compound_dims=()
     for dim_type in trunk_dims related_dims sub_dims control_props data_props; do
 
       local -n dim_array=${dim_type}_expanded
 
-      for dim in "${dim_array[@]}"; do
+      local compound_dim
+      for compound_dim in "${dim_array[@]}"; do
 
+        get_unplural $compound_dim dim
         local -n dt=dim_${dim}_type
 
         if [[ "${dt:-}" ]]; then
           log_fatal "Dim $dim was defined as a $dim_type, but it is also defined as a $dt. A dim can only be of one type. Fix the dna definition for this cell."
           fail1
+        fi
+
+        if [[ $compound_dim != $dim ]]; then
+          compound_dims[$dim]=1
         fi
 
         dt=$dim_type
@@ -3993,7 +4004,7 @@ build_dim_info() {
 
     done
 
-    write_vars_to_context localize_dims localize_reverse_dims dim_shorts || fail
+    write_vars_to_context compound_dims localize_dims localize_reverse_dims dim_shorts || fail
 
   end_function
   handle_return
@@ -4921,7 +4932,6 @@ attempt_default() {
   begin_function
 
     local problem
-    local -n dim_type=dim_${dim}_type
 
     values=()
 
@@ -5202,6 +5212,7 @@ set_function_cross_dims_single() {
   handle_return
 }
 
+# Should only be run on simple (non-compound) dims
 # input: 
 #   dim
 #   member
@@ -5383,27 +5394,27 @@ calc_coordinates_next_unknown_dim() {
       abort
     fi
 
-    local dim_index
     if [[ "${unknown_dims:-}" ]]; then
+      local maybe_compound_dim
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
       for phase in default derive derive_optional_functions narrow; do
-        for dim in $unknown_dims; do
+        for maybe_compound_dim in $unknown_dims; do
 
           grip_fence
           needs_narrowing=t
 
-          local -n dim_type=${dim}_dim_type
+          get_unplural $maybe_compound_dim dim
           get_plural $dim dims
 
           log_show_vars='dim phase'
-          log_debug "Finding values for $dim in phase $phase"
+          log_debug "Finding values for $maybe_compound_dim in phase $phase"
 
           local values=() already_expanded=f \
             needs_narrowing=t \
             derive_exactly_one=t \
 
-          if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+          if [[ " ${all_if_blank:-} " == *" $dim "* || -v compound_dims[$dim] ]]; then
             derive_exactly_one=f
           fi
 
@@ -5448,6 +5459,7 @@ calc_coordinates_next_unknown_dim() {
   handle_return
 }
 
+# should only be run on non-compound = simple dims
 # inputs:
 #   dim
 calc_coords_validate_member() {
@@ -5504,21 +5516,32 @@ calc_coords_validate_member() {
 # inputs:
 #   needs_validation
 #   dim
+#   dims
 #   m                 member value
+#   ms                memberrs value (if plural dim)
 #   phase             unknown or known.  
 calc_coordinates_next_dim_member() {
   local phase=$phase
-  log_show_vars='dim m'
+  log_show_vars='dim m ms'
   begin_function
     localize
-    local -n member=d_$dim
+    local -n member=d_$dim members=d_$dims
     member=$m
-    log_debug "Processing $dim = $member in phase $phase"
-    local validated_dims=${validated_dims:-} conflicting_values=() is_valid=t
+    members=( "${ms[@]}" )
+
+    if [[ -v compound_dims[$dim] ]]; then
+      log_debug "Processing $dims = $members in phase $phase"
+    else
+      log_debug "Processing $dim = $member in phase $phase"
+    fi
+
+    local validated_dims=${validated_dims:-} \
+      conflicting_values=() \
+      is_valid=t \
 
     local -I cross_dims_tried
 
-    if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
+    if [[ ! -v compound_dims[$dim] && $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
       calc_coords_validate_member "$member" || fail
       log_show_vars='dim member'
       fence
@@ -5529,18 +5552,20 @@ calc_coordinates_next_dim_member() {
       conflict=
 
       if [[ "$member" != $empty_member ]]; then
-        allow_dims=${coordinate_fields[*]} \
-        set_cross_dims_internal || fail
+        if [[ ! -v compound_dims[$dim] ]]; then
+          allow_dims=${coordinate_fields[*]} \
+          set_cross_dims_internal || fail
 
-        if [[ "$conflict" ]]; then
-          local conflict_plural
-          if [[ "$conflict" =~ ^[a-zA-Z0-9_]+$ ]]; then
-            get_plural $conflict conflict_plural
-            local -n conflict_member=d_$conflict \
-              conflict_members=d_$conflict_plural
-            log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
-          else
-            log_debug "Conflict found for cross-dim $dim = $member $conflict"
+          if [[ "$conflict" ]]; then
+            local conflict_plural
+            if [[ "$conflict" =~ ^[a-zA-Z0-9_]+$ ]]; then
+              get_plural $conflict conflict_plural
+              local -n conflict_member=d_$conflict \
+                conflict_members=d_$conflict_plural
+              log_debug "Conflict found between cross-dim $dim = $member and $conflict = ${conflict_members:-${conflict_member:-}}"
+            else
+              log_debug "Conflict found for cross-dim $dim = $member $conflict"
+            fi
           fi
         fi
 
@@ -5595,30 +5620,24 @@ calc_coordinates_next_dim() {
       abort
     fi
 
-    local dim dims \
+    local dim_original dim dims \
       row_index=${row_index:-} \
       unknown_dims=${unknown_dims:-} \
       check_dims=${check_dims:-} \
       resolved_dims=${resolved_dims:-} \
 
-    dim=${check_dims%% *}
+    dim_original=${check_dims%% *}
     check_dims=${check_dims##$dim*( )}
 
-    if [[ "$dim" ]]; then
+    if [[ "$dim_original" ]]; then
 
-      log_debug "Checking dim $dim"
+      log_debug "Checking dim $dim_original"
+      get_unplural $dim_original dim
       get_plural $dim dims
 
       eval "local -I d_$dim d_$dims"
       local -n member=d_$dim \
         members=d_$dims
-
-      # This should not be needed now that all derive tables are loaded always
-      #local -n derive_tables_loaded=dim_${dim}_derive_tables_loaded
-
-      #if [[ "${derive_tables_loaded:-}" != t ]]; then
-      #  load_related_derive_tables $dim || fail
-      #fi
 
       if [[ "${member:-}" || "${members:-}" ]]; then
         
@@ -5631,8 +5650,10 @@ calc_coordinates_next_dim() {
           ms=( "${members[@]}" )
         fi
 
-        result_var=ms \
-        narrow_dim || fail
+        if [[ ! -v compound_dims[$dim] ]]; then
+          result_var=ms \
+          narrow_dim || fail
+        fi
         needs_validation=f
 
         if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
@@ -5658,9 +5679,13 @@ calc_coordinates_next_dim() {
         if [[ "${m:-}" ]]; then
           calc_coordinates_next_dim_member || fail
         else
-          begin_for m in "${ms[@]}"; doo
+          if [[ -v compound_dims[$dim] ]]; then
             calc_coordinates_next_dim_member || fail
-          end_for
+          else
+            begin_for m in "${ms[@]}"; doo
+              calc_coordinates_next_dim_member || fail
+            end_for
+          fi
         fi
 
         log_show_vars='dim member'
@@ -5856,6 +5881,7 @@ calc_coordinates_refine_get_matching_rows() {
   for (( column_index = 0; column_index < field_count; column_index++ )); do
 
     field=${derive_fields[$column_index]}
+    get_unplural $field field
     get_plural $field fields
 
     local -n ddim=d_$field \
@@ -6455,6 +6481,7 @@ build_context() {
     for dim_type in trunk_dims sub_dims control_props data_props; do
       local -n dim_array=${dim_type}_expanded
       for dim in ${dim_array[*]}; do
+        get_unplural $dim dim
         local -n dt=dim_${dim}_type
         dt=$dim_type
         write_vars_to_context dim_${dim}_type || fail
@@ -6894,6 +6921,7 @@ get_required_freshness() {
 any_dim_is_set() {
   local dim dims is_set=f
   for dim in $*; do
+    get_unplural $dim dim
     get_plural $dim dims
     local -n ddim=d_${dim} ddims=d_${dims}
     if [[ "${ddim:-}" || "${ddims:-}" ]]; then
@@ -6909,6 +6937,7 @@ any_dim_is_set() {
 all_dims_are_set() {
   local dim dims is_set=t
   for dim in $*; do
+    get_unplural $dim dim
     get_plural $dim dims
     local -n ddim=d_${dim} ddims=d_${dims}
     if [[ ! "${ddim:-}" && ! "${ddims:-}" ]]; then
