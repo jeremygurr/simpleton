@@ -192,6 +192,8 @@ execute_up() {
     prefix=${up_cell_type}_ \
     load_upstream_vars || fail
 
+    validation_says_already_done=
+
     local all_post_function=${up_cell_type}_all_post
     if function_exists $all_post_function; then
       log_debug "Executing all post function: $all_post_function"
@@ -209,6 +211,75 @@ execute_up() {
       $other_post_function || fail
     fi
     
+  end_function
+  handle_return
+}
+
+validate_cell_check_conditions() {
+  begin_function
+    if [[ "$conditions" ]]; then
+      local condition key value negative
+      for condition in ${conditions//,/ }; do
+        key=${condition%%:*}
+        value=${condition#*:}
+        negative=f
+        if [[ $value == -* ]]; then
+          negative=t
+          value=${value#-}
+        fi
+        local -n up_var=validator_${target_var}_$key
+        if [[ $negative == f ]]; then
+          if [[ "${up_var:-}" == "$value" ]]; then
+            validation_says_already_done=t
+          else
+            validation_says_already_done=f
+            break
+          fi
+        else
+          if [[ "${up_var:-}" != "$value" ]]; then
+            validation_says_already_done=t
+          else
+            validation_says_already_done=f
+            break
+          fi
+        fi
+      done
+
+      local -n up_validation_message=validator_${target_var}_validation_message
+      local -n up_validation_object=validator_${target_var}_validation_object
+      local -n up_validation_result=validator_${target_var}_validation_result
+
+      if [[ ! "${up_validation_message:-}" ]]; then
+        if [[ "${up_validation_object:-}" ]]; then
+          validation_message=$up_validation_object
+          if [[ "${up_validation_result:-}" ]]; then
+            validation_message+=" $up_validation_result"
+          fi
+        else
+          if [[ "${up_validation_result:-}" ]]; then
+            validation_message+="$up_validation_result"
+          fi
+        fi
+      else
+        validation_message=$up_validation_message
+      fi
+
+      if [[ "$validation_message" ]]; then
+        validation_message=" ($validation_message)"
+      fi
+
+      if [[ $validation_says_already_done == t ]]; then
+        touch $status_path/last-validation-good || fail
+        touch $status_path/last-validation-${target_var}-good || fail
+        strong_log=t log_verbose "${validate_type^}-validation result: DONE$validation_message"
+      else
+        touch $status_path/last-validation-bad || fail
+        touch $status_path/last-validation-${target_var}-bad || fail
+        strong_log=t log_verbose "${validate_type^}-validation result: NOT DONE$validation_message"
+        break
+      fi
+
+    fi
   end_function
   handle_return
 }
@@ -268,72 +339,9 @@ validate_cell() {
         if [[ $update_skipped == t ]]; then
           log_verbose "Validation skipped"
         else
-
-          validation_says_already_done=
-          if [[ "$conditions" ]]; then
-            local condition key value negative
-            for condition in ${conditions//,/ }; do
-              key=${condition%%:*}
-              value=${condition#*:}
-              negative=f
-              if [[ $value == -* ]]; then
-                negative=t
-                value=${value#-}
-              fi
-              local -n up_var=validator_${target_var}_$key
-              if [[ $negative == f ]]; then
-                if [[ "${up_var:-}" == "$value" ]]; then
-                  validation_says_already_done=t
-                else
-                  validation_says_already_done=f
-                  break
-                fi
-              else
-                if [[ "${up_var:-}" != "$value" ]]; then
-                  validation_says_already_done=t
-                else
-                  validation_says_already_done=f
-                  break
-                fi
-              fi
-            done
-
-            local -n up_validation_message=validator_${target_var}_validation_message
-            local -n up_validation_object=validator_${target_var}_validation_object
-            local -n up_validation_result=validator_${target_var}_validation_result
-
-            if [[ ! "${up_validation_message:-}" ]]; then
-              if [[ "${up_validation_object:-}" ]]; then
-                validation_message=$up_validation_object
-                if [[ "${up_validation_result:-}" ]]; then
-                  validation_message+=" $up_validation_result"
-                fi
-              else
-                if [[ "${up_validation_result:-}" ]]; then
-                  validation_message+="$up_validation_result"
-                fi
-              fi
-            else
-              validation_message=$up_validation_message
-            fi
-
-            if [[ "$validation_message" ]]; then
-              validation_message=" ($validation_message)"
-            fi
-
-            if [[ $validation_says_already_done == t ]]; then
-              touch $status_path/last-validation-good || fail
-              touch $status_path/last-validation-${target_var}-good || fail
-              strong_log=t log_verbose "${validate_type^}-validation result: DONE$validation_message"
-            else
-              touch $status_path/last-validation-bad || fail
-              touch $status_path/last-validation-${target_var}-bad || fail
-              strong_log=t log_verbose "${validate_type^}-validation result: NOT DONE$validation_message"
-              break
-            fi
-
+          if [[ ! "$validation_says_already_done" ]]; then
+            validate_cell_check_conditions || fail
           fi
-
         fi
 
       end_for
