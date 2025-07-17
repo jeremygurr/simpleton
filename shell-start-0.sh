@@ -554,11 +554,12 @@ forge_add_dims() {
         fi
       done
 
-      local dim_type dim dim_path
+      local dim_type dims dim dim_path
       for dim_type in trunk_dims sub_dims control_props data_props; do
         file=$current_selection/.dna/$dim_type.arr
         if [[ -f $file ]]; then
-          for dim in $(<$file); do
+          for dims in $(<$file); do
+            get_unplural $dims dim
             dim_path=$lib_path/dim/$dim
             if [[ -d $dim_path ]]; then
               file1=$lib_path/dim
@@ -601,8 +602,7 @@ forge() {
       current_action=go \
       link_expansion=f \
       add_roots=f \
-      copy_list=() \
-      copy_type=copy \
+      selected=() \
 
     show_selection() {
       local extra= branches=() branch member \
@@ -631,6 +631,10 @@ forge() {
         branch=${branches[$i]}
         echo "$branch"
       done
+
+      if [[ "${selected:-}" ]]; then
+        echo "$DIM_GREEN(${#selected[*]} files/folders selected)$RESET"
+      fi
     }
 
     adjust_choices() {
@@ -638,16 +642,17 @@ forge() {
         hidden=t walk_add_choice "." "*up*" "- Go up a folder"
       fi
 
-      hidden=t walk_add_choice "a" "*action*" "- Change action"
-      hidden=t walk_add_choice "b" "*back*" "- Go back to previous directory"
-      hidden=t walk_add_choice "d" "*new-dir*" "- Create a new directory here"
-      hidden=t walk_add_choice "f" "*new-file*" "- Create a new file here"
-      hidden=t walk_add_choice "j" "*jump*" "- Go to other jump point"
-      hidden=t walk_add_choice "J" "*jump-set*" "- Set current jump point to this location"
-      hidden=t walk_add_choice "r" "*real*" "- Go to real (not linked) path of the current directory"
-      hidden=t walk_add_choice "R" "*roots*" "- Toggle whether to include roots"
-      hidden=t walk_add_choice "t" "*target*" "- Set target for move/copy/link commands"
-      hidden=t walk_add_choice "x" "*expand*" "- Toggle link expansion"
+      hidden=t walk_add_choice "a" "*action*" "Change action"
+      hidden=t walk_add_choice "b" "*back*" "Go back to previous directory"
+      hidden=t walk_add_choice "c" "*compare*" "Compare the previously selected files"
+      hidden=t walk_add_choice "d" "*new-dir*" "Create a new directory here"
+      hidden=t walk_add_choice "e" "*edit*" "Edit the previously selected items"
+      hidden=t walk_add_choice "f" "*new-file*" "Create a new file here"
+      hidden=t walk_add_choice "j" "*jump*" "Go to other jump point"
+      hidden=t walk_add_choice "J" "*jump-set*" "Set current jump point to this location"
+      hidden=t walk_add_choice "r" "*real*" "Go to real (not linked) path of the current directory"
+      hidden=t walk_add_choice "R" "*roots*" "Toggle whether to include roots"
+      hidden=t walk_add_choice "x" "*expand*" "Toggle link expansion"
 
       local path
 
@@ -663,13 +668,25 @@ forge() {
     handle_walk_responses() {
       local new_target
       if [[ "$response" == "*back*" ]]; then
-        current_selection=${back_stack[-1]}
         if [[ -v back_stack[-1] ]]; then
+          current_selection=${back_stack[-1]}
           unset back_stack[-1]
         else
           echo "Back stack is empty"
         fi
         walk_filter=
+      elif [[ "$response" == "*compare*" ]]; then
+        if (( ${#selected[*]} > 1 )); then
+          vimdiff "${selected[@]}"
+        else
+          echo "Not enough files selected for comparison. Set the current action to 'select' and choose 2 or more files to compare."
+        fi
+      elif [[ "$response" == "*edit*" ]]; then
+        if (( ${#selected[*]} > 0 )); then
+          vim "${selected[@]}"
+        else
+          echo "Not enough files selected for edit. Set the current action to 'select' and choose 1 or more files to edit."
+        fi
       elif [[ "$response" == "*new-dir*" ]]; then
         local new_name
         new_target=${current_selection}
@@ -720,17 +737,13 @@ forge() {
           read -n1 -sp "Choose action (? = list actions): " choice
           case "$choice" in
             c)
-              echo "add item to copy list"
+              echo "copy selected items to target"
               current_action=copy
-              copy_list=()
-              copy_type=copy
               break
             ;;
             C)
-              echo "add item to copy-contents list"
+              echo "copy contents of selected folders to target"
               current_action=copy-contents
-              copy_list=()
-              copy_type=copy-contents
               break
             ;;
             d)
@@ -761,8 +774,6 @@ forge() {
             m)
               echo "add item to move list"
               current_action=move
-              copy_list=()
-              copy_type=move
               break
             ;;
             n)
@@ -779,6 +790,12 @@ forge() {
               current_action=rename
               break
             ;;
+            s)
+              echo "select files or folders"
+              current_action=select
+              selected=()
+              break
+            ;;
             t)
               echo "$copy_type to"
               current_action=to
@@ -790,18 +807,18 @@ forge() {
               break
             ;;
             \?)
-              echo "c copy item to target dir (select items to copy, then use t command to set destination)"
-              echo "C copy contents of item to target dir (select folders to copy from, then use t command to set destination folder))"
+              echo "c copy selected items to target dir (select items to copy using select action, then use c action to set destination)"
+              echo "C copy contents of selected items to target dir (select folders to copy from using select action, then use C action to set destination folder))"
               echo "d delete"
               echo "D duplicate"
               #echo "i info"
               echo "g go"
               #echo "l link to target dir (use t command to set destination)"
-              echo "m move item to target dir (select items to copy, then use t command to set destination)"
+              echo "m move selected items to target dir (select items to move using select action, then use m command to set destination)"
               echo "n create a new instance by cloning the chosen item (clones a file/dim/cell intelligently)"
               echo "q cancel action change"
               echo "r rename"
-              echo "t move/copy items in copy list to the given target folder"
+              echo "s select items for a future command (copy/move/compare). Select list will be cleared when this action is chosen."
               echo "v view file"
             ;;
             *)
@@ -816,9 +833,64 @@ forge() {
         target=$target1/$target2
 
         case $action in
-          copy|copy-contents|move)
-            echo "Added $target to $copy_type list"
-            copy_list+=( "$target" )
+          copy)
+            if [[ -d $target ]]; then
+              if (( ${#selected[*]} > 0 )); then
+                echo rsync -av "${selected[@]}" $target/
+                rsync -av "${selected[@]}" $target/
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            elif [[ -f $target ]]; then
+              if (( ${#selected[*]} > 1 )); then
+                echo "To many files were selected to copy onto a single file. Either target a folder, or use the select action again to choose only one file."
+              elif (( ${#selected[*]} == 1 )); then
+                echo rsync -av $selected $target
+                rsync -av $selected $target
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            else
+              echo "Target $target doesn't exist or is a special file"
+            fi
+          ;;
+          copy-contents)
+            if [[ -d $target ]]; then
+              if (( ${#selected[*]} > 0 )); then
+                local s
+                for s in "${selected[@]}"; do
+                  echo rsync -av "$s/" $target/
+                  rsync -av "$s/" $target/
+                done
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            elif [[ -f $target ]]; then
+              echo "Can't copy the contents of a folder to a file"
+            else
+              echo "Target $target doesn't exist or is a special file"
+            fi
+          ;;
+          move)
+            if [[ -d $target ]]; then
+              if (( ${#selected[*]} > 0 )); then
+                echo mv "${selected[@]}" $target/
+                mv "${selected[@]}" $target/
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            elif [[ -f $target ]]; then
+              if (( ${#selected[*]} > 1 )); then
+                echo "To many files were selected to move onto a single file. Either target a folder, or use the select action again to choose only one file."
+              elif (( ${#selected[*]} == 1 )); then
+                echo mv $selected $target
+                mv $selected $target
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            else
+              echo "Target $target doesn't exist or is a special file"
+            fi
           ;;
           delete)
             if [[ "$target" == */.lib/dim/* && -d "$target" \
@@ -927,24 +999,9 @@ forge() {
               mv $target $target1/$new_name
             fi
           ;;
-          to)
-            local from
-            case $copy_type in
-              copy)
-                for from in "${copy_list[@]}"; do
-                  echo rsync -av $from $target
-                  rsync -av $from $target
-                done
-              ;;
-              copy-contents)
-              ;;
-              move)
-              ;;
-              *)
-                echo "Internal error: invalid copy_type: $copy_type"
-                return 1
-              ;; 
-            esac
+          select)
+            echo "Added $target to selection list"
+            selected+=( "$target" )
           ;;
           view)
             echo "Viewing $target"
