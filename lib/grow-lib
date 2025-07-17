@@ -1,0 +1,544 @@
+#!/usr/bin/env bash
+
+type -t grow_lib_loaded >/dev/null && return 0
+grow_lib_loaded=t
+
+plant_seed_internal() {
+  local from=$1 to=$2 contents x x_part deep=${deep:-t} \
+    cell_is_leaf=${cell_is_leaf:-t} key_path=${key_path:-} \
+
+  begin_function
+
+    if [[ ! -d $to ]]; then
+
+      log_verbose "Planting seed from $from to $to"
+
+      if [[ $from == /seed/* && -d $from ]]; then
+        plant_seed_internal ${from%/*} ${to%/*} || fail
+      else
+        log_fatal "Seed doesn't exist for $to"
+        fail1
+      fi
+
+    else
+
+      contents=( $(find1 $from | sort -g) ) || fail
+      local target
+      begin_for x in ${contents[*]}; doo
+        x_part=${x##*/}
+        target=$to/$x_part
+        if [[ -d $x ]]; then
+          if [[ ! -e $target ]]; then
+
+            # remove broken links
+            if [[ -L $target ]]; then
+              rm $target || fail
+            fi
+
+            if [[ $x_part == .dna || $x_part == .root ]]; then
+              safe_link $(realpath $x) $to/ || fail
+            elif [[ $x_part == .key ]]; then
+              key_path=$x || fail
+            elif [[ $x_part == .lib ]]; then
+              mkdir $target || fail
+              safe_link $(realpath $x)/* $target/ || fail
+            elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
+              safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
+            elif [[ $x_part == *:* ]]; then
+
+              if [[ "${branch_coordinate_fields:-}" ]]; then
+                local dim_part=${x_part%%:*} \
+                  mem_part=${x_part#*:}
+
+                if [[ ! $dim_part =~ ^[a-zA-Z0-9_]+$ ]]; then
+                  log_fatal "Invalid dim name: $dim_part, found in $x"
+                  fail1
+                fi
+
+                local values
+                coord_type=branch \
+                dim=$dim_part \
+                fetch_values_from_coordinates $dim_part || fail
+
+                local value_count=${#values[*]}
+
+                # Hashed members currently not supported
+                # Not too hard to implement, but isn't likely to be needed
+                if (( value_count == 1 )) && [[ "$values" == "$mem_part" ]]; then
+                  plant_seed_internal $x $to || fail
+                fi
+              fi
+
+            elif [[ $x_part != .* ]]; then
+              mkdir $target || fail
+            fi
+          fi
+          if [[ $x_part != .* && -d $target && $deep == t ]]; then
+            plant_seed_internal $x $target || fail
+          fi
+        elif [[ $cell_is_leaf == t && ! -e $target && $x_part != .* ]]; then
+          if [[ $x == *.safe ]]; then
+            ignore_failure=t \
+            cell_decrypt_file $x ${target%.safe} || fail
+          else
+            cp -a $x $to/ || fail
+          fi
+        fi
+      end_for
+
+    fi
+  end_function
+  handle_return
+}
+
+# inputs: $1  work path to the cell
+plant_seed() {
+  local seed_path from=$1 to=${2:-$1} \
+    deep=${deep:-t} \
+    ignore_nonexistent=${ignore_nonexistent:-f}
+
+  begin_function
+
+    if [[ ! -d "$to" ]]; then
+      log_fatal "plant_seed called on a non-existant work path: $to"
+      fail1
+    fi
+
+    find_seed_path $from || fail
+    if [[ ! "$seed_path" ]]; then
+      log_fatal "No seed is associated with this path: $to"
+      fail1
+    fi
+
+    local dna_path=$seed_path
+    if [[ $command_requires_cell == t ]]; then
+      while [[ ! -d $dna_path/.dna ]]; do
+        dna_path=${dna_path%/*}
+        if [[ $dna_path != /*/* ]]; then
+          log_fatal "Could not find dna in seed: $seed_path"
+          fail1
+        fi
+      done
+
+      if [[ $dna_path != $seed_path ]]; then
+        safe_link $dna_path/.dna $to/ || fail
+      fi
+
+    fi
+
+    plant_seed_internal $seed_path $to || fail
+
+  end_function
+  handle_return
+}
+
+# inputs: parent_path seed_path member dim
+plant_member() {
+  begin_function
+    local deep=${deep:-f} repair=${repair:-f}
+    get_sane_value "$member" || fail
+    member_path=$parent_path/$dim:$sane_value
+    if [[ ! -d $member_path || $repair == t ]]; then
+
+      local new_path=$member_path.new
+
+      if [[ -d $new_path ]]; then
+        rm -rf $new_path || fail
+      fi
+
+      mkdir $new_path || fail
+      if [[ "$member" != "$sane_value" ]]; then
+        echo -n "$member" >$new_path/.member || fail
+      fi
+
+      local cell_is_leaf=t
+      if [[ ${child_dims:-} ]] && (( ${#child_dims[*]} > 1 )); then
+        cell_is_leaf=f
+      fi
+      plant_seed $member_path $new_path || fail
+
+      if [[ -e $member_path ]]; then
+        rm -rf $member_path || fail
+      fi
+      mv $new_path $member_path || fail
+
+    fi
+  end_function
+  handle_return
+}
+
+create_sub_cell() {
+  local sub_cell=$sub_cell \
+    parent_cell=$parent_cell \
+    parent_seed=$parent_seed
+
+  local log_show_vars='^sub_cell'
+  begin_function
+
+    log_debug "Creating sub cell $cell_path"
+
+    if [[ "$sub_cell" == */.dna* ]]; then
+      log_fatal "Internal error: Invalid sub_cell $sub_cell."
+      log_fatal "We should not be creating a sub cell inside of a dna folder"
+      fail1
+    fi
+
+    if [[ "$parent_cell" == "$sub_cell" ]]; then
+      log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
+      stack_trace
+      fail1
+    fi
+
+    deep=t \
+    parent_path=$parent_cell \
+    seed_path=$parent_seed \
+    member=$member \
+    repair=t \
+    plant_member || fail
+
+  end_function
+  handle_return
+}
+
+grow_member() {
+  local sane_value member_path \
+    log_show_vars=member \
+    upstream_cell_link=${upstream_cell_link:-} \
+    cell_path=$cell_path \
+    original_cell_path=$cell_path \
+    anchor_dims=${anchor_dims:-} \
+    dim=$dim \
+
+  begin_function
+
+    get_sane_value "$member" || fail
+    member_path=$cell_path/$dim:$sane_value
+
+    log_debug "Updating member $dim:$sane_value"
+
+    local needs_update=
+    if [[ ! -d $member_path/.dna ]]; then
+      parent_cell=$cell_path \
+      parent_seed=$seed_path \
+      sub_cell=$member_path \
+      create_sub_cell || fail
+      needs_update=t
+    else
+      cell_path=$member_path
+      get_needs_update $member_path || fail
+    fi
+
+    if [[ "${upstream_cell_link:-}" ]]; then
+      cell_path=$member_path update_downstream || fail
+    fi
+
+    if [[ $needs_update == t ]]; then
+
+      if (( member_count > 1 )); then
+        log_debug "More than one member found ($member_count), not passing upstream_cell_link."
+        upstream_cell_link=
+      elif [[ "$upstream_cell_link" ]]; then
+        log_debug "Only one member found, passing upstream_cell_link: $upstream_cell_link"
+      fi
+
+      fork execute_commands $member_path update || fail
+
+      if [[ $update_successful == f ]]; then
+        #log_error "Failed to update member cell $member_path"
+        reply_to_caller "update_successful=f" || fail
+      else 
+        update_successful=t
+      fi
+    fi
+
+    if (( member_count == 1 )); then
+      upstream_cell_link=
+    fi
+  end_function
+  handle_return
+}
+
+grow_members() {
+  begin_function
+
+    local dim=${child_dims[0]}
+    update_successful=t
+    par=t fork=f function=grow_member for_each_member $dim || fail
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   target_cell
+#   prefix
+load_upstream_vars() {
+  begin_function
+
+    if [[ ! -d "${target_cell:-}" ]]; then
+      log_fatal "Internal error: missing target_cell $target_cell"
+    fi
+
+    local export_path=$target_cell/export \
+      out_path=$target_cell \
+      prefix=${prefix:-}${target_cell##*/}_ \
+      dna_roots= \
+      context_type= \
+
+    prefix=${prefix//-/_}
+
+    pass_thru=t \
+    recursive=f \
+    ignore_unknown=t \
+    auto_load_tab_vars=t \
+    load_dna_contents $out_path || fail
+
+    if [[ -d $export_path ]]; then
+      ignore_unknown=t \
+      pass_thru=t \
+      load_dna_contents $export_path || fail
+    fi
+
+  end_function
+
+  if failed; then
+    update_successful=f
+  fi
+
+  handle_return
+}
+
+grow_up_inner() {
+  begin_function
+
+    local all_prep_function=${up_cell_type}_all_prep
+    if function_exists $all_prep_function; then
+      log_debug "Executing all prep function: $all_prep_function"
+      $all_prep_function || fail
+    fi
+
+    # other preps are only run if there isn't a specific prep function for the upstream
+    local other_prep_function=${up_cell_type}_other_prep
+    local prep_function=${up_cell_type}_${up_var}_grow_prep
+    if function_exists $prep_function; then
+      log_debug "Executing prep function: $prep_function"
+      $prep_function || fail
+    elif function_exists $other_prep_function; then
+      log_debug "Executing other prep function: $other_prep_function"
+      $other_prep_function || fail
+    fi
+
+    local up_cell_path \
+      short_cell \
+      upstream_cell_link \
+      downstream_cell_name \
+
+    if [[ $needs_update == t ]]; then
+      
+      maybe_fix_up || fail
+
+      upstream_cell_link=$up_cell
+      get_short_cell $cell_path
+
+      if [[ $up_cell_type == up ]]; then
+        downstream_cell_name=${short_cell//\//_}
+      else
+        downstream_cell_name=
+      fi
+
+      up_cell_path=$(realpath $up_cell) || fail
+      if [[ $up_cell_path == */.cyto/* ]]; then
+        log_fatal "Internal error: up_cell_path is in cyto: $up_cell_path"
+        fail1
+      fi
+
+      needs_update=
+
+      #  Don't clear anchor_dims because it might be set by prep
+      #local anchor_dims=
+      get_needs_update $up_cell_path || fail
+
+      if [[ $needs_update == t ]]; then
+        execute_commands "$up_cell_path" update || fail
+      fi
+
+    else
+      log_verbose "Skipping update of upstream $up_name because prep function set needs_update=f"
+      reply_to_caller "update_skipped=t"
+    fi
+
+    #    not sure why this is here
+    # reply_to_caller "needs_update=$needs_update"
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   up_cell_type
+#   up_cell
+grow_up() {
+  begin_function
+    if [[ ! "${up_cell:-}" ]]; then
+      log_fatal "Internal error: up_cell was not passed into execute_up"
+      fail1
+    fi
+
+    if [[ ! "${up_cell_type:-}" ]]; then
+      log_fatal "Internal error: up_cell_type was not passed into execute_up"
+      fail1
+    fi
+
+    local up_name=${up_cell##*/}
+    log_debug "Growing $up_cell_type $up_name"
+
+    local needs_update=t \
+      up_var=${up_name//-/_} \
+
+    update_skipped=f
+    fork grow_up_inner || fail
+
+    validation_says_already_done=
+
+    local all_post_function=${up_cell_type}_all_post
+    if function_exists $all_post_function; then
+      log_debug "Executing all post function: $all_post_function"
+      $all_post_function || fail
+    fi
+
+    # other posts are only run if there isn't a specific post function for the upstream
+    local other_post_function=${up_cell_type}_other_post
+    local post_function=${up_cell_type}_${up_var}_post
+    if function_exists $post_function; then
+      log_debug "Executing post function: $post_function"
+      $post_function || fail
+    elif function_exists $other_post_function; then
+      log_debug "Executing other post function: $other_post_function"
+      $other_post_function || fail
+    fi
+    
+  end_function
+  handle_return
+}
+
+grow_upstream() {
+
+  local original_cell_path=${cell_path:-} \
+    upstream=$1 \
+
+  local log_show_vars=^upstream 
+  begin_function
+
+    local upstream_cell_link= \
+      anchor_dims= \
+      grow_history=${grow_history:-} \
+      upstream_var=${upstream_name//-/_} \
+
+    local cell_path=${upstream%/.cyto/up/$upstream_name}
+    if [[ $cell_path == $upstream ]]; then
+      log_fatal "Invalid upstream: $upstream, it should be within .cyto/up"
+      fail1
+    fi
+
+    local cyto_path=$cell_path/.cyto
+    local up_path=$cyto_path/up
+
+    localize
+
+    up_cell_type=up \
+    up_cell=$upstream \
+    grow_up || fail
+
+  end_function
+  handle_return
+}
+
+grow_command() {
+  begin_function
+
+    local leave_loop=0 \
+      something_changed=f \
+      needs_update=${needs_update:-} \
+      needs_inner=f \
+      grow_successful=t \
+
+    if [[ "${refresh:-f}" == t ]]; then
+      refresh=f
+      #find $cell_path -path '*/.cyto/status/up-to-date' -delete || fail
+      rm $cyto_path/status/up-to-date || fail
+    fi
+
+    switch_context $cell_path || fail
+    fence
+
+    if [[ "${upstream_cell_link:-}" ]]; then
+      update_downstream || fail
+    fi
+
+    calc_coords_branch || fail
+    fence
+
+    if [[ -v branch_coordinate_data ]]; then
+      show_coordinates || fail
+    fi
+
+    if [[ $cell_is_leaf == t ]]; then
+
+      # this isn't directly needed to calculate the cell branches,
+      # but it may be used in upstream prep functions to figure out the
+      # branches of upstream cells
+      handle_no_coords=ignore \
+      calc_coords_leaf || fail
+      grip_fence
+
+      # make sure convert_table_to_dims doesn't try to hit any other row
+      local row_index=0
+
+      if [[ -v branch_coordinate_fields ]]; then
+        table=branch_coordinate \
+        target_dim_var_types='ddim ddims' \
+        convert_table_to_dims || fail
+      fi
+
+      if [[ -v leaf_coordinate_fields ]]; then
+        table=leaf_coordinate \
+        target_dim_var_types='ddim ddims' \
+        convert_table_to_dims || fail
+      fi
+
+      local can_agg=f
+      deep=t plant_seed_internal "$seed_path" "$cell_path" || fail
+
+      if [[ $cell_is_leaf == f ]]; then
+        if [[ "${child_dims:-}" ]]; then
+          grow_members || fail
+          if [[ $grow_successful == f ]]; then
+            log_error "Some members of $short_cell failed to update successfully."
+          fi
+        else
+          log_fatal "Internal error: cell is not a leaf, yet it doesn't have child dims?"
+          fail1
+        fi
+      else
+        # grow upstreams
+        begin_for upstream_name in "${up[@]}"; doo
+          upstream=$up_path/$upstream_name
+          grow_upstream $upstream || fail
+        end_for
+        # grow validators
+        # grow reactors
+      fi
+
+    else
+      grow_successful=t
+      abort
+    fi
+
+  end_function
+
+  command_successful=${grow_successful:-f}
+  reply_to_caller "command_successful=${command_successful:-}"
+
+  handle_return
+}
+

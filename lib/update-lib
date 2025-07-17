@@ -59,162 +59,6 @@ prep_upstream() {
   handle_return
 }
 
-# inputs:
-#   target_cell
-#   prefix
-load_upstream_vars() {
-  begin_function
-
-    if [[ ! -d "${target_cell:-}" ]]; then
-      log_fatal "Internal error: missing target_cell $target_cell"
-    fi
-
-    local export_path=$target_cell/export \
-      out_path=$target_cell \
-      prefix=${prefix:-}${target_cell##*/}_ \
-      dna_roots= \
-      context_type= \
-
-    prefix=${prefix//-/_}
-
-    pass_thru=t \
-    recursive=f \
-    ignore_unknown=t \
-    auto_load_tab_vars=t \
-    load_dna_contents $out_path || fail
-
-    if [[ -d $export_path ]]; then
-      ignore_unknown=t \
-      pass_thru=t \
-      load_dna_contents $export_path || fail
-    fi
-
-  end_function
-
-  if failed; then
-    update_successful=f
-  fi
-
-  handle_return
-}
-
-execute_up_inner() {
-  begin_function
-
-    local all_prep_function=${up_cell_type}_all_prep
-    if function_exists $all_prep_function; then
-      log_debug "Executing all prep function: $all_prep_function"
-      $all_prep_function || fail
-    fi
-
-    # other preps are only run if there isn't a specific prep function for the upstream
-    local other_prep_function=${up_cell_type}_other_prep
-    local prep_function=${up_cell_type}_${up_var}_prep
-    if function_exists $prep_function; then
-      log_debug "Executing prep function: $prep_function"
-      $prep_function || fail
-    elif function_exists $other_prep_function; then
-      log_debug "Executing other prep function: $other_prep_function"
-      $other_prep_function || fail
-    fi
-
-    local up_cell_path \
-      short_cell \
-      upstream_cell_link \
-      downstream_cell_name \
-
-    if [[ $needs_update == t ]]; then
-      
-      maybe_fix_up || fail
-
-      upstream_cell_link=$up_cell
-      get_short_cell $cell_path
-
-      if [[ $up_cell_type == up ]]; then
-        downstream_cell_name=${short_cell//\//_}
-      else
-        downstream_cell_name=
-      fi
-
-      up_cell_path=$(realpath $up_cell) || fail
-      if [[ $up_cell_path == */.cyto/* ]]; then
-        log_fatal "Internal error: up_cell_path is in cyto: $up_cell_path"
-        fail1
-      fi
-
-      needs_update=
-
-      #  Don't clear anchor_dims because it might be set by prep
-      #local anchor_dims=
-      get_needs_update $up_cell_path || fail
-
-      if [[ $needs_update == t ]]; then
-        execute_commands "$up_cell_path" update || fail
-      fi
-
-    else
-      log_verbose "Skipping update of upstream $up_name because prep function set needs_update=f"
-      reply_to_caller "update_skipped=t"
-    fi
-
-    #    not sure why this is here
-    # reply_to_caller "needs_update=$needs_update"
-
-  end_function
-  handle_return
-}
-
-# inputs:
-#   up_cell_type
-#   up_cell
-execute_up() {
-  begin_function
-    if [[ ! "${up_cell:-}" ]]; then
-      log_fatal "Internal error: up_cell was not passed into execute_up"
-      fail1
-    fi
-
-    if [[ ! "${up_cell_type:-}" ]]; then
-      log_fatal "Internal error: up_cell_type was not passed into execute_up"
-      fail1
-    fi
-
-    local up_name=${up_cell##*/}
-    log_debug "Checking $up_cell_type $up_name"
-
-    local needs_update=t \
-      up_var=${up_name//-/_} \
-
-    update_skipped=f
-    fork execute_up_inner || fail
-
-    target_cell=$up_cell \
-    prefix=${up_cell_type}_ \
-    load_upstream_vars || fail
-
-    validation_says_already_done=
-
-    local all_post_function=${up_cell_type}_all_post
-    if function_exists $all_post_function; then
-      log_debug "Executing all post function: $all_post_function"
-      $all_post_function || fail
-    fi
-
-    # other posts are only run if there isn't a specific post function for the upstream
-    local other_post_function=${up_cell_type}_other_post
-    local post_function=${up_cell_type}_${up_var}_post
-    if function_exists $post_function; then
-      log_debug "Executing post function: $post_function"
-      $post_function || fail
-    elif function_exists $other_post_function; then
-      log_debug "Executing other post function: $other_post_function"
-      $other_post_function || fail
-    fi
-    
-  end_function
-  handle_return
-}
-
 validate_cell_check_conditions() {
   begin_function
     if [[ "$conditions" ]]; then
@@ -794,7 +638,6 @@ pre_update() {
 
     something_changed=f \
     member_count=0 \
-    cell_locks= \
 
     if [[ "${pretend_filter:-}" ]]; then
       local filter
@@ -862,10 +705,6 @@ pre_update() {
       rm $status_path/last-good-update-end || fail
     fi
 
-    if [[ $cell_is_leaf == t ]]; then
-      calc_coords_leaf || fail
-    fi
-
   end_function
   handle_return
 }
@@ -927,39 +766,6 @@ link_dim_parts() {
         safe_link $(realpath $part) $to_path/ || fail
       fi
     done; maybe_break
-  end_function
-  handle_return
-}
-
-create_sub_cell() {
-  local sub_cell=$sub_cell \
-    parent_cell=$parent_cell \
-    parent_seed=$parent_seed
-
-  local log_show_vars='^sub_cell'
-  begin_function
-
-    log_debug "Creating sub cell $cell_path"
-
-    if [[ "$sub_cell" == */.dna* ]]; then
-      log_fatal "Internal error: Invalid sub_cell $sub_cell."
-      log_fatal "We should not be creating a sub cell inside of a dna folder"
-      fail1
-    fi
-
-    if [[ "$parent_cell" == "$sub_cell" ]]; then
-      log_fatal "Can't create sub cells in a cell without parents: $sub_cell"
-      stack_trace
-      fail1
-    fi
-
-    deep=t \
-    parent_path=$parent_cell \
-    seed_path=$parent_seed \
-    member=$member \
-    repair=t \
-    plant_member || fail
-
   end_function
   handle_return
 }
@@ -1725,9 +1531,6 @@ update_command() {
       fi
 
       if [[ $cell_is_leaf == t ]]; then
-        handle_no_coords=ignore \
-        calc_coords_sub || fail
-        grip_fence
 
         handle_no_coords=ignore \
         calc_coords_leaf || fail
