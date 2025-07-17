@@ -111,6 +111,7 @@ RUN --mount=type=cache,target=/var/cache/apk \
     utmps-doc \
     utmps-openrc \
     vim \
+    vimdiff \
     vim-doc \
     yq \
     zlib-doc \
