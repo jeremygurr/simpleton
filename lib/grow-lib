@@ -3,6 +3,549 @@
 type -t grow_lib_loaded >/dev/null && return 0
 grow_lib_loaded=t
 
+check_foundation() {
+  begin_function
+    if [[ -f $dna_path/cell_is_foundation.var && ! -v cell_is_foundation ]]; then
+      context_type= \
+      prefix= \
+      load_dna_item $dna_path/cell_is_foundation.var || fail
+    fi
+
+    if [[ $cell_path != */foundation/* 
+       && -d $module_path/foundation/all 
+       && ! -d $module_path/foundation/all/.cyto
+       && ${cell_is_foundation:-f} == f
+       ]]; then
+      log_fatal "Foundation cells have not been updated, so update can't proceed. Update $module_path/foundation/all before attempting to update other cells."
+      fail1
+    fi
+  end_function
+  handle_return
+}
+
+# inputs:
+#   lib_dim_path
+#   cache_path
+make_dim_cache() {
+  begin_function
+
+    log_debug "Generating dim cache for $lib_dim_path"
+
+    if [[ -f $cache_path.new ]]; then
+      rm $cache_path.new || fail
+    fi
+
+    local dim_paths dim_path dim context_file=$cache_path.new
+    local -A dim_group=()
+    dim_paths=$(find1 $lib_dim_path -type d -not -name ".*" | sort) || fail
+
+    for dim_path in $dim_paths; do
+      dim=${dim_path##*/}
+      if [[ $dim == _* ]]; then
+        local group_dims=
+        get_group_dims $dim_path || fail
+        dim_group[$dim]="$group_dims"
+      else
+        build_dim_info_single $dim_path || fail
+      fi
+    done
+
+    write_vars_to_context \
+      dim_group \
+      secret_vars \
+      all_dims \
+      dim_shorts \
+      || fail
+
+    mv $cache_path.new $cache_path || fail
+
+  end_function
+  handle_return
+}
+
+load_dim_caches() {
+  local work_path=$1
+  begin_function
+
+    if [[ $work_path == /*/*/* ]]; then
+      load_dim_caches ${work_path%/*} || fail
+    fi
+
+    local lib_dim_path=$work_path/.lib/dim
+
+    if [[ -d $lib_dim_path ]]; then
+      local dt files links link type is_generated \
+        cache_path=$work_path/.lib/dim-cache \
+        real_path real_path_parent \
+
+      dim_caches+="$cache_path "
+
+      if [[ ! -f $cache_path ]]; then
+        fork make_dim_cache || fail
+      fi
+
+      source $cache_path || fail
+
+    fi
+
+  end_function
+  handle_return
+}
+
+add_derive_from() {
+  local required_dims=$required_dims optional_dims=${optional_dims:-} result
+
+  result=$required_dims
+  if [[ "$optional_dims" ]]; then
+    result+="/$optional_dims"
+  fi
+  derive_from+=( "$tool $result" )
+}
+
+make_derive_cache_handle_function() {
+  begin_function
+
+    load_fun_to_code $derive_path derive_function_$name || fail
+    eval "$code" || fail
+    derive_functions+=( $name )
+    write_to_context fun code || fail
+
+    local fields=() derive_paths=()
+
+    action=info \
+    derive_function_$name || fail
+
+    local derived_dim
+    for derived_dim in ${fields[*]}; do
+
+      local -n derive_from=dim_${derived_dim}_derived_from \
+        key_functions=dim_${derived_dim}_key_functions \
+
+      local is_key=f key_field_group
+      for key_field_group in ${derive_paths[*]}; do
+
+        local required_dims=$key_field_group \
+          optional_dims= \
+          target_dims= \
+
+        if [[ "$required_dims" == *'->'* ]]; then
+          target_dims=${required_dims#*->}
+          required_dims=${required_dims%->*}
+        else
+          log_fatal "Wrong derive_path format: $key_field_group . This is generated in the info function in the file derive_$name.fun in the .lib/derive folder"
+          log_fatal "The add_derive_path function should be being called in that info function to add the necessary paths."
+          fail1
+        fi
+
+        if [[ "$required_dims" == */* ]]; then
+          optional_dims=${required_dims#*/}
+          required_dims=${required_dims%/*}
+        fi
+
+        if [[ ",${required_dims}," != *",$derived_dim,"* \
+           && ",${optional_dims}," != *",$derived_dim,"* \
+           && ",${target_dims},"   == *",$derived_dim,"* \
+           ]]; then
+
+          tool=${name}.fun \
+          add_derive_from || fail
+
+        fi
+
+        if [[ "$required_dims" == "$derived_dim" \
+           && ! "$optional_dims" \
+           ]]; then
+          is_key=t
+        fi
+
+      done
+
+      if [[ $is_key == t ]]; then
+        key_functions+=( $name )
+      fi
+
+    done
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   lib_dt_path
+#   cache_path
+make_derive_cache() {
+  begin_function
+
+    log_verbose "Generating derive cache for $lib_dt_path"
+    deriving_dims=t
+
+    if [[ -f $cache_path.new ]]; then
+      rm $cache_path.new || fail
+    fi
+
+    local context_file=$cache_path.new \
+      type files \
+
+    begin_for type in fun tab; doo
+
+      if [[ $type == fun ]]; then
+        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.fun' | sort -g) || fail
+      else
+        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
+      fi
+
+      local name code derive_path
+      begin_for derive_path in $files; doo
+        name=${derive_path##*/}
+        name=${name%.*}
+        name=${name#derive_}
+        if [[ $type == fun ]]; then
+          make_derive_cache_handle_function || fail
+        else
+          make_derive_cache_handle_table || fail
+        fi
+      end_for
+    end_for
+
+    write_vars_to_context derive_tables derive_functions || fail
+
+    local dim
+    for dim in ${!all_dims[*]}; do
+
+      ignore_missing=t \
+      write_vars_to_context \
+        dim_${dim}_key_tables \
+        dim_${dim}_key_functions \
+        dim_${dim}_derived_from \
+        dim_${dim}_narrowed_from \
+        || fail
+
+#        dim_${dim}_card_table \
+
+      local -n member_type=dim_${dim}_member_type \
+        dim_members=dim_${dim}_members \
+        dim_derive_tables=dim_${dim}_derive_tables \
+
+      if [[ ! -v dim_members ]]; then
+        calc_missing_members || fail
+      fi
+
+      case ${member_type:-unset} in
+        static|dynamic)
+          :
+        ;;
+        unset)
+          if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
+            member_type=static
+          else
+            member_type=dynamic
+          fi
+        ;;
+        *)
+          log_fatal "Invalid value for member_type: $member_type defined for dim $dim"
+          fail1
+        ;;
+      esac
+
+      write_vars_to_context dim_${dim}_member_type || fail
+       
+    done
+
+    if [[ -f $cache_path.new ]]; then
+      mv $cache_path.new $cache_path || fail
+    fi
+    unset deriving_dims
+
+  end_function
+  handle_return
+}
+ 
+load_derive_caches() {
+  local work_path=$1
+  begin_function
+
+    if [[ $work_path == /*/*/* ]]; then
+      load_derive_caches ${work_path%/*} || fail
+    fi
+
+    local lib_dt_path=$work_path/.lib/derive
+
+    if [[ -d $lib_dt_path ]]; then
+
+      local dt files links link type is_generated \
+        cache_path=$work_path/.lib/derive-cache \
+        real_path real_path_parent \
+
+      derive_caches+="$cache_path "
+
+      if [[ ! -f $cache_path ]]; then
+        fork make_derive_cache || fail
+      fi
+
+      source $cache_path || fail
+
+    fi
+
+  end_function
+  handle_return
+}
+
+build_context() {
+  local cell_path=$1
+  begin_function
+
+    load_dim_caches $cell_path || fail
+    load_derive_caches $cell_path || fail
+
+    if [[ ! -f $context_path-trunk ]]; then
+      local trunk_context_path=$trunk_cell/.cyto/context
+      if [[ $cell_is_trunk == t || ! -f $trunk_context_path-trunk ]]; then
+        context_path=$trunk_cell/.cyto/context \
+        build_context_trunk || fail
+      else
+        source $trunk_context_path-trunk || fail
+      fi
+      if [[ $cell_is_trunk == f ]]; then
+        safe_link $trunk_context_path-trunk $context_path-trunk || fail
+      fi
+    else
+      source $context_path-trunk || fail
+    fi
+
+    #  maybe not needed any more
+    #setup_dims || fail
+
+    if [[ ! -f $context_path-branch ]]; then
+      build_context_branch || fail
+    else
+      source $context_path-branch || fail
+    fi
+
+    #  disabling seeding for now
+    #if [[ "${trunk_dims_expanded:-}" ]]; then
+    #  if [[ ! -f $context_path-branch-coords ]]; then
+    #    build_branch_seed_coords || fail
+    #  else
+    #    source $context_path-branch-coords || fail
+    #  fi
+    #fi
+
+    #  unused at the moment
+    #if [[ $cell_is_leaf == t ]]; then
+    #  if [[ ! -f $context_path-leaf ]]; then
+    #    build_context_leaf || fail
+    #  else
+    #    source $context_path-leaf || fail
+    #  fi
+    #fi
+
+    if [[ -e $context_path.new ]]; then
+      rm $context_path.new || fail
+    fi
+
+    local dim_cache derive_cache
+
+    begin_for dim_cache in ${dim_caches:-}; doo
+      cat $dim_cache >>$context_path.new || fail
+    end_for
+
+    begin_for derive_cache in ${derive_caches:-}; doo
+      cat $derive_cache >>$context_path.new || fail
+    end_for
+
+    if [[ -e $context_path-trunk ]]; then
+      cat $context_path-trunk >>$context_path.new || fail
+    fi
+
+    local dim_type dim
+    for dim_type in trunk_dims sub_dims control_props data_props; do
+      local -n dim_array=${dim_type}_expanded
+      for dim in ${dim_array[*]}; do
+        get_unplural $dim dim
+        local -n dt=dim_${dim}_type
+        dt=$dim_type
+        write_vars_to_context dim_${dim}_type || fail
+      done
+    done
+
+    if [[ -e $context_path-branch ]]; then
+      cat $context_path-branch >>$context_path.new || fail
+    fi
+
+    if [[ -e $context_path-leaf ]]; then
+      cat $context_path-leaf >>$context_path.new || fail
+    fi
+
+    if [[ -e $context_path.new ]]; then
+      mv $context_path.new $context_path || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+build_cyto() {
+  local cell_path=$1
+
+  begin_function
+
+    log_debug "Building cyto for $short_cell"
+    dna_path=$cell_path/.dna \
+    cyto_path=$cell_path/.cyto \
+
+    if [[ ! -d $cyto_path ]]; then
+      mkdir $cyto_path || fail
+    fi
+
+    if [[ ! -d $status_path ]]; then
+      mkdir $status_path || fail
+    fi
+
+    load_branch_info || fail
+    find_seed_path $cell_path || fail
+
+    if [[ ! -f $context_path ]]; then
+      build_context $cell_path || fail
+    fi
+
+    local context_check_var_eval= c
+    if [[ "${context_check_vars:-}" ]]; then
+      for c in $context_check_vars; do
+        local -n v=$c
+        if [[ "${v:-}" ]]; then
+          shell_quote_var v
+          context_check_var_eval+="$c=$v"
+        fi
+      done
+    fi
+
+    if [[ ! -f $context_path-check ]]; then
+      context_type=check \
+      write_vars_to_context \
+        out_file \
+        out_path \
+        check_op_var \
+        data_props_expanded \
+        default_freshness \
+        context_check_vars \
+        context_check_var_eval \
+        || fail
+      mv $context_path-check.new $context_path-check || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+grow_context() {
+  cell_path=$1
+  module_path=${cell_path#/*/*/}
+  module_path=${cell_path%/$module_path}
+
+  if [[ "${last_context_loaded:-}" != $cell_path ]]; then
+
+    local log_show_vars=^cell_path rebuild_attempted=f
+    begin_function
+
+      get_short_cell
+      log_debug "Growing context for $short_cell"
+
+      if [[ "$cell_path" == /seed/* ]]; then
+        log_fatal "Can't switch contexts to a seed path. Make sure to run this command in a work folder."
+        fail1
+      fi
+
+      dna_path=$cell_path/.dna \
+      cyto_path=$cell_path/.cyto \
+
+      local dna_exists=f
+      if [[ -e $dna_path ]]; then
+        dna_exists=t
+      fi
+
+      if [[ $dna_exists == t ]]; then
+        if [[ "$clean_cells" ]]; then
+          local cell_to_clean
+          cells_already_cleaned=${cells_already_cleaned:-}
+          if [[ " $cells_already_cleaned " == *" $cell_path "* ]]; then
+            log_debug "Cell already cleaned: $cell_path"
+          else
+            begin_for cell_to_clean in $clean_cells; doo
+              if [[ $cell_path == *$cell_to_clean* ]]; then
+                if [[ -e $cyto_path ]]; then
+                  log_info "Cleaning cell ${cell_to_clean#/work/*/} => $short_cell..."
+                  rm -rf $cell_path/!(.*) $cyto_path || fail
+                else
+                  log_info "Cell already clean: $cell_to_clean => $short_cell"
+                fi
+                cells_already_cleaned+=" $cell_path"
+                break
+              fi
+            end_for
+          fi
+        fi
+      fi
+
+      context_path=$cyto_path/context
+      init_context || fail
+
+      seed_path=
+      if [[ $dna_exists == t ]]; then
+
+        check_foundation || fail
+
+        if [[ ! -f $context_path ]]; then
+          fork build_cyto $cell_path || fail
+        fi
+
+        source $context_path || fail
+
+        setup_dims || fail
+
+        if [[ $cell_is_leaf == t && ! -d $up_path ]]; then
+
+          local up_cell_type up_name
+          begin_for up_cell_type in up validator reactor; doo
+            local -n upstream_var=$up_cell_type
+            if [[ -v upstream_var ]]; then
+              make_cyto_up || fail
+            fi
+          end_for
+
+        fi
+
+        local problem_found=f
+        broken_link_check || fail
+        if [[ $problem_found == t ]]; then
+          if [[ $rebuild_attempted == f ]]; then
+            log_verbose "Problem found, rebuilding context"
+            rm -rf $cyto_path/up* $context_path* || fail
+            rebuild_attempted=t
+            continue
+          else
+            log_fatal "Context rebuild failed to resolve problem"
+            fail1
+          fi
+        fi
+      fi
+
+      load_post_context_dynamic_vars || fail
+
+      last_context_loaded=$cell_path
+
+      error_if_unresolved=t \
+      handle_questions || fail
+
+    end_function
+    handle_return
+
+  else
+    log_debug "Context already loaded: $short_cell"
+  fi
+
+  return 0
+}
+
 plant_seed_internal() {
   local from=$1 to=$2 contents x x_part deep=${deep:-t} \
     cell_is_leaf=${cell_is_leaf:-t} key_path=${key_path:-} \
@@ -319,7 +862,7 @@ grow_up_inner() {
 
     # other preps are only run if there isn't a specific prep function for the upstream
     local other_prep_function=${up_cell_type}_other_prep
-    local prep_function=${up_cell_type}_${up_var}_prep
+    prep_function=${up_cell_type}_${up_var}_prep
     if function_exists $prep_function; then
       log_debug "Executing prep function: $prep_function"
       $prep_function || fail
@@ -400,15 +943,15 @@ grow_up() {
 
     validation_says_already_done=
 
-    local all_post_function=${up_cell_type}_all_post
-    if function_exists $all_post_function; then
-      log_debug "Executing all post function: $all_post_function"
-      $all_post_function || fail
+    local post_function=${up_cell_type}_post
+    if function_exists $post_function; then
+      log_debug "Executing all post function: $post_function"
+      $post_function || fail
     fi
 
     # other posts are only run if there isn't a specific post function for the upstream
     local other_post_function=${up_cell_type}_other_post
-    local post_function=${up_cell_type}_${up_var}_post
+    post_function=${up_cell_type}_${up_var}_post
     if function_exists $post_function; then
       log_debug "Executing post function: $post_function"
       $post_function || fail
@@ -425,6 +968,7 @@ grow_upstream() {
 
   local original_cell_path=${cell_path:-} \
     upstream=$1 \
+    up_cell_type=$up_cell_type \
 
   local log_show_vars=^upstream 
   begin_function
@@ -445,7 +989,6 @@ grow_upstream() {
 
     localize
 
-    up_cell_type=up \
     up_cell=$upstream \
     grow_up || fail
 
@@ -468,6 +1011,7 @@ grow_command() {
       rm $cyto_path/status/up-to-date || fail
     fi
 
+    grow_context $cell_path || fail
     switch_context $cell_path || fail
     fence
 
@@ -520,13 +1064,28 @@ grow_command() {
           fail1
         fi
       else
+
         # grow upstreams
         begin_for upstream_name in "${up[@]}"; doo
-          upstream=$up_path/$upstream_name
+          upstream=$up_path/$upstream_name \
+          up_cell_type=up \
           grow_upstream $upstream || fail
         end_for
+
         # grow validators
+        begin_for upstream_name in "${validator[@]}"; doo
+          upstream=$validator_path/$upstream_name \
+          up_cell_type=validator \
+          grow_upstream $upstream || fail
+        end_for
+
         # grow reactors
+        begin_for upstream_name in "${reactor[@]}"; doo
+          upstream=$reactor_path/$upstream_name \
+          up_cell_type=reactor \
+          grow_upstream $upstream || fail
+        end_for
+
       fi
 
     else

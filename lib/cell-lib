@@ -990,18 +990,6 @@ load_derive_table() {
   handle_return
 }
 
-add_derive_from() {
-
-  local required_dims=$required_dims optional_dims=${optional_dims:-} result
-
-  result=$required_dims
-  if [[ "$optional_dims" ]]; then
-    result+="/$optional_dims"
-  fi
-  derive_from+=( "$tool $result" )
-
-}
-
 # inputs:
 #   name        name of derive table
 # outputs:
@@ -4276,194 +4264,6 @@ add_derive_path() {
 
 }
 
-make_derive_cache_handle_function() {
-  begin_function
-
-    load_fun_to_code $derive_path derive_function_$name || fail
-    eval "$code" || fail
-    derive_functions+=( $name )
-    write_to_context fun code || fail
-
-    local fields=() derive_paths=()
-
-    action=info \
-    derive_function_$name || fail
-
-    local derived_dim
-    for derived_dim in ${fields[*]}; do
-
-      local -n derive_from=dim_${derived_dim}_derived_from \
-        key_functions=dim_${derived_dim}_key_functions \
-
-      local is_key=f key_field_group
-      for key_field_group in ${derive_paths[*]}; do
-
-        local required_dims=$key_field_group \
-          optional_dims= \
-          target_dims= \
-
-        if [[ "$required_dims" == *'->'* ]]; then
-          target_dims=${required_dims#*->}
-          required_dims=${required_dims%->*}
-        else
-          log_fatal "Wrong derive_path format: $key_field_group . This is generated in the info function in the file derive_$name.fun in the .lib/derive folder"
-          log_fatal "The add_derive_path function should be being called in that info function to add the necessary paths."
-          fail1
-        fi
-
-        if [[ "$required_dims" == */* ]]; then
-          optional_dims=${required_dims#*/}
-          required_dims=${required_dims%/*}
-        fi
-
-        if [[ ",${required_dims}," != *",$derived_dim,"* \
-           && ",${optional_dims}," != *",$derived_dim,"* \
-           && ",${target_dims},"   == *",$derived_dim,"* \
-           ]]; then
-
-          tool=${name}.fun \
-          add_derive_from || fail
-
-        fi
-
-        if [[ "$required_dims" == "$derived_dim" \
-           && ! "$optional_dims" \
-           ]]; then
-          is_key=t
-        fi
-
-      done
-
-      if [[ $is_key == t ]]; then
-        key_functions+=( $name )
-      fi
-
-    done
-
-  end_function
-  handle_return
-}
-
-# inputs:
-#   lib_dt_path
-#   cache_path
-make_derive_cache() {
-  begin_function
-
-    log_verbose "Generating derive cache for $lib_dt_path"
-    deriving_dims=t
-
-    if [[ -f $cache_path.new ]]; then
-      rm $cache_path.new || fail
-    fi
-
-    local context_file=$cache_path.new \
-      type files \
-
-    begin_for type in fun tab; doo
-
-      if [[ $type == fun ]]; then
-        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.fun' | sort -g) || fail
-      else
-        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
-      fi
-
-      local name code derive_path
-      begin_for derive_path in $files; doo
-        name=${derive_path##*/}
-        name=${name%.*}
-        name=${name#derive_}
-        if [[ $type == fun ]]; then
-          make_derive_cache_handle_function || fail
-        else
-          make_derive_cache_handle_table || fail
-        fi
-      end_for
-    end_for
-
-    write_vars_to_context derive_tables derive_functions || fail
-
-    local dim
-    for dim in ${!all_dims[*]}; do
-
-      ignore_missing=t \
-      write_vars_to_context \
-        dim_${dim}_key_tables \
-        dim_${dim}_key_functions \
-        dim_${dim}_derived_from \
-        dim_${dim}_narrowed_from \
-        || fail
-
-#        dim_${dim}_card_table \
-
-      local -n member_type=dim_${dim}_member_type \
-        dim_members=dim_${dim}_members \
-        dim_derive_tables=dim_${dim}_derive_tables \
-
-      if [[ ! -v dim_members ]]; then
-        calc_missing_members || fail
-      fi
-
-      case ${member_type:-unset} in
-        static|dynamic)
-          :
-        ;;
-        unset)
-          if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
-            member_type=static
-          else
-            member_type=dynamic
-          fi
-        ;;
-        *)
-          log_fatal "Invalid value for member_type: $member_type defined for dim $dim"
-          fail1
-        ;;
-      esac
-
-      write_vars_to_context dim_${dim}_member_type || fail
-       
-    done
-
-    if [[ -f $cache_path.new ]]; then
-      mv $cache_path.new $cache_path || fail
-    fi
-    unset deriving_dims
-
-  end_function
-  handle_return
-}
- 
-load_derive_caches() {
-  local work_path=$1
-  begin_function
-
-    if [[ $work_path == /*/*/* ]]; then
-      load_derive_caches ${work_path%/*} || fail
-    fi
-
-    local lib_dt_path=$work_path/.lib/derive
-
-    if [[ -d $lib_dt_path ]]; then
-
-      local dt files links link type is_generated \
-        cache_path=$work_path/.lib/derive-cache \
-        real_path real_path_parent \
-
-      derive_caches+="$cache_path "
-
-      if [[ ! -f $cache_path ]]; then
-        fork make_derive_cache || fail
-      fi
-
-      source $cache_path || fail
-
-    fi
-
-  end_function
-  handle_return
-}
-
 # inputs:
 #   derive_tables
 # outputs:
@@ -4616,7 +4416,6 @@ branch_dims=( ${branch_dims[*]} )
 branch_dim_count=$branch_dim_count
 branch_members=( ${members_string% } )
 branch_hashes=( ${branch_hashes[*]} )
-cell_is_leaf=$cell_is_leaf
 "
     write_to_context var content || fail
 
@@ -6317,75 +6116,6 @@ get_group_dims() {
   handle_return
 }
 
-# inputs:
-#   lib_dim_path
-#   cache_path
-make_dim_cache() {
-  begin_function
-
-    log_debug "Generating dim cache for $lib_dim_path"
-
-    if [[ -f $cache_path.new ]]; then
-      rm $cache_path.new || fail
-    fi
-
-    local dim_paths dim_path dim context_file=$cache_path.new
-    local -A dim_group=()
-    dim_paths=$(find1 $lib_dim_path -type d -not -name ".*" | sort) || fail
-
-    for dim_path in $dim_paths; do
-      dim=${dim_path##*/}
-      if [[ $dim == _* ]]; then
-        local group_dims=
-        get_group_dims $dim_path || fail
-        dim_group[$dim]="$group_dims"
-      else
-        build_dim_info_single $dim_path || fail
-      fi
-    done
-
-    write_vars_to_context \
-      dim_group \
-      secret_vars \
-      all_dims \
-      dim_shorts \
-      || fail
-
-    mv $cache_path.new $cache_path || fail
-
-  end_function
-  handle_return
-}
-
-load_dim_caches() {
-  local work_path=$1
-  begin_function
-
-    if [[ $work_path == /*/*/* ]]; then
-      load_dim_caches ${work_path%/*} || fail
-    fi
-
-    local lib_dim_path=$work_path/.lib/dim
-
-    if [[ -d $lib_dim_path ]]; then
-      local dt files links link type is_generated \
-        cache_path=$work_path/.lib/dim-cache \
-        real_path real_path_parent \
-
-      dim_caches+="$cache_path "
-
-      if [[ ! -f $cache_path ]]; then
-        fork make_dim_cache || fail
-      fi
-
-      source $cache_path || fail
-
-    fi
-
-  end_function
-  handle_return
-}
-
 build_branch_seed_coords() {
   begin_function
     local parent_coord_path=${cell_path%/*}/.cyto/context-branch-coords \
@@ -6405,100 +6135,6 @@ build_branch_seed_coords() {
     if [[ "${branch_seed_coordinate_data:-}" ]]; then
       write_coordinates_to_shell_file $context_path-branch-coords || fail
     fi
-  end_function
-  handle_return
-}
-
-build_context() {
-  local cell_path=$1
-  begin_function
-
-    load_dim_caches $cell_path || fail
-    load_derive_caches $cell_path || fail
-
-    if [[ ! -f $context_path-trunk ]]; then
-      local trunk_context_path=$trunk_cell/.cyto/context
-      if [[ $cell_is_trunk == t || ! -f $trunk_context_path-trunk ]]; then
-        context_path=$trunk_cell/.cyto/context \
-        build_context_trunk || fail
-      else
-        source $trunk_context_path-trunk || fail
-      fi
-      if [[ $cell_is_trunk == f ]]; then
-        safe_link $trunk_context_path-trunk $context_path-trunk || fail
-      fi
-    else
-      source $context_path-trunk || fail
-    fi
-
-    #  maybe not needed any more
-    #setup_dims || fail
-
-    if [[ ! -f $context_path-branch ]]; then
-      build_context_branch || fail
-    else
-      source $context_path-branch || fail
-    fi
-
-    #  disabling seeding for now
-    #if [[ "${trunk_dims_expanded:-}" ]]; then
-    #  if [[ ! -f $context_path-branch-coords ]]; then
-    #    build_branch_seed_coords || fail
-    #  else
-    #    source $context_path-branch-coords || fail
-    #  fi
-    #fi
-
-    #  unused at the moment
-    #if [[ $cell_is_leaf == t ]]; then
-    #  if [[ ! -f $context_path-leaf ]]; then
-    #    build_context_leaf || fail
-    #  else
-    #    source $context_path-leaf || fail
-    #  fi
-    #fi
-
-    if [[ -e $context_path.new ]]; then
-      rm $context_path.new || fail
-    fi
-
-    local dim_cache derive_cache
-
-    begin_for dim_cache in ${dim_caches:-}; doo
-      cat $dim_cache >>$context_path.new || fail
-    end_for
-
-    begin_for derive_cache in ${derive_caches:-}; doo
-      cat $derive_cache >>$context_path.new || fail
-    end_for
-
-    if [[ -e $context_path-trunk ]]; then
-      cat $context_path-trunk >>$context_path.new || fail
-    fi
-
-    local dim_type dim
-    for dim_type in trunk_dims sub_dims control_props data_props; do
-      local -n dim_array=${dim_type}_expanded
-      for dim in ${dim_array[*]}; do
-        get_unplural $dim dim
-        local -n dt=dim_${dim}_type
-        dt=$dim_type
-        write_vars_to_context dim_${dim}_type || fail
-      done
-    done
-
-    if [[ -e $context_path-branch ]]; then
-      cat $context_path-branch >>$context_path.new || fail
-    fi
-
-    if [[ -e $context_path-leaf ]]; then
-      cat $context_path-leaf >>$context_path.new || fail
-    fi
-
-    if [[ -e $context_path.new ]]; then
-      mv $context_path.new $context_path || fail
-    fi
-
   end_function
   handle_return
 }
@@ -7080,54 +6716,6 @@ maybe_fix_up() {
   handle_return
 }
 
-build_cyto() {
-  local cell_path=$1
-
-  begin_function
-
-    log_debug "Building cyto for $short_cell"
-    dna_path=$cell_path/.dna \
-    cyto_path=$cell_path/.cyto \
-
-    if [[ ! -d $cyto_path ]]; then
-      mkdir $cyto_path || fail
-    fi
-
-    if [[ ! -d $status_path ]]; then
-      mkdir $status_path || fail
-    fi
-
-    load_branch_info || fail
-    find_seed_path $cell_path || fail
-
-    if [[ ! -f $context_path ]]; then
-      build_context $cell_path || fail
-    fi
-
-  end_function
-  handle_return
-}
-
-check_foundation() {
-  begin_function
-    if [[ -f $dna_path/cell_is_foundation.var && ! -v cell_is_foundation ]]; then
-      context_type= \
-      prefix= \
-      load_dna_item $dna_path/cell_is_foundation.var || fail
-    fi
-
-    if [[ $cell_path != */foundation/* 
-       && -d $module_path/foundation/all 
-       && ! -d $module_path/foundation/all/.cyto
-       && ${cell_is_foundation:-f} == f
-       ]]; then
-      log_fatal "Foundation cells have not been updated, so update can't proceed. Update $module_path/foundation/all before attempting to update other cells."
-      fail1
-    fi
-  end_function
-  handle_return
-}
-
 # inputs:
 #   $1   cell_path
 #   anchor_dims (as a space separated string)
@@ -7160,100 +6748,23 @@ switch_context() {
         dna_exists=t
       fi
 
-      if [[ $dna_exists == t ]]; then
-        if [[ "$clean_cells" ]]; then
-          local cell_to_clean
-          cells_already_cleaned=${cells_already_cleaned:-}
-          if [[ " $cells_already_cleaned " == *" $cell_path "* ]]; then
-            log_debug "Cell already cleaned: $cell_path"
-          else
-            begin_for cell_to_clean in $clean_cells; doo
-              if [[ $cell_path == *$cell_to_clean* ]]; then
-                if [[ -e $cyto_path ]]; then
-                  log_info "Cleaning cell ${cell_to_clean#/work/*/} => $short_cell..."
-                  rm -rf $cell_path/!(.*) $cyto_path || fail
-                else
-                  log_info "Cell already clean: $cell_to_clean => $short_cell"
-                fi
-                cells_already_cleaned+=" $cell_path"
-                break
-              fi
-            end_for
-          fi
-        fi
-      fi
-
       context_path=$cyto_path/context
       init_context || fail
 
       seed_path=
       if [[ $dna_exists == t ]]; then
 
-        check_foundation || fail
-
         if [[ ! -f $context_path ]]; then
-          fork build_cyto $cell_path || fail
+          log_fatal "Context has not been generated yet. Run the grow command first."
+          fail1
         fi
 
         source $context_path || fail
-
         setup_dims || fail
 
-        if [[ $cell_is_leaf == t && ! -d $up_path ]]; then
-
-          local up_cell_type up_name
-          begin_for up_cell_type in up validator reactor; doo
-            local -n upstream_var=$up_cell_type
-            if [[ -v upstream_var ]]; then
-              make_cyto_up || fail
-            fi
-          end_for
-
-        fi
-
-        local problem_found=f
-        broken_link_check || fail
-        if [[ $problem_found == t ]]; then
-          if [[ $rebuild_attempted == f ]]; then
-            log_verbose "Problem found, rebuilding context"
-            rm -rf $cyto_path/up* $context_path* || fail
-            rebuild_attempted=t
-            continue
-          else
-            log_fatal "Context rebuild failed to resolve problem"
-            fail1
-          fi
-        fi
       fi
 
       load_post_context_dynamic_vars || fail
-
-      local context_check_var_eval= c
-      if [[ "${context_check_vars:-}" ]]; then
-        for c in $context_check_vars; do
-          local -n v=$c
-          if [[ "${v:-}" ]]; then
-            shell_quote_var v
-            context_check_var_eval+="$c=$v"
-          fi
-        done
-      fi
-
-      if [[ ! -f $context_path-check ]]; then
-        context_type=check \
-        write_vars_to_context \
-          out_file \
-          out_path \
-          cell_is_leaf \
-          check_op_var \
-          data_props_expanded \
-          default_freshness \
-          context_check_vars \
-          context_check_var_eval \
-          || fail
-        mv $context_path-check.new $context_path-check || fail
-      fi
-
       last_context_loaded=$cell_path
 
       error_if_unresolved=t \
