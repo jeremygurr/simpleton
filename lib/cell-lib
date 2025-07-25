@@ -1394,42 +1394,42 @@ build_context_expand_members_known() {
   local members_with_pipes=${members_with_pipes// /\|}
 
   code+="
-  all)
-    _out=( $quoted_members )
-  ;;
-  $members_with_pipes)
-    _out=( \$_in )
-  ;;
-  *)
-    problem=\"Invalid $dim: \$_in\"
-  ;;
-esac
+    all)
+      _out=( $quoted_members )
+    ;;
+    $members_with_pipes)
+      _out=( \$_in )
+    ;;
+    *)
+      problem=\"Invalid $dim: \$_in\"
+    ;;
+  esac
 }"
 }
 
 build_context_expand_members() {
   code+="
-  all)
-    local -n members=dim_${dim}_members
-    if [[ -v members ]]; then
-      _out=( \"\${members[@]}\" )
-    else
-      problem=\"Can't use all value for a dynamic dim\"
-    fi
-  ;;
-  *)
-    local -n members=dim_${dim}_members \
-      member_type=dim_${dim}_member_type \
+    all)
+      local -n members=dim_${dim}_members
+      if [[ -v members ]]; then
+        _out=( \"\${members[@]}\" )
+      else
+        problem=\"Can't use all value for a dynamic dim\"
+      fi
+    ;;
+    *)
+      local -n members=dim_${dim}_members \\
+        member_type=dim_${dim}_member_type \\
 
-    if [[ -v members ]] && array_contains members \"\$_in\"; then
-      _out=( \"\$_in\" )
-    elif [[ ! -v member_type || \$member_type == dynamic ]]; then
-      _out=( \"\$_in\" )
-    else
-      problem=\"Invalid dim member for $dim: \$_in\"
-    fi
-  ;;
-esac
+      if [[ -v members ]] && array_contains members \"\$_in\"; then
+        _out=( \"\$_in\" )
+      elif [[ \${member_type:-dynamic} == dynamic ]]; then
+        _out=( \"\$_in\" )
+      else
+        problem=\"Invalid dim member for $dim: \$_in\"
+      fi
+    ;;
+  esac
 }"
 }
 
@@ -6727,57 +6727,49 @@ switch_context() {
   module_path=${cell_path#/*/*/}
   module_path=${cell_path%/$module_path}
 
-  if [[ "${last_context_loaded:-}" != $cell_path ]]; then
+  local log_show_vars=^cell_path rebuild_attempted=f
+  begin_function
 
-    local log_show_vars=^cell_path rebuild_attempted=f
-    begin_function
+    get_short_cell
+    log_debug "Loading context for $short_cell"
 
-      get_short_cell
-      log_debug "Loading context for $short_cell"
+    if [[ "$cell_path" == /seed/* ]]; then
+      log_fatal "Can't switch contexts to a seed path. Make sure to run this command in a work folder."
+      fail1
+    fi
 
-      if [[ "$cell_path" == /seed/* ]]; then
-        log_fatal "Can't switch contexts to a seed path. Make sure to run this command in a work folder."
+    dna_path=$cell_path/.dna \
+    cyto_path=$cell_path/.cyto \
+
+    local dna_exists=f
+    if [[ -e $dna_path ]]; then
+      dna_exists=t
+    fi
+
+    context_path=$cyto_path/context
+    init_context || fail
+
+    seed_path=
+    if [[ $dna_exists == t ]]; then
+
+      if [[ ! -f $context_path ]]; then
+        log_fatal "Context has not been generated yet. Run the grow command first."
         fail1
       fi
 
-      dna_path=$cell_path/.dna \
-      cyto_path=$cell_path/.cyto \
+      source $context_path || fail
+      setup_dims || fail
 
-      local dna_exists=f
-      if [[ -e $dna_path ]]; then
-        dna_exists=t
-      fi
+    fi
 
-      context_path=$cyto_path/context
-      init_context || fail
+    load_post_context_dynamic_vars || fail
+    last_context_loaded=$cell_path
 
-      seed_path=
-      if [[ $dna_exists == t ]]; then
+    error_if_unresolved=t \
+    handle_questions || fail
 
-        if [[ ! -f $context_path ]]; then
-          log_fatal "Context has not been generated yet. Run the grow command first."
-          fail1
-        fi
-
-        source $context_path || fail
-        setup_dims || fail
-
-      fi
-
-      load_post_context_dynamic_vars || fail
-      last_context_loaded=$cell_path
-
-      error_if_unresolved=t \
-      handle_questions || fail
-
-    end_function
-    handle_return
-
-  else
-    log_debug "Context already loaded: $short_cell"
-  fi
-
-  return 0
+  end_function
+  handle_return
 }
 
 cell_open_log_file() {
