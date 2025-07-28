@@ -1920,6 +1920,19 @@ append_coords_to_file() {
   handle_return
 }
 
+# will work on singular or plural dims, auto detecting
+get_singular_dim() {
+  local in_var=$1 out_var=$2
+  local -n _in=$in_var _out=$out_var
+  if [[ -v all_dims[$_in] ]]; then
+    # already singular
+    _out=$_in
+  else
+    # assumed plural
+    get_unplural $in_var $out_var
+  fi
+}
+
 # inputs:
 #   table                  variable name containing the table, without _fields or _data
 #   row_index              defaults to 0
@@ -1954,7 +1967,7 @@ convert_table_to_dims() {
       for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
         maybe_compound_field=${c_fields[$field_index]}
 
-        get_unplural $maybe_compound_field field
+        get_singular_dim $maybe_compound_field field
         get_plural $field fields
 
         local -n sdim=s_$field sdims=s_$fields ddim=d_$field ddims=d_$fields
@@ -2087,7 +2100,7 @@ expand_dims() {
     local dim_var dim_var plural maybe_compound_field
     for maybe_compound_field in $to_expand; do
 
-      get_unplural $maybe_compound_field dim_var
+      get_singular_dim $maybe_compound_field dim_var
       local dims_var
       get_plural $dim_var dims_var
       local -n \
@@ -3320,7 +3333,7 @@ pass_dims() {
 #   (return code)  0 if a parameter sets this dim
 dim_set_in_parameter() {
   local long_dim=$1 maybe_compound_dim=${2:-$1} dim dims
-  get_unplural $maybe_compound_dim dim
+  get_singular_dim $maybe_compound_dim dim
   get_plural $dim dims
 
   local -n pdim=p_$dim pdims=p_$dims
@@ -3860,7 +3873,7 @@ build_context_related_dims() {
         tried[$maybe_compound_dim]=1
         next_level_dims[$maybe_compound_dim]=1
       fi
-      get_unplural $maybe_compound_dim dim
+      get_singular_dim $maybe_compound_dim dim
       new_target_dims[$dim]=1
     end_for
     target_dims=()
@@ -3951,7 +3964,7 @@ build_dim_info() {
       local compound_dim
       for compound_dim in "${dim_array[@]}"; do
 
-        get_unplural $compound_dim dim
+        get_singular_dim $compound_dim dim
         local -n dt=dim_${dim}_type
 
         if [[ "${dt:-}" ]]; then
@@ -5202,7 +5215,7 @@ calc_coordinates_next_unknown_dim() {
           grip_fence
           needs_narrowing=t
 
-          get_unplural $maybe_compound_dim dim
+          get_singular_dim $maybe_compound_dim dim
           get_plural $dim dims
 
           log_show_vars='dim phase'
@@ -5430,7 +5443,7 @@ calc_coordinates_next_dim() {
     if [[ "$dim_original" ]]; then
 
       log_debug "Checking dim $dim_original"
-      get_unplural $dim_original dim
+      get_singular_dim $dim_original dim
       get_plural $dim dims
 
       eval "local -I d_$dim d_$dims"
@@ -5679,7 +5692,7 @@ calc_coordinates_refine_get_matching_rows() {
   for (( column_index = 0; column_index < field_count; column_index++ )); do
 
     field=${derive_fields[$column_index]}
-    get_unplural $field field
+    get_singular_dim $field field
     get_plural $field fields
 
     local -n ddim=d_$field \
@@ -6063,7 +6076,7 @@ calc_anchor_dims() {
 
     if [[ "$anchor_dims" ]]; then
       local new_anchors=
-      for dim in $anchor_dims; do
+      for dim in ${anchor_dims[*]}; do
         new_anchors+="$dim "
       done
       anchor_dims=${new_anchors% }
@@ -6427,7 +6440,7 @@ get_required_freshness() {
 any_dim_is_set() {
   local dim dims is_set=f
   for dim in $*; do
-    get_unplural $dim dim
+    get_singular_dim $dim dim
     get_plural $dim dims
     local -n ddim=d_${dim} ddims=d_${dims}
     if [[ "${ddim:-}" || "${ddims:-}" ]]; then
@@ -6443,7 +6456,7 @@ any_dim_is_set() {
 all_dims_are_set() {
   local dim dims is_set=t
   for dim in $*; do
-    get_unplural $dim dim
+    get_singular_dim $dim dim
     get_plural $dim dims
     local -n ddim=d_${dim} ddims=d_${dims}
     if [[ ! "${ddim:-}" && ! "${ddims:-}" ]]; then
