@@ -559,14 +559,21 @@ forge_add_dims() {
         file=$current_selection/.dna/$dim_type.arr
         if [[ -f $file ]]; then
           for dims in $(<$file); do
-            get_unplural $dims dim
+            dim=$dims
             dim_path=$lib_path/dim/$dim
             if [[ -d $dim_path ]]; then
               file1=$lib_path/dim
               file2=$dim
               forge_add_choice "$file1 $file2" "$dim_type" "$dim"
             else
-              echo "${YELLOW}Warning: dim doesn't exist: $dim (defined in $dim_type)$RESET"
+              get_unplural $dims dim
+              dim_path=$lib_path/dim/$dim
+              if [[ -d $dim_path ]]; then
+                file1=$lib_path/dim
+                file2=$dim
+                forge_add_choice "$file1 $file2" "$dim_type" "$dim"
+                echo "${YELLOW}Warning: dim doesn't exist: $dim (defined in $dim_type)$RESET"
+              fi
             fi
           done
         fi
