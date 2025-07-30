@@ -23,6 +23,67 @@ check_foundation() {
   handle_return
 }
 
+write_to_context() {
+  local context_type=${context_type:-} new_type=$1 context_file=${context_file:-}
+  local -n _content=$2
+  begin_function_lo
+    if [[ "$context_type" || "$context_file" ]]; then
+      if [[ ! "$context_file" ]]; then
+        context_file=$context_path-$context_type.new
+      fi
+
+      last_type=${last_type:-var}
+      if [[ $last_type == fun || $new_type == fun ]]; then
+        echo >>$context_file || fail
+      fi
+      trim_ws _content
+      echo "${_content}" >>$context_file || fail
+      last_type=$new_type
+      eval "$_content" || {
+        if [[ "${var_full_path:-}" ]]; then
+          log_fatal "Invalid dna file: $var_full_path"
+        else
+          log_fatal "Invalid dna file. Contents:"
+          log_fatal "$_content"
+        fi
+        fail1
+      }
+    fi
+  end_function
+  handle_return
+}
+
+# inputs:
+#   either context_type or context_file
+#   $*    vars to write to context file
+write_vars_to_context() {
+  local vars_to_write=$* ignore_missing=${ignore_missing:-f}
+  begin_function_lo
+    local var val quoted_val
+    for var in $vars_to_write; do
+      local -n val=$var
+      local is_set=f
+      if is_set val; then
+        set_to_string val quoted_val
+        is_set=t
+      elif is_array val; then
+        array_to_string val quoted_val
+      elif [[ $ignore_missing == t && ! -v $var ]]; then
+        continue
+      else
+        local quoted_val=${val:-}
+        shell_quote_var quoted_val
+      fi
+      local content="$var=$quoted_val"
+      if [[ $is_set == t ]]; then
+        content="declare -Ag $content"
+      fi
+      write_to_context var content || fail
+    done; maybe_break
+  end_function
+  handle_return
+}
+
 # inputs:
 #   lib_dim_path
 #   cache_path
@@ -289,12 +350,700 @@ load_derive_caches() {
   handle_return
 }
 
+# inputs:
+#   $1        start_path
+#   dim
+# outputs:
+#   dim_path    will not be set if it's not found
+get_dim_path() {
+
+  local start_path=$1 lib_dim_path
+
+  lib_dim_path=$start_path/.lib/dim
+  if [[ -d $lib_dim_path/$dim ]]; then
+    dim_path=$lib_dim_path/$dim
+  elif [[ $start_path == /*/*/* ]]; then
+    get_dim_path ${start_path%/*}
+  fi
+
+}
+
+# inputs:
+#   $1      dim path
+# 
+build_dim_info_single() {
+  local log_show_vars=dim_path \
+    dim_path=$1 dim
+
+  begin_function
+
+    local dims dim=${dim_path##*/}
+
+    if [[ -v all_dims[$dim] ]]; then
+      log_fatal "Dim $dim has already been built"
+      fail1
+    fi
+
+    all_dims[$dim]=1
+
+    if [[ ! "$dim" =~ ^[a-zA-Z0-9][a-zA-Z0-9_]+$ ]]; then
+      log_fatal "Invalid dim name: $dim. Dims must consist of alphanumeric characters or underscores."
+      fail1
+    fi
+
+    get_plural $dim dims
+
+    prefix=dim_${dim}_ \
+    load_dna_contents $dim_path || fail
+
+    local -n is_secret=dim_${dim}_is_secret
+    if [[ -v is_secret && $is_secret == t ]]; then
+      add_word_to_string secret_vars "$dim $dims s_$dim s_$dims d_$dim d_$dims"
+    fi
+
+    local -n members=dim_${dim}_members
+
+    if ! function_exists expand_function; then
+      build_context_expand || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   dim
+#   dim_derived_from
+#   next_level_row
+build_context_support_dims_find_related() {
+  local log_show_vars=dim
+
+  begin_function
+
+    local row object type
+    begin_for row in "${dim_derived_from[@]}"; doo
+      local row_array=( $row )
+      object=${row_array[0]}
+      type=${row_array[1]}
+
+      local canopy=${row_array[1]} \
+        up_dim \
+        new_shortest \
+        old_shortest \
+
+      canopy=${canopy//\// }
+      canopy=${canopy//,/ }
+
+      begin_for up_dim in $canopy; doo
+
+        new_shortest=( $next_level_row )
+
+        if [[ ! -v tried[$up_dim] ]]; then
+
+          log_debug "Found reference to derived dim $up_dim (from $dim via $object)"
+
+          if [[ ! -v all_dims[$up_dim] ]]; then
+            log_fatal "Missing dim $up_dim"
+            fail1
+          fi
+
+          local new_next_level_row=$next_level_row d
+          for d in $canopy; do
+            if [[ " $new_next_level_row " != *" $d "* && $d != $up_dim ]]; then
+              new_next_level_row+=" $d"
+            fi
+          done
+          new_next_level_row+=" $up_dim"
+
+          tried[$up_dim]=1 \
+          related_dims_set[$up_dim]=1 \
+          next_level_dims[$new_next_level_row]=1 \
+
+        fi
+
+      end_for
+    end_for
+
+  end_function
+  handle_return
+}
+
+build_context_related_dims() {
+  begin_function
+
+    local dim dim_parents next_level_row \
+      support_dim_depth=0 down_dim \
+      maybe_compound_dim \
+      anchors=${anchor_dims:-${default_anchor_dims[*]:-}} \
+
+    local -A related_dims_set=() \
+      support_dims_set=() \
+      tried=() \
+      next_level_dims=() \
+      current_level_dims=() \
+      target_dims=() \
+
+    array_to_set trunk_dims_expanded    target_dims
+    array_to_set sub_dims_expanded      target_dims
+    array_to_set control_props_expanded target_dims
+    array_to_set data_props_expanded    target_dims
+
+    local -A new_target_dims
+    begin_for maybe_compound_dim in ${!target_dims[*]}; doo
+      get_singular_dim $maybe_compound_dim dim
+      if [[ ! -v tried[$dim] ]]; then
+        tried[$dim]=1
+        next_level_dims[$dim]=1
+      fi
+    end_for
+
+    begin_while (( ${#next_level_dims[*]} > 0 )); doo
+      current_level_dims=()
+      add_to_set next_level_dims current_level_dims
+      next_level_dims=()
+      begin_for next_level_row in "${!current_level_dims[@]}"; doo
+        dim=${next_level_row##* }
+        dim_parents=${next_level_row% *}
+        if [[ "$dim" == "$dim_parents" ]]; then
+          dim_parents=
+        fi
+        local -n dim_derived_from=dim_${dim}_derived_from
+        if [[ -v dim_derived_from ]]; then
+          log_debug "Finding related dims of $dim"
+          build_context_support_dims_find_related || fail
+        fi
+      end_for
+    end_while
+
+    fence
+
+    related_dims_expanded=( ${!related_dims_set[*]} )
+    sort_array related_dims_expanded
+
+    if [[ "${related_dims_expanded:-}" ]]; then
+      log_debug "Related dims found: ${related_dims_expanded[*]}"
+    fi
+
+    write_vars_to_context related_dims_expanded || fail
+
+  end_function
+  handle_return
+}
+
+build_dim_info_expand_group() {
+  local dim=$1
+  begin_function
+
+    local dim_path=
+    get_dim_path $cell_path || fail
+
+    if [[ ! "$dim_path" ]]; then
+      log_fatal "Could not find dim $dim of $dim_type"
+      fail1
+    fi
+
+    local dim_folders dim_folder
+    dim_folders=$(find1 $dim_path | sort -g) || fail
+
+    for dim_folder in $dim_folders; do
+      local dim=${dim_folder##*/}
+      dim=${dim##+([0-9])-}
+      if [[ $dim == _* ]]; then
+        build_dim_info_expand_group $dim || fail
+      else
+        expanded_array+=( $dim )
+      fi
+    done
+
+  end_function
+  handle_return
+}
+
+build_dim_info() {
+  begin_function
+
+    local dim dim_type
+    localize_dims=
+    localize_reverse_dims=
+
+    expand_dim_array trunk_dims sub_dims control_props data_props || fail
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo 
+      write_vars_to_context ${dim_type}_expanded || fail
+    end_for
+
+    build_context_related_dims || fail
+
+    local dim dims
+    compound_dims=()
+    for dim_type in trunk_dims related_dims sub_dims control_props data_props; do
+
+      local -n dim_array=${dim_type}_expanded
+
+      local compound_dim
+      for compound_dim in "${dim_array[@]}"; do
+
+        get_singular_dim $compound_dim dim
+        local -n dt=dim_${dim}_type
+
+        if [[ "${dt:-}" ]]; then
+          log_fatal "Dim $dim was defined as a $dim_type, but it is also defined as a $dt. A dim can only be of one type. Fix the dna definition for this cell."
+          fail1
+        fi
+
+        if [[ $compound_dim != $dim ]]; then
+          compound_dims[$dim]=1
+        fi
+
+        dt=$dim_type
+
+        get_plural $dim dims
+        localize_dims+=" d_$dim d_$dims"
+        localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
+        write_vars_to_context dim_${dim}_type || fail
+
+        local shorter_dim=$dim shorter_dims
+
+        dim_shorts[$dim]=$dim
+        while [[ $shorter_dim == *_* ]]; do
+
+          shorter_dim=${shorter_dim#*_}
+          get_plural $shorter_dim shorter_dims
+          if [[ ! -v dim_shorts[$shorter_dim] ]]; then
+            dim_shorts[$shorter_dim]=$dim
+            dim_shorts[$shorter_dims]=$dims
+          else
+            # Allow exact dim name to override all abbreviations
+            if [[ "${dim_shorts[$shorter_dim]}" != $shorter_dim ]]; then
+              dim_shorts[$shorter_dim]+=" $dim"
+              dim_shorts[$shorter_dims]+=" $dims"
+            fi
+          fi
+
+        done
+
+      done
+
+    done
+
+    write_vars_to_context compound_dims localize_dims localize_reverse_dims dim_shorts || fail
+
+  end_function
+  handle_return
+}
+
+load_dna_contents_handle_dir() {
+  begin_function_lo
+    if [[ "$current_var" && $item_var != _* ]]; then
+      array_content+=( "$item_name" )
+      if [[ -L $item || -d $item ]]; then
+        result="${current_var}_${item_var}_path=$real_path"
+        write_to_context var result || fail
+      fi
+      array_ord+=( $ord )
+    fi
+
+    if [[ ! -d $real_path/.dna ]]; then
+
+      local new_pass_thru=f
+
+      if [[ $item_var != _* ]]; then
+        new_prefix+=${item_var}_
+      else
+        new_pass_thru=t
+      fi
+
+      # recursive
+      prefix=$new_prefix pass_thru=$new_pass_thru load_dna_contents $item || fail
+
+    fi
+  end_function
+  handle_return
+}
+ 
+# if context_type is not set, then no context will be written
+# inputs:
+#   $1                  folder to load dna objects from
+#   prefix              prefix to append all var names with
+#   recursive           whether to descend into sub dirs
+#   ignore_unknown      if set to 'f', then unknown dna objects will throw an error
+#   context_type        which context file to write the variable to. If empty, no context file will be written
+#   auto_load_tab_vars  if set to 't', and a table is loaded with only one row, the fields of that row get loaded as variables also
+load_dna_contents() {
+  local folder=$1 prefix=${prefix:-} \
+    pass_thru=${pass_thru:-f} recursive=${recursive:-t} \
+    ignore_unknown=${ignore_unknown:-f} \
+    context_type=${context_type:-} \
+    auto_load_tab_vars=${auto_load_tab_vars:-f} \
+
+  begin_function
+
+    local items new_items
+    items=$(find1 $folder -not -name '.*' -not -name root | sort -g) || fail
+
+    local current_var=${prefix%_} ord item_name item_var= result 
+    if [[ $pass_thru == f ]]; then
+      local array_content=( )
+      local -n array_ord=${current_var}_ord
+    fi
+    current_var=${current_var//-/_}
+
+    begin_for item in $items; doo
+
+      item_name=${item##*/}
+
+      local dna_prefix=f
+      if [[ "$item_name" == dna-* ]]; then
+        dna_prefix=t
+        item_name=${item_name#dna-}
+      fi
+
+      if [[ "$item_name" == *:* && $item != */.dna/* ]]; then
+        local filter filters=${item_name%:*}
+        for filter in ${filters//:/ }; do
+          if [[ $cell_path != */"$filter"/* && $cell_path != */"$filter" ]]; then
+            continue 2
+          fi
+        done
+        item_name=${item_name##*:}
+      fi
+
+      extract_simple_name item_name ord item_name
+      item_var=${item_name//-/_}
+      item_var=${item_var%%,*}
+      item_var=${item_var%%:*}
+
+      local new_prefix= 
+      if [[ "$current_var" && $dna_prefix == f ]]; then
+        new_prefix=${current_var}_
+      fi
+
+      local real_path=$(realpath -m $item)
+
+      if [[ -d $item ]]; then
+        if [[ $recursive == t ]]; then
+          load_dna_contents_handle_dir || fail
+        fi
+      elif [[ -f $item ]]; then
+        prefix=$new_prefix load_dna_item $item || fail
+      elif [[ -L $item ]]; then
+        log_fatal "Broken link in dna: $item"
+        fail1
+      fi
+
+    end_for
+
+    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
+      local append=f
+      local -n v=$current_var
+      [[ "${v:-}" ]] && append=t
+      make_array_assignment $current_var array_content || fail
+      write_to_context var array_assignment || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+load_parent_context() {
+  local path=$1
+  begin_function
+    if [[ "$path" == /*/*/* ]]; then
+      load_parent_context ${path%/*}
+    fi
+    local root_path=$path/.root
+    if [[ -e $root_path ]]; then
+      log_debug "Appending parent trunk context ${path#/*/*/}"
+      echo "$NL# FROM $root_path" >>$context_path-$context_type.new || fail
+      if [[ -d $root_path ]]; then
+        load_dna_contents $root_path || fail
+      elif [[ -f $root_path ]]; then
+        cat $root_path >>$context_path-$context_type.new || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
+# Unused now?
+build_dim_expand_functions() {
+  begin_function
+    local dim
+    for dim in ${!all_dims[*]}; do
+      local -n expand_function=dim_${dim}_expand
+      if ! function_exists expand_function; then
+        build_context_expand || fail
+      fi
+    done; maybe_break
+  end_function
+  handle_return
+}
+
+# inputs:
+#   name
+#   derive_path
+#   cache_path
+make_derive_cache_handle_table() {
+  begin_function
+
+    local -n dtp=derive_table_${name}_path
+    dtp=$derive_path
+
+    load_derive_table $name || fail
+    derive_tables+=( $name )
+
+    write_vars_to_context \
+      derive_table_${name}_path \
+      derive_table_${name}_fields \
+      derive_table_${name}_data \
+      || fail
+
+    grip_fence
+
+    table=derive_table_${name} \
+    make_table_index || fail
+
+    table=derive_table_${name} \
+    write_index_to_context $cache_path.new || fail
+
+    grip_fence
+
+    local -n table_fields=derive_table_${name}_fields \
+      table_data=derive_table_${name}_data \
+      key_fields=derive_table_${name}_key_fields \
+
+    local field_count=${#table_fields[*]} \
+      data_count=${#table_data[*]} \
+
+    local row_count
+    (( row_count = data_count / field_count ))
+
+    load_derive_table_simple_keys || fail
+    load_derive_table_compound_keys || fail
+
+    write_vars_to_context derive_table_${name}_key_fields || fail
+
+    tab_get_derive_from || fail
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   all_dims
+#   dim_*_derive_tables
+# outputs:
+#   dim_*_refine_tables
+build_refine_tables() {
+  begin_function
+
+    local dim dt dts
+
+    for dim in ${!all_dims[*]}; do
+
+      local -n refine_tables=dim_${dim}_refine_tables \
+        dts=dim_${dim}_derive_tables \
+        members=dim_${dim}_members \
+
+      if [[ -v dts && -v members ]]; then
+
+        refine_tables=()
+        local member_count=${#members[*]}
+
+        for dt in $dts; do
+          local -n index=derive_table_${dt}_index_$dim
+          if (( ${#index[*]} == member_count )); then
+            refine_tables+=( $dt )
+          fi
+        done
+
+        if [[ "${refine_tables:-}" ]]; then
+          log_debug "Refine tables found for $dim: ${refine_tables[*]}"
+        fi
+
+        write_vars_to_context dim_${dim}_refine_tables || fail
+
+      fi
+
+    done
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   dim
+calc_missing_members() {
+  begin_function
+
+    local members_array 
+    log_debug "Calculating missing dim members for $dim"
+
+    local -n dts=dim_${dim}_derive_tables
+
+    local -A found_members=()
+
+    local dt v
+    if [[ -v dts ]]; then
+
+      local -n members=dim_${dim}_members
+      members=()
+
+      for dt in $dts; do
+        local -n index=derive_table_${dt}_index_$dim
+        for v in ${!index[*]}; do
+          found_members[$v]=1
+        done
+      done
+      members=( "${!found_members[@]}" )
+      sort_array members
+
+      log_debug "Found ${#found_members[*]} members for $dim"
+
+      if [[ ! "${found_members[*]}" ]]; then
+        log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
+        fail1
+      fi
+
+      write_vars_to_context dim_${dim}_members || fail
+
+    else
+      log_debug "No derive tables found for $dim, and no explicit members are defined, so it must be a dynamic dim"
+    fi
+
+  end_function
+  handle_return
+}
+
+build_context_branch() {
+  begin_function
+
+    local context_type=branch last_type=var
+    log_debug "Building branch context for $short_cell"
+
+    if [[ -e $context_path-$context_type.new ]]; then
+      rm $context_path-$context_type.new || fail
+    fi
+
+    local dim assignment member i members_string=
+    begin_for ((i = 0; i < branch_dim_count; i++)); doo
+      dim=${branch_dims[$i]}
+      member=${branch_members[$i]}
+      shell_quote_var member
+      assignment="d_$dim=$member"
+      members_string+="$member "
+      write_to_context var assignment || fail
+    end_for
+
+    local content="
+branch_dims=( ${branch_dims[*]} )
+branch_dim_count=$branch_dim_count
+branch_members=( ${members_string% } )
+branch_hashes=( ${branch_hashes[*]} )
+"
+    write_to_context var content || fail
+
+    mv $context_path-$context_type.new $context_path-$context_type || fail
+
+  end_function
+  handle_return
+}
+
+build_context_trunk_dna() {
+  local log_vars=cell_path log_show_vars=short_cell
+  begin_function
+
+    local item_name last_part dna_full_item suffix context_type=trunk
+    local -A append_vars
+
+    if [[ -d $dna_path ]]; then
+
+      auto_loads=()
+
+      if [[ "$cell_path" == */*/* ]]; then
+        load_parent_context ${cell_path%/*} || fail
+      fi
+
+      echo "$NL# FROM $dna_path" >>$context_path-$context_type.new || fail
+      prefix= load_dna_contents $dna_path || fail
+
+      write_vars_to_context auto_loads || fail
+
+      if [[ ! "${default_anchor_dims:-}" ]]; then
+        default_anchor_dims="${trunk_dims_expanded[*]:-}"
+        write_vars_to_context default_anchor_dims || fail
+      fi
+
+      mv $context_path-$context_type.new $context_path-$context_type.new2 || fail
+      echo "#!/usr/env bash" >$context_path-$context_type.new || fail
+      local v
+      for v in ${!append_vars[*]}; do
+        echo "$v=" >>$context_path-$context_type.new || fail
+      done
+
+      cat $context_path-$context_type.new2 >>$context_path-$context_type.new || fail
+      rm $context_path-$context_type.new2 || fail
+
+    elif [[ -f $dna_path ]]; then
+      safe_link $dna_path $context_path-$context_type.new || fail
+      source $dna_path || fail
+    else
+      log_vars=dna_path log_fatal "Internal error: dna not found"
+      fail1
+    fi
+
+  end_function
+  handle_return
+}
+
+build_context_trunk() {
+  begin_function
+
+    local context_type=trunk last_type=var
+
+    log_debug "Building trunk context for $short_cell"
+
+    if [[ -e $context_path-$context_type.new ]]; then
+      rm $context_path-$context_type.new || fail
+    fi
+
+    build_context_trunk_dna || fail
+
+    if [[ "${trunk_dims[0]:-}${sub_dims[0]:-}${control_props[0]:-}${data_props[0]:-}" ]]; then
+
+      local dims_missing_members=
+
+      write_vars_to_context derive_tables derive_functions derive_caches || fail
+
+      build_dim_info || fail
+
+      if [[ "$dims_missing_members" ]]; then
+        calc_missing_members || fail
+      fi
+
+      build_refine_tables || fail
+
+    fi
+
+    if [[ ! -d $status_path ]]; then
+      mkdir -p $status_path || fail
+    fi
+
+    get_key_path || fail
+    write_vars_to_context key_path || fail
+
+    mv $context_path-$context_type.new $context_path-$context_type || fail
+
+  end_function
+  handle_return
+}
+
 build_context() {
   local cell_path=$1
   begin_function
 
     load_dim_caches $cell_path || fail
     load_derive_caches $cell_path || fail
+    grip_fence
 
     if [[ ! -f $context_path-trunk ]]; then
       local trunk_context_path=$trunk_cell/.cyto/context
