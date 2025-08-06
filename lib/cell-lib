@@ -4,6 +4,20 @@
 [[ -v cell_lib_loaded ]] && return 0
 cell_lib_loaded=t
 
+handle_special_vars() {
+  local -n vars=$1
+  local t new_vars=
+  for t in $vars; do
+    if [[ $t == ^* ]]; then
+      t=${t#^}
+      new_vars+="p_$t p_${t}s d_$t d_${t}s s_$t s_${t}s "
+    else
+      new_vars+="$t "
+    fi
+  done
+  vars=${new_vars% }
+}
+
 cell_lib_init() {
   # don't let other users read any files written by these scripts
   umask 0077
@@ -56,30 +70,18 @@ cell_lib_init() {
   trace_dims=${trace_dims:-${trace_dim:-}}
 }
 
-handle_special_vars() {
-  local -n vars=$1
-  local t new_vars=
-  for t in $vars; do
-    if [[ $t == ^* ]]; then
-      t=${t#^}
-      new_vars+="p_$t p_${t}s d_$t d_${t}s s_$t s_${t}s "
-    else
-      new_vars+="$t "
-    fi
-  done
-  vars=${new_vars% }
-}
-
 # allocates a unique file optionally based on a given name in the cell tmp_path
 # returns tmp_file set to the full path of the file
 get_tmp_file() {
-  local base=${1:-tmp}
-  if [[ ! -e $tmp_path ]]; then
-    mkdir $tmp_path || return 1
-  fi
-  tmp_file=$(mktemp $tmp_path/$base.$$.XXXXXX) || return 1
-  defer "rm $tmp_file"
-  return 0
+  begin_function
+    local base=${1:-tmp}
+    if [[ ! -e $tmp_path ]]; then
+      mkdir $tmp_path || fail
+    fi
+    tmp_file=$(mktemp $tmp_path/$base.$$.XXXXXX) || fail
+    defer "rm $tmp_file"
+  end_function
+  handle_return
 }
 
 # renames the first field found with the given new name
