@@ -319,34 +319,27 @@ reached_debug_id() {
 debug_id_inc() {
   (( no_trace_depth++ )) || true
 
-  local allow_breaker_update=${allow_breaker_update:-t}
+  local allow_breaker_update=${allow_breaker_update:-t} \
+    debug_id_prev=$debug_id_current \
+
+  (( debug_id_current++ )) || true
 
   if [[ -v lifted_breaker_open[$current_function] ]]; then
-    #echo "Skipping $current_function because breaker is open" >&2
     (( no_trace_depth-- )) || true
     return 0
   fi
-
-  #echo -n .
 
   local debug_id_inc_start=${EPOCHREALTIME//./} diff
   if [[ -v lifted_breaker_time[$current_function] && $allow_breaker_update == t ]]; then
     (( diff = debug_id_inc_start - lifted_breaker_time[$current_function] )) || true
     if (( diff < grip )); then
-      #if (( grip < default_grip )); then
-      #  echo "Opening breaker for $current_function because two events happened less than $grip microseconds apart: $diff" >&$fd_original_err
-      #fi
       lifted_breaker_open[$current_function]=t
-      #echo "Breakers open: ${!lifted_breaker_open[*]}"
       (( no_trace_depth-- )) || true
       return 0
     fi
   fi
   lifted_breaker_time[$current_function]=$debug_id_inc_start
 
-  local debug_id_prev=$debug_id_current
-
-  (( debug_id_current++ )) || true
   local showed_something=f 
 
   fork_debug_id=$debug_id_current
