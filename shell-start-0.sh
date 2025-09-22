@@ -646,7 +646,7 @@ forge() {
 
     adjust_choices() {
       if [[ -d $current_selection/.. ]]; then
-        hidden=t walk_add_choice "." "*up*" "- Go up a folder"
+        hidden=t walk_add_choice "." "*up*" "Go up a folder"
       fi
 
       hidden=t walk_add_choice "a" "*action*" "Change action"
@@ -962,8 +962,7 @@ forge() {
             if [[ "$target" == */.lib/dim/* && -d "$target" ]]; then
               echo "Cloning a dim"
               read -p "New dim name: (leave empty to cancel) " new_name 
-              echo rsync -av $target/ $target1/$new_name/
-              rsync -av $target/ $target1/$new_name/
+              out_exec rsync -av $target/ $target1/$new_name/
 
               local dim_type dim
               for dim_type in trunk_dims sub_dims control_props data_props; do
@@ -987,11 +986,9 @@ forge() {
               read -p "New name: (leave empty to cancel) " new_name 
               if [[ "$new_name" ]]; then
                 if [[ -d $target ]]; then
-                  echo rsync -av $target/ $target1/$new_name/
-                  rsync -av $target/ $target1/$new_name/
+                  out_exec rsync -av $target/ $target1/$new_name/
                 else
-                  echo rsync -av $target $target1/$new_name
-                  rsync -av $target $target1/$new_name
+                  out_exec rsync -av $target $target1/$new_name
                 fi
               fi
             else
@@ -1002,8 +999,32 @@ forge() {
             local new_name=
             read -p "New name: (leave empty to cancel) " new_name 
             if [[ "$new_name" ]]; then
-              echo mv $target $target1/$new_name
-              mv $target $target1/$new_name
+              if [[ -e "$target" ]]; then
+                local dest_target=$target1
+                if [[ "$new_name" == ^* ]]; then
+                  new_name=${new_name#^}
+                  local after_module=${dest_target#/*/*/} module
+                  module=${dest_target%/$after_module}
+                  dest_target=$module
+                fi
+                local parent_dir=$dest_target/$new_name
+                parent_dir=${parent_dir%/*}
+                if [[ ! -d $parent_dir ]]; then
+                  out_exec mkdir -p $parent_dir
+                fi
+                if [[ -d $target/.dna ]]; then
+                  out_exec relink $target $dest_target/$new_name /seed
+                  out_exec relink $target $dest_target/$new_name /work
+                  target=/work/${target#/seed/}
+                  dest_target=/work/${dest_target#/seed/}
+                  out_exec relink $target $dest_target/$new_name /work
+                else
+                  out_exec mv $target $dest_target/$new_name
+                fi
+              else
+                echo "ERROR: source doesn't exist: $target" >&2
+                return 1
+              fi
             fi
           ;;
           select)
