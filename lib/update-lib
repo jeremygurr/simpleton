@@ -71,11 +71,10 @@ load_upstream_vars() {
 
     local export_path=$target_cell/export \
       out_path=$target_cell \
-      prefix=${prefix:-}${target_cell##*/}_ \
+      prefix=${prefix//-/_} \
       dna_roots= \
       context_type= \
 
-    prefix=${prefix//-/_}
 
     pass_thru=t \
     recursive=f \
@@ -128,6 +127,12 @@ execute_up_inner() {
       maybe_fix_up || fail
 
       upstream_cell_link=$up_cell
+      if [[ $skip_downstream_linking == t ]]; then
+        upstream_cell_link=
+        # so that updates of cells from here don't inherit this unintentionally
+        skip_downstream_linking=f
+      fi
+
       get_short_cell $cell_path
 
       if [[ $up_cell_type == up ]]; then
@@ -167,7 +172,10 @@ execute_up_inner() {
 # inputs:
 #   up_cell_type
 #   up_cell
+#   skip_downstream_linking   don't reconnect upstream cell to downstream links
 execute_up() {
+  local skip_downstream_linking=${skip_downstream_linking:-f}
+
   begin_function
     if [[ ! "${up_cell:-}" ]]; then
       log_fatal "Internal error: up_cell was not passed into execute_up"
@@ -189,8 +197,17 @@ execute_up() {
     fork execute_up_inner || fail
 
     target_cell=$up_cell \
-    prefix=${up_cell_type}_ \
+    prefix=${up_cell_type}_${target_cell##*/}_ \
     load_upstream_vars || fail
+
+    grip_fence
+
+    # also load without the prefix
+    target_cell=$up_cell \
+    prefix= \
+    load_upstream_vars || fail
+
+    grip_fence
 
     validation_says_already_done=
 
@@ -966,9 +983,16 @@ create_sub_cell() {
 update_downstream() {
   begin_function
 
+    zombie_log "update_downstream of cell_path=$cell_path"
+
     local old_link=$upstream_cell_link \
       old_target=$(readlink $upstream_cell_link) \
       new_target=$cell_path || fail
+
+    if [[ "$new_target" == "$old_link" ]]; then
+      log_fatal "Internal error: new_target and old_link are the same: $new_target"
+      fail1
+    fi
 
     if [[ $cell_is_leaf == t && "${downstream_cell_name:-}" ]]; then
       create_downstream_links || fail
@@ -993,7 +1017,7 @@ update_downstream() {
 
     if [[ $update_downstream_link == t ]]; then
       log_debug "Linking upstream cell to it's downstream cell cyto up folder"
-      force=t safe_link $cell_path $old_link || fail
+      force=t safe_link $new_target $old_link || fail
     fi
 
   end_function
@@ -1654,13 +1678,6 @@ update_command() {
     if [[ $current_mock == disabled ]]; then
       log_fatal "Cell is disabled. Use mock command to change it if this is not intended."
       fail1
-    fi
-
-    # this already happened in switch_context
-    #setup_dims || fail
-
-    if [[ "${auto_loads:-}" ]]; then
-      execute_auto_loads "${auto_loads[@]}" || fail
     fi
 
     if [[ ${branches_only:-f} == t && $cell_is_leaf == t ]]; then

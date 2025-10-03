@@ -1010,7 +1010,7 @@ forge() {
                 local parent_dir=$dest_target/$new_name
                 parent_dir=${parent_dir%/*}
                 if [[ ! -d $parent_dir ]]; then
-                  out_exec mkdir -p $parent_dir
+                  out_exec mkdir -p $parent_dir || return 1
                 fi
                 if [[ -d $target/.dna ]]; then
                   out_exec relink $target $dest_target/$new_name /seed
@@ -1019,7 +1019,9 @@ forge() {
                   dest_target=/work/${dest_target#/seed/}
                   out_exec relink $target $dest_target/$new_name /work
                 else
-                  out_exec mv $target $dest_target/$new_name
+                  if [[ -d $dest_target ]]; then
+                    out_exec mv $target $dest_target/$new_name || return 1
+                  fi
                 fi
               else
                 echo "ERROR: source doesn't exist: $target" >&2
@@ -1815,7 +1817,7 @@ relink() {
     fi
   done
 
-  if [[ -e "$from" && ! -e "$to" ]]; then
+  if [[ -e "$from" && ! -e "$to" && -d "${to%/*}" ]]; then
     out_exec mv "$from" "$to" || return 1
   fi
 

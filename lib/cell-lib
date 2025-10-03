@@ -4,29 +4,12 @@
 [[ -v cell_lib_loaded ]] && return 0
 cell_lib_loaded=t
 
-handle_special_vars() {
-  local -n vars=$1
-  local t new_vars=
-  for t in $vars; do
-    if [[ $t == ^* ]]; then
-      t=${t#^}
-      new_vars+="p_$t p_${t}s d_$t d_${t}s s_$t s_${t}s "
-    else
-      new_vars+="$t "
-    fi
-  done
-  vars=${new_vars% }
-}
-
 cell_lib_init() {
   # don't let other users read any files written by these scripts
   umask 0077
 
   empty_member=_ 
   execute_inner=${execute_inner:-${dig:-m}}
-
-  handle_special_vars trace_vars
-  handle_special_vars pause_at_vars
 
   : ${risk_tolerance:=${risk:-0}}
   case "$risk_tolerance" in
@@ -1271,15 +1254,6 @@ load_dna_item() {
 
     local var_name o code= load_type=var is_auto=f
     extract_simple_name file_name o var_name
-
-    #if [[ $var_name == auto-* ]]; then
-    #  is_auto=t
-    #  var_name=${var_name#auto-}
-    #fi
-
-    #if [[ $is_auto == t ]]; then
-    #  auto_loads+=( $var_name.$suffix )
-    #fi
 
     var_name=${var_name//-/_}
     var_name=$prefix$var_name
@@ -3443,7 +3417,7 @@ get_dim_parameters() {
   begin_function
     dim_parameters=
     local dim short_dim
-    begin_for dim in ${related_dims_expanded[*]} ${trunk_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-}; doo
+    begin_for dim in ${related_dims_expanded[*]}; doo
       if dim_set_in_parameter $dim; then
 
         local short_dims
@@ -3469,15 +3443,15 @@ get_dim_parameters() {
 
         pdims=( $pdims )
 
-        local value
-        for value in "${pdims[@]}"; do
-          dim_${dim}_expand value || fail1
+        #local value
+        #for value in "${pdims[@]}"; do
+        #  dim_${dim}_expand value || fail1
 
-          if [[ "$problem" ]]; then
-            log_fatal "$problem"
-            fail1
-          fi
-        done
+        #  if [[ "$problem" ]]; then
+        #    log_fatal "$problem"
+        #    fail1
+        #  fi
+        #done
 
         dim_parameters+="$dim "
 
@@ -3525,8 +3499,46 @@ expand_dim_array() {
   handle_return
 }
 
+execute_dim_upstreams() {
+  begin_function
+    local related_dim
+    begin_for related_dim in ${related_dims_expanded[*]}; doo
+
+      local -n dim_up=dim_${related_dim}_up
+      if [[ "${dim_up:-}" ]]; then
+        local dim_up_name
+        begin_for dim_up_name in ${dim_up[*]}; doo
+
+          log_verbose "Resolving dim upstream $dim_up_name of $related_dim"
+
+          local -n dim_up_path=dim_${related_dim}_up_${dim_up_name//-/_}_path
+
+          if [[ ! -d $dim_up_path/.dna ]]; then
+            log_fatal "Invalid upstream path: $dim_up_path"
+            fail1
+          fi
+
+          if [[ $dim_up_path == /seed/* ]]; then
+            dim_up_path=/work/${dim_up_path#/seed/}
+          fi
+
+          up_cell_type=dim_${related_dim}_up_${dim_up_name} \
+          skip_downstream_linking=t \
+          up_cell=$dim_up_path \
+          execute_up || fail
+
+        end_for
+      fi
+
+    end_for
+  end_function
+  handle_return
+}
+
 setup_dims() {
   begin_function
+
+    execute_dim_upstreams || fail
 
     required_dims=()
     calc_anchor_dims || fail
@@ -3936,8 +3948,8 @@ build_context_support_dims_find_related() {
 build_context_related_dims() {
   begin_function
 
-    local dim dim_parents next_level_row support_dim_depth=0 down_dim
-      anchors=${anchor_dims:-${default_anchor_dims[*]:-}}
+    local dim dim_parents next_level_row support_dim_depth=0 down_dim \
+      anchors=${anchor_dims:-${default_anchor_dims[*]:-}} \
 
     local -A related_dims_set=() \
       support_dims_set=() \
@@ -3955,6 +3967,7 @@ build_context_related_dims() {
       if [[ ! -v tried[$dim] ]]; then
         tried[$dim]=1
         next_level_dims[$dim]=1
+        related_dims_set[$dim]=1
       fi
     end_for
 
@@ -4035,45 +4048,31 @@ build_dim_info() {
     build_context_related_dims || fail
 
     local dim dims
-    for dim_type in trunk_dims related_dims sub_dims control_props data_props; do
 
-      local -n dim_array=${dim_type}_expanded
+    for dim in ${related_dims_expanded[*]}; do
 
-      for dim in "${dim_array[@]}"; do
+      get_plural $dim dims
+      localize_dims+=" d_$dim d_$dims"
+      localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
+      write_vars_to_context dim_${dim}_type || fail
 
-        local -n dt=dim_${dim}_type
+      local shorter_dim=$dim shorter_dims
 
-        if [[ "${dt:-}" ]]; then
-          log_fatal "Dim $dim was defined as a $dim_type, but it is also defined as a $dt. A dim can only be of one type. Fix the dna definition for this cell."
-          fail1
-        fi
+      dim_shorts[$dim]=$dim
+      while [[ $shorter_dim == *_* ]]; do
 
-        dt=$dim_type
-
-        get_plural $dim dims
-        localize_dims+=" d_$dim d_$dims"
-        localize_reverse_dims+=" $dim=\${d_$dim:-} $dims=( \"\${d_$dims[@]:-}\" )"
-        write_vars_to_context dim_${dim}_type || fail
-
-        local shorter_dim=$dim shorter_dims
-
-        dim_shorts[$dim]=$dim
-        while [[ $shorter_dim == *_* ]]; do
-
-          shorter_dim=${shorter_dim#*_}
-          get_plural $shorter_dim shorter_dims
-          if [[ ! -v dim_shorts[$shorter_dim] ]]; then
-            dim_shorts[$shorter_dim]=$dim
-            dim_shorts[$shorter_dims]=$dims
-          else
-            # Allow exact dim name to override all abbreviations
-            if [[ "${dim_shorts[$shorter_dim]}" != $shorter_dim ]]; then
-              dim_shorts[$shorter_dim]+=" $dim"
-              dim_shorts[$shorter_dims]+=" $dims"
-            fi
+        shorter_dim=${shorter_dim#*_}
+        get_plural $shorter_dim shorter_dims
+        if [[ ! -v dim_shorts[$shorter_dim] ]]; then
+          dim_shorts[$shorter_dim]=$dim
+          dim_shorts[$shorter_dims]=$dims
+        else
+          # Allow exact dim name to override all abbreviations
+          if [[ "${dim_shorts[$shorter_dim]}" != $shorter_dim ]]; then
+            dim_shorts[$shorter_dim]+=" $dim"
+            dim_shorts[$shorter_dims]+=" $dims"
           fi
-
-        done
+        fi
 
       done
 
