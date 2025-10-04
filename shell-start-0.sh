@@ -646,7 +646,7 @@ forge() {
 
     adjust_choices() {
       if [[ -d $current_selection/.. ]]; then
-        hidden=t walk_add_choice "." "*up*" "Go up a folder"
+        hidden=t walk_add_choice "." "*up*" "- Go up a folder"
       fi
 
       hidden=t walk_add_choice "a" "*action*" "Change action"
@@ -708,7 +708,27 @@ forge() {
         echo "New file will be created here: $new_target"
         read -p "Name of new file: " new_name
         if [[ "${new_name:-}" ]]; then
-          edit "$new_target/$new_name"
+          local we_are_sure=t
+          if [[ $new_name == *.arr || $new_name == *.var || $new_name == *.tab ]]; then
+            if [[ $new_target != */.dna/* ]]; then
+              echo "Warning: You have specified that you want to create a file in $new_target, which is not a dna folder."
+              local result
+              prompt_ynq "Yet you are creating a dna type file. Are you sure you don't want this file in .dna?" result
+              case $result in
+                n)
+                  we_are_sure=f
+                ;;
+                q)
+                  fail1
+                ;;
+              esac
+            fi
+          fi
+          if [[ $we_are_sure == t ]]; then
+            edit "$new_target/$new_name"
+          else
+            echo "Aborting edit"
+          fi
         fi
       elif [[ "$response" == "*expand*" ]]; then
         if [[ $link_expansion == f ]]; then
@@ -1817,7 +1837,6 @@ relink() {
     fi
   done
 
-  if [[ -e "$from" && ! -e "$to" && -d "${to%/*}" ]]; then
     out_exec mv "$from" "$to" || return 1
   fi
 
