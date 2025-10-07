@@ -20,13 +20,11 @@ handle_special_vars() {
   local -n vars=$1
   local t new_vars=
   for t in $vars; do
-
     if [[ ! "${t#^}" =~ ^[a-zA-Z0-9_]+$ ]]; then
       echo "Invalid var name: ${t#^}" >&$fd_original_err
       vars=
       return 1
     fi
-
   done
   vars=${new_vars% }
 }
@@ -40,35 +38,7 @@ bash_lifted_init() {
 
   trace_vars=${trace_vars:-${trace_var:-${traces:-${trace:-}}}}
 
-  pause_at_functions=${pause_at_functions:-${pause_at_function:-}}
-  pause_at_vars=${pause_at_vars:-${pause_at_var:-}}
-  pause_at_debug_id=${pause_at_debug_id:-${pause_at_debug:-}}
-
-  if [[ "${pause:-}" ]]; then
-    if [[ "$pause" =~ ^[0-9\.]+$ ]]; then
-      if [[ ! "$pause_at_debug_id" ]]; then
-        pause_at_debug_id=$pause
-      fi
-    elif [[ "$pause" =~ ^[a-zA-Z_0-9]+$ ]]; then
-      if [[ ! "$pause_at_vars" ]]; then
-        pause_at_vars=$pause
-      fi
-      if [[ ! "$pause_at_functions" ]]; then
-        pause_at_functions=$pause
-      fi
-    elif [[ "$pause" =~ ^[a-zA-Z_0-9\^\ ]+$ ]]; then
-      if [[ ! "$pause_at_vars" ]]; then
-        pause_at_vars=$pause
-      fi
-    fi
-  fi
-
-  if [[ "$pause_at_vars" ]]; then
-    trace_vars+=" $pause_at_vars"
-  fi
-
   handle_special_vars trace_vars || return 1
-  handle_special_vars pause_at_vars || return 1
 
   DEBUG_COLOR=$CYAN
   DIM_DEBUG_COLOR=$DIM_CYAN
@@ -94,6 +64,15 @@ bash_lifted_init() {
   fi
 }
 
+# Used to pass vars to parent of forked processes
+# Must set reply_file to a valid location for this to work
+reply_to_caller() {
+  if [[ "${reply_file:-}" ]]; then
+    echo "$*" >>$reply_file || return 1
+  fi
+  return 0
+}
+
 handle_user_interrupt() {
   local c silent=f prompt=${1:-Paused.}
   echo >&$fd_original_err
@@ -117,11 +96,7 @@ handle_user_interrupt() {
         local log=
         read -u $fd_original_in -e -p "New log level: " log >&$fd_original_err
         if [[ "$log" ]]; then
-          if function_exists resolve_log_var; then
-            resolve_log_var
-          else
-            log_level_filter=$log
-          fi
+          resolve_log_var
           log_format=default
           log_level_filter_changed
           debug_log_level_filter=$log
@@ -172,7 +147,7 @@ micro_time_diff() {
 
 show_time_update() {
   if [[ "${show_time:-f}" == t* && ${showed_something:-f} == f ]]; then
-    new_time=${EPOCHREALTIME/./}
+    local new_time=${EPOCHREALTIME/./}
     if [[ $show_time == ts ]]; then
       prefix="$new_time "
     elif [[ "${show_time_prev:-}" ]]; then
@@ -185,7 +160,7 @@ show_time_update() {
 }
 
 show_trace_vars() {
-  local indent=0 prefix= new_time
+  local indent=0 prefix= showed_something=f 
 
   if [[ ${show_debug_id:-f} == a ]]; then
     show_time_update
@@ -355,7 +330,6 @@ debug_id_inc() {
   local debug_id_prev=$debug_id_current
 
   (( debug_id_current++ )) || true
-  local showed_something=f 
 
   fork_debug_id=$debug_id_current
   fork_debug_id_minus_one=$debug_id_prev
