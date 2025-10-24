@@ -166,9 +166,36 @@ bash_lifted_init() {
   fi
 
   original_cmd=${original_cmd:-"$0 $*"}
+  first_run=${first_run:-t}
 
-  local first_run=${first_run:-t}
+  declare -A log_level_num_map=( 
+    [off]=0
+    [fatal]=1 
+    [error]=2 
+    [warn]=3 
+    [info]=4 
+    [verbose]=5 
+    [debug]=6 
+    [trace]=7 
+    [all]=8
+    )
 
+  declare -A log_level_color_map=( 
+    [all]= 
+    [trace]= 
+    [debug]= 
+    [verbose]= 
+    [info]=
+    [warn]=$YELLOW
+    [error]=$RED 
+    [fatal]=$RED 
+    [off]=
+    )
+
+  debug_setup
+}
+
+debugger_init() {
   debug_output=${debug_output:-f} \
   debug_ignore=${debug_ignore:-} \
   tracing_depth=${tracing_depth:-0} \
@@ -218,7 +245,8 @@ bash_lifted_init() {
   debug_ignore=( $debug_ignore )
   debug_ignore="${debug_ignore[*]}"
 
-  if [[ "$first_run" == t ]]; then
+  if [[ "${first_run:-t}" == t ]]; then
+    first_run=f
     rm $tmp_folder/debug-* $tmp_folder/side-log-* &>/dev/null || true
   fi
 
@@ -245,32 +273,6 @@ bash_lifted_init() {
     rm -rf $tmp_folder/debug_highlight &>/dev/null
     mkdir -p $tmp_folder/debug_highlight || exit 1
   fi
-
-  declare -A log_level_num_map=( 
-    [off]=0
-    [fatal]=1 
-    [error]=2 
-    [warn]=3 
-    [info]=4 
-    [verbose]=5 
-    [debug]=6 
-    [trace]=7 
-    [all]=8
-    )
-
-  declare -A log_level_color_map=( 
-    [all]= 
-    [trace]= 
-    [debug]= 
-    [verbose]= 
-    [info]=
-    [warn]=$YELLOW
-    [error]=$RED 
-    [fatal]=$RED 
-    [off]=
-    )
-
-  debug_setup
 }
 
 # Used to pass vars to parent of forked processes
@@ -1107,6 +1109,149 @@ parameters_to_env() {
       real_params+=( "$term" )
     fi
   done
+}
+
+# override this to add custom flags
+show_flag_usage_custom() {
+  :
+}
+
+# override this to add custom flags
+# return 0 if the flag was handled, 1 otherwise
+handle_flag_custom() {
+  local flag=$1 # single character flag to be handled
+  return 1;
+}
+
+show_flag_usage() {
+  out "Flags are shortcuts for longer settings, and only the following are defined:"
+  out "  Flag   Equivalent setting"
+  out "  ------ -----------------------------"
+  {
+    show_flag_usage_custom
+    out "  -d     debug flags: same as -vvi (debug logs + show debug ids)"
+    out "  -g     grip++ (increase debug checkpoints, slowing down execution but making it easier to debug)"
+    out "  -i     show_debug_id=t (if used twice, show_debug_id=a)"
+    out "  -l     less detail: command_detail-- (command_detail defaults to 0)"
+    out "  -m     more detail: command_detail++ (can use this twice to get the most detail)"
+    out "  -q     less logs. Can be used repeatedly. Without this, log=info, -q = warn, -qq = error, -qqq = fatal"
+    out "  -s     trace_structure=t"
+    out "  -T     show_time=t"
+    out "  -v     more logs. Can be used repeatedly. Without this, log=info, -v = verbose, -vv = debug, -vvv = trace"
+    out "  -x     debug_on_exit=t"
+  } | sort
+}
+
+handle_flag() {
+  local flags=${1#-} flag
+
+  while [[ "$flags" ]]; do
+    flag=${flags:0:1}
+    flags=${flags#?}
+    if ! handle_flag_custom "$flag"; then
+      case $flag in
+        \?)
+          show_flag_usage
+          exit 100
+          ;;
+        d)
+          show_debug_id=t
+          log=debug
+          ;;
+        g)
+          (( grip /= 10 )) || true
+          ;;
+        i)
+          if [[ "${show_debug_id:-f}" != f ]]; then
+            show_debug_id=a
+          else
+            show_debug_id=t
+          fi
+          ;;
+        l)
+          (( command_detail-- )) || true
+          ;;
+        m)
+          (( command_detail++ )) || true
+          ;;
+        q)
+          case "${log:-}" in
+            '')
+              log=warn
+            ;;
+            warn)
+              log=error
+            ;;
+            error)
+              log=fatal
+            ;;
+          esac
+          ;;
+        r)
+          recursive_command=t
+          ;;
+        s)
+          trace_structure=t
+          ;;
+        T)
+          show_time=t
+          ;;
+        v)
+          case "${log:-}" in
+            '')
+              log=verbose
+            ;;
+            verbose)
+              log=debug
+            ;;
+            debug)
+              log=trace
+              trace_structure=t
+            ;;
+          esac
+          ;;
+        x)
+          debug_on_exit=t
+          ;;
+        *)
+          log_fatal "Unknown flag: $flag"
+          show_flag_usage
+          return 1
+          ;;
+      esac
+    fi
+  done
+}
+
+reset_flags() {
+  trace_var_always=${trace_var_always:-f}
+  log=${log:-}
+  show_debug_id=${show_debug_id:-f}
+}
+
+get_help_depth_and_flags() {
+  local parameters=( "$@" )
+  begin_function
+
+    for parameter in ${parameters[*]}; do
+      case $parameter in
+        help|--help|-h|\?)
+          (( help_depth++ )) 
+        ;;
+        -*)
+          handle_flag $parameter || fail
+        ;;
+        \?\?)
+          (( help_depth += 2 )) 
+        ;;
+      esac
+    done
+  end_function
+  if (( help_depth >= 2 )); then
+    (( command_detail++ ))
+  fi
+  debug_return_vars=help_depth
+  handle_return
 }
 
 # usage: required_function {function(s) to check...}
@@ -3409,7 +3554,6 @@ log_and_run() {
 # BASH Debugger
 # At beginning of script you wish to debug: 
 #   source this file. example: source /home/my_user/repos/bash-debugger
-#   intialize debugger in your source: debugger_init
 #   execute debug in the code where you wish to begin debugging.
 # press '?' for list of commands while debugging
 # If you want to get syntax highlighting working, install source-highlight
@@ -4209,7 +4353,7 @@ debug_command_loop() {
         echo >&$fd_original_err
         read -u $fd_original_in -e -p "Display: " debug_display >&$fd_original_err
         set +u 
-        if [[ "$debug_display" =~ ^\$?[0-9]+ ]]; then
+        if [[ "$debug_display" =~ ^\$?[0-9@]+$ ]]; then
           set -- "${debug_saved_params[@]}"
           eval "echo \$${debug_display#\$}" >&$fd_original_err
         else
@@ -5617,156 +5761,14 @@ debug_setup() {
   fi
 }
 
-# override this to add custom flags
-show_flag_usage_custom() {
-  :
-}
-
-# override this to add custom flags
-# return 0 if the flag was handled, 1 otherwise
-handle_flag_custom() {
-  local flag=$1 # single character flag to be handled
-  return 1;
-}
-
-show_flag_usage() {
-  out "Flags are shortcuts for longer settings, and only the following are defined:"
-  out "  Flag   Equivalent setting"
-  out "  ------ -----------------------------"
-  {
-    show_flag_usage_custom
-    out "  -d     debug flags: same as -vvi (debug logs + show debug ids)"
-    out "  -g     grip++ (increase debug checkpoints, slowing down execution but making it easier to debug)"
-    out "  -i     show_debug_id=t (if used twice, show_debug_id=a)"
-    out "  -l     less detail: command_detail-- (command_detail defaults to 0)"
-    out "  -m     more detail: command_detail++ (can use this twice to get the most detail)"
-    out "  -q     less logs. Can be used repeatedly. Without this, log=info, -q = warn, -qq = error, -qqq = fatal"
-    out "  -s     trace_structure=t"
-    out "  -T     show_time=t"
-    out "  -v     more logs. Can be used repeatedly. Without this, log=info, -v = verbose, -vv = debug, -vvv = trace"
-    out "  -x     debug_on_exit=t"
-  } | sort
-}
-
-handle_flag() {
-  local flags=${1#-} flag
-
-  while [[ "$flags" ]]; do
-    flag=${flags:0:1}
-    flags=${flags#?}
-    if ! handle_flag_custom "$flag"; then
-      case $flag in
-        \?)
-          show_flag_usage
-          exit 100
-          ;;
-        d)
-          show_debug_id=t
-          log=debug
-          ;;
-        g)
-          (( grip /= 10 )) || true
-          ;;
-        i)
-          if [[ "${show_debug_id:-f}" != f ]]; then
-            show_debug_id=a
-          else
-            show_debug_id=t
-          fi
-          ;;
-        l)
-          (( command_detail-- )) || true
-          ;;
-        m)
-          (( command_detail++ )) || true
-          ;;
-        q)
-          case "${log:-}" in
-            '')
-              log=warn
-            ;;
-            warn)
-              log=error
-            ;;
-            error)
-              log=fatal
-            ;;
-          esac
-          ;;
-        r)
-          recursive_command=t
-          ;;
-        s)
-          trace_structure=t
-          ;;
-        T)
-          show_time=t
-          ;;
-        v)
-          case "${log:-}" in
-            '')
-              log=verbose
-            ;;
-            verbose)
-              log=debug
-            ;;
-            debug)
-              log=trace
-              trace_structure=t
-            ;;
-          esac
-          ;;
-        x)
-          debug_on_exit=t
-          ;;
-        *)
-          log_fatal "Unknown flag: $flag"
-          show_flag_usage
-          return 1
-          ;;
-      esac
-    fi
-  done
-}
-
-reset_flags() {
-  trace_var_always=${trace_var_always:-f}
-  log=${log:-}
-  show_debug_id=${show_debug_id:-f}
-}
-
-get_help_depth_and_flags() {
-  local parameters=( "$@" )
-  begin_function
-
-    for parameter in ${parameters[*]}; do
-      case $parameter in
-        help|--help|-h|\?)
-          (( help_depth++ )) 
-        ;;
-        -*)
-          handle_flag $parameter || fail
-        ;;
-        \?\?)
-          (( help_depth += 2 )) 
-        ;;
-      esac
-    done
-  end_function
-  if (( help_depth >= 2 )); then
-    (( command_detail++ ))
-  fi
-  debug_return_vars=help_depth
-  handle_return
-}
-
 if [[ ${auto_setup_lifted:-t} == t ]]; then
   command_detail=${command_detail:-0}
   parameters_to_env "$@" || exit 1
   if [[ "${real_params:-}" ]]; then
-    set -- "${real_params[@]}"; shift
+    set -- "${real_params[@]}"
   fi
-  bash_lifted_init || exit 1
-  get_help_depth_and_flags || exit 1
+  bash_lifted_init "$@" || exit 1
+  debugger_init || exit 1
+  get_help_depth_and_flags "$@" || exit 1
 fi
 
