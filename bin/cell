@@ -18,120 +18,41 @@ cell_lib_init || exit 1
 help_depth=0
 recursive_command=${recursive_command:-${recursive:-f}}
 
-show_flag_usage() {
-  out "Flags are shortcuts for longer settings, and only the following are defined:"
-  out "  Flag   Equivalent setting"
-  out "  ------ -----------------------------"
-  out "  -d     debug flags: same as -vvi (debug logs + show debug ids)"
+# overrides what is in lifted-bash
+show_flag_usage_custom() {
   out "  -f     refresh=t (force refresh only current cell)"
   out "  -ff    fresh=0 (force refresh of current cell and important upstreams)"
   out "  -fff   fresh=0 and pre_validate=f (don't check to see if the change is already applied)"
-  out "  -g     grip++ (increase debug checkpoints, slowing down execution but making it easier to debug)"
-  out "  -i     show_debug_id=t (if used twice, show_debug_id=a)"
-  out "  -l     less detail: command_detail-- (command_detail defaults to 0)"
-  out "  -m     more detail: command_detail++ (can use this twice to get the most detail)"
-  out "  -q     less logs. Can be used repeatedly. Without this, log=info, -q = warn, -qq = error, -qqq = fatal"
   out "  -r     apply command recusively. Only used by status for now."
   out "  -R     replay=t"
-  out "  -s     trace_structure=t"
   out "  -t     out_form=table (used for get command)"
-  out "  -T     show_time=t"
-  out "  -v     more logs. Can be used repeatedly. Without this, log=info, -v = verbose, -vv = debug, -vvv = trace"
-  out "  -x     debug_on_exit=t"
 }
 
-handle_flag() {
-  local flags=${1#-} flag
-
-  while [[ "$flags" ]]; do
-    flag=${flags:0:1}
-    flags=${flags#?}
-    case $flag in
-      \?)
-        show_flag_usage
-        exit 100
-        ;;
-      d)
-        show_debug_id=t
-        log=debug
-        ;;
-      f)
-        if [[ "${fresh:-}" == 0 ]]; then
-          pre_validate=f
-        elif [[ "${refresh:-}" == t ]]; then
-          fresh=0
-        else
-          refresh=t
-        fi
-        ;;
-      g)
-        (( grip /= 10 )) || true
-        ;;
-      i)
-        if [[ "${show_debug_id:-f}" != f ]]; then
-          show_debug_id=a
-        else
-          show_debug_id=t
-        fi
-        ;;
-      l)
-        (( command_detail-- )) || true
-        ;;
-      m)
-        (( command_detail++ )) || true
-        ;;
-      q)
-        case "${log:-}" in
-          '')
-            log=warn
-          ;;
-          warn)
-            log=error
-          ;;
-          error)
-            log=fatal
-          ;;
-        esac
-        ;;
-      R)
-        replay=t
-        ;;
-      r)
-        recursive_command=t
-        ;;
-      s)
-        trace_structure=t
-        ;;
-      t)
-        out_form=table
-        ;;
-      T)
-        show_time=t
-        ;;
-      v)
-        case "${log:-}" in
-          '')
-            log=verbose
-          ;;
-          verbose)
-            log=debug
-          ;;
-          debug)
-            log=trace
-            trace_structure=t
-          ;;
-        esac
-        ;;
-      x)
-        debug_on_exit=t
-        ;;
-      *)
-        log_fatal "Unknown flag: $flag"
-        show_flag_usage
-        return 1
-        ;;
-    esac
-  done
+# overrides what is in lifted-bash
+# return 0 if the flag was handled, 1 otherwise
+handle_flag_custom() {
+  local flag=$1 # single character flag to be handled
+  case $flag in
+	f)
+	  if [[ "${fresh:-}" == 0 ]]; then
+		pre_validate=f
+	  elif [[ "${refresh:-}" == t ]]; then
+		fresh=0
+	  else
+		refresh=t
+	  fi
+	  return 0
+	  ;;
+	R)
+	  replay=t
+	  return 0
+	  ;;
+	t)
+	  out_form=table
+	  return 0
+	  ;;
+  esac
+  return 1;
 }
 
 show_usage() {
@@ -193,29 +114,6 @@ show_usage() {
     fi
 
   end_function
-  handle_return
-}
-
-get_help_depth_and_flags() {
-  begin_function
-    for parameter in ${parameters[*]}; do
-      case $parameter in
-        help|--help|-h|\?)
-          (( help_depth++ )) 
-        ;;
-        -*)
-          handle_flag $parameter || fail
-        ;;
-        \?\?)
-          (( help_depth += 2 )) 
-        ;;
-      esac
-    done
-  end_function
-  if (( help_depth >= 2 )); then
-    (( command_detail++ ))
-  fi
-  debug_return_vars=help_depth
   handle_return
 }
 
@@ -368,12 +266,6 @@ handle_cell() {
   handle_return
 }
 
-reset_flags() {
-  trace_var_always=${trace_var_always:-f}
-  log=${log:-}
-  show_debug_id=${show_debug_id:-f}
-}
-
 top_level() {
   local parameters=( "$@" ) \
 
@@ -387,8 +279,7 @@ top_level() {
       multi_commands=f \
       clean_cells=${clean_cells:-${clean_cell:-${clean:-}}} \
 
-    reset_flags
-    get_help_depth_and_flags || fail
+    get_help_depth_and_flags "${parameters[@]}" || fail
 
     omni_log_init $original_cmd || fail
 
