@@ -2,7 +2,6 @@
 
 SIMPLETON_LIB=/repo/simpleton/lib
 source $SIMPLETON_LIB/lifted-bash || exit 1
-source $SIMPLETON_LIB/bash-lib || exit 1
 bash_lifted_init
 source $SIMPLETON_LIB/walk-lib || exit 1
 
@@ -1815,7 +1814,6 @@ find_links() {
   done
 }
 
-# moves a file or folder and updates all links pointing to it
 relink() {
   local from=$1 to=$2 start_at=${start_at:-$PWD}
 
@@ -1837,6 +1835,7 @@ relink() {
     fi
   done
 
+  if [[ -e "$from" && ! -e "$to" && -d "${to%/*}" ]]; then
     out_exec mv "$from" "$to" || return 1
   fi
 
