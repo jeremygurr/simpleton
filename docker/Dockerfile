@@ -43,6 +43,7 @@ RUN --mount=type=cache,target=/var/cache/apk \
     curl-doc \
     dnsmasq \
     dnsmasq-doc \
+    docker \
     docs \
     expat-doc \
     file \
@@ -74,7 +75,7 @@ RUN --mount=type=cache,target=/var/cache/apk \
     musl-locales \
     net-tools \
     net-tools-doc \
-    openjdk23 \
+    openjdk21 \
     openrc \
     openrc-bash-completion \
     openrc-doc \
