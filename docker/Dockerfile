@@ -22,6 +22,13 @@ RUN --mount=type=cache,target=/var/cache/apk \
   apk --allow-untrusted add \
     alpine-conf
 
+
+#    perl \
+#    perl-doc \
+#    perl-error \
+#    perl-error-doc \
+#    perl-git \
+
 RUN --mount=type=cache,target=/var/cache/apk \
   apk --allow-untrusted add \
     alpine-conf \
@@ -36,6 +43,10 @@ RUN --mount=type=cache,target=/var/cache/apk \
     binutils \
     busybox \
     busybox-doc \
+    $end_of_packages
+
+RUN --mount=type=cache,target=/var/cache/apk \
+  apk --allow-untrusted add \
     ca-certificates-doc \
     coreutils \
     coreutils-doc \ 
@@ -51,6 +62,10 @@ RUN --mount=type=cache,target=/var/cache/apk \
     findutils \
     findutils-doc \
     fstrm-doc \
+    $end_of_packages
+
+RUN --mount=type=cache,target=/var/cache/apk \
+  apk --allow-untrusted add \
     git \
     git-doc \
     git-perl \
@@ -69,6 +84,10 @@ RUN --mount=type=cache,target=/var/cache/apk \
     libretls-doc \
     libxml2-doc \
     linux-pam-doc \
+    $end_of_packages
+
+RUN --mount=type=cache,target=/var/cache/apk \
+  apk --allow-untrusted add \
     man-pages \
     mandoc \
     mandoc-doc \
@@ -85,15 +104,14 @@ RUN --mount=type=cache,target=/var/cache/apk \
     pciutils \
     pcre-doc \
     pcre2-doc \
-    perl \
-    perl-doc \
-    perl-error \
-    perl-error-doc \
-    perl-git \
     pkgconf-doc \
     procps \
     readline-doc \
     rsync \
+    $end_of_packages
+
+RUN --mount=type=cache,target=/var/cache/apk \
+  apk --allow-untrusted add \
     skalibs-doc \
     source-highlight \
     source-highlight-doc \
@@ -107,6 +125,10 @@ RUN --mount=type=cache,target=/var/cache/apk \
     texinfo-doc \
     tzdata \
     usbutils \
+    $end_of_packages
+
+RUN --mount=type=cache,target=/var/cache/apk \
+  apk --allow-untrusted add \
     util-linux \
     util-linux-doc \
     utmps-doc \
