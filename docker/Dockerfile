@@ -22,7 +22,6 @@ RUN --mount=type=cache,target=/var/cache/apk \
   apk --allow-untrusted add \
     alpine-conf
 
-
 #    perl \
 #    perl-doc \
 #    perl-error \
@@ -162,6 +161,8 @@ RUN mkdir -p $HOME/.ssh
 RUN chmod 700 $HOME/.ssh
 RUN chown -R autouser $HOME
 RUN rm /etc/motd
+
+COPY . /repo/simpleton
 
 WORKDIR /work
 CMD [ "/bin/bash", "/repo/simpleton/target/init" ]
