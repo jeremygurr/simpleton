@@ -163,6 +163,7 @@ RUN chown -R autouser $HOME
 RUN rm /etc/motd
 
 COPY . /repo/simpleton
+COPY home /home-template
 
 WORKDIR /work
 CMD [ "/bin/bash", "/repo/simpleton/target/init" ]
