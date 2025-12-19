@@ -10,6 +10,12 @@ clean=${clean:-f}
 # as above, but also wipes the alpine build cache (very rarely needed, and will greatly slow down the build)
 deepclean=${deepclean:-f}
 
+# Set this in order to build an image that you plan to deploy to a different architecture machine:
+arch=${arch:-}
+
+# Embeds simpleton repo into the image. Other modules must be added to the launch command manually.
+embed=${embed:-f}
+
 if [[ "${1:-}" == clean ]]; then
   clean=t
   shift
@@ -24,6 +30,13 @@ fi
 if [[ "${1:-}" == debug ]]; then
   debug=t
   shift
+fi
+
+if [[ "$arch" ]]; then
+  build_platform="--platform linux/$arch"
+  arch=${arch}-
+else
+  build_platform=
 fi
 
 instance=${instance:-${1:-}}
@@ -42,11 +55,6 @@ SIMPLETON_WORK=${SIMPLETON_WORK:-$HOME/.simpletonWork$instance}
 
 # Sharing the cache across instances
 SIMPLETON_CACHE=${SIMPLETON_CACHE:-$HOME/.simpletonCache}
-
-if [[ $debug == t ]]; then
-  source $SIMPLETON_REPO/lib/bash-debugger || exit 1
-  debug_start || exit 1
-fi
 
 if [[ $clean == t ]]; then
   if [[ -d "$SIMPLETON_HOME" ]]; then
@@ -108,12 +116,18 @@ uid=$UID
 user=$USER
 echo "$user:x:$uid:$uid:$user:/home:/bin/bash" >>$build_dir/passwd || exit 1
 
+repo_mount=
+NL=$'\n'
+if [[ $embed == f ]]; then
+  repo_mount="$NL"'  -v $SIMPLETON_BASE:/repo \'
+fi
+
 echo -n '
 launch_command="
 docker run --init -it --rm -u $uid --name $name -h $name \
-  -v $SIMPLETON_BASE:/repo \
   -v $SIMPLETON_HOME:/home \
-  -v $SIMPLETON_WORK:/work \
+  -v $SIMPLETON_WORK:/work \'"$repo_mount"'
+  -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
 ' | tee $build_dir/launch-command-fast >$build_dir/launch-command-persist || exit 1
 
@@ -191,8 +205,9 @@ fi
 set -x
 docker buildx build \
   $extra \
+  $build_platform \
   -f $build_dir/Dockerfile \
-  -t simpleton$instance \
+  -t ${arch}simpleton$instance \
   -o type=docker \
   --build-arg TIME_ZONE=$TIME_ZONE \
   --build-arg ALPINE_IMAGE=$ALPINE_IMAGE \
