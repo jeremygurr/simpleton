@@ -2,7 +2,7 @@
 
 SIMPLETON_LIB=/repo/simpleton/lib
 source $SIMPLETON_LIB/lifted-bash || exit 1
-bash_lifted_init
+lifted_bash_init || exit 1
 source $SIMPLETON_LIB/walk-lib || exit 1
 
 if [[ "${ADD_PATH:-}" ]]; then
