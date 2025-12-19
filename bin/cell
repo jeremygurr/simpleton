@@ -2,9 +2,6 @@
 
 source $SIMPLETON_LIB/lifted-bash || exit 1
 source $SIMPLETON_LIB/cell-lib || exit 1
-source $SIMPLETON_LIB/help-lib || exit 1
-source $SIMPLETON_LIB/walk-lib || exit 1
-source $SIMPLETON_LIB/clean-lib || exit 1
 
 command_detail=${command_detail:-0}
 parameters_to_env "$@" || exit 1
@@ -12,7 +9,7 @@ if [[ "${real_params:-}" ]]; then
   set -- "${real_params[@]}"; shift
 fi
 
-bash_lifted_init || exit 1
+lifted_bash_init || exit 1
 cell_lib_init || exit 1
 
 recursive_command=${recursive_command:-${recursive:-f}}
@@ -23,7 +20,7 @@ show_flag_usage_custom() {
   out "  -ff    fresh=0 (force refresh of current cell and important upstreams)"
   out "  -fff   fresh=0 and pre_validate=f (don't check to see if the change is already applied)"
   out "  -r     apply command recusively. Only used by status for now."
-  out "  -R     replay=t"
+  out "  -R     replay=t (if cell supports replay)"
   out "  -s     synchronous mode (parallel_execution=f)"
   out "  -t     out_form=table (used for get command)"
 }
@@ -51,6 +48,10 @@ handle_flag_custom() {
 	  parallel_execution=f
 	  return 0
 	  ;;
+	r)
+	  recursive_command=t
+	  return 0
+	  ;;
 	t)
 	  out_form=table
 	  return 0
@@ -59,12 +60,65 @@ handle_flag_custom() {
   return 1;
 }
 
+commands=()
+
+name=update description="Updates product of this cell" new_command 
+
+name=fresh default=inf description="Minimum freshness required. 
+  0 = update no matter what. 
+  5m = update if fresh within 5 minutes. 
+  2h = update if fresh within 2 hours. 
+  inf = ignore freshness." add_parameter 
+
+name=refresh default=f description="Allows for direct control over whether a cell needs to be updated.
+  t = mark all cells in this tree as stale (needing to be updated).
+  f = only update cells which need to be updated
+" add_parameter
+
+name=risk_tolerance short=risk default=low description="Maximum risk tolerance. Low risk means only operations with virtually
+  no chance of causing problems will be allowed. If you attept to update a cell that is higher risk than the
+  tolerance specified, that update will fail.
+  0 = low = restriced to read only operations, no changes will be made to anything.
+  1 = medium = very safe changes are allowed which can only result in low impact outages at worst.
+  2 = high = production outage may occur if you aren't sure of what you are doing, but there will be many 
+    checks in place to minimize the chance of this.
+  3 = very_high = production outage may occur, and there aren't a lot of safe guards in place, so you really
+    need to know what you are doing and what these scripts do on a low level before attempting these commands.
+" add_parameter
+
+name=mock description="Switch to the given mocked cell result. 
+Set mock=f to turn off mocking and go back to real cell computation.
+" add_parameter
+
+name=confirm_dims default=t description="Will ask user before running a top level command if the derived dims are valid before updating.
+If set to 'a' it will confirm for every cell, not just the top one.
+" add_parameter
+
+name=show_dims default=t description="Will display the dims for the top cell if set to t.
+If set to 'a' it will show the dims for every cell.
+" add_parameter
+
+name=pre_validate default=t description="Whether validation cells/functions should be run before update
+" add_parameter
+
+name=post_validate default=t description="Whether validation cells/functions should be run after update
+" add_parameter
+
+name=validate default=t description="Sets both pre_validate and post_validate to this value
+" add_parameter
+
+name=up_only description="Only runs upstreams matching the given values
+" add_parameter
+
+name=debug_log description="Starts debugger when a log line containing this string is written
+" add_parameter
+
 show_usage() {
   begin_function
     local indent=${indent:-0}
     out "Usage: ${0##*/} ({cells..} {commands..}).."
 
-    (( indent += 2 ))
+    indent
     local d=
     d+="Parameters are cells followed by commands to be run on those cells. "
     d+="Any number of cell/command combinations can be given, which will be executed sequentially. "
@@ -81,29 +135,28 @@ show_usage() {
     d+="Soft interrupt feature: While a command is executing, you may press enter to pause execution. "
     d+="$NL$NL"
     d+="Use \`cell . help\` to see help specific to the current cell (you can replace . with any cell name also)."
-    echo "$d" | fold -s -w $((COLUMNS-2)) | indent $indent
+    echo "$d" | fold -s -w $((COLUMNS-2)) | indent_stream $indent
 
-    (( indent -= 2 ))
+    outdent
     out "${NL}Possible Commands:"
-    (( indent += 2 ))
-    local command_info command_name infos
-    infos=$(find1 $path_to_commands -name '*.info' -not -name 'all.info' | sort -g) || fail
+    indent
+    local name
     {
-      begin_for command_info in $infos; doo
-        command_name=${command_info%.info}
-        command_name=${command_name##*/}
-        source $command_info || fail
+      begin_for name in ${commands[*]}; doo
+        local -n command_description=command_${name}_description
         if [[ "$command_description" ]]; then
           local short_desc=$command_description
           trim_ws short_desc
           short_desc=${short_desc%%$NL*}
-          echo "$command_name $short_desc"
+          echo "$name $short_desc"
         else
-          echo "$command_name Please add a description to this command in $cell_command"
+          echo "$name Please add a description to this command in $cell_command"
         fi
       end_for
-    } | column -l 2 -t | indent $indent
+    } | column -l 2 -t | indent_stream $indent
 
+    local -n command_aliases=command_${name}_aliases
+    local -n command_alias_command=command_${name}_alias_command
     if [[ "${command_aliases:-}" ]]; then
       local i
       (( indent -= 2 ))
@@ -114,7 +167,7 @@ show_usage() {
         begin_for (( i = 0; i < ${#command_aliases[*]}; i++ )); doo
           echo "${command_aliases[$i]} ${command_alias_command[$i]}"
         end_for
-      } | column -l 2 -t | indent $indent
+      } | column -l 2 -t | indent_stream $indent
     fi
 
   end_function
@@ -123,9 +176,8 @@ show_usage() {
 
 is_command() {
   local parameter=$1
-  [[ -f "$path_to_commands/$parameter.info" ]] \
-  || array_contains command_aliases $parameter \
-  || wild_file_exists $path_to_commands/$parameter-*.info
+  [[ " ${commands[*]} " == *" $parameter "* ]] \
+  || array_contains command_aliases $parameter
 }
 
 get_cells() {
@@ -167,14 +219,13 @@ get_commands() {
             leftover_command=${leftover_command// /-}-$parameter
           fi
 
-          if [[ -f "$path_to_commands/$parameter.info" ]]; then
+          if is_command $parameter; then
+             || array_contains command_aliases $parameter; then
             cell_commands+=( $parameter )
-          elif array_contains command_aliases $parameter; then
-            cell_commands+=( $parameter )
-          elif [[ -f "$path_to_commands/$leftover_command.info" ]]; then
+          elif is_command $leftover_command; then
             cell_commands+=( $leftover_command )
             leftovers=()
-          elif ! is_command $parameter && [[ -d $parameter ]]; then
+          elif [[ -d $parameter ]]; then
             # it's a cell
             abort
           else
@@ -187,20 +238,26 @@ get_commands() {
   handle_return
 }
 
+get_sub_commands() {
+  local command_prefix=$1 command
+  subs=()
+  for command in ${commands[*]}; do
+    if [[ $command == ${command_prefix}-* ]]; then
+      subs+=( $command )
+    fi
+  done
+}
+
 handle_leftovers() {
   begin_function
     local leftover
     for leftover in "${leftovers[@]}"; do
       if (( help_depth > 0 )); then
-        local subs=( $path_to_commands/$leftovers-*.info )
-        if [[ "$subs" != *\** ]]; then
+        local subs
+        get_sub_commands $leftover || fail
+        if [[ "$subs" ]]; then
           out "Choose a subcommand of $leftover:$NL"
-          local sub
-          for sub in ${subs[*]}; do
-            local cell_command=${sub##*/}
-            cell_command=${cell_command%.info}
-            cell_commands+=( $cell_command )
-          done
+          cell_commands+=( ${subs[*]} )
           continue
         fi
       fi
@@ -244,8 +301,6 @@ handle_cell() {
   local log_show_vars='^cell_path'
   begin_function
 
-    local omni_log_job_id job_id_log=${home_job_path:-$HOME/.simpleton/job-log}
-
     if [[ -e "$cell_path" ]]; then
       cell_path=$(unrealpath $cell_path) || {
         log_fatal "Invalid cell path: $cell_path"
@@ -276,7 +331,6 @@ top_level() {
   begin_function
 
     local cell_path \
-      path_to_commands=$SIMPLETON_REPO/command \
       first_command=t \
       first_cell=t \
       multi_cell=f \
