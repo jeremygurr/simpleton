@@ -1415,41 +1415,6 @@ unrealpath() {
   return 0
 }
 
-# usage: cat file | hydrate >output
-#   will replace bash variables and expressions
-hydrate() {
-  local to_execute= OIFS=$IFS IFS=$NL
-  while read -r line || [ "${line:-}" ]; do
-    IFS=$OIFS
-    if [[ "$line" =~ ^\$\  ]]; then
-      hydrate_execute || return 1
-      to_execute="${line#\$ }" 
-    elif [[ "$line" =~ ^\>\  ]]; then
-      to_execute+="${line#> }" 
-    elif [[ "$line" =~ ^\\\  ]]; then
-      to_execute+="$NL${line#\\ }" 
-    elif [[ "$line" =~ \$ ]]; then
-      hydrate_execute || return 1
-      line="${line//\"/\\\"}"
-      eval "echo \"$line\"" || return 1
-    else
-      hydrate_execute || return 1
-      echo "$line"
-    fi
-    IFS=$NL
-  done
-  hydrate_execute || return 1
-}
-
-# internal function used by hydrate function
-hydrate_execute() {
-  if [[ "$to_execute" ]]; then
-    eval "$to_execute" || return 1
-    to_execute=
-  fi
-  return 0
-}
-
 # usage: echo -e "\n\n blah  \n\n" | trim_newlines
 # will trim empty lines from beginning and end of given string
 # will leave exactly one trailing newline at the end
