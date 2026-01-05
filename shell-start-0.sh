@@ -737,7 +737,7 @@ forge() {
       elif [[ "$response" == "*up*" ]]; then
         back_stack+=( $current_selection )
         current_selection=${current_selection%/*}
-      elif [[ "$response" == *action* ]]; then
+      elif [[ "$response" == "*action*" ]]; then
         local choice
         while true; do
 
