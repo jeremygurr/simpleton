@@ -1,11 +1,12 @@
-# Simpleton
-
-## What is simpleton?
+# Overview
 Simpleton is a framework for bash scripts that uses the micro-scripting philosophy to orchestrate complex processes, as oppposed to using large monolithic scripts. The micro-script philosophy means that a process is broken
 down into individual cells, each mapping to a folder. Each cell has it's own logging, can run in it's own process in parallel, can depend on other cells, and is designed to produce once piece of information. Cells not only
 encapsulate how to obtain a piece of information, similar to how functions work in most programming languages, but they also store the actual calculated values as well, providing automatic and intrinsic caching. For example,
 if 5 different steps in a process all must get a list of pods on a remote server, that cell which obtains the list of pods only needs to be executed once, and as long as that information is sufficiently fresh for the other
 4 steps, they will just reuse what is already there. 
+
+It does have similar purpose and goals as remote script execution framework like ansible, although it differs dramatically in it's implemnetation, being in my opinion dramatically easier to build, read, test, and debug than the
+ansible equivalents. 
 
 Using simpleton provides two primary advantages: 
 1. It simplifies the work engineers need to do to write automation processes, since common boilerplate code managing parallelization, caching of results, dependency management, logging,
@@ -17,9 +18,50 @@ as many times as needed, until the problem is solved, as opposed to needing to r
 bash debugger, which is so powerful and quick to use as to not only rival most expensive IDE debuggers other languages use, but to even be faster and more effective and getting to a root problem than most others. Using the debugger
 is just a single parameter added to the commands that are already being run. The debugger provides many novel mechanisms enabling rapid narrowing down of problems that approach even omniscient debuggers in efficiency, 
 
-## Core Concepts
+Simpleton is especially valuable for dealing with management of complex computer systems, where new problems appear frequently and clever solutions must be figured out and implemented in very short periods of time. Scripting is better
+for quick and short lived solutions. For longer lasting code, or code that has much higher risk and must be more carefully checked and tested, an application language is often a better solution. 
 
-### Dimensions
+## WHat is it NOT?
+
+Simpleton is not a replacement for a Jenkins or Github actions type devops tools. It's meant to be the orchestrator that calls tools like those. Unlike Jenkins or Github actions, simpleton scripts run locally on the users computer, so they
+don't have to wait for worker nodes to become available or fight for system resources to execute a workflow. 
+
+Simpleton is not a replacement for low level cli tools that would typically be written in C or Go. Simpleton is bash based, and anything requiring more speed or functionality would be written in a lower level language which
+the bash scripts could easily call as needed. So simpleton scripts would still be calling tools like curl, kubectl, jq, etc.
+
+Simpleton is not meant to be the source of truth of anything significant, or to provide centralized logging of its actions, or store any source of truth data. It is meant to call the tools that would perform those functions instead.
+If this principle was fully applied, engineers would be able to perform all of their responsibilities without using simpleton at all. But using simpleton cells should make them be able to do those processes more effectively and efficiently. 
+
+That doesn't mean it absolutely can't be used for any of these purposes, it's just not the main empasis behind it's design, and so the results may be less than ideal.
+
+## Example use cases:
+
+1. Gather pod lists and status from 100 different nodes across multiple data centers and zones into a single list, requiring ssh logins to many machines to gather the needed information.
+2. Run a series of regression tests applying to dozens of docker hosts to ensure everything is behaving as expected. 
+3. Go to hundreds of repos and fetch speific files and compose resulting prometheus alert configurations based on those files.
+4. Log into 100 different hosts and grab uptime stats. It's true that in most cases this will be more easily seen in a dashboard which has already gathered these metrics, but there are cases where metrics are not yet available, or 
+temporarily broken, or you want to double check that the metrics actually match real data, or there are nodes which can't easily transmit metrics in the standard way.
+
+## Why BASH?
+
+1. BASH is pretty much the king of meta-scripting. It's not at the same level nor is it meant to solve the same problems as more advanced and complete scripting languages like javascript or python. Nor can it even come close to the
+performance of lower level application languages like Java, C, or Go. But it's by far the best at calling and chaining together tools writting in all of these languages, which is what most simpleton cell scripts are composed of. 
+A single command line can unite input and outputs from tools written in possibly completely different languages into a seamless unit. For example:
+```
+cat some-file | grep -v '^#' | awk '{ print $1, $2 }' >new-file
+```
+The equivalent of the above command written in nearly all other languages is many, sometimes dozens, of lines of code (assuming the code is actually calling these exact external programs, allocating and mapping file descriptors,
+piping those file descriptors properly, etc).
+
+2. It's file system access is ridiculously simple and concise. Simpleton heavily relies on filesystem access and calling lots of lower level commands. 
+3. It's turned out to be shockingly easy to debug, assuming the user has proper tools (provided by simpleton itself) and training.
+4. Bash is well known by a large number of engineers, making the cell update scripts easy to understand to more people.
+5. Bash has it's quirks, but it's been refined over such a long period of time and over so many users that the rough edges are mostly smoothed out, and what awkwardness remains has alternative approaches which work better. As a
+result, it works very consistently with very few bugs. 
+
+# Core Concepts
+
+## Dimensions
 
 A single cell is responsible for obtaining a single piece of information. For example, you could have a cell that contains the status of a pod in a particular datacenter, zone, and project. If you wanted status of 4 different pods,
 those would be in 4 different cells. Pod name, datacenter, zone, and project in this example are dimensions of a cell. Each cell is identified by each of these dimensions set to a single value. How simpleton handles this is by
@@ -29,7 +71,7 @@ the dimension from the member. Dimensions are a very powerful concept and in mos
 the exact host name you want to deploy an app to, you can specify that host name, and if the dimensions are defined well enough, the datacenter, region, zone, etc. can be derived from that host name. Or if you specified the
 datacenter, region, and zone, it can derive the matching hostnames that could fit. Multiple values can be specified for dimensions to make operations that span hundreds of cells easy to execute. 
 
-### Cell Freshness
+## Cell Freshness
 
 There are two types of cells: static and dynamic. Static cells don't change their values over time. Once generated, it won't ever need to be regenerated unless one of it's dependencies were changed. For example, a cell that
 takes data from an upstream dependency and compresses it will store the compressed result in it's cell, and that data won't become stale over time. A dynamic cell, on the other hand, is expected to change over time. For example,
@@ -39,14 +81,14 @@ If the cell's data isn't fresh enough for the downstream cell requiring it's val
 The user can also specify how fresh they want a cell to be when they update it with the `fresh` parameter. It can be set to standard time period values. Examples: fresh=1m (one minute), fresh=4d (4 days), fresh=10s (10 seconds), 
 fresh=0 (refresh immediately), fresh=inf (infinite freshness, never refreshes). 
 
-### Risk and Tolerance
+## Risk and Tolerance
 
 Executing a cell may involve various levels of risk. Simpleton categorizes it into 4 levels: risk=0 means the cell will never impact anything significant, even if it fails, and is always safe to run. risk=1 means the cell involves
 only minor risk, no real production or customer impact, only minor inconvenience if something goes wrong. risk=2 means a major failure can occur by the improper use of that cell, possibly causing significant outage in rare cases.
 risk=3 means catastrophic impact can occur if this cell is not used with thorough understanding of how it works, and it's implications. Attempting to execute a cell with risk > 0 will cause simpleton to prompt the user to ensure
 they have properly considered the risk, and are following all appropriate risk management procedures before running it. The `risk` parameter may be passed into an update command allowing a cell update of that risk level to proceed.
 
-## First-time Setup and Launching
+# First-time Setup and Launching
 
 First have a folder which will contain this simpleton repo and all simpleton modules. Do not have any other repos or files in this folder (example `mkdir ~/repo; cd ~/repo; git clone https://github.com/jeremygurr/simpleton.git`)
 
@@ -73,7 +115,7 @@ Then execute the launch command.
 ./launch
 ```
 
-## Running Cell Commands
+# Running Cell Commands
 
 Once you are inside of the simpleton container, you can execute cell
 commands targettings cells in the workspace.
@@ -84,17 +126,20 @@ cell help status  # See cell status
 cell ?            # same as cell help
 cell ??           # More verbose cell help
 cell ???          # Most verbose cell help
-update ?          # See update options for current cell
-update -?         # See update flag options
-update dim=?      # See documentation for a dimension of a cell
+cell update ?     # See update options for current cell
+cell update -?    # See update flag options
+cell update dim=? # See documentation for a dimension of a cell
+forge             # modify cell definitions using the forge tool
 ```
 
-## Shortcuts
+# Shortcuts
 ```
 f                 # open `forge` program allowing you to see all relevant files in .dna along with upstream cells, dims and navigate to dim / derive folders to update those if needed. If you spend any time making cells, you'll be spending most your time in `forge`
+update            # same as `cell update`
+clean             # same as `cell clean`
 ```
 
-### Navigation
+# Navigation
 ```
 u                 # go up to parent dir folder
 uu                # go up two folders
