@@ -1,14 +1,50 @@
 # Simpleton
-light weight bash scripting elements to provide a foundation for build and maintenance systems
-
 
 ## What is simpleton?
+Simpleton is a framework for bash scripts that uses the micro-scripting philosophy to orchestrate complex processes, as oppposed to using large monolithic scripts. The micro-script philosophy means that a process is broken
+down into individual cells, each mapping to a folder. Each cell has it's own logging, can run in it's own process in parallel, can depend on other cells, and is designed to produce once piece of information. Cells not only
+encapsulate how to obtain a piece of information, similar to how functions work in most programming languages, but they also store the actual calculated values as well, providing automatic and intrinsic caching. For example,
+if 5 different steps in a process all must get a list of pods on a remote server, that cell which obtains the list of pods only needs to be executed once, and as long as that information is sufficiently fresh for the other
+4 steps, they will just reuse what is already there. 
+
+Using simpleton provides two primary advantages: 
+1. It simplifies the work engineers need to do to write automation processes, since common boilerplate code managing parallelization, caching of results, dependency management, logging,
+and debugging are provided by the framework, allowing code that implements the update process for most cells to be half a page or less. 
+2. It greatly enhances debuggability of complex processes. Because each piece of that process is executed in a separate cell, if a workflow fails, the user can go into the specific folder of the failing cell, look at each cell
+it depends on until they track down the root cause, fix that, and then resume the workflow where it left off. Cells that have already completed won't need to run again, as long as the data still meets the freshness requirements
+of the operation taking place. Also since all logging data relevant to that cell is stored in the cell itself, it's much easier to get to the relevant information about why it failed. The failing cell can also be run by itself,
+as many times as needed, until the problem is solved, as opposed to needing to run the whole workflow over and over which most other strategies would require. On top of these advantages, simpleton includes a built in state-of-the-art
+bash debugger, which is so powerful and quick to use as to not only rival most expensive IDE debuggers other languages use, but to even be faster and more effective and getting to a root problem than most others. Using the debugger
+is just a single parameter added to the commands that are already being run. The debugger provides many novel mechanisms enabling rapid narrowing down of problems that approach even omniscient debuggers in efficiency, 
 
 ## Core Concepts
 
+### Dimensions
+
+A single cell is responsible for obtaining a single piece of information. For example, you could have a cell that contains the status of a pod in a particular datacenter, zone, and project. If you wanted status of 4 different pods,
+those would be in 4 different cells. Pod name, datacenter, zone, and project in this example are dimensions of a cell. Each cell is identified by each of these dimensions set to a single value. How simpleton handles this is by
+organizing cells of the same type (pod status in this case) in a tree of cells. The trunk of the tree will hold branches (each being a subfolder) for the first dimension and it's values. Those branches would further branch into
+the second dimension and it's values, etc. For example, you could have a cell with a path like this: `/work/my-cells/pod-status/data_center:1/zone:a/pod:1a2b3c` Branches will always have a colon in the folder name to separate
+the dimension from the member. Dimensions are a very powerful concept and in most cases just one or two dimensions can be specified, and simpleton will derive other related dimensions automatically. For example, if you know 
+the exact host name you want to deploy an app to, you can specify that host name, and if the dimensions are defined well enough, the datacenter, region, zone, etc. can be derived from that host name. Or if you specified the
+datacenter, region, and zone, it can derive the matching hostnames that could fit. Multiple values can be specified for dimensions to make operations that span hundreds of cells easy to execute. 
+
 ### Cell Freshness
 
+There are two types of cells: static and dynamic. Static cells don't change their values over time. Once generated, it won't ever need to be regenerated unless one of it's dependencies were changed. For example, a cell that
+takes data from an upstream dependency and compresses it will store the compressed result in it's cell, and that data won't become stale over time. A dynamic cell, on the other hand, is expected to change over time. For example,
+getting a list of pods from a remote server will likely change over time. There may be one downstream cell that needs the pod list within 1 minute of freshness, and another that might only need it to within one hour of freshness.
+If the cell's data isn't fresh enough for the downstream cell requiring it's value, then the cell will be updated. 
+
+The user can also specify how fresh they want a cell to be when they update it with the `fresh` parameter. It can be set to standard time period values. Examples: fresh=1m (one minute), fresh=4d (4 days), fresh=10s (10 seconds), 
+fresh=0 (refresh immediately), fresh=inf (infinite freshness, never refreshes). 
+
 ### Risk and Tolerance
+
+Executing a cell may involve various levels of risk. Simpleton categorizes it into 4 levels: risk=0 means the cell will never impact anything significant, even if it fails, and is always safe to run. risk=1 means the cell involves
+only minor risk, no real production or customer impact, only minor inconvenience if something goes wrong. risk=2 means a major failure can occur by the improper use of that cell, possibly causing significant outage in rare cases.
+risk=3 means catastrophic impact can occur if this cell is not used with thorough understanding of how it works, and it's implications. Attempting to execute a cell with risk > 0 will cause simpleton to prompt the user to ensure
+they have properly considered the risk, and are following all appropriate risk management procedures before running it. The `risk` parameter may be passed into an update command allowing a cell update of that risk level to proceed.
 
 ## First-time Setup and Launching
 
@@ -22,10 +58,18 @@ for some persistence between sessions.
 `SIMPLETON_WORKSPACE` gets mounted to the work folder in the container. This should have the projects/folders you will be
 running simpleton actions on. 
 
+Ensure that the following env vars are set:
+
 ``` bash
 export SIMPLETON_REPO=/path/to/this/repo
 export SIMPLETON_HOME=/path/to/folder/for/persistent/home
 export SIMPLETON_WORKSPACE=/path/to/workspace
+```
+
+Change directory to the simpleton repo or to any of the simpleton modules before launching the container.
+
+Then execute the launch command.
+```
 ./launch
 ```
 
