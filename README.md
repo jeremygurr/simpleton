@@ -90,28 +90,12 @@ they have properly considered the risk, and are following all appropriate risk m
 
 # First-time Setup and Launching
 
-First have a folder which will contain this simpleton repo and all simpleton modules. Do not have any other repos or files in this folder (example `mkdir ~/repo; cd ~/repo; git clone https://github.com/jeremygurr/simpleton.git`)
-
-`SIMPLETON_REPO` must be set to the path this file is in.
-
-`SIMPLETON_HOME` is where the home folder will be mounted for the simpleton docker container. This allows
-for some persistence between sessions.
-
-`SIMPLETON_WORKSPACE` gets mounted to the work folder in the container. This should have the projects/folders you will be
-running simpleton actions on. 
+First have a folder which will contain this simpleton repo and all simpleton modules. 
+Do not have any other repos or files in this folder (example `mkdir ~/simp-repo; cd ~/simp-repo; git clone https://github.com/jeremygurr/simpleton.git`)
 
 Ensure that the following env vars are set:
 
 ``` bash
-export SIMPLETON_REPO=/path/to/this/repo
-export SIMPLETON_HOME=/path/to/folder/for/persistent/home
-export SIMPLETON_WORKSPACE=/path/to/workspace
-```
-
-Change directory to the simpleton repo or to any of the simpleton modules before launching the container.
-
-Then execute the launch command.
-```
 ./launch
 ```
 
