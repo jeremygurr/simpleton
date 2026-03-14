@@ -6,6 +6,8 @@ source $SIMPLETON_LIB/bash-lib || exit 1
 bash_lifted_init
 source $SIMPLETON_LIB/walk-lib || exit 1
 
+COMP_WORDBREAKS=${COMP_WORDBREAKS//:}
+
 if [[ "${ADD_PATH:-}" ]]; then
   export PATH=$ADD_PATH:$PATH
 fi
