@@ -62,6 +62,7 @@ alias uu='builtin cd ../..'
 alias uuu='builtin cd ../../..'
 alias vi=vim
 alias vis='vim /etc/profile.d/shell-start-0.sh'
+alias dockerv='docker ps --format "{{.Names}} [{{.Label \"artifact_version\" }}] ({{.Image}})"'
 
 # used by /etc/profile, this avoids a warning
 BB_ASH_VERSION=
@@ -1861,6 +1862,13 @@ small_prompt() {
   fi
 
   export PS1="$DIM_YELLOW\W $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+}
+
+gacp() {
+  local message=$*;
+  git add .;
+  git commit -m "$message";
+  git push
 }
 
 big_prompt
