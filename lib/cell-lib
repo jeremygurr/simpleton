@@ -5097,9 +5097,10 @@ set_table_cross_dims_single() {
     local -n dt_index=derive_table_${derive_table}_index_${dim}
     if [[ -v dt_index[$member] ]]; then
       row_index=( ${dt_index[$member]} )
+
       if (( ${#row_index[*]} > 1 )); then
-        log_fatal "Too many rows found in derive table matching cross dim: $row_index"
-        fail1
+        log_debug "Too many rows found in derive table matching cross dim: $row_index, skipping cross dim setting"
+        succeed
       fi
 
       for (( column_index = 0; column_index < field_count; column_index++ )); do
@@ -6709,7 +6710,14 @@ cell_decrypt_file() {
 
     local mk_path=$tmp_path/mk
     defer "rm $mk_path"
-    extract_master_key $key_path/$user.key $mk_path || fail
+    extract_master_key $key_path/$user.key $mk_path 2>/dev/null || {
+      if [[ $ignore_failure == f ]]; then
+        fail1
+      else
+        log_warn "Failed to decrypt master key for $user in $key_path. Maybe public key needs to be updated."
+        succeed
+      fi
+      }
     master_key=$mk_path \
     simple_decrypt $from_file $to_file || fail
 
