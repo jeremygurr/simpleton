@@ -400,68 +400,12 @@ get_compound_cardinality() {
 load_derive_table_compound_keys() {
   begin_function
 
-    local field
-
-    local start_of_key=0; found=f
-    while (( start_of_key < field_count )); do
-      found=f
-
-      local end_of_key compound_cardinality
-
-      if [[ "${key_fields:-}" ]]; then
-        # find start field of the compound key, can't be a key
-        while (( start_of_key < field_count )); do
-
-          field=${table_fields[$start_of_key]}
-          if [[ " $key_fields " != *" $field "* ]]; then
-            found=t
-            break
-          fi
-
-          (( start_of_key++ )) || true
-
-        done
-
-      else
-        found=t
-      fi
-
-      end_of_key=$(( start_of_key + 1 ))
-
-      local -A composite_values=()
-      if [[ $found == t ]]; then
-
-        # find end field of the compound key, can't be a key, and the fields
-        # which are part of this must form a key
-        while (( end_of_key < field_count )); do
-
-          field=${table_fields[$end_of_key]}
-          if [[ "${key_fields:-}" && " $key_fields " == *" $field "* ]]; then
-            # could not find a compound key before hitting the next simple key
-            break
-          fi
-          
-          get_compound_cardinality || fail
-          if (( compound_cardinality == row_count )); then
-            # we found a compound key
-            local field_index
-            for (( field_index = start_of_key; field_index <= end_of_key; field_index++ )); do
-              field=${table_fields[$field_index]}
-              key_fields+="$field,"
-            done
-            key_fields="${key_fields%,} "
-            break
-          fi
-
-          (( end_of_key++ )) || true
-          
-        done
-
-      fi
-
-      (( start_of_key = end_of_key + 1 )) || true
+    local field field_index
+    for (( field_index = 1; field_index < field_count; field_index++ )); do
+      field=${table_fields[$field_index]}
+      key_fields+="$field,"
     done
-    key_fields=${key_fields% }
+    key_fields="${key_fields%,}"
 
   end_function
   handle_return
@@ -470,35 +414,22 @@ load_derive_table_compound_keys() {
 load_derive_table_simple_keys() {
   begin_function
 
-    local field_index field row_count
+    local field_index=0 field row_count
 
     (( row_count = data_count / field_count ))
 
-    for (( field_index = 0; field_index < field_count; field_index++ )); do
+    field=${table_fields[$field_index]}
 
-      field=${table_fields[$field_index]}
+    local -n index=derive_table_${name}_index_${field} \
+      key_tables=dim_${field}_key_tables \
 
-      local -n index=derive_table_${name}_index_${field}
+    key_tables+="$name "
+    key_fields+="$field "
 
-      if [[ ! "${index[*]:-}" ]]; then
-        log_warn "Internal error: index missing from derive_table ${name} field ${field}"
-        continue
-      fi
-
-      local card=${#index[*]}
-      if (( card == row_count )); then
-        local -n key_tables=dim_${field}_key_tables
-
-        key_tables+="$name "
-        key_fields+="$field "
-      fi
-
-      local -n dim_derive_tables=dim_${field}_derive_tables
-      if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $name "* ]]; then
-        dim_derive_tables+=( $name )
-      fi
-
-    done
+    local -n dim_derive_tables=dim_${field}_derive_tables
+    if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $name "* ]]; then
+      dim_derive_tables+=( $name )
+    fi
 
   end_function
   handle_return
@@ -3561,7 +3492,7 @@ setup_dims() {
       all_if_blank=${all_if_blank[*]}
     fi
 
-    if [[ ! "${support_dims_expanded:-}" ]]; then
+    if [[ ! "${support_dims_expanded:-}" ]] && ! is_array support_dims_expanded; then
       if [[ "${support_dims:-}" ]]; then
         expand_dim_array support_dims || fail
         local new_supports=() support_dim
@@ -4443,6 +4374,8 @@ make_derive_cache() {
     end_for
 
     write_vars_to_context derive_tables derive_functions || fail
+
+    grip_fence
 
     local dim
     for dim in ${!all_dims[*]}; do
