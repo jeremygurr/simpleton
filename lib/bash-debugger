@@ -116,7 +116,7 @@ is_set() {
 }
 
 get_var_value() {
-  local __var_name=$1 __val_name=${2:-value}
+  local __var_name=$1 __val_name=${2:-value} max_count=${max_count:-}
 
   if [[ ! "$__var_name" =~ ^[a-zA-Z0-9_]+$ ]]; then
     echo "Invalid variable name: $__var_name" >&$fd_original_err
@@ -135,34 +135,34 @@ get_var_value() {
       eval "_val=\${$__var_name}"
     fi
   elif is_set _var; then
-    local c=0 k v
+    local _c=0 _k _v
     _val="( "
-    for k in "${!_var[@]}"; do
-      v=${_var[$k]}
-      if [[ "${v:-}" ]]; then
-        _val+="$k=$v "
+    for _k in "${!_var[@]}"; do
+      _v=${_var[$k]}
+      if [[ "${_v:-}" ]]; then
+        _val+="$_k=$_v "
       else
-        _val+="$k=(empty) "
+        _val+="$_k=(empty) "
       fi
-      (( c++ ))
-      if (( c > 20 )); then
+      (( _c++ ))
+      if [[ "$max_count}" ]] && (( _c > max_count )); then
         _val+="... "
         break
       fi
     done
     _val+=")"
   elif is_array _var; then
-    #if [[ "${_var:-}" ]] && (( ${#_var[*]} > 20 )); then
-    #  _val="( ${_var[*]:0:20} ... )"
-    #else
-    #  _val="( ${_var[*]:-} )"
-    #fi
-    local v
+    local _v _c=0
     _val="( "
     if (( "${#_var[*]}" > 0 )); then
-      for v in "${_var[@]}"; do
-        quotes=single shell_quote_var v
-        _val+="$v "
+      for _v in "${_var[@]}"; do
+        quotes=single shell_quote_var _v
+        _val+="$_v "
+        (( _c++ ))
+        if [[ "$max_count" ]] && (( _c > max_count )); then
+          _val+="... "
+          break
+        fi
       done
     fi
     _val+=")"
@@ -2103,6 +2103,7 @@ debugger_init() {
   debug_ignore+="
     debug
     debug_id_inc
+    debug_ignore_remove
     debug_load_state
     debug_start
     get_var_value
@@ -2123,8 +2124,8 @@ debugger_init() {
     pause_tee
     reached_debug_id
     shell_quote_var
-    show_trace_vars
     show_time_update
+    show_trace_vars
     snapshot_source_location
     unpause_tee
     write_to_log

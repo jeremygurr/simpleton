@@ -499,6 +499,7 @@ init_context() {
     data_props=() \
     data_props_expanded=() \
     default_anchor_dims= \
+    default_completed=f \
     default_freshness= \
     default_strategies=crl \
     derive_caches= \
@@ -2515,18 +2516,30 @@ narrow_dim() {
 
     begin_for derived_from_row in "${array_from[@]}"; doo
       row_array=( $derived_from_row )
+
+      local required_dims=${row_array[1]} \
+        optional_dims \
+      
+      if [[ "$required_dims" == */* ]]; then
+        optional_dims=${required_dims#*/}
+        required_dims=${required_dims%/*}
+      fi
+
+      if [[ $use_narrow_from == f ]]; then
+        local required_dim
+        for required_dim in ${required_dims//,/ }; do
+          local -n d=d_$required_dim
+          if [[ ! "${d:-}" ]]; then
+            continue 2
+          fi
+        done
+      fi
+
       target=$row_array
       type=${target##*.}
       case $type in
         fun)
-          local derive_fun=${target%.*} \
-            required_dims=${row_array[1]} \
-            optional_dims \
-
-          if [[ "$required_dims" == */* ]]; then
-            optional_dims=${required_dims#*/}
-            required_dims=${required_dims%/*}
-          fi
+          local derive_fun=${target%.*}
 
           if [[ "${optional_dims:-}" \
              && $phase != derive_optional_functions \
@@ -2669,7 +2682,9 @@ attempt_derive() {
       elif [[ ! "${values:-}" ]]; then
         log_debug "Derive of $dim failed, no possibilities found"
       else
-        log_debug "Derive of $dim successful: ${values[*]:0:30}"
+        local v
+        max_count=10 get_var_value values v
+        log_debug "Derive of $dim successful: $v"
       fi
     else
       log_debug "No derive options found for $dim for this phase"
@@ -5334,7 +5349,9 @@ calc_coordinates_next_unknown_dim_found() {
     fi
 
     if [[ "${ms:-}" ]]; then
-      log_debug "Resolved $dim with $phase: ${ms[*]:0:30}"
+      local v
+      max_count=10 get_var_value ms v
+      log_debug "Resolved $dim with $phase: $v"
       progress_bar_nudge
     else
       log_debug "Failed to find any matching values for $dim in $phase phase"
@@ -5399,7 +5416,7 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
-      for phase in default derive derive_optional_functions narrow; do
+      for phase in default derive derive_optional_functions all_if_blank narrow; do
 
         if [[ $default_completed == t && $phase == default ]]; then
           continue
@@ -5429,6 +5446,13 @@ calc_coordinates_next_unknown_dim() {
 
           if [[ $phase == default ]]; then
             attempt_default || fail
+          elif [[ $phase == all_if_blank ]]; then
+            if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+              local -n dim_members=dim_${dim}_members
+              if [[ "$dim_members" ]]; then
+                values=( "${dim_members[@]}" )
+              fi
+            fi
           elif [[ $phase == derive \
              || $phase == derive_optional_functions ]]; then
             deriving= \
