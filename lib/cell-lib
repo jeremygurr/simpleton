@@ -3121,8 +3121,12 @@ find_path_to_dim() {
       type required_dims optional_dims \
       any_loops_found=f \
       non_loop_found=f \
-      allow_narrowing=${allow_narrowing:-f} \
       previous_unresolved_log=$unresolved_log \
+      allow_narrowing=f \
+
+      # was:
+      #allow_narrowing=${allow_narrowing:-f} \
+      # but I think this is causing needless waste
 
     path_found=f
     local history=${history:-}
@@ -3188,18 +3192,23 @@ find_path_to_dim() {
     end_for
 
     if [[ $path_found == f ]]; then
-      if [[ $allow_narrowing == t ]]; then
-        find_path_to_dim_narrow $target_dim || fail
-      fi
-      if [[ $path_found == t ]]; then
+      if [[ " ${all_if_blank:-} " == *" $target_dim "* ]]; then
+        path_found=t
         resolve_dim $target_dim
+      elif [[ $allow_narrowing == t ]]; then
+        find_path_to_dim_narrow $target_dim || fail
+        if [[ $path_found == t ]]; then
+          resolve_dim $target_dim
+        fi
       fi
     fi
 
     if [[ $path_found == f \
        && $allow_narrowing == f \
-       && $any_loops_found == f \
        ]]; then
+
+#     was:
+#       && $any_loops_found == f \
 
       dead_ends[$target_dim]=1
 
@@ -3289,8 +3298,10 @@ add_required_dims() {
   for dim in $dims; do
     local -n default_value=dim_${dim}_default
     if [[ $dim != _ && " $all_optional_dims " != *" $dim "* && ! "${default_value:-}" ]]; then
-      required_dims[$dim]=1
-      required_dims_array+=( $dim )
+      if [[ ! -v required_dims[$dim] ]]; then
+        required_dims[$dim]=1
+        required_dims_array+=( $dim )
+      fi
     fi
   done
 }
@@ -5145,7 +5156,7 @@ set_table_cross_dims_single() {
              multi_member=d_$fields \
              target_member="$value" \
              member_conflicts; then
-            conflict="$field = $value vs. $field_dim"
+            conflict="$field = $value vs. $field_dim (via ${derive_table}.tab)"
             break
           else
             if [[ "$value" && "$value" != all \
