@@ -1011,15 +1011,15 @@ tab_get_derive_from() {
         index_multi=derive_table_${name}_index_multi_$derived_dim \
 
       for key_field_group in $key_fields; do
-        if [[ ,${key_field_group}, != *,${derived_dim},* \
-           && ${index_multi:-f} == f
-           ]]; then
-
+        #  was:
+        #if [[ ,${key_field_group}, != *,${derived_dim},* \
+        #   && ${index_multi:-f} == f
+        #   ]]; then
+        if [[ ,${key_field_group}, != *,${derived_dim},* ]]; then
           tool=${name}.tab \
           required_dims=$key_field_group \
           optional_dims= \
           add_derive_from || fail
-
         fi
       done
 
@@ -2297,6 +2297,7 @@ extract_from_derive_table_check_row() {
 # outputs:
 #   value_set               the var out_set points to will contain a set of all matches
 #   derive_found
+#   tools_used
 extract_from_derive_table() {
   local derive_table=${derive_table:-} full_table=${full_table:-} \
     skip_if_incomplete=${skip_if_incomplete:-f} \
@@ -2365,6 +2366,7 @@ extract_from_derive_table() {
       rows_matched=${#new_value_set[*]}
 
       intersect_with_all value_set new_value_set value_set
+      tools_used+="${derive_table}.tab "
 
     fi
 
@@ -2472,6 +2474,7 @@ narrow_dim_fun() {
         fi
       done
       intersect_with_all new_values value_set value_set
+      tools_used+="${f_name}.fun "
 
     fi
     
@@ -2503,6 +2506,7 @@ narrow_dim() {
       original_count=${#result[*]} new_count \
       original_first=${result:-} \
       array_from \
+      tools_used= \
 
     local -A value_set=()
     array_to_set result value_set
@@ -2586,7 +2590,7 @@ narrow_dim() {
       if [[ "$original_first" == all ]]; then
         from=all
       fi
-      log_debug "Narrowed down $dim from $from to $new_count"
+      log_debug "Narrowed down $dim from $from to $new_count (via ${tools_used% })"
     fi
 
   end_function
@@ -5146,7 +5150,7 @@ set_table_cross_dims_single() {
           else
             if [[ "$value" && "$value" != all \
                && ! -v cross_dims_tried[$field] ]]; then
-              log_debug "Cross dim set: $dim=$member -> $field=$value (via derive table $derive_table)"
+              log_debug "Cross dim set: $dim=$member -> $field=$value (via ${derive_table}.tab)"
               field_dim=$value
               validated_dims+=" $field"
               cross_dims_tried[$field]=1
@@ -5210,7 +5214,7 @@ set_function_cross_dims_single() {
       else
         if [[ "$value" && "$value" != all \
            && ! -v cross_dims_tried[$field] ]]; then
-          log_debug "Cross dim set: $dim=$member -> $field=$value (via derive function $derive_fun)"
+          log_debug "Cross dim set: $dim=$member -> $field=$value (via ${derive_fun}.fun)"
           ddim=$value
           validated_dims+=" $field"
           cross_dims_tried[$field]=1
@@ -5444,6 +5448,9 @@ calc_coordinates_next_unknown_dim() {
             fi
             derive_exactly_one=f
           fi
+
+          # overriding this for now, not sure if we need to only derive one at this point
+          derive_exactly_one=f
 
           if [[ $phase == default ]]; then
             attempt_default || fail
