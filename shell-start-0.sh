@@ -918,7 +918,7 @@ forge() {
                   done
                 fi
               done
-            elif [[ -f "$target" ]]; then
+            elif [[ -f "$target" || -L "$target" ]]; then
               echo rm "$target"
               rm "$target"
             elif [[ -d "$target" ]]; then
