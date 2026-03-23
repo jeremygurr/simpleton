@@ -2495,7 +2495,6 @@ narrow_dim() {
 
   local -n result=$result_var
   begin_function
-    log_debug "Narrowing down $dim"
     local -n \
       derive_from=dim_${dim}_derived_from \
       narrow_from=dim_${dim}_narrowed_from \
@@ -2509,8 +2508,10 @@ narrow_dim() {
     array_to_set result value_set
 
     if [[ $use_narrow_from == t ]]; then
+      log_debug "Narrowing down $dim"
       array_from=( "${narrow_from[@]}" )
     else
+      log_debug "Deriving $dim"
       array_from=( "${derive_from[@]}" )
     fi
 
@@ -5117,7 +5118,7 @@ set_table_cross_dims_single() {
       row_index=( ${dt_index[$member]} )
 
       if (( ${#row_index[*]} > 1 )); then
-        log_debug "Too many rows found in derive table matching cross dim: $row_index, skipping cross dim setting"
+        log_debug "Too many rows found in derive table $derive_table matching cross dim $dim / $member: ${#row_index[*]}, skipping cross dim setting"
         abort
       fi
 
@@ -5209,7 +5210,7 @@ set_function_cross_dims_single() {
       else
         if [[ "$value" && "$value" != all \
            && ! -v cross_dims_tried[$field] ]]; then
-          log_debug "Cross dim set: $dim=$member -> $field=$value (via derive function $derive_fun"
+          log_debug "Cross dim set: $dim=$member -> $field=$value (via derive function $derive_fun)"
           ddim=$value
           validated_dims+=" $field"
           cross_dims_tried[$field]=1
@@ -5449,8 +5450,11 @@ calc_coordinates_next_unknown_dim() {
           elif [[ $phase == all_if_blank ]]; then
             if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
               local -n dim_members=dim_${dim}_members
-              if [[ "$dim_members" ]]; then
+              if [[ "${dim_members:-}" ]]; then
                 values=( "${dim_members[@]}" )
+              else
+                log_fatal "dim_members not defined for $dim. Either define it expliciting in the dim definition, or add a derive table containing the valid members."
+                fail1
               fi
             fi
           elif [[ $phase == derive \
