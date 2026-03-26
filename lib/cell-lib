@@ -379,6 +379,14 @@ make_table_index() {
   handle_return
 }
 
+# inputs: 
+#   start_of_key
+#   end_of_key
+#   row_count
+#   field_count
+#   table_data
+# outputs:
+#   compound_cardinality
 get_compound_cardinality() {
   compound_cardinality=0
   local row compound_value field_index field data_index
@@ -388,7 +396,7 @@ get_compound_cardinality() {
     for (( field_index = start_of_key; field_index <= end_of_key; field_index++ )); do
       (( data_index = row * field_count + field_index ))
       value=${table_data[$data_index]}
-      compound_value+="$value "
+      compound_value+="$value *^* "
     done
     possibilities[$compound_value]=1
   done
@@ -397,40 +405,42 @@ get_compound_cardinality() {
 
 # inputs:
 #   name
-load_derive_table_compound_keys() {
+#   row_count
+#   field_count
+#   table_fields
+#   table_data
+# outputs:
+#   dim_${field}_key_tables
+#   dim_${field}_derive_tables
+#   key_fields
+load_derive_table_keys() {
   begin_function
 
-    local field field_index
-    for (( field_index = 1; field_index < field_count; field_index++ )); do
-      field=${table_fields[$field_index]}
-      local -n dim_derive_tables=dim_${field}_derive_tables
-      key_fields+="$field,"
-      dim_derive_tables+=( $name )
-    done
-    key_fields="${key_fields%,}"
+    local field_index first_field field row_count
 
-  end_function
-  handle_return
-}
+    first_field=${table_fields[0]}
 
-load_derive_table_simple_keys() {
-  begin_function
+    local -n index=derive_table_${name}_index_${first_field} \
+      key_tables=dim_${first_field}_key_tables \
+      dim_derive_tables=dim_${first_field}_derive_tables \
 
-    local field_index=0 field row_count
+    if (( ${#index[*]} == row_count )); then
+      key_tables+="$name "
+      key_fields+="$first_field "
+    fi
 
-    (( row_count = data_count / field_count ))
+    local start_of_key=1 end_of_key=$((field_count - 1))
 
-    field=${table_fields[$field_index]}
-
-    local -n index=derive_table_${name}_index_${field} \
-      key_tables=dim_${field}_key_tables \
-
-    key_tables+="$name "
-    key_fields+="$field "
-
-    local -n dim_derive_tables=dim_${field}_derive_tables
-    if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $name "* ]]; then
-      dim_derive_tables+=( $name )
+    get_compound_cardinality || fail
+    if (( compound_cardinality == row_count )); then
+      for (( field_index = 1; field_index < field_count; field_index++ )); do
+        field=${table_fields[$field_index]}
+        key_fields+="$field,"
+        if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $name "* ]]; then
+          dim_derive_tables+=( $name )
+        fi
+      done
+      key_fields="${key_fields%,} "
     fi
 
   end_function
@@ -1659,7 +1669,12 @@ display_coordinates() {
         (( data_offset = row_index * c_fields_count + field_index ))
         field=${c_fields[$field_index]}
         if [[ " $skip_dims " != *" $field "* ]]; then
-          value=${c_data[$data_offset]}
+          local -n is_secret=dim_${field}_is_secret
+          if [[ -v is_secret && $is_secret == t ]]; then
+            value='******'
+          else
+            value=${c_data[$data_offset]}
+          fi
           apad_calc $field "$value  "
         fi
       done
@@ -4273,11 +4288,8 @@ make_derive_cache_handle_table() {
     local row_count
     (( row_count = data_count / field_count ))
 
-    load_derive_table_simple_keys || fail
-    load_derive_table_compound_keys || fail
-
+    load_derive_table_keys || fail
     write_vars_to_context derive_table_${name}_key_fields || fail
-
     tab_get_derive_from || fail
 
   end_function
@@ -6468,6 +6480,15 @@ build_context() {
   local cell_path=$1
   begin_function
 
+    if [[ $dim_resolver == brute ]]; then
+      local -A dim_cardinality \
+        con_cardinality \
+        constellation_of \
+        constellation_dims \
+
+      local constellations=()
+    fi
+
     load_dim_caches $cell_path || fail
     load_derive_caches $cell_path || fail
 
@@ -7378,6 +7399,20 @@ switch_context() {
 
       context_path=$cyto_path/context
       init_context || fail
+
+      dim_resolver=${dim_resolver:-${resolver:-cherry}}
+      case $dim_resolver in
+        cherry)
+          log_debug "Using cherry resolver. This is old and fairly well refined, but has intrinsic flaws."
+        ;;
+        brute)
+          log_debug "Using brute resolver. This is a new experimental resolver that should fix the problems of cherry."
+        ;;
+        *)
+          log_fatal "Unknown resolver: $dim_resolver. Must be one of: cherry brute (defaults to cherry)"
+          fail1
+        ;;
+      esac
 
       seed_path=
       if [[ $dna_exists == t ]]; then
