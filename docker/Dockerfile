@@ -18,10 +18,8 @@ ENV LC_ALL=en_US.UTF-8
 
 RUN ln -s /var/cache/apk /etc/apk/cache 
 
-RUN --mount=type=cache,target=/var/cache/apk \
-  apk --allow-untrusted add \
-    alpine-conf
-
+#RUN --mount=type=cache,target=/var/cache/apk \
+#  apk --allow-untrusted add \
 #    perl \
 #    perl-doc \
 #    perl-error \
