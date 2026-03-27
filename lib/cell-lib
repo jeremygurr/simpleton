@@ -4491,6 +4491,7 @@ calc_missing_members() {
 #   tool_possibilities (set)
 build_constellation_table_handle_tab() {
   begin_function
+    begin_for 
   end_function
   handle_return
 }
@@ -4533,9 +4534,14 @@ build_constellation_table() {
       local -n narrowed_from=dim_${current_dim}_narrowed_from
       local row tool
       local -A dim_members=() tool_possibilities=()
+
       begin_for row in ${narrowed_from}; doo
         tool=${row%% *}
         tool_possibilities=()
+
+        # check if tool fields match known dims
+        incomplete
+
         if [[ $tool == *.tab ]]; then
           build_constellation_table_handle_tab || fail
         elif [[ $tool == *.fun ]]; then
@@ -4544,21 +4550,23 @@ build_constellation_table() {
           log_fatal "Unknown tool: $tool in narrowed_from of $current_dim"
           fail1
         fi
-        intersect dim_members tool_possibilities tool_possibilities
-        if (( ${#dim_members[*]} == 0 )); then
-          con_table_data+=( "none" )
+        intersect dim_members tool_possibilities dim_members
+      end_for
+
+      if (( ${#dim_members[*]} == 0 )); then
+        con_table_data+=( "none" )
+        if (( field_index + 1 < field_count )); then
+          field_index=$((field_index+1)) build_constellation_table || fail
+        fi
+      else
+        begin_for member in "${dim_members[@]}"; doo
+          con_table_data+=( "$member" )
           if (( field_index + 1 < field_count )); then
             field_index=$((field_index+1)) build_constellation_table || fail
           fi
-        else
-          begin_for member in "${dim_members[@]}"; doo
-            con_table_data+=( "$member" )
-            if (( field_index + 1 < field_count )); then
-              field_index=$((field_index+1)) build_constellation_table || fail
-            fi
-          end_for
-        fi
-      end_for
+        end_for
+      fi
+
     fi
     
   end_function
