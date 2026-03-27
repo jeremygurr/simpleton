@@ -373,6 +373,11 @@ make_table_index() {
         fail1
       fi
 
+      local -n members_of=members_of_$field
+      for value in ${!index[*]}; do
+        members_of[$value]=1
+      done
+
     end_for
 
   end_function
@@ -4270,6 +4275,12 @@ make_derive_cache_handle_table() {
 
     grip_fence
 
+    if [[ $dim_resolver == brute ]]; then
+      local cons_found=()
+      dims=${fields[*]} find_constellations_of_dims || fail
+      dims=${fields[*]} merge_dim_constellations || fail
+    fi
+
     table=derive_table_${name} \
     make_table_index || fail
 
@@ -4316,6 +4327,50 @@ add_derive_path() {
 
 }
 
+# input: dims
+# output cons_found
+find_constellations_of_dims() {
+  local dims=$dims dim con
+  for dim in $dims; do
+    con=${constellation_of[$derived_dim]:-}
+    if [[ "$con" && " ${cons_found[*]} " != *" $con "* ]]; then
+      cons_found+=( $con )
+    fi
+  done
+}
+
+# inputs:
+#   from         constellation to copy over the other cons
+#   to           other cons to be overwritten
+merge_constellations() {
+  local from=$from to=$to con dim
+  for dim in ${!constellation_of[*]}; do
+    if [[ " $to " == *" $dim "* ]]; then
+      constellation_of[$dim]=$from
+    fi
+  done
+}
+
+# inputs: 
+#   dims
+#   cons_found
+merge_dim_constellations() {
+  local king_con dims=( $dims )
+  if (( ${#cons_found[*]} == 0 )); then
+    king_con=${dims[0]}
+  else
+    king_con=${cons_found[0]}
+  fi
+
+  if (( ${#cons_found[*]} > 1 )); then
+    from=$king_con to=${cons_found[*]:1} merge_constellations || fail
+  fi
+
+  for derived_dim in ${dims[*]}; do
+    constellation_of[$derived_dim]=$king_con
+  done
+}
+
 make_derive_cache_handle_function() {
   begin_function
 
@@ -4324,13 +4379,23 @@ make_derive_cache_handle_function() {
     derive_functions+=( $name )
     write_to_context fun code || fail
 
-    local fields=() derive_paths=()
+    local fields=() derive_paths=() cons_found=()
 
     action=info \
     derive_function_$name || fail
 
-    local derived_dim
+    if [[ $dim_resolver == brute ]]; then
+      dims=${fields[*]} find_constellations_of_dims || fail
+      dims=${fields[*]} merge_dim_constellations || fail
+    fi
+
+    local derived_dim cons_found=() con
     for derived_dim in ${fields[*]}; do
+
+      con=${constellation_of[$derived_dim]:-}
+      if [[ "$con" && " ${cons_found[*]} " != *" $con "* ]]; then
+        cons_found+=( $con )
+      fi
 
       local -n derive_from=dim_${derived_dim}_derived_from \
         key_functions=dim_${derived_dim}_key_functions \
@@ -4372,14 +4437,127 @@ make_derive_cache_handle_function() {
           is_key=t
         fi
 
-      done
+      done # key_field_group
 
       if [[ $is_key == t ]]; then
         key_functions+=( $name )
       fi
 
+    done # derived_dim
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   dim
+calc_missing_members() {
+  begin_function
+
+    local members_array 
+    log_debug "Calculating missing dim members for $dim"
+
+    local -n \
+      members=dim_${dim}_members \
+      members_of=members_of_$dim \
+
+    members=()
+
+    for member in "${!members_of[@]}"; do
+      members+=( "$member" )
     done
 
+    sort_array members
+
+    log_debug "Found ${#members[*]} members for $dim"
+
+    if [[ ! "${members[*]}" ]]; then
+      log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
+      fail1
+    fi
+
+    write_vars_to_context dim_${dim}_members || fail
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   
+# outputs:
+#   tool_possibilities (set)
+build_constellation_table_handle_tab() {
+  begin_function
+  end_function
+  handle_return
+}
+
+# inputs:
+#   
+# outputs:
+#   tool_possibilities (set)
+build_constellation_table_handle_fun() {
+  begin_function
+  end_function
+  handle_return
+}
+
+# inputs:
+#   con
+#   field_index
+#   field_count
+#   con_table_fields
+#   con_table_data
+# outputs:
+#   con_table_fields
+#   con_table_data
+build_constellation_table() {
+  local field_index=$field_index con=$con
+  begin_function
+    local current_dim=${con_table_fields[$field_index]}
+    # check if dynamic
+    if [[ $field_index == 0 ]]; then
+      local -n dim_members=dim_${current_dim}_members
+      local member
+      begin_for member in "${dim_members[@]}"; doo
+        con_table_data+=( "$member" )
+        if (( field_index + 1 < field_count )); then
+          field_index=$((field_index+1)) build_constellation_table || fail
+        fi
+      end_for
+    else # $dim_index > 0
+      # loop over all derive tools related to the current dim
+      local -n narrowed_from=dim_${current_dim}_narrowed_from
+      local row tool
+      local -A dim_members=() tool_possibilities=()
+      begin_for row in ${narrowed_from}; doo
+        tool=${row%% *}
+        tool_possibilities=()
+        if [[ $tool == *.tab ]]; then
+          build_constellation_table_handle_tab || fail
+        elif [[ $tool == *.fun ]]; then
+          build_constellation_table_handle_fun || fail
+        else
+          log_fatal "Unknown tool: $tool in narrowed_from of $current_dim"
+          fail1
+        fi
+        intersect dim_members tool_possibilities tool_possibilities
+        if (( ${#dim_members[*]} == 0 )); then
+          con_table_data+=( "none" )
+          if (( field_index + 1 < field_count )); then
+            field_index=$((field_index+1)) build_constellation_table || fail
+          fi
+        else
+          begin_for member in "${dim_members[@]}"; doo
+            con_table_data+=( "$member" )
+            if (( field_index + 1 < field_count )); then
+              field_index=$((field_index+1)) build_constellation_table || fail
+            fi
+          end_for
+        fi
+      end_for
+    fi
+    
   end_function
   handle_return
 }
@@ -4399,6 +4577,10 @@ make_derive_cache() {
 
     local context_file=$cache_path.new \
       type files \
+
+    for dim in ${all_dims[*]}; do
+      local -A members_of_$dim
+    done
 
     begin_for type in fun tab; doo
 
@@ -4425,7 +4607,46 @@ make_derive_cache() {
 
     grip_fence
 
-    local dim
+    local con dim
+
+    if [[ $dim_resolver == brute ]]; then
+      for dim in ${!constellation_of[*]}; do
+        con=${constellation_of[$dim]}
+        local -n member_type=dim_${dim}_member_type
+        if [[ $member_type == static ]]; then
+          constellation_static_dims[$con]+=( $dim )
+        else
+          constellation_dynamic_dims[$con]+=( $dim )
+        fi
+        if [[ " ${constellations[*]} " != *" $con "* ]]; then
+          constellations+=( $con )
+        fi
+      done
+
+      local fd fd2 c
+      : {fd}<>   # allocation file descriptor
+      : {fd2}<>   # allocation file descriptor
+      for con in ${constellations[*]}; do
+        local sorted_dims=()
+
+        for dim in ${constellation_static_dims[$con]}; do
+          local -n members_of=members_of_$dim
+          if [[ "${members_of[0]:-}" ]]; then
+            local cardinality=${#members_of[*]}
+            echo "$cardinality $dim"
+          fi
+        done >&$fd &
+
+        sort -rn <&$fd >&$fd2 &
+
+        while read -u $fd2 c dim; do
+          sorted_dims+=( $dim )
+        done
+
+        constellation_static_dims[$con]=${sorted_dims[*]}
+      done
+    fi
+
     for dim in ${!all_dims[*]}; do
 
       ignore_missing=t \
@@ -4466,6 +4687,27 @@ make_derive_cache() {
       write_vars_to_context dim_${dim}_member_type || fail
        
     done
+
+    if [[ $dim_resolver == brute ]]; then
+      begin_for con in ${constellations[*]}; doo
+        local con_${con}_table_fields \
+          con_${con}_table_data \
+          static_dims=( ${constellation_static_dims[$con]} ) \
+
+        local field_count=${#static_dims[*]} \
+
+        local -n \
+          con_table_fields=con_${con}_table_fields \
+          con_table_data=con_${con}_table_data \
+
+        con_table_fields=( ${static_dims[*]} )
+        # constellation tables are only created for multi-dim constellations
+        if (( ${#con_table_fields[*]} > 1 )); then
+          field_index=0 build_constellation_table || fail
+          write_vars_to_context con_${con}_table_fields con_${con}_table_data || fail
+        fi
+      end_for
+    fi
 
     if [[ -f $cache_path.new ]]; then
       mv $cache_path.new $cache_path || fail
@@ -4542,50 +4784,6 @@ build_refine_tables() {
       fi
 
     done
-
-  end_function
-  handle_return
-}
-
-# inputs:
-#   dim
-calc_missing_members() {
-  begin_function
-
-    local members_array 
-    log_debug "Calculating missing dim members for $dim"
-
-    local -n dts=dim_${dim}_derive_tables
-
-    local -A found_members=()
-
-    local dt v
-    if [[ -v dts ]]; then
-
-      local -n members=dim_${dim}_members
-      members=()
-
-      for dt in $dts; do
-        local -n index=derive_table_${dt}_index_$dim
-        for v in ${!index[*]}; do
-          found_members[$v]=1
-        done
-      done
-      members=( "${!found_members[@]}" )
-      sort_array members
-
-      log_debug "Found ${#found_members[*]} members for $dim"
-
-      if [[ ! "${found_members[*]}" ]]; then
-        log_fatal "No members were found for this dim $dim. Check the derive tables or explicitly make a members list in the dim folder."
-        fail1
-      fi
-
-      write_vars_to_context dim_${dim}_members || fail
-
-    else
-      log_debug "No derive tables found for $dim, and no explicit members are defined, so it must be a dynamic dim"
-    fi
 
   end_function
   handle_return
@@ -6484,7 +6682,8 @@ build_context() {
       local -A dim_cardinality \
         con_cardinality \
         constellation_of \
-        constellation_dims \
+        constellation_static_dims \
+        constellation_dynamic_dims \
 
       local constellations=()
     fi
