@@ -337,6 +337,8 @@ make_table_index() {
 
         begin_for (( row_index = 0; row_index < row_count; row_index++ )); doo
 
+          grip_fence
+
           (( data_offset = row_index * field_count + field_index ))
           value=${table_data[$data_offset]}
 
@@ -700,7 +702,7 @@ execute_command_prep() {
 execute_commands() {
   local cell_path=$1; shift
   local cell_commands=( $* ) cell_command
-  local log_show_vars='^cell_path cell_commands'
+  local interesting_vars='^cell_path cell_commands'
   begin_function
 
     if [[ "$pause_at_cells" ]]; then
@@ -2255,7 +2257,7 @@ extract_from_derive_table_check_row() {
       field=${derive_fields[$column_index]}
       value=${derive_data[$((data_index + column_index))]}
 
-      log_show_vars='field value'
+      interesting_vars='field value'
 
       if [[ $field == $dim ]]; then
 
@@ -2644,7 +2646,7 @@ attempt_derive() {
     use_narrow_from=${use_narrow_from:-f} \
     use_derive_from=${use_derive_from:-t} \
 
-  log_show_vars='dim from_dim'
+  interesting_vars='dim from_dim'
   begin_function
 
     local -n \
@@ -2983,7 +2985,7 @@ resolve_dim() {
 }
 
 find_path_to_dim_optional_dims() {
-  local log_show_vars='target_dim from_row'
+  local interesting_vars='target_dim from_row'
   begin_function
     local optional_dim
     begin_for optional_dim in ${optional_dims[*]}; doo
@@ -3013,7 +3015,7 @@ find_path_to_dim_optional_dims() {
 
 find_path_to_dim_narrow() {
   local target_dim=$1
-  local log_show_vars=target_dim
+  local interesting_vars=target_dim
   begin_function
 
     local -A old_extra_dims_needed
@@ -3036,7 +3038,7 @@ find_path_to_dim_narrow() {
     local dim from_row
     begin_for from_row in "${narrow_from[@]}"; doo
 
-      local log_show_vars=target_dim
+      local interesting_vars=target_dim
       grip_fence
 
       row_array=( $from_row )
@@ -3080,7 +3082,7 @@ is_dim_required() {
 }
 
 find_path_to_dim_required_dims() {
-  local log_show_vars='target_dim from_row'
+  local interesting_vars='target_dim from_row'
   begin_function
     local required_dim 
     begin_for required_dim in ${required_dims[*]}; doo
@@ -3136,7 +3138,7 @@ find_path_to_dim_required_dims() {
 
 find_path_to_dim() {
   local target_dim=$1 
-  local log_show_vars=target_dim
+  local interesting_vars=target_dim
   begin_function
     local -A old_extra_dims_needed
     local -n derived_from=dim_${target_dim}_derived_from
@@ -3165,7 +3167,7 @@ find_path_to_dim() {
     local dim from_row
     begin_for from_row in "${derived_from[@]}"; doo
 
-      local log_show_vars=target_dim
+      local interesting_vars=target_dim
       grip_fence
 
       row_array=( $from_row )
@@ -3679,7 +3681,7 @@ init_command_vars() {
 execute_command() {
   local cell_path=$1 cell_command=$2 \
     short_cell=$short_cell \
-    log_show_vars='short_cell cell_command' \
+    interesting_vars='short_cell cell_command' \
 
   begin_function_hi
 
@@ -3833,7 +3835,7 @@ get_dim_path() {
 #   $1      dim path
 # 
 build_dim_info_single() {
-  local log_show_vars=dim_path \
+  local interesting_vars=dim_path \
     dim_path=$1 dim
 
   begin_function
@@ -3877,7 +3879,7 @@ build_dim_info_single() {
 #   dim_derived_from
 #   next_level_row
 build_context_support_dims_find_related() {
-  local log_show_vars=dim
+  local interesting_vars=dim
 
   begin_function
 
@@ -4216,7 +4218,7 @@ build_dim_expand_functions() {
 }
 
 build_context_trunk_dna() {
-  local log_vars=cell_path log_show_vars=short_cell
+  local interesting_vars=cell_path interesting_vars=short_cell
   begin_function
 
     local item_name last_part dna_full_item suffix context_type=trunk
@@ -4254,7 +4256,7 @@ build_context_trunk_dna() {
       safe_link $dna_path $context_path-$context_type.new || fail
       source $dna_path || fail
     else
-      log_vars=dna_path log_fatal "Internal error: dna not found"
+      interesting_vars=dna_path log_fatal "Internal error: dna not found"
       fail1
     fi
 
@@ -5118,6 +5120,7 @@ make_derive_cache_constellation() {
 #   lib_dt_path
 #   cache_path
 make_derive_cache() {
+  local interesting_vars=lib_dt_path
   begin_function
 
     log_verbose "Generating derive cache for $lib_dt_path"
@@ -5129,7 +5132,7 @@ make_derive_cache() {
 
     local context_file=$cache_path.new
 
-    for dim in ${all_dims[*]}; do
+    for dim in ${!all_dims[*]}; do
       local -A members_of_$dim
     done
 
@@ -5171,7 +5174,7 @@ make_derive_cache() {
 }
  
 load_derive_caches() {
-  local work_path=$1
+  local work_path=$1 interesting_vars=work_path
   begin_function
 
     if [[ $work_path == /*/*/* ]]; then
@@ -5416,7 +5419,7 @@ check_table_row() {
     is_valid=t
     for (( f = 0; f < field_count; f++ )); do
 
-      log_show_vars=f
+      interesting_vars=f
 
       local field=${table_fields[$f]}
       (( t = offset + f ))
@@ -5762,7 +5765,7 @@ load_related_derive_tables() {
 
 calc_coordinates_next_unknown_dim_found() {
   local needs_narrowing=${needs_narrowing:-t} \
-    log_show_vars=dim
+    interesting_vars=dim
   begin_function
 
     resolved_dims+=" $dim"
@@ -5855,7 +5858,7 @@ calc_coordinates_next_unknown_dim_found() {
 #   unknown_dims
 #   all other ddims which may be used to derive the unknown dims
 calc_coordinates_next_unknown_dim() {
-  local log_show_vars=unknown_dims
+  local interesting_vars=unknown_dims
   begin_function
     local dim dims \
       phase unknown_dims=${unknown_dims:-} \
@@ -5970,7 +5973,7 @@ calc_coordinates_next_unknown_dim() {
 # inputs:
 #   dim
 calc_coords_validate_member() {
-  local member=$1 log_show_vars='dim member'
+  local member=$1 interesting_vars='dim member'
   begin_function
 
     is_valid=t
@@ -6027,7 +6030,7 @@ calc_coords_validate_member() {
 #   phase             unknown or known.  
 calc_coordinates_next_dim_member() {
   local phase=$phase
-  log_show_vars='dim m'
+  interesting_vars='dim m'
   begin_function
     localize
     local -n member=d_$dim
@@ -6039,7 +6042,7 @@ calc_coordinates_next_dim_member() {
 
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
       calc_coords_validate_member "$member" || fail
-      log_show_vars='dim member'
+      interesting_vars='dim member'
       fence
     fi
 
@@ -6182,7 +6185,7 @@ calc_coordinates_next_dim() {
           end_for
         fi
 
-        log_show_vars='dim member'
+        interesting_vars='dim member'
 
         # if none of the members are valid, we just skip the row
         # if any are valid, they will have added their own rows already
@@ -6206,7 +6209,7 @@ calc_coordinates_next_dim() {
 
 # internal function
 seed_coordinates_handle_row() {
-  log_show_vars=row_index
+  interesting_vars=row_index
   begin_function
     localize
     local is_valid seed_field
@@ -7029,7 +7032,7 @@ parallel_loop() {
     body2=$body tail2=${tail:-} \
     par2=$par fork2=$fork \
 
-  local log_show_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
+  local interesting_vars='loop_over_var=loop_over_var2 par=par2 fork=fork2'
   begin_function_lo
 
     # Make sure these variables don't get passed into inner loops
@@ -7146,8 +7149,8 @@ for_each_member() {
     par=${par:-t} \
     cell_path=${cell_path:-} \
 
-  local log_vars='fork par' \
-    log_show_vars='dim function'
+  local interesting_vars='fork par' \
+    interesting_vars='dim function'
   begin_function
 
     local dims values=() member_count=0 \
@@ -7786,7 +7789,7 @@ switch_context() {
 
   if [[ "${last_context_loaded:-}" != $cell_path ]]; then
 
-    local log_show_vars=^cell_path rebuild_attempted=f
+    local interesting_vars=^cell_path rebuild_attempted=f
     begin_function
 
       get_short_cell
@@ -8367,7 +8370,7 @@ trace_op=${trace_op:-}
 execute_op() {
   local op_name=$1 op_function= ignore_missing=${ignore_missing:-f}
 
-  local log_vars='cell_path op_name'
+  local interesting_vars='cell_path op_name'
   begin_function
 
     op_function=${op_name}_op
@@ -8527,7 +8530,7 @@ encrypt_file_with_shared_key() {
 
   log_debug "Encrypting $from to $to"
 
-  local log_vars='from to'
+  local interesting_vars='from to'
   begin_function_hi
 
     if [[ ! -f "$from" ]]; then
@@ -8621,7 +8624,7 @@ encrypt_file_with_shared_key() {
 
 handle_secure_edit() {
 
-  local log_vars= old_file=$file new_file=$file.new
+  local interesting_vars= old_file=$file new_file=$file.new
   begin_function_hi
 
     setup_tmp_path || fail
@@ -8671,7 +8674,7 @@ handle_secure_edit() {
 
 handle_insecure_edit() {
 
-  local log_vars= old_file=$file new_file=$file.new
+  local interesting_vars= old_file=$file new_file=$file.new
   begin_function_hi
 
     if [[ -f $old_file ]]; then
@@ -8766,7 +8769,7 @@ decrypt_file() {
     to_var=${to_var:-} \
     key=${key:-$user_private_key}
 
-  local log_show_vars='^from ^to to_var'
+  local interesting_vars='^from ^to to_var'
   begin_function_hi
 
     if [[ ! "$to" && ! "$to_var" ]]; then
@@ -8909,7 +8912,7 @@ decrypt_file_with_shared_key() {
 
   log_debug "Decrypting $from to $to" || return 1
 
-  local log_vars='from to'
+  local interesting_vars='from to'
   begin_function_hi
 
     if [[ ! -f "$from" ]]; then
@@ -9099,7 +9102,7 @@ cell_lock() {
     lock_type=read \
     lock_path
 
-  local log_show_vars="timeout ^cell_path"
+  local interesting_vars="timeout ^cell_path"
   begin_function
 
     if [[ -e $cell_path/.cyto/context ]]; then
@@ -9141,7 +9144,7 @@ up_delegate() {
   local cell_path=${cyto_up_path%/.cyto/up/*} \
     up_lock=$cyto_up_path/chosen/.cyto/lock \
     up_name=${cyto_up_path##*/}
-  local log_show_vars='^cyto_up_path ^cell_path up_lock'
+  local interesting_vars='^cyto_up_path ^cell_path up_lock'
   begin_function_hi
 
     if [[ -e $up_lock ]]; then
