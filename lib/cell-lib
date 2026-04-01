@@ -4352,7 +4352,8 @@ find_constellations_of_dims() {
 merge_constellations() {
   local from=$from to=$to con dim
   for dim in ${!constellation_of[*]}; do
-    if [[ " $to " == *" $dim "* ]]; then
+    con=${constellation_of[$dim]}
+    if [[ " $to " == *" $con "* ]]; then
       constellation_of[$dim]=$from
     fi
   done
@@ -4362,20 +4363,29 @@ merge_constellations() {
 #   dims
 #   cons_found
 merge_dim_constellations() {
-  local king_con dims=( $dims )
-  if (( ${#cons_found[*]} == 0 )); then
-    king_con=${dims[0]}
-  else
-    king_con=${cons_found[0]}
-  fi
+  local interesting_vars='king_con dims'
+  begin_function
+    local king_con dims=( $dims )
+    if (( ${#cons_found[*]} == 0 )); then
+      king_con=${dims[0]}
+    else
+      king_con=${cons_found[0]}
+    fi
 
-  if (( ${#cons_found[*]} > 1 )); then
-    from=$king_con to=${cons_found[*]:1} merge_constellations || fail
-  fi
+    if (( ${#cons_found[*]} > 1 )); then
+      from=$king_con to=${cons_found[*]:1} merge_constellations || fail
+    fi
 
-  for derived_dim in ${dims[*]}; do
-    constellation_of[$derived_dim]=$king_con
-  done
+    local dim
+    for dim in ${dims[*]}; do
+      constellation_of[$dim]=$king_con
+      if [[ ! -v all_dims[$dim] ]]; then
+        log_fatal "No definition of dim $dim found, even though it's used in $derive_path"
+        fail1
+      fi
+    done
+  end_function
+  handle_return
 }
 
 make_derive_cache_handle_function() {
@@ -5004,9 +5014,9 @@ calculate_constellation_dims() {
       con=${constellation_of[$dim]}
       local -n member_type=dim_${dim}_member_type
       if [[ $member_type == static ]]; then
-        constellation_static_dims[$con]+=( $dim )
+        constellation_static_dims[$con]+="$dim "
       else
-        constellation_dynamic_dims[$con]+=( $dim )
+        constellation_dynamic_dims[$con]+="$dim "
       fi
       if [[ " ${constellations[*]} " != *" $con "* ]]; then
         constellations+=( $con )
@@ -5060,8 +5070,9 @@ make_derive_cache_dim_info() {
     local -n member_type=dim_${dim}_member_type \
       dim_members=dim_${dim}_members \
       dim_derive_tables=dim_${dim}_derive_tables \
+      members_of=members_of_$dim \
 
-    if [[ ! -v dim_members ]]; then
+    if [[ ! -v dim_members && -v members_of ]]; then
       calc_missing_members || fail
     fi
 
@@ -5138,14 +5149,15 @@ make_derive_cache() {
 
     local con dim
 
+    for dim in ${!all_dims[*]}; do
+      grip_fence
+      make_derive_cache_dim_info || fail
+    done
+
     if [[ $dim_resolver == brute ]]; then
       zombie_debug
       calculate_constellation_dims || fail
     fi
-
-    for dim in ${!all_dims[*]}; do
-      make_derive_cache_dim_info || fail
-    done
 
     if [[ $dim_resolver == brute ]]; then
       zombie_debug
