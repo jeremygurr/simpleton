@@ -4513,7 +4513,7 @@ build_constellation_table_handle_tab_forward() {
       fail1
     fi
 
-    for val in ${current_dims[$first_field]}; do
+    for val in ${current_dim_values[$first_field]}; do
       if [[ -v table_index[$val] ]]; then
         rows+="${table_index[$val]} "
       fi
@@ -4571,7 +4571,7 @@ build_constellation_table_handle_tab_reverse() {
   begin_function
     local -n table_index=derive_table_${tool%.tab}_index_${second_field}
 
-    for val in ${current_dims[$second_field]}; do
+    for val in ${current_dim_values[$second_field]}; do
       if [[ -v table_index[$val] ]]; then
         rows+="${table_index[$val]} "
       fi
@@ -4583,7 +4583,7 @@ build_constellation_table_handle_tab_reverse() {
       for (( other_index = 2; other_index < field_count; other_index++ )); do
         values=( ${table_data[$((data_index + other_index))]} )
         table_dim=${table_fields[$other_index]}
-        target_member=${current_dims[$table_dim]}
+        target_member=${current_dim_values[$table_dim]}
         if dim=$table_dim multi_member=values member_conflicts; then
           continue 2
         fi
@@ -4601,7 +4601,7 @@ build_constellation_table_handle_tab_reverse() {
 
 # inputs:
 #   tool
-#   current_dims
+#   current_dim_values
 # outputs:
 #   tool_possibilities (set)
 build_constellation_table_handle_tab() {
@@ -4620,7 +4620,7 @@ build_constellation_table_handle_tab() {
 
       local field
       for field in ${table_fields[*]:1}; do
-        if [[ ! -v current_dims[$field] ]]; then
+        if [[ ! -v current_dim_values[$field] ]]; then
           return
         fi
       done
@@ -4628,7 +4628,7 @@ build_constellation_table_handle_tab() {
 
     else
 
-      if [[ ! -v current_dims[$first_field] ]]; then
+      if [[ ! -v current_dim_values[$first_field] ]]; then
         return
       fi
       build_constellation_table_handle_tab_forward || fail
@@ -4665,20 +4665,20 @@ build_constellation_table_handle_fun() {
       if [[ ",$target_dims," == *",$current_dim,"* ]]; then
         eval "local ${required_dims[*]}" || fail
         for dim in $required_dims; do
-          if [[ ! -v current_dims[$dim] ]]; then
+          if [[ ! -v current_dim_values[$dim] ]]; then
             continue 2
           fi
           local -n ddim=d_$dim
-          ddim=${current_dims[$dim]}
+          ddim=${current_dim_values[$dim]}
           if [[ "$ddim" == *" "* ]]; then
             # we don't support multiple members here at this time
             ddim=
           fi
         done
         for dim in $optional_dims; do
-          if [[ -v current_dims[$dim] ]]; then
+          if [[ -v current_dim_values[$dim] ]]; then
             local -n ddim=d_$dim
-            ddim=${current_dims[$dim]}
+            ddim=${current_dim_values[$dim]}
             if [[ "$ddim" == *" "* ]]; then
               # we don't support multiple members here at this time
               ddim=
@@ -4819,7 +4819,7 @@ set_function_cross_dims_single() {
           if [[ $set_dims_directly == t ]]; then
             ddim=$value
           else
-            current_dims[$field]=$value
+            current_dim_values[$field]=$value
           fi
 
           validated_dims+=" $field"
@@ -4876,7 +4876,7 @@ set_cross_dims_internal() {
 #   dim
 #   member
 #   allow_dims
-#   set_dims_directly (bool)  if true, sets d_{dim} values, otherwise sets current_dims[{dim}
+#   set_dims_directly (bool)  if true, sets d_{dim} values, otherwise sets current_dim_values[{dim}
 # output:
 #   {dims}
 #   conflict
@@ -4901,20 +4901,27 @@ set_cross_dims() {
 #   con_table_fields
 #   con_table_data
 #   current_row
-#   current_dims (set)
+#   current_dim_values (set)
 # outputs:
 #   con_table_fields
 #   con_table_data
 build_constellation_table() {
-  local field_index=$field_index con=$con current_dims=( ${current_dims[*]:-} )
+  local field_index=$field_index con=$con
+
+  # isolate current_dim_values from calling function
+  local -A old_dim_values
+  copy_set current_dim_values old_dim_values
+  local -A current_dim_values
+  copy_set old_dim_values current_dim_values
+
   begin_function
     local current_dim=${con_table_fields[$field_index]}
     local -A dim_members=()
     if (( field_index + 1 > field_count )); then
       con_table_data+=( "${current_row[@]}" )
       abort
-    elif [[ -v current_dims[$current_dim] ]]; then
-      dim_members=( ${current_dims[$current_dim]} )
+    elif [[ -v current_dim_values[$current_dim] ]]; then
+      dim_members=( "${current_dim_values[$current_dim]}" )
     elif [[ $field_index == 0 ]]; then
       local -n current_dim_members=dim_${current_dim}_members
       if [[ ! "${current_dim_members:-}" ]]; then
@@ -4955,14 +4962,14 @@ build_constellation_table() {
     
     if (( ${#dim_members[*]} == 0 )); then
       current_row+=( "none" )
-      current_dims[$current_dim]=none
+      current_dim_values[$current_dim]=none
       if (( field_index + 1 < field_count )); then
         field_index=$((field_index+1)) build_constellation_table || fail
       fi
     else
       begin_for member in "${dim_members[@]}"; doo
         current_row+=( "$member" )
-        current_dims[$current_dim]=$member
+        current_dim_values[$current_dim]=$member
 
         dim=$current_dim \
         set_dims_directly=f \
@@ -5118,7 +5125,7 @@ make_derive_cache_constellation() {
     con_table_fields=( ${static_dims[*]} )
     # constellation tables are only created for multi-dim constellations
     if (( ${#con_table_fields[*]} > 1 )); then
-      local -A current_dims=()
+      local -A current_dim_values=()
       field_index=0 current_row=() build_constellation_table || fail
       write_vars_to_context con_${con}_table_fields con_${con}_table_data || fail
     fi
