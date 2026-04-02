@@ -4438,16 +4438,10 @@ make_derive_cache_handle_function() {
     derive_functions+=( $name )
     write_to_context fun code || fail
 
-    local fields=() derive_paths=()
+    local fields=() derive_paths=() found_all_static=t
 
     action=info \
     derive_function_$name || fail
-
-    if [[ $dim_resolver == brute ]]; then
-      local cons_found=() 
-      dims=${fields[*]} find_constellations_of_dims || fail
-      dims=${fields[*]} merge_dim_constellations || fail
-    fi
 
     local derived_dim con
     for derived_dim in ${fields[*]}; do
@@ -4476,6 +4470,14 @@ make_derive_cache_handle_function() {
           required_dims=${required_dims%/*}
         fi
 
+        local required_dim
+        for required_dim in ${required_dims//,/ } ${target_dims//,/ }; do
+          local -n member_type=dim_${required_dim}_member_type
+          if [[ ${member_type:-dynamic} != static ]]; then
+            found_all_static=f
+          fi
+        done
+
         if [[ ",${required_dims}," != *",$derived_dim,"* \
            && ",${optional_dims}," != *",$derived_dim,"* \
            && ",${target_dims},"   == *",$derived_dim,"* \
@@ -4499,6 +4501,12 @@ make_derive_cache_handle_function() {
       fi
 
     done # derived_dim
+
+    if [[ $dim_resolver == brute && $found_all_static == t ]]; then
+      local cons_found=() 
+      dims=${fields[*]} find_constellations_of_dims || fail
+      dims=${fields[*]} merge_dim_constellations || fail
+    fi
 
   end_function
   handle_return
@@ -5364,7 +5372,6 @@ make_derive_cache() {
     local con dim
 
     for dim in ${!all_dims[*]}; do
-      grip_fence
       make_derive_cache_dim_info || fail
     done
 
