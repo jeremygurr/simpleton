@@ -5014,6 +5014,7 @@ calculate_constellation_dims() {
   begin_function
     local dim con
     for dim in ${!constellation_of[*]}; do
+      grip_fence
       con=${constellation_of[$dim]}
       local -n member_type=dim_${dim}_member_type
       if [[ $member_type == static ]]; then
@@ -5026,32 +5027,33 @@ calculate_constellation_dims() {
       fi
     done
 
-    local fd fd2 c \
-      fifo1=$tmp_path/fifo-fd-1-$$ \
-      fifo2=$tmp_path/fifo-fd-2-$$ \
+    grip_fence
 
-    defer "rm $fifo1 $fifo2"
-    mkfifo $fifo1 $fifo2 || fail
-    : {fd}<>$fifo1    # allocate file descriptor
-    : {fd2}<>$fifo2   # allocate file descriptor
+    local c tmp_file
+    get_tmp_file con_sorting || fail
+
     for con in ${constellations[*]}; do
+      grip_fence
       local sorted_dims=()
 
-      for dim in ${constellation_static_dims[$con]}; do
-        local -n members_of=members_of_$dim
-        if [[ "${members_of[0]:-}" ]]; then
-          local cardinality=${#members_of[*]}
-          echo "$cardinality $dim"
-        fi
-      done >&$fd &
+      if [[ "${constellation_static_dims[$con]:-}" ]]; then
 
-      sort -rn <&$fd >&$fd2 &
+        for dim in ${constellation_static_dims[$con]}; do
+          local -n members_of=members_of_$dim
+          if [[ -v members_of[*] ]]; then
+            local cardinality=${#members_of[*]}
+            echo "$cardinality $dim"
+          fi
+        done | sort -rn >$tmp_file || fail
 
-      while read -u $fd2 c dim; do
-        sorted_dims+=( $dim )
-      done
+        while read c dim; do
+          sorted_dims+=( $dim )
+        done < <(cat $tmp_file) || fail
 
-      constellation_static_dims[$con]=${sorted_dims[*]}
+        constellation_static_dims[$con]=${sorted_dims[*]}
+
+      fi
+      
     done
   end_function
   handle_return
@@ -5075,7 +5077,7 @@ make_derive_cache_dim_info() {
       dim_derive_tables=dim_${dim}_derive_tables \
       members_of=members_of_$dim \
 
-    if [[ ! -v dim_members && -v members_of ]]; then
+    if [[ ! -v dim_members && -v members_of[*] ]]; then
       calc_missing_members || fail
     fi
 
