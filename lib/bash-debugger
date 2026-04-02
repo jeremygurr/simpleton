@@ -57,9 +57,6 @@ log_direct() {
   echo >&$fd_original_err "$@"
 }
 
-alias zombie_debug=debug
-alias zombie_log='echo >&$fd_original_err'
-
 # duplicated from bash-lib
 shell_quote_var() {
   local var_name=$1
@@ -125,54 +122,70 @@ is_set() {
 get_var_value() {
   local __var_name=$1 __val_name=${2:-value} max_count=${max_count:-}
 
-  if [[ ! "$__var_name" =~ ^[a-zA-Z0-9_]+$ ]]; then
-    echo "Invalid variable name: $__var_name" >&$fd_original_err
+  local __base_var_name=${__var_name%%\[*} \
+    __index= \
+
+  if [[ $__var_name == *\[* ]]; then
+    __index=${__var_name##*\[}
+    __index=${__index%\]}
+  fi
+
+  if [[ ! "$__base_var_name" =~ ^[a-zA-Z0-9_]+$ ]]; then
+    echo "get_var_value: Invalid variable name: $__base_var_name" >&$fd_original_err
     return 1
   fi
 
   if [[ ! "$__val_name" =~ ^[a-zA-Z0-9_]+$ ]]; then
-    echo "Invalid variable name: $__val_name" >&$fd_original_err
+    echo "get_var_value: Invalid variable name: $__val_name" >&$fd_original_err
     return 1
   fi
 
-  local -n _var=$__var_name _val=$__val_name || return 1
+  local -n _var=$__base_var_name _val=$__val_name || return 1
   _val='(unset)'
-  if [[ "$__var_name" == *\[* ]]; then
-    if is_set ${__var_name%%\[*} && [[ -v $__var_name ]]; then
-      eval "_val=\${$__var_name}"
-    fi
-  elif is_set _var; then
+  if is_set _var; then
     local _c=0 _k _v
-    _val="( "
-    for _k in "${!_var[@]}"; do
-      _v=${_var[$_k]}
-      if [[ "${_v:-}" ]]; then
-        _val+="$_k=$_v "
-      else
-        _val+="$_k=(empty) "
+    if [[ "${__index}" ]]; then
+      if [[ -v _var[$__index] ]]; then
+        _val=${_var[$__index]}
       fi
-      (( _c++ ))
-      if [[ "$max_count" ]] && (( _c > max_count )); then
-        _val+="... "
-        break
-      fi
-    done
-    _val+=")"
-  elif is_array _var; then
-    local _v _c=0
-    _val="( "
-    if (( "${#_var[*]}" > 0 )); then
-      for _v in "${_var[@]}"; do
-        quotes=single shell_quote_var _v
-        _val+="$_v "
+    else
+      _val="( "
+      for _k in "${!_var[@]}"; do
+        _v=${_var[$_k]}
+        if [[ "${_v:-}" ]]; then
+          _val+="$_k=$_v "
+        else
+          _val+="$_k=(empty) "
+        fi
         (( _c++ ))
         if [[ "$max_count" ]] && (( _c > max_count )); then
           _val+="... "
           break
         fi
       done
+      _val+=")"
     fi
-    _val+=")"
+  elif is_array _var; then
+    local _v _c=0
+    if [[ "${__index}" ]]; then
+      if [[ -v _var[$__index] ]]; then
+        _val=${_var[$__index]}
+      fi
+    else
+      _val="( "
+      if (( "${#_var[*]}" > 0 )); then
+        for _v in "${_var[@]}"; do
+          quotes=single shell_quote_var _v
+          _val+="$_v "
+          (( _c++ ))
+          if [[ "$max_count" ]] && (( _c > max_count )); then
+            _val+="... "
+            break
+          fi
+        done
+      fi
+      _val+=")"
+    fi
   elif [[ -v _var ]]; then
     _val=$_var
     newlines=preserved quotes=single shell_quote_var _val
@@ -2346,7 +2359,7 @@ debug_start() {
 
 debug() {
   local function_to_debug=$* \
-    unignore_this_function=2 \
+    unignore_this_function=${unignore_this_function:-2} \
 
   if [[ "$function_to_debug" ]]; then
     debug_start

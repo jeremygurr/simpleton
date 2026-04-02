@@ -14,6 +14,9 @@ debug_id_current=0
 # this is empty, meaning we haven't forked yet. the top level process having a blank id
 fork_id_current=    
 
+alias zombie_log='echo >&$fd_original_err'
+alias zombie_debug=debug
+
 yolo=${yolo:-f}
 if [[ $yolo == t ]]; then
   echo >&2
@@ -27,11 +30,13 @@ fork_debug_id=0
 
 handle_special_vars() {
   local -n vars=$1
-  local t new_vars=
+  local t clean_t new_vars=
   for t in $vars; do
 
-    if [[ ! "${t#^}" =~ ^[a-zA-Z0-9_]+$ ]]; then
-      echo "Invalid var name: ${t#^}" >&$fd_original_err
+    clean_t=${t#^}
+    clean_t=${clean_t%%\[*}
+    if [[ ! "$clean_t" =~ ^[a-zA-Z0-9_]+$ ]]; then
+      echo "handle_special_vars: Invalid var name: ${t#^}" >&$fd_original_err
       vars=
       return 1
     fi
@@ -242,11 +247,16 @@ show_trace_vars() {
   fi
 
   if [[ "${trace_vars:-}" ]]; then
-    local var value
+    local var value base_var
     for var in $trace_vars; do
       get_var_value $var
       local show_val=$value
-      if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $var "* ]]; then
+      if [[ $var == *\[* ]]; then
+        base_var=${var%%\[*}
+      else
+        base_var=$var
+      fi
+      if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $base_var "* ]]; then
         show_val='****'
       fi
       stack_detail[$stack_pos]+="$var=$show_val "
@@ -259,7 +269,9 @@ show_trace_vars() {
             handle_user_interrupt "Var changed: $var."
           fi
         fi
-        unset trace_var_sub[$var]
+        #unset trace_var_sub[$var]   Isn't working?
+        unset trace_var_sub
+        declare -Ag trace_var_sub
         trace_var_old[$var]=$value
       elif [[ "${trace_var_old[$var]:-}" != "$value" || ${trace_var_always:-f} == t ]]; then
         if [[ $fork_debug_id != 1 || "$value" != '(unset)' ]]; then
@@ -270,7 +282,8 @@ show_trace_vars() {
             handle_user_interrupt "Var changed: $var."
           fi
         fi
-        unset trace_var_sub[$var]
+        unset trace_var_sub
+        declare -Ag trace_var_sub
         trace_var_old[$var]=$value
       fi
     done
