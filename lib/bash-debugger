@@ -53,6 +53,13 @@ CLEAR_SCREEN=$'\033[2J\r\033[H'
 original_cmd=${original_cmd:-"$0 $*"}
 alias debug_once='[[ ! "${debug_once_triggered:-}" ]] && { debug_once_triggered=t; debug_start; }'
 
+log_direct() {
+  echo >&$fd_original_err "$@"
+}
+
+alias zombie_debug=debug
+alias zombie_log='echo >&$fd_original_err'
+
 # duplicated from bash-lib
 shell_quote_var() {
   local var_name=$1
@@ -1733,6 +1740,8 @@ debug_get_ok_to_debug() {
     debug_step_to_next_file=f
     ok_to_debug=t
 
+  else
+    [[ $debug_debug == t ]] && echo "${CYAN}Not stopping${RESET}" >&$fd_original_err
   fi
 }
 
@@ -2158,6 +2167,7 @@ debugger_init() {
     log_trace
     log_verbose
     log_warn
+    log_direct
     micro_time_diff
     pause_tee
     reached_debug_id
@@ -2220,6 +2230,7 @@ debug_start() {
     return 0
   fi
   debug_skip_breakpoints=t
+  debug_immediate=${debug_immediate:-t}
 
   local unignore_this_function=${unignore_this_function:-0}
 
@@ -2251,7 +2262,6 @@ debug_start() {
     debug_ignore_remove ${FUNCNAME[*]:$unignore_this_function}
   fi
 
-  debug_immediate=${debug_immediate:-t}
   if [[ $debugging == f ]]; then
     # export \
     debugging=t \
@@ -2262,7 +2272,6 @@ debug_start() {
     debug_dir=$PWD \
     debug_display=${debug_display:-none} \
     debug_exit=${debug_exit:-} \
-    debug_expanded_search=${debug_expanded_search:-f} \
     debug_expanded_search=${debug_expanded_search:-f} \
     debug_expansion=${debug_expansion:-1} \
     debug_expression=${debug_expression:-echo none} \
@@ -2336,8 +2345,9 @@ debug_start() {
 }
 
 debug() {
-  local function_to_debug=$*
-  debug_immediate=t
+  local function_to_debug=$* \
+    unignore_this_function=2 \
+
   if [[ "$function_to_debug" ]]; then
     debug_start
     $function_to_debug
@@ -2345,9 +2355,6 @@ debug() {
     debug_start
   fi
 }
-
-alias zombie_debug=debug_start
-alias zombie_log=log_info
 
 debug_handle_resolve_next() {
   local debug_item="${debug%% *}"
