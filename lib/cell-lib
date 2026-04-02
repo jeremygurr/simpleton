@@ -4913,6 +4913,8 @@ set_cross_dims() {
     local -n key_tables=dim_${dim}_key_tables \
       key_functions=dim_${dim}_key_functions \
 
+    cross_dims_tried[$dim]=1
+
     set_cross_dims_internal || fail
 
   end_function
@@ -4939,13 +4941,13 @@ build_constellation_table() {
   begin_function
     local current_dim=${con_table_fields[$field_index]}
     local -A dim_members=()
+    local -n current_dim_members=dim_${current_dim}_members
     if (( field_index + 1 > field_count )); then
       con_table_data+=( "${current_row[@]}" )
       abort
     elif [[ -v current_dim_values[$current_dim] ]]; then
       dim_members=( "${current_dim_values[$current_dim]}" )
     elif [[ $field_index == 0 ]]; then
-      local -n current_dim_members=dim_${current_dim}_members
       if [[ ! "${current_dim_members:-}" ]]; then
         log_fatal "$current_dim is marked as a static dim, but there are no known members."
         fail1
@@ -4962,7 +4964,7 @@ build_constellation_table() {
         tool=${row_array[0]}
         tool_possibilities=()
         tool_dims=${row_array[1]}
-        tool_dims=${dims//,/ }
+        tool_dims=${tool_dims//,/ }
 
         if [[ $tool == *.tab ]]; then
           build_constellation_table_handle_tab || fail
@@ -4982,6 +4984,11 @@ build_constellation_table() {
 
     fi
     
+    if (( ${#dim_members[*]} == 0 )) && [[ "${current_dim_members:-}" ]]; then
+      # TODO what if the tools conflict?
+      array_to_set current_dim_members dim_members
+    fi
+
     if (( ${#dim_members[*]} == 0 )); then
       current_row+=( "none" )
       current_dim_values[$current_dim]=none
@@ -4992,8 +4999,6 @@ build_constellation_table() {
       begin_for member in "${!dim_members[@]}"; doo
         current_row+=( "$member" )
         current_dim_values[$current_dim]=$member
-
-        local -A cross_dims_tried
 
         dim=$current_dim \
         set_dims_directly=f \
@@ -5199,7 +5204,9 @@ make_derive_cache_constellation() {
     con_table_fields=( ${static_dims[*]} )
     # constellation tables are only created for multi-dim constellations
     if (( ${#con_table_fields[*]} > 1 )); then
-      local -A current_dim_values=()
+      local -A current_dim_values \
+        cross_dims_tried \
+
       local current_row=()
       field_index=0 build_constellation_table || fail
       write_vars_to_context con_${con}_table_fields con_${con}_table_data || fail
