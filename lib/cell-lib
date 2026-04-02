@@ -4559,7 +4559,7 @@ build_constellation_table_handle_tab_forward() {
       fi
     done
 
-    for row in $rows; do
+    for row in ${rows:-}; do
       (( data_index = row * field_count + target_field_index ))
       values=( ${table_data[$data_index]} )
       dim_var=$current_dim expand_dim_members values || fail
@@ -4965,7 +4965,8 @@ set_cross_dims() {
 #   con_table_fields
 #   con_table_data
 build_constellation_table() {
-  local field_index=$field_index con=$con
+  local field_index=$field_index con=$con \
+    interesting_vars='con field_index' \
 
   zombie_debug
   local -I current_dim_values
@@ -4974,6 +4975,8 @@ build_constellation_table() {
     local current_dim=${con_table_fields[$field_index]}
     local -A dim_members=()
     local -n current_dim_members=dim_${current_dim}_members
+
+    interesting_vars+=' current_dim'
     if (( field_index + 1 > field_count )); then
       con_table_data+=( "${current_row[@]}" )
       abort
@@ -4994,6 +4997,7 @@ build_constellation_table() {
       begin_for row in "${narrowed_from[@]}"; doo
         row_array=( $row )
         tool=${row_array[0]}
+        interesting_vars+=' tool'
         tool_possibilities=()
         tool_dims=${row_array[1]}
         tool_dims=${tool_dims//,/ }
@@ -5221,6 +5225,33 @@ make_derive_cache_dim_info() {
   handle_return
 }
 
+rename_constellation() {
+  local from_con=$1 to_con=$2
+  begin_function
+    local -n \
+      from_con_table_fields=con_${from_con}_table_fields \
+      from_con_table_data=con_${from_con}_table_data \
+      to_con_table_fields=con_${to_con}_table_fields \
+      to_con_table_data=con_${to_con}_table_data \
+
+    to_con_table_fields=( "${from_con_table_fields[@]}" )
+    to_con_table_data=( "${from_con_table_data[@]}" )
+
+    unset con_${from_con}_table_fields \
+      con_${from_con}_table_data \
+
+    local dim
+    for dim in ${!all_dims[*]}; do
+      local dim_con=dim_${dim}_con
+      if [[ "${dim_con:-}" == $from_con ]]; then
+        dim_con=$to_con
+      fi
+    done
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   con
 make_derive_cache_constellation() {
@@ -5241,7 +5272,24 @@ make_derive_cache_constellation() {
       local -A current_dim_values \
         cross_dims_tried \
 
-      local current_row=()
+      local current_row=() new_con dim
+      for (( i = 0; i < ${#con_table_fields[*]}; i++ )); do
+        dim=${con_table_fields[$i]}
+        if [[ ! -v is_breaker[$dim] ]]; then
+          new_con=$dim
+        fi
+      done
+
+      if [[ ! "${new_con:-}" ]]; then
+        log_fatal "Internal error: constellation fields don't contain a non-breaking dim: ${con_table_fields[*]}"
+        fail1
+      fi
+
+      if [[ $new_con != $con ]]; then
+        rename_constellation $con $new_con || fail
+      fi
+      con=$new_con
+
       field_index=0 build_constellation_table || fail
       write_vars_to_context con_${con}_table_fields con_${con}_table_data || fail
     fi
