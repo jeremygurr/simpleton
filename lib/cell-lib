@@ -1435,7 +1435,7 @@ build_context_expand_members() {
   ;;
   *)
     local -n members=dim_${dim}_members \
-      member_type=dim_${dim}_member_type \
+      member_type=dim_${dim}_effective_member_type \
 
     if [[ -v members ]] && array_contains members \"\$_in\"; then
       _out=( \"\$_in\" )
@@ -2202,7 +2202,7 @@ extract_from_derive_table_find_row_indexes() {
       local -n dt_index=${full_table}_index_${field}
       if [[ $field == $dim ]]; then
         output_dim_index=$column_index
-        local -n member_type=dim_${dim}_member_type
+        local -n member_type=dim_${dim}_effective_member_type
         if [[ ${member_type:-dynamic} == static ]]; then
           local -n members=dim_${dim}_members
           local member_count=${#members[*]}
@@ -2360,7 +2360,7 @@ extract_from_derive_table() {
 
     local -n index=${full_table}_index_${dim} \
       dim_members=dim_${dim}_members \
-      member_type=dim_${dim}_member_type \
+      member_type=dim_${dim}_effective_member_type \
 
     local row_count=$(( data_count / field_count )) \
 
@@ -5019,7 +5019,7 @@ calculate_constellation_dims() {
     for dim in ${!constellation_of[*]}; do
       grip_fence
       con=${constellation_of[$dim]}
-      local -n member_type=dim_${dim}_member_type
+      local -n member_type=dim_${dim}_effective_member_type
       if [[ $member_type == static ]]; then
         constellation_static_dims[$con]+="$dim "
       else
@@ -5039,7 +5039,14 @@ calculate_constellation_dims() {
       begin_for dynamic_dim in ${constellation_dynamic_dims[$con]}; doo
         grip_fence
         # search functions for each dynamic dim
-        local -n derived_from=dim_${dynamic_dim}_derived_from
+        local -n derived_from=dim_${dynamic_dim}_derived_from \
+            original_member_type=dim_${dynamic_dim}_member_type \
+
+        if [[ $original_member_type == dynamic ]]; then
+          # can't promote dims that are explicitly marked as dynamic
+          continue
+        fi
+
         local row
         for row in "${derived_from[@]}"; do
           local row_array=( $row )
@@ -5049,7 +5056,7 @@ calculate_constellation_dims() {
           if [[ $object == *.fun ]]; then
 
             for other_dim in ${required_dims//,/ }; do
-              local -n other_member_type=dim_${other_dim}_member_type
+              local -n other_member_type=dim_${other_dim}_effective_member_type
               if [[ $other_member_type == dynamic ]]; then
                 continue 2
               fi
@@ -5057,7 +5064,7 @@ calculate_constellation_dims() {
 
             log_debug "Promoted $dynamic_dim to be static because of $object"
             # all required dims are static, so we can promote this one also
-            local -n this_member_type=dim_${dynamic_dim}_member_type
+            local -n this_member_type=dim_${dynamic_dim}_effective_member_type
             this_member_type=static
             local old_dynamic_dims=${constellation_dynamic_dims[$con]}
             remove_word_from_string old_dynamic_dims $dynamic_dim
@@ -5115,6 +5122,7 @@ make_derive_cache_dim_info() {
 #        dim_${dim}_card_table \
 
     local -n member_type=dim_${dim}_member_type \
+      effective_member_type=dim_${dim}_effective_member_type \
       dim_members=dim_${dim}_members \
       dim_derive_tables=dim_${dim}_derive_tables \
       members_of=members_of_$dim \
@@ -5125,13 +5133,13 @@ make_derive_cache_dim_info() {
 
     case ${member_type:-unset} in
       static|dynamic)
-        :
+        effective_member_type=$member_type
       ;;
       unset)
         if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
-          member_type=static
+          effective_member_type=static
         else
-          member_type=dynamic
+          effective_member_type=dynamic
         fi
       ;;
       *)
@@ -5140,7 +5148,7 @@ make_derive_cache_dim_info() {
       ;;
     esac
 
-    write_vars_to_context dim_${dim}_member_type || fail
+    write_vars_to_context dim_${dim}_member_type dim_${dim}_effective_member_type || fail
      
   end_function
   handle_return
@@ -5585,7 +5593,7 @@ setup_coord_fields() {
       local new_fields=() dim
 
       for dim in ${coordinate_fields[*]}; do
-        local -n member_type=dim_${dim}_member_type
+        local -n member_type=dim_${dim}_effective_member_type
 
         if [[ ! -v member_type ]]; then
           log_fatal "internal error: Missing member_type for dim $dim. Might need to clean the dim cache with a 'cell clean' command."
