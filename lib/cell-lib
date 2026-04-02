@@ -4961,6 +4961,8 @@ set_cross_dims() {
 #   field_count
 #   current_row
 #   current_dim_values (set)
+#   con_table_fields
+#   con_table_data
 # outputs:
 #   con_table_fields
 #   con_table_data
@@ -4968,22 +4970,23 @@ build_constellation_table() {
   local field_index=$field_index con=$con \
     interesting_vars='con field_index' \
 
-  local -n \
-    con_table_fields=con_${con}_table_fields \
-    con_table_data=con_${con}_table_data \
-
-  local -I current_dim_values
+  local -I current_dim_values \
+    current_row \
 
   begin_function
+    if (( field_index + 1 > field_count )); then
+      log_debug "Wrote constellation row: ${current_row[@]}"
+      con_table_data+=( "${current_row[@]}" )
+      abort
+    fi
+
     local current_dim=${con_table_fields[$field_index]}
     local -A dim_members=()
     local -n current_dim_members=dim_${current_dim}_members
 
     interesting_vars+=' current_dim'
-    if (( field_index + 1 > field_count )); then
-      con_table_data+=( "${current_row[@]}" )
-      abort
-    elif [[ -v current_dim_values[$current_dim] ]]; then
+
+    if [[ -v current_dim_values[$current_dim] ]]; then
       dim_members=( "${current_dim_values[$current_dim]}" )
     elif [[ $field_index == 0 ]]; then
       if [[ ! "${current_dim_members:-}" ]]; then
@@ -5031,9 +5034,7 @@ build_constellation_table() {
     if (( ${#dim_members[*]} == 0 )); then
       current_row+=( "none" )
       current_dim_values[$current_dim]=none
-      if (( field_index + 1 < field_count )); then
-        field_index=$((field_index+1)) build_constellation_table || fail
-      fi
+      field_index=$((field_index+1)) build_constellation_table || fail
     else
       begin_for member in "${!dim_members[@]}"; doo
         current_row+=( "$member" )
@@ -5044,9 +5045,7 @@ build_constellation_table() {
         allow_dims=${con_table_fields[*]} \
         set_cross_dims || fail
 
-        if (( field_index + 1 < field_count )); then
-          field_index=$((field_index+1)) build_constellation_table || fail
-        fi
+        field_index=$((field_index+1)) build_constellation_table || fail
       end_for
     fi
 
@@ -5269,6 +5268,8 @@ make_derive_cache_constellation() {
     local field_count=${#static_dims[*]}
 
     con_table_fields=( ${static_dims[*]} )
+    con_table_data=()
+
     # constellation tables are only created for multi-dim constellations
     if (( ${#con_table_fields[*]} > 1 )); then
       local -A current_dim_values \
@@ -5290,8 +5291,13 @@ make_derive_cache_constellation() {
 
       if [[ $new_con != $con ]]; then
         rename_constellation $con $new_con || fail
+        con=$new_con
+
+        local -n \
+          con_table_fields=con_${con}_table_fields \
+          con_table_data=con_${con}_table_data \
+
       fi
-      con=$new_con
 
       field_index=0 build_constellation_table || fail
       write_vars_to_context con_${con}_table_fields con_${con}_table_data || fail
