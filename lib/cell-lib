@@ -3884,7 +3884,6 @@ build_context_support_dims_find_related() {
     begin_for row in "${dim_derived_from[@]}"; doo
       local row_array=( $row )
       object=${row_array[0]}
-      type=${row_array[1]}
 
       local canopy=${row_array[1]} \
         up_dim \
@@ -5033,10 +5032,49 @@ calculate_constellation_dims() {
 
     grip_fence
 
+    # attempt to promote dynamic dims
+    local dynamic_dim changed=t
+    begin_while [[ $changed == t ]]; doo
+      changed=f
+      begin_for dynamic_dim in ${constellation_dynamic_dims[$con]}; doo
+        grip_fence
+        # search functions for each dynamic dim
+        local -n derived_from=dim_${dynamic_dim}_derived_from
+        local row
+        for row in "${derived_from[@]}"; do
+          local row_array=( $row )
+          local object=${row_array[0]}
+          local canopy=${row_array[1]}
+          local required_dims=${canopy%%/*}
+          if [[ $object == *.fun ]]; then
+
+            for other_dim in ${required_dims//,/ }; do
+              local -n other_member_type=dim_${other_dim}_member_type
+              if [[ $other_member_type == dynamic ]]; then
+                continue 2
+              fi
+            done
+
+            log_debug "Promoted $dynamic_dim to be static because of $object"
+            # all required dims are static, so we can promote this one also
+            local -n this_member_type=dim_${dynamic_dim}_member_type
+            this_member_type=static
+            local old_dynamic_dims=${constellation_dynamic_dims[$con]}
+            remove_word_from_string old_dynamic_dims $dynamic_dim
+            constellation_dynamic_dims[$con]=$old_dynamic_dims
+            constellation_static_dims[$con]+="$dynamic_dim "
+            changed=t
+            break 2
+
+          fi
+        done
+      end_for
+    end_while
+
     local c tmp_file
     get_tmp_file con_sorting || fail
 
-    for con in ${constellations[*]}; do
+    begin_for con in ${constellations[*]}; doo
       grip_fence
       local sorted_dims=()
 
@@ -5058,7 +5096,7 @@ calculate_constellation_dims() {
 
       fi
       
-    done
+    end_for
   end_function
   handle_return
 }
@@ -5116,11 +5154,11 @@ make_derive_cache_constellation() {
       con_${con}_table_data \
       static_dims=( ${constellation_static_dims[$con]} ) \
 
-    local field_count=${#static_dims[*]} \
-
     local -n \
       con_table_fields=con_${con}_table_fields \
       con_table_data=con_${con}_table_data \
+
+    local field_count=${#static_dims[*]}
 
     con_table_fields=( ${static_dims[*]} )
     # constellation tables are only created for multi-dim constellations
@@ -5164,7 +5202,6 @@ make_derive_cache() {
     done
 
     if [[ $dim_resolver == brute ]]; then
-      zombie_debug
       calculate_constellation_dims || fail
     fi
 
