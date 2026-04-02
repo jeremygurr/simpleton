@@ -4613,11 +4613,16 @@ build_constellation_table_handle_tab_reverse() {
   begin_function
     local -n table_index=derive_table_${tool%.tab}_index_${second_field}
 
+    rows=
     for val in ${current_dim_values[$second_field]}; do
       if [[ -v table_index[$val] ]]; then
         rows+="${table_index[$val]} "
       fi
     done
+
+    if [[ ! "$rows" ]]; then
+      log_debug "No matching rows found in $tool for row: $current_row"
+    fi
 
     local other_index table_dim target_member single_member=
     for row in $rows; do
@@ -4986,11 +4991,13 @@ build_constellation_table() {
       current_row+=( "$member" )
       current_dim_values[$current_dim]=$member
 
-      # takes from the callers current_dim before it is localized here
-      dim=$current_dim \
-      set_dims_directly=f \
-      allow_dims=${con_table_fields[*]} \
-      set_cross_dims || fail
+      if (( field_index + 1 < field_count )); then
+        # takes from the callers current_dim before it is localized here
+        dim=$current_dim \
+        set_dims_directly=f \
+        allow_dims=${con_table_fields[*]} \
+        set_cross_dims || fail
+      fi
     fi
 
     if (( field_index + 1 > field_count )); then
@@ -5018,6 +5025,7 @@ build_constellation_table() {
       local -n derived_from=dim_${current_dim}_derived_from
       local row tool row_array tool_dims tool_valid
       local -A tool_possibilities=()
+      dim_members=( all )
 
       begin_for row in "${derived_from[@]}"; doo
         row_array=( $row )
@@ -5049,15 +5057,21 @@ build_constellation_table() {
 
     fi
     
-    if (( ${#dim_members[*]} == 0 )); then
-      log_debug "No tools found which can be used to derive $current_dim in this row"
-    else
-      local sorted_members=( "${!dim_members[@]}" )
-      sort_array sorted_members
-      begin_for member in "${sorted_members[@]}"; doo
-        field_index=$((field_index+1)) build_constellation_table || fail
-      end_for
+    if (( ${#dim_members[*]} == 0 )) || [[ -v dim_members[all] ]]; then
+      log_debug "No tools found which can be used to derive $current_dim in this row, will use all possibilities"
+      if [[ ! "${current_dim_members:-}" ]]; then
+        log_fatal "$current_dim is marked as a static dim, but there are no known members."
+        fail1
+      fi
+      clear_set dim_members
+      array_to_set current_dim_members dim_members
     fi
+
+    local sorted_members=( "${!dim_members[@]}" )
+    sort_array sorted_members
+    begin_for member in "${sorted_members[@]}"; doo
+      field_index=$((field_index+1)) build_constellation_table || fail
+    end_for
 
   end_function
   handle_return
@@ -5361,6 +5375,7 @@ make_derive_cache() {
     if [[ $dim_resolver == brute ]]; then
       begin_for con in ${constellations[*]}; doo
         make_derive_cache_constellation || fail
+        grip_fence
       end_for
       zombie_debug
     fi
