@@ -4350,9 +4350,11 @@ add_derive_path() {
 find_constellations_of_dims() {
   local dims=$dims dim con
   for dim in $dims; do
-    con=${constellation_of[$dim]:-}
-    if [[ "$con" && " ${cons_found[*]} " != *" $con "* ]]; then
-      cons_found+=( $con )
+    if [[ ! -v is_breaker[$dim] ]]; then
+      con=${constellation_of[$dim]:-}
+      if [[ "$con" && " ${cons_found[*]} " != *" $con "* ]]; then
+        cons_found+=( $con )
+      fi
     fi
   done
 }
@@ -4361,11 +4363,26 @@ find_constellations_of_dims() {
 #   from         constellation to copy over the other cons
 #   to           other cons to be overwritten
 merge_constellations() {
-  local from=$from to=$to con dim
+  local from=$from to=$to cons new_cons con dim
   for dim in ${!constellation_of[*]}; do
-    con=${constellation_of[$dim]}
-    if [[ " $to " == *" $con "* ]]; then
-      constellation_of[$dim]=$from
+    cons=${constellation_of[$dim]}
+    if [[ -v is_breaker[$dim] ]]; then
+      new_cons=
+      for con in $cons; do
+        if [[ " $to " == *" $con "* ]]; then
+          if [[ " $new_cons " != *" $from "* ]]; then
+            new_cons+="$from "
+          fi
+        else
+          new_cons+="$con "
+        fi
+      done
+      constellation_of[$dim]=$new_cons
+    else
+      con=$cons
+      if [[ " $to " == *" $con "* ]]; then
+        constellation_of[$dim]=$from
+      fi
     fi
   done
 }
@@ -4376,9 +4393,19 @@ merge_constellations() {
 merge_dim_constellations() {
   local interesting_vars='king_con dims'
   begin_function
-    local king_con dims=( $dims )
+    local king_con dims=( $dims ) dim
     if (( ${#cons_found[*]} == 0 )); then
-      king_con=${dims[0]}
+      local i
+      for (( i = 0; i < ${#dims[*]}; i++ )); do
+        dim=${dims[$i]}
+        if [[ ! -v is_breaker[$dim] ]]; then
+          king_con=$dim
+        fi
+      done
+      if [[ ! -v king_con ]]; then
+        log_fatal "Failed to determine con name for constellation containing ${dims[*]} since they are all breakers."
+        fail1
+      fi
     else
       king_con=${cons_found[0]}
     fi
@@ -4387,9 +4414,14 @@ merge_dim_constellations() {
       from=$king_con to=${cons_found[*]:1} merge_constellations || fail
     fi
 
-    local dim
     for dim in ${dims[*]}; do
-      constellation_of[$dim]=$king_con
+      if [[ -v is_breaker[$dim] ]]; then
+        if [[ " ${constellation_of[$dim]:-} " != *" $king_con "* ]]; then
+          constellation_of[$dim]+="$king_con "
+        fi
+      else
+        constellation_of[$dim]=$king_con
+      fi
       if [[ ! -v all_dims[$dim] ]]; then
         log_fatal "No definition of dim $dim found, even though it's used in $derive_path"
         fail1
@@ -4987,10 +5019,10 @@ build_constellation_table() {
 
     fi
     
-    if (( ${#dim_members[*]} == 0 )) && [[ "${current_dim_members:-}" ]]; then
-      # TODO what if the tools conflict?
-      array_to_set current_dim_members dim_members
-    fi
+    #if (( ${#dim_members[*]} == 0 )) && [[ "${current_dim_members:-}" ]]; then
+    #  # TODO what if the tools conflict?
+    #  array_to_set current_dim_members dim_members
+    #fi
 
     if (( ${#dim_members[*]} == 0 )); then
       current_row+=( "none" )
@@ -5049,19 +5081,21 @@ make_derive_cache_tools() {
 
 calculate_constellation_dims() {
   begin_function
-    local dim con
+    local dim con cons
     for dim in ${!constellation_of[*]}; do
       grip_fence
-      con=${constellation_of[$dim]}
       local -n member_type=dim_${dim}_effective_member_type
-      if [[ $member_type == static ]]; then
-        constellation_static_dims[$con]+="$dim "
-      else
-        constellation_dynamic_dims[$con]+="$dim "
-      fi
-      if [[ " ${constellations[*]} " != *" $con "* ]]; then
-        constellations+=( $con )
-      fi
+      cons=${constellation_of[$dim]}
+      for con in $cons; do
+        if [[ $member_type == static ]]; then
+          constellation_static_dims[$con]+="$dim "
+        else
+          constellation_dynamic_dims[$con]+="$dim "
+        fi
+        if [[ " ${constellations[*]} " != *" $con "* ]]; then
+          constellations+=( $con )
+        fi
+      done
     done
 
     grip_fence
@@ -5070,7 +5104,7 @@ calculate_constellation_dims() {
     local dynamic_dim changed=t
     begin_while [[ $changed == t ]]; doo
       changed=f
-      begin_for dynamic_dim in ${constellation_dynamic_dims[$con]}; doo
+      begin_for dynamic_dim in ${constellation_dynamic_dims[$con]:-}; doo
         grip_fence
         # search functions for each dynamic dim
         local -n derived_from=dim_${dynamic_dim}_derived_from \
@@ -5233,9 +5267,14 @@ make_derive_cache() {
     fi
 
     local context_file=$cache_path.new
+    local -A is_breaker
 
     for dim in ${!all_dims[*]}; do
       local -A members_of_$dim
+      local -n breaker=dim_${dim}_constellation_breaker
+      if [[ ${breaker:-f} == t ]]; then
+        is_breaker[$dim]=t
+      fi
     done
 
     make_derive_cache_tools || fail
