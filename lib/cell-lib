@@ -4704,7 +4704,9 @@ build_constellation_table_handle_fun() {
 #   member
 #   allow_dims
 set_table_cross_dims_single() {
-  local member=$member dim=$dim derive_table=$derive_table
+  local member=$member dim=$dim derive_table=$derive_table \
+    interesting_vars='${interesting_vars:-} derive_table' \
+
   begin_function
     local -n derive_fields=derive_table_${derive_table}_fields \
              derive_data=derive_table_${derive_table}_data \
@@ -4750,7 +4752,13 @@ set_table_cross_dims_single() {
             if [[ "$value" && "$value" != all \
                && ! -v cross_dims_tried[$field] ]]; then
               log_debug "Cross dim set: $dim=$member -> $field=$value (via ${derive_table}.tab)"
-              field_dim=$value
+
+              if [[ $set_dims_directly == t ]]; then
+                field_dim=$value
+              else
+                current_dim_values[$field]=$value
+              fi
+
               validated_dims+=" $field"
               cross_dims_tried[$field]=1
 
@@ -4779,7 +4787,9 @@ set_table_cross_dims_single() {
 #   dim
 #   member
 #   allow_dims
+#   cross_dims_tried (set)
 set_function_cross_dims_single() {
+  local interesting_vars="${interesting_vars:-} derive_fun"
 
   begin_function
 
@@ -4844,6 +4854,7 @@ set_function_cross_dims_single() {
 #   key_functions
 #   key_tables
 #   allow_dims
+#   cross_dims_tried (set)
 # output:
 #   {dims}
 #   conflict
@@ -4876,11 +4887,17 @@ set_cross_dims_internal() {
 #   member
 #   allow_dims
 #   set_dims_directly (bool)  if true, sets d_{dim} values, otherwise sets current_dim_values[{dim}
+#   cross_dims_tried (set)
 # output:
 #   {dims}
 #   conflict
 set_cross_dims() {
-  local set_dims_directly=${set_dims_directly:-t}
+  local set_dims_directly=${set_dims_directly:-t} \
+    allow_dims=$allow_dims \
+    dim=$dim \
+    member=$member \
+    interesting_vars='dim member set_dims_directly'
+
   begin_function
 
     conflict=
@@ -4907,11 +4924,8 @@ set_cross_dims() {
 build_constellation_table() {
   local field_index=$field_index con=$con
 
-  # isolate current_dim_values from calling function
-  local -A old_dim_values
-  copy_set current_dim_values old_dim_values
-  local -A current_dim_values
-  copy_set old_dim_values current_dim_values
+  zombie_debug
+  local -I current_dim_values
 
   begin_function
     local current_dim=${con_table_fields[$field_index]}
@@ -4927,7 +4941,7 @@ build_constellation_table() {
         log_fatal "$current_dim is marked as a static dim, but there are no known members."
         fail1
       fi
-      dim_members=( "${current_dim_members[@]}" )
+      array_to_set current_dim_members dim_members
     else # $dim_index > 0
       # loop over all derive tools related to the current dim
       local -n narrowed_from=dim_${current_dim}_narrowed_from
@@ -4966,12 +4980,15 @@ build_constellation_table() {
         field_index=$((field_index+1)) build_constellation_table || fail
       fi
     else
-      begin_for member in "${dim_members[@]}"; doo
+      begin_for member in "${!dim_members[@]}"; doo
         current_row+=( "$member" )
         current_dim_values[$current_dim]=$member
 
+        local -A cross_dims_tried
+
         dim=$current_dim \
         set_dims_directly=f \
+        allow_dims=${con_table_fields[*]} \
         set_cross_dims || fail
 
         if (( field_index + 1 < field_count )); then
@@ -5092,6 +5109,8 @@ calculate_constellation_dims() {
           if [[ -v members_of[*] ]]; then
             local cardinality=${#members_of[*]}
             echo "$cardinality $dim"
+          else
+            echo "0 $dim"
           fi
         done | sort -rn >$tmp_file || fail
 
@@ -5172,7 +5191,8 @@ make_derive_cache_constellation() {
     # constellation tables are only created for multi-dim constellations
     if (( ${#con_table_fields[*]} > 1 )); then
       local -A current_dim_values=()
-      field_index=0 current_row=() build_constellation_table || fail
+      local current_row=()
+      field_index=0 build_constellation_table || fail
       write_vars_to_context con_${con}_table_fields con_${con}_table_data || fail
     fi
   end_function
@@ -5214,7 +5234,6 @@ make_derive_cache() {
     fi
 
     if [[ $dim_resolver == brute ]]; then
-      zombie_debug
       begin_for con in ${constellations[*]}; doo
         make_derive_cache_constellation || fail
       end_for
