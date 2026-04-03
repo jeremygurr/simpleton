@@ -5059,7 +5059,7 @@ build_constellation_table() {
         if [[ $tool_valid == t ]]; then
           intersect_with_all dim_members tool_possibilities dim_members
           if (( ${#dim_members[*]} == 0 )); then
-            log_debug "Row (${current_row[*]}) invalidated by tool: $tool (next dim: $current_dim)"
+            log_debug "Row (${current_row[*]}) invalidated by tool: $tool (dim: $current_dim)"
             abort
           fi
         fi
@@ -5121,7 +5121,6 @@ calculate_constellation_dims() {
   begin_function
     local dim con cons
     for dim in ${!constellation_of[*]}; do
-      grip_fence
       local -n member_type=dim_${dim}_effective_member_type
       cons=${constellation_of[$dim]}
       for con in $cons; do
@@ -5136,14 +5135,11 @@ calculate_constellation_dims() {
       done
     done
 
-    grip_fence
-
     # attempt to promote dynamic dims
     local dynamic_dim changed=t
     begin_while [[ $changed == t ]]; doo
       changed=f
       begin_for dynamic_dim in ${constellation_dynamic_dims[$con]:-}; doo
-        grip_fence
         # search functions for each dynamic dim
         local -n derived_from=dim_${dynamic_dim}_derived_from \
             original_member_type=dim_${dynamic_dim}_member_type \
@@ -5188,7 +5184,6 @@ calculate_constellation_dims() {
     get_tmp_file con_sorting || fail
 
     begin_for con in ${constellations[*]}; doo
-      grip_fence
       local sorted_dims=()
 
       if [[ "${constellation_static_dims[$con]:-}" ]]; then
@@ -5383,19 +5378,23 @@ make_derive_cache() {
     fi
 
     if [[ $dim_resolver == brute ]]; then
-      begin_for con in ${constellations[*]}; doo
-        make_derive_cache_constellation || fail
-        grip_fence
-      end_for
-      zombie_debug
-    fi
 
-    for dim in ${!all_dims[*]}; do
-      local dim_${dim}_con
-      local -n dim_con=dim_${dim}_con
-      dim_con=${constellation_of[$dim]}
-      write_vars_to_context dim_${dim}_con || fail
-    done
+      begin_for con in ${constellations[*]}; doo
+        grip_fence
+        make_derive_cache_constellation || fail
+      end_for
+
+      for dim in ${!all_dims[*]}; do
+        grip_fence
+        if [[ -v constellation_of[$dim] ]]; then
+          local dim_${dim}_con
+          local -n dim_con=dim_${dim}_con
+          dim_con=${constellation_of[$dim]}
+          write_vars_to_context dim_${dim}_con || fail
+        fi
+      done
+
+    fi
 
     if [[ -f $cache_path.new ]]; then
       mv $cache_path.new $cache_path || fail
