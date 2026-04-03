@@ -5056,7 +5056,7 @@ build_constellation_table() {
         if [[ $tool_valid == t ]]; then
           intersect_with_all dim_members tool_possibilities dim_members
           if (( ${#dim_members[*]} == 0 )); then
-            log_debug "Row (${current_row[*]}) invalidated by tool: $tool"
+            log_debug "Row (${current_row[*]}) invalidated by tool: $tool (next dim: $current_dim)"
             abort
           fi
         fi
@@ -6471,126 +6471,6 @@ seed_coordinates_handle_row() {
       fi
 
     fi
-  end_function
-  handle_return
-}
-
-# Will not output fields that don't exist
-xlr8_get_input_string() {
-  local fields_to_export=$*
-  begin_function
-    for f in $fields_to_export; do
-      local -n x=$f
-      if [[ -v x ]]; then
-        if is_array x; then
-          local m
-          v="( "
-          for m in "${x[@]}"; do
-            shell_quote_var m
-            v+="$m "
-          done
-          v+=")"
-        else
-          v=$x
-        fi
-        shell_quote_var v
-        input_string+="$f=$v$NL"
-      fi
-    done
-  end_function
-  handle_return
-}
-
-xlr8_execute() {
-  begin_function
-    case $source_type in
-      simple_java)
-        java -cp $target_path Main || fail
-      ;;
-      *)
-        log_fatal "Don't know how to execute source type $source_type yet"
-        fail1
-      ;;
-    esac
-  end_function
-  handle_return
-}
-
-xlr8() {
-  local function_name=$1; shift
-  local fields_to_export=$*
-  begin_function
-
-    debug_start
-
-    local xlr8_command_path=/work/xlr8/op/$function_name \
-      target_path=$xlr8_command_path/target \
-      source_path=$xlr8_command_path/src \
-      standard_fields='
-        bisect_test
-        debug_bisect
-        debug_bisect_max
-        debug_bisect_min
-        debug_exit
-        debug_function_old
-        debug_id
-        debug_id_current
-        debug_immediate
-        debug_quick_function
-        debug_quick_stop_less_than_depth
-        debug_restart_command
-        debug_step_to_mid_function
-        debugging
-        fork_debug_id
-        fork_id_current
-        pause_at_functions
-        pause_at_vars
-        secret_vars
-        show_time
-        show_time_prev
-        trace_condition
-        trace_expression
-        trace_fun
-        trace_structure
-        trace_time
-        trace_time_fd
-        trace_time_log
-        trace_var
-        trace_vars
-        trace_var_always
-        trace_var_old
-        trace_var_sub
-      '
-
-    if [[ ! -d $xlr8_command_path ]]; then
-      log_fatal "Function $function_name doesn't exist in $xlr8_command_path"
-      fail1
-    fi
-
-    if [[ ! -d $target_path ]]; then
-      fork execute_commands "$xlr8_command_path" update || fail
-    fi
-
-    if [[ ! -d $target_path ]]; then
-      log_fatal "Function $function_name didn't produce a target path"
-      fail1
-    fi
-
-    if [[ -f $target_path/Main.class ]]; then
-      source_type=simple_java
-    else
-      log_fatal "Can't identify source type of xlr8 op: $xlr8_command_path"
-      fail1
-    fi
-
-    local input_string= v f
-    xlr8_get_input_string $standard_fields $fields_to_export || fail
-
-    result=$(echo "$input_string" | xlr8_execute) || fail
-    if [[ "$result" ]]; then
-      source "$result" || fail
-    fi
-
   end_function
   handle_return
 }
