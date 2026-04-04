@@ -6094,6 +6094,147 @@ calc_coordinates_next_unknown_dim_found() {
   handle_return
 }
 
+# inputs:
+#   con_of_dim
+calc_coordinates_next_unknown_dim_in_phase_con() {
+  local interesting_vars=con_of_dim
+  begin_function
+    zombie_debug
+    local -n con_fields=con_${con_of_dim}_table_fields \
+      con_data=con_${con_of_dim}_table_data \
+
+    local dim dims result=() unknown_dims=${unknown_dims}
+    local -A new_matching_rows matching_rows=( all )
+    begin_for dim in ${con_fields[*]}; doo
+
+      get_plural $dim dims
+      local -n member=d_$dim \
+        members=d_$dims
+
+      local all_members=()
+      if [[ "${member:-}" ]]; then
+        all_members=( "$member" )
+      elif [[ "${members:-}" ]]; then
+        all_members=( "${members[@]}" )
+      else
+        # don't have a value for this dim yet, so can't narrow down con
+        continue
+      fi
+
+      local m row_indexes
+      begin_for m in "${all_members[@]}"; doo
+        local -n con_index=con_${con_of_dim}_table_index_${dim}
+        row_indexes=( ${con_index[$m]} )
+        array_to_set row_indexes new_matching_rows
+        intersect_with_all matching_rows new_matching_rows matching_rows
+      end_for
+      
+    end_for
+
+    local data_count=${#con_data[*]} \
+      field_count=${#con_fields[*]} \
+      field_index new_value data_index row \
+
+    local row_count=$((data_count / field_count)) conflict=
+    begin_for (( row = 0; row < row_count; row++ )); doo
+
+      if [[ ! -v matching_rows[all] && ! -v matching_rows[$row] ]]; then
+        continue
+      fi
+
+      begin_for field_index in ${!con_fields[*]}; doo
+        data_index=$(( row * field_count + field_index ))
+        # set dim detect conflict
+        new_value=${con_data[$data_index]}
+        dim=${con_fields[$field_index]}
+
+        local -n ddim=d_${dim}
+
+        if [[ "${ddim:-}" ]] \
+           && dim=$dim \
+           single_member="$new_value" \
+           target_member="${ddim:-}" \
+           member_conflicts; then
+          log_debug "Dim $dim (of constellation $con_of_dim) has value of $new_value which conflicts with existing dim $ddim"
+          continue 2 # go to the next row, since this one conflicts
+        else
+          if [[ "$new_value" != all ]]; then
+            log_debug "Con dim set: $dim=$new_value (via con ${con_of_dim})"
+
+            if [[ $set_dims_directly == t ]]; then
+              ddim=$new_value
+            else
+              current_dim_values[$dim]=$new_value
+            fi
+
+            validated_dims+=" $dim"
+            remove_word_from_string unknown_dims $dim
+          fi
+        fi
+      end_for # field_index
+
+      calc_coordinates_next_unknown_dim || fail
+
+    end_for # row
+
+  end_function
+  handle_return
+}
+
+calc_coordinates_next_unknown_dim_in_phase() {
+  begin_function
+    local -n dim_type=${dim}_dim_type
+    get_plural $dim dims
+
+    log_debug "Finding values for $dim in phase $phase"
+
+    local values=() already_expanded=f \
+      needs_narrowing=t \
+
+    if [[ $phase == con ]]; then
+      local -n con_of_dim=dim_${dim}_con
+      if [[ -v con_of_dim ]]; then
+        calc_coordinates_next_unknown_dim_in_phase_con || fail
+      fi
+    else # $phase != con
+      if [[ $phase == default ]]; then
+        attempt_default || fail
+      elif [[ $phase == all_if_blank ]]; then
+        if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+          local -n dim_members=dim_${dim}_members
+          if [[ "${dim_members:-}" ]]; then
+            values=( "${dim_members[@]}" )
+          else
+            log_fatal "dim_members not defined for $dim. Either define it expliciting in the dim definition, or add a derive table containing the valid members."
+            fail1
+          fi
+        fi
+      elif [[ $phase == derive \
+         || $phase == derive_optional_functions ]]; then
+        deriving= \
+        attempt_derive || fail
+        needs_narrowing=f
+      elif [[ $phase == narrow ]]; then
+        derive_exactly_one=f \
+        deriving= \
+        use_narrow_from=t \
+        attempt_derive || fail
+        needs_narrowing=f
+      else
+        log_fatal "Internal error: invalid phase: $phase"
+        fail1
+      fi
+
+      if [[ "${values:-}" ]]; then
+        calc_coordinates_next_unknown_dim_found || fail
+        abort
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
 # will end the coordinate row one way or another
 # inputs:
 #   unknown_dims
@@ -6106,6 +6247,7 @@ calc_coordinates_next_unknown_dim() {
       resolved_dims=${resolved_dims:-} \
       row_ended=f \
       default_completed=${default_completed:-f} \
+      derive_exactly_one=t \
 
     if (( coord_limit > 0 && total_coord_rows_added >= coord_limit )); then
       log_warn "Limit of $coord_limit reached, not calculating any further"
@@ -6116,25 +6258,23 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
-      for phase in default derive derive_optional_functions all_if_blank narrow; do
+      for phase in default con derive derive_optional_functions all_if_blank narrow; do
 
         if [[ $default_completed == t && $phase == default ]]; then
           continue
         fi
 
-        for dim in $unknown_dims; do
+        if [[ $dim_resolver == brute && $phase == all_if_blank ]]; then
+          # brute resolver doesn't need this phase
+          continue
+        fi
 
-          grip_fence
+        if [[ $dim_resolver != brute && $phase == con ]]; then
+          # only brute resolver uses this phase
+          continue
+        fi
 
-          local -n dim_type=${dim}_dim_type
-          get_plural $dim dims
-
-          log_debug "Finding values for $dim in phase $phase"
-
-          local values=() already_expanded=f \
-            needs_narrowing=t \
-            derive_exactly_one=t \
-
+        begin_for dim in $unknown_dims; doo
           if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
             if [[ $phase == default ]]; then
               log_debug "Skipping $dim default phase because it's in all_if_blank"
@@ -6142,58 +6282,8 @@ calc_coordinates_next_unknown_dim() {
             fi
             derive_exactly_one=f
           fi
-
-          # overriding this for now, not sure if we need to only derive one at this point
-          #   actually we need to derive one when doing derive phase, and multiple for narrow phase
-          #   so that optional derive functions get a chance to be executed in the right order 
-          #   (host_path before component_name -> docker_container is derived and messes up host_path)
-          #   maybe use different non-conflicting dim name instead...
-          #derive_exactly_one=f
-
-          if [[ $phase == default ]]; then
-            attempt_default || fail
-          elif [[ $phase == all_if_blank ]]; then
-            if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
-              local problem=
-              value=all dim_${dim}_expand || fail
-              if [[ "$problem" ]]; then
-                log_fatal "$problem"
-                fail1
-              fi
-            fi
-          elif [[ $phase == derive \
-             || $phase == derive_optional_functions ]]; then
-            deriving= \
-            attempt_derive || fail
-            needs_narrowing=f
-          elif [[ $phase == narrow ]]; then
-            derive_exactly_one=f \
-            deriving= \
-            use_narrow_from=t \
-            attempt_derive || fail
-            needs_narrowing=f
-#  not sure this is needed, since narrowing phase should already handle this
-#          elif [[ $derive_exactly_one == f \
-#               || $target_form == seed ]]; then
-#            local value=all
-#            expand_dim value values || fail
-#            already_expanded=t
-          else
-            log_fatal "Internal error: invalid phase: $phase"
-            fail1
-          fi
-
-          if [[ "${values:-}" ]]; then
-#            if [[ $phase != default ]]; then
-              calc_coordinates_next_unknown_dim_found || fail
-              abort
-#            else
-#              log_debug "Found default for $dim: ${values[*]}"
-#              remove_word_from_string unknown_dims $dim
-#            fi
-          fi
-
-        done; maybe_break
+          calc_coordinates_next_unknown_dim_in_phase || fail
+        end_for
 
         if [[ $phase == default ]]; then
           default_completed=t
@@ -6727,7 +6817,6 @@ calc_coordinates() {
   begin_function
 
     localize
-    zombie_debug
 
     local dim_var \
       new_coordinate_data=() \
@@ -7617,9 +7706,6 @@ calc_coords_branch() {
           log_debug "Skipping coordinate refinement since no dim filters were set"
         fi
 
-      elif [[ $dim_resolver == brute ]]; then
-        source=cons \
-        calc_coordinates || fail
       else
         calc_coordinates || fail
       fi
@@ -7634,12 +7720,7 @@ calc_coords_leaf() {
 
     local coord_type=leaf
     if [[ "${leaf_coordinate_refined:-}" != t ]]; then
-      if [[ $dim_resolver == brute ]]; then
-        source=cons \
-        calc_coordinates || fail
-      else
-        calc_coordinates || fail
-      fi
+      calc_coordinates || fail
     fi
 
     local leaf_coordinate_field_count=${#leaf_coordinate_fields[*]}
