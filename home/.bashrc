@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#+=( "${values[@]}" )!/usr/bin/env bash
 
 if [[ "${bashrc_already_run}" ]]; then
   return 0
