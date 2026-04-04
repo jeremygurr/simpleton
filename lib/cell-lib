@@ -2260,6 +2260,7 @@ extract_from_derive_table_find_row_indexes() {
 }
 
 extract_from_derive_table_check_row() {
+  local interesting_vars=
   begin_function
 
     local field value column_index
@@ -2657,7 +2658,7 @@ attempt_derive() {
     use_narrow_from=${use_narrow_from:-f} \
     use_derive_from=${use_derive_from:-t} \
 
-  interesting_vars='dim from_dim'
+  local interesting_vars='dim from_dim'
   begin_function
 
     local -n \
@@ -2728,7 +2729,7 @@ attempt_derive() {
       else
         local v
         max_count=10 get_var_value values v
-        log_debug "Derive of $dim successful: $v"
+        #log_debug "Derive of $dim successful: $v"
       fi
     else
       log_debug "No derive options found for $dim for this phase"
@@ -4860,6 +4861,8 @@ set_function_cross_dims_single() {
   begin_function
 
     local action=derive fields=() values=() i field value
+
+    target_dim=$dim \
     derive_function_$derive_fun || fail
 
     begin_for (( i = 0; i < ${#fields[*]}; i++ )); doo
@@ -5651,7 +5654,8 @@ check_table_field() {
 # outputs:
 #   is_valid 
 check_table_row() {
-  local offset=${offset:-} row_index=${row_index:-} field_count=${#table_fields[*]}
+  local offset=${offset:-} row_index=${row_index:-} field_count=${#table_fields[*]} \
+    interesting_vars=
   begin_function
     local f t
     if [[ ! "$offset" ]]; then
@@ -6098,12 +6102,12 @@ calc_coordinates_next_unknown_dim_found() {
 #   con_of_dim
 calc_coordinates_next_unknown_dim_in_phase_con() {
   local interesting_vars=con_of_dim
+
   begin_function
-    zombie_debug
     local -n con_fields=con_${con_of_dim}_table_fields \
       con_data=con_${con_of_dim}_table_data \
 
-    local dim dims result=() unknown_dims=${unknown_dims}
+    local dim dims result=() unknown_dims=$unknown_dims validated_dims=$validated_dims
     local -A new_matching_rows matching_rows=( all )
     begin_for dim in ${con_fields[*]}; doo
 
@@ -6143,6 +6147,7 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
       fi
 
       begin_for field_index in ${!con_fields[*]}; doo
+        grip_fence
         data_index=$(( row * field_count + field_index ))
         # set dim detect conflict
         new_value=${con_data[$data_index]}
@@ -6160,13 +6165,7 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
         else
           if [[ "$new_value" != all ]]; then
             log_debug "Con dim set: $dim=$new_value (via con ${con_of_dim})"
-
-            if [[ $set_dims_directly == t ]]; then
-              ddim=$new_value
-            else
-              current_dim_values[$dim]=$new_value
-            fi
-
+            ddim=$new_value
             validated_dims+=" $dim"
             remove_word_from_string unknown_dims $dim
           fi
@@ -6193,7 +6192,7 @@ calc_coordinates_next_unknown_dim_in_phase() {
 
     if [[ $phase == con ]]; then
       local -n con_of_dim=dim_${dim}_con
-      if [[ -v con_of_dim ]]; then
+      if [[ -v con_of_dim && "$con_of_dim" != *' '* ]]; then
         calc_coordinates_next_unknown_dim_in_phase_con || fail
       fi
     else # $phase != con
@@ -6227,7 +6226,7 @@ calc_coordinates_next_unknown_dim_in_phase() {
 
       if [[ "${values:-}" ]]; then
         calc_coordinates_next_unknown_dim_found || fail
-        abort
+        found_values=t
       fi
     fi
 
@@ -6258,7 +6257,7 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
-      for phase in default con derive derive_optional_functions all_if_blank narrow; do
+      begin_for phase in default con derive derive_optional_functions all_if_blank narrow; doo
 
         if [[ $default_completed == t && $phase == default ]]; then
           continue
@@ -6274,6 +6273,7 @@ calc_coordinates_next_unknown_dim() {
           continue
         fi
 
+        local found_values=f
         begin_for dim in $unknown_dims; doo
           if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
             if [[ $phase == default ]]; then
@@ -6283,13 +6283,16 @@ calc_coordinates_next_unknown_dim() {
             derive_exactly_one=f
           fi
           calc_coordinates_next_unknown_dim_in_phase || fail
+          if [[ $found_values == t ]]; then
+            abort
+          fi
         end_for
 
         if [[ $phase == default ]]; then
           default_completed=t
         fi
 
-      done; maybe_break
+      end_for
     fi
 
     if [[ $row_ended == f ]]; then
@@ -6360,8 +6363,7 @@ calc_coords_validate_member() {
 #   m                 member value
 #   phase             unknown or known.  
 calc_coordinates_next_dim_member() {
-  local phase=$phase
-  interesting_vars='dim m'
+  local phase=$phase interesting_vars='dim m phase'
   begin_function
     localize
     local -n member=d_$dim
@@ -6383,7 +6385,7 @@ calc_coordinates_next_dim_member() {
 
       if [[ "$member" != $empty_member ]]; then
         allow_dims=${coordinate_fields[*]} \
-        set_cross_dims_internal || fail
+        set_cross_dims || fail
 
         if [[ "$conflict" ]]; then
           local conflict_plural
@@ -6440,6 +6442,7 @@ calc_coordinates_next_dim_member() {
 #   check_dims (may be empty)
 #   coordinate_fields_plural
 calc_coordinates_next_dim() {
+  local dim interesting_vars=dim
   begin_function
 
     local coord_limit=${coord_limit:-0} total_coord_rows_added=${total_coord_rows_added:-0}
@@ -6448,7 +6451,7 @@ calc_coordinates_next_dim() {
       abort
     fi
 
-    local dim dims \
+    local dims \
       row_index=${row_index:-} \
       unknown_dims=${unknown_dims:-} \
       check_dims=${check_dims:-} \
@@ -6540,7 +6543,7 @@ calc_coordinates_next_dim() {
 
 # internal function
 seed_coordinates_handle_row() {
-  interesting_vars=row_index
+  local interesting_vars=row_index
   begin_function
     localize
     local is_valid seed_field
