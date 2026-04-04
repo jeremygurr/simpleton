@@ -3559,8 +3559,9 @@ setup_dims() {
     fi
 
     if [[ "${all_if_blank:-}" ]]; then
-      all_if_blank=( ${all_if_blank[*]} )
-      all_if_blank=${all_if_blank[*]}
+      local x=( ${all_if_blank[*]} )
+      unset all_if_blank
+      all_if_blank=${x[*]}
     fi
 
     if [[ $dim_resolver == brute ]]; then
@@ -6161,8 +6162,9 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
 
       local m row_indexes
       begin_for m in "${all_members[@]}"; doo
+        grip_fence
         local -n con_index=con_${con_of_dim}_table_index_${dim}
-        row_indexes=( ${con_index[$m]} )
+        row_indexes=( ${con_index[$m]:-} )
         array_to_set row_indexes new_matching_rows
         intersect_with_all matching_rows new_matching_rows matching_rows
       end_for
@@ -6173,10 +6175,18 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
       field_count=${#con_fields[*]} \
 
     local row_count=$((data_count / field_count)) row
+    local matching_row_count=${#matching_rows[*]}
+    if [[ -v matching_rows[all] ]]; then
+      log_debug "Analyzing $row_count rows from constellation $con_of_dim"
+    else
+      log_debug "Analyzing $matching_row_count rows (out of $row_count) from constellation $con_of_dim"
+    fi
+
     begin_for (( row = 0; row < row_count; row++ )); doo
       if [[ ! -v matching_rows[all] && ! -v matching_rows[$row] ]]; then
         continue
       fi
+      progress_bar_nudge .
       calc_coordinates_next_unknown_dim_in_phase_con_row || fail
     end_for
 
@@ -8044,7 +8054,7 @@ switch_context() {
       context_path=$cyto_path/context
       init_context || fail
 
-      dim_resolver=${dim_resolver:-${resolver:-cherry}}
+      dim_resolver=${dim_resolver:-${resolver:-brute}}
       case $dim_resolver in
         cherry)
           log_debug "Using cherry resolver. This is old and fairly well refined, but has intrinsic flaws."
