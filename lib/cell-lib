@@ -6095,6 +6095,43 @@ calc_coordinates_next_unknown_dim_found() {
   handle_return
 }
 
+calc_coordinates_next_unknown_dim_in_phase_con_row() {
+  begin_function
+
+    local field_index new_value data_index
+    localize
+
+    begin_for field_index in ${!con_fields[*]}; doo
+      data_index=$(( row * field_count + field_index ))
+      # set dim detect conflict
+      new_value=${con_data[$data_index]}
+      dim=${con_fields[$field_index]}
+
+      local -n ddim=d_${dim}
+
+      if [[ "${ddim:-}" ]] \
+         && dim=$dim \
+         single_member="$new_value" \
+         target_member="${ddim:-}" \
+         member_conflicts; then
+        log_debug "Dim $dim (of constellation $con_of_dim) has value of $new_value which conflicts with existing dim $ddim"
+        abort # go to the next row, since this one conflicts
+      else
+        if [[ "$new_value" != all ]]; then
+          log_debug "Con dim set: $dim=$new_value (via con ${con_of_dim})"
+          ddim=$new_value
+          validated_dims+=" $dim"
+          remove_word_from_string unknown_dims $dim
+        fi
+      fi
+    end_for
+
+    calc_coordinates_next_unknown_dim || fail
+
+  end_function
+  handle_return
+}
+
 # inputs:
 #   con_of_dim
 calc_coordinates_next_unknown_dim_in_phase_con() {
@@ -6134,44 +6171,14 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
 
     local data_count=${#con_data[*]} \
       field_count=${#con_fields[*]} \
-      field_index new_value data_index row \
 
-    local row_count=$((data_count / field_count)) conflict=
+    local row_count=$((data_count / field_count)) row
     begin_for (( row = 0; row < row_count; row++ )); doo
-
       if [[ ! -v matching_rows[all] && ! -v matching_rows[$row] ]]; then
         continue
       fi
-
-      begin_for field_index in ${!con_fields[*]}; doo
-        grip_fence
-        data_index=$(( row * field_count + field_index ))
-        # set dim detect conflict
-        new_value=${con_data[$data_index]}
-        dim=${con_fields[$field_index]}
-
-        local -n ddim=d_${dim}
-
-        if [[ "${ddim:-}" ]] \
-           && dim=$dim \
-           single_member="$new_value" \
-           target_member="${ddim:-}" \
-           member_conflicts; then
-          log_debug "Dim $dim (of constellation $con_of_dim) has value of $new_value which conflicts with existing dim $ddim"
-          continue 2 # go to the next row, since this one conflicts
-        else
-          if [[ "$new_value" != all ]]; then
-            log_debug "Con dim set: $dim=$new_value (via con ${con_of_dim})"
-            ddim=$new_value
-            validated_dims+=" $dim"
-            remove_word_from_string unknown_dims $dim
-          fi
-        fi
-      end_for # field_index
-
-      calc_coordinates_next_unknown_dim || fail
-
-    end_for # row
+      calc_coordinates_next_unknown_dim_in_phase_con_row || fail
+    end_for
 
   end_function
   handle_return
@@ -6191,6 +6198,7 @@ calc_coordinates_next_unknown_dim_in_phase() {
       local -n con_of_dim=dim_${dim}_con
       if [[ -v con_of_dim && "$con_of_dim" != *' '* ]]; then
         calc_coordinates_next_unknown_dim_in_phase_con || fail
+        found_values=t
       fi
     else # $phase != con
       if [[ $phase == default ]]; then
