@@ -3894,7 +3894,8 @@ build_context_support_dims_find_related() {
   begin_function
 
     local row object type
-    begin_for row in "${dim_derived_from[@]}"; doo
+    #begin_for row in "${dim_derived_from[@]}"; doo
+    begin_for row in "${dim_narrowed_from[@]}"; doo
       local row_array=( $row )
       object=${row_array[0]}
 
@@ -3952,37 +3953,59 @@ build_context_related_dims() {
       next_level_dims=() \
       current_level_dims=() \
       target_dims=() \
+      cons_found=() \
 
     array_to_set trunk_dims_expanded    target_dims
     array_to_set sub_dims_expanded      target_dims
     array_to_set control_props_expanded target_dims
     array_to_set data_props_expanded    target_dims
 
-    begin_for dim in ${!target_dims[*]}; doo
-      if [[ ! -v tried[$dim] ]]; then
-        tried[$dim]=1
-        next_level_dims[$dim]=1
-        related_dims_set[$dim]=1
-      fi
-    end_for
-
-    begin_while (( ${#next_level_dims[*]} > 0 )); doo
-      current_level_dims=()
-      add_to_set next_level_dims current_level_dims
-      next_level_dims=()
-      begin_for next_level_row in "${!current_level_dims[@]}"; doo
-        dim=${next_level_row##* }
-        dim_parents=${next_level_row% *}
-        if [[ "$dim" == "$dim_parents" ]]; then
-          dim_parents=
+    zombie_debug
+    if [[ $dim_resolver == brute ]]; then
+      log_debug "Pulling related dims from constellations"
+      for dim in ${!target_dims[*]}; do
+        local -n dim_con=dim_${dim}_con
+        if [[ -v dim_con && $dim_con != *' '* ]]; then
+          cons_found[$dim_con]=1
         fi
-        local -n dim_derived_from=dim_${dim}_derived_from
-        if [[ -v dim_derived_from ]]; then
-          log_debug "Finding related dims of $dim"
-          build_context_support_dims_find_related || fail
+      done
+      local con
+      for con in ${!cons_found[*]}; do
+        local -n con_fields=con_${con}_table_fields
+        for dim in ${con_fields[*]}; do
+          related_dims_set[$dim]=1
+        done
+      done
+    else
+      begin_for dim in ${!target_dims[*]}; doo
+        if [[ ! -v tried[$dim] ]]; then
+          tried[$dim]=1
+          next_level_dims[$dim]=1
+          related_dims_set[$dim]=1
         fi
       end_for
-    end_while
+
+      begin_while (( ${#next_level_dims[*]} > 0 )); doo
+        current_level_dims=()
+        add_to_set next_level_dims current_level_dims
+        next_level_dims=()
+        begin_for next_level_row in "${!current_level_dims[@]}"; doo
+          dim=${next_level_row##* }
+          dim_parents=${next_level_row% *}
+          if [[ "$dim" == "$dim_parents" ]]; then
+            dim_parents=
+          fi
+
+          local -n dim_derived_from=dim_${dim}_derived_from \
+            dim_narrowed_from=dim_${dim}_narrowed_from \
+            
+          if [[ -v dim_derived_from || -v dim_narrowed_from ]]; then
+            log_debug "Finding related dims of $dim"
+            build_context_support_dims_find_related || fail
+          fi
+        end_for
+      end_while
+    fi
 
     fence
 
@@ -6187,6 +6210,7 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
       if [[ ! -v matching_rows[all] && ! -v matching_rows[$row] ]]; then
         continue
       fi
+      log_debug "Processing con $con_of_dim row $row"
       progress_bar_nudge .
       calc_coordinates_next_unknown_dim_in_phase_con_row || fail
     end_for
