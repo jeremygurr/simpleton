@@ -4573,43 +4573,6 @@ calc_missing_members() {
   handle_return
 }
 
-build_constellation_table_handle_tab_forward() {
-  begin_function
-    local -n table_index=derive_table_${tool%.tab}_index_${first_field}
-
-    local target_field_index i
-
-    for (( i = 1; i < field_count; i++ )); do
-      if [[ ${table_fields[$i]} == $current_dim ]]; then
-        target_field_index=$i
-        break
-      fi
-    done
-
-    if [[ ! -v target_field_index ]]; then
-      log_fatal "Internal error: $current_dim not found in field list"
-      fail1
-    fi
-
-    for val in ${current_dim_values[$first_field]}; do
-      if [[ -v table_index[$val] ]]; then
-        rows+="${table_index[$val]} "
-      fi
-    done
-
-    for row in ${rows:-}; do
-      (( data_index = row * field_count + target_field_index ))
-      values=( ${table_data[$data_index]} )
-      dim_var=$current_dim expand_dim_members values || fail
-      for val in "${new_values[@]}"; do
-        tool_possibilities[$val]=1
-      done
-    done
-
-  end_function
-  handle_return
-}
-
 # inputs:
 #   dim            Dim of the member being checked. can't be empty
 #   single_member  The member to be checked, if there is only one. may be empty
@@ -4645,37 +4608,53 @@ member_conflicts() {
   return 1
 }
 
-build_constellation_table_handle_tab_reverse() {
+build_constellation_table_handle_tab_inner() {
   begin_function
-    local -n table_index=derive_table_${tool%.tab}_index_${second_field}
 
-    rows=
-    for val in ${current_dim_values[$second_field]}; do
-      if [[ -v table_index[$val] ]]; then
-        rows+="${table_index[$val]} "
+    local target_field_index i
+
+    for (( i = 1; i < field_count; i++ )); do
+      if [[ ${table_fields[$i]} == $current_dim ]]; then
+        target_field_index=$i
+        break
       fi
     done
 
-    if [[ ! "$rows" ]]; then
-      log_debug "No matching rows found in $tool for row: $current_row"
+    if [[ ! -v target_field_index ]]; then
+      log_fatal "Internal error: $current_dim not found in field list"
+      fail1
     fi
 
-    local other_index table_dim target_member single_member=
-    for row in $rows; do
-      (( data_index = row * field_count ))
-      for (( other_index = 2; other_index < field_count; other_index++ )); do
-        values=( ${table_data[$((data_index + other_index))]} )
-        table_dim=${table_fields[$other_index]}
-        target_member=${current_dim_values[$table_dim]}
-        if dim=$table_dim multi_member=values member_conflicts; then
-          continue 2
+    local -A new_matching_rows=( all ) \
+      possibilities=() \
+      new_possibilities=() \
+
+    for (( i = 0; i < field_count; i++ )); do
+      local f=${table_fields[$i]}
+      local -n table_index=derive_table_${tool%.tab}_index_$f
+      possibilities=()
+      for val in ${current_dim_values[$f]:-}; do
+        if [[ -v table_index[$val] ]]; then
+          local a=( ${table_index[$val]} )
+          array_to_set a new_possibilities
+          add_to_set new_possibilities possibilities
         fi
       done
+      intersect_with_all new_matching_rows possibilities new_matching_rows
+    done
+
+    for (( row = 0; row < row_count; row++ )); do
+      if [[ ! -v new_matching_rows[$row] ]]; then
+        continue
+      fi
+
+      (( data_index = row * field_count + target_field_index ))
       values=( ${table_data[$data_index]} )
       dim_var=$current_dim expand_dim_members values || fail
       for val in "${new_values[@]}"; do
         tool_possibilities[$val]=1
       done
+
     done
 
   end_function
@@ -4697,8 +4676,10 @@ build_constellation_table_handle_tab() {
 
     local row rows values new_values val data_index \
       first_field=${table_fields[0]} \
-      second_field=${table_fields[1]} \
       field_count=${#table_fields[*]} \
+      data_count=${#table_data[*]} \
+
+    local row_count=$(( data_count / field_count ))
 
     if [[ $current_dim == $first_field ]]; then
 
@@ -4708,14 +4689,14 @@ build_constellation_table_handle_tab() {
           abort
         fi
       end_for
-      build_constellation_table_handle_tab_reverse || fail
+      build_constellation_table_handle_tab_inner || fail
 
     else
 
       if [[ ! -v current_dim_values[$first_field] ]]; then
         abort
       fi
-      build_constellation_table_handle_tab_forward || fail
+      build_constellation_table_handle_tab_inner || fail
 
     fi
 
@@ -5025,6 +5006,9 @@ build_constellation_table() {
     cross_dims_tried \
 
   begin_function
+    if [[ $con == component_name ]]; then
+      zombie_debug
+    fi
     if [[ "$member" ]]; then
       current_row+=( "$member" )
       current_dim_values[$current_dim]=$member
