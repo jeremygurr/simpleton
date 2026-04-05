@@ -769,6 +769,7 @@ debug_shell() {
 
 debug_show_var() {
   local display_var=$1 val= show_var_name=${show_var_name:-f}
+  local base_var=${display_var%%\[*}
   if [[ $show_var_name == t ]]; then
     echo -n "$display_var: " >&$fd_original_err
   fi
@@ -780,7 +781,7 @@ debug_show_var() {
     else
       echo "FALSE ($result)" >&$fd_original_err
     fi
-  elif [[ "$display_var" =~ ^[][a-zA-Z_0-9]+$ ]]; then
+  elif [[ "$base_var" =~ ^[a-zA-Z_0-9]+$ ]]; then
     get_var_value $display_var val
     echo "$val" >&$fd_original_err 
   elif [[ "$display_var" == @@* ]]; then
@@ -868,11 +869,12 @@ debug_command_loop() {
     fi
 
     if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
-      set +u
       local watch_var watch_output='+ ' __value
       for watch_var in $debug_watch; do
         if [[ "$watch_var" == *\$* ]]; then
+          set +u
           eval "__value=\"$watch_var\""
+          set -u
         else
           get_var_value $watch_var __value
         fi
@@ -2106,8 +2108,7 @@ show_array() {
 
   echo "size=$size" >&$fd_original_err
   if is_set _array; then
-    local keys
-    set_to_array _array keys
+    local keys=( ${!_array[*]} )
     sort_array keys
     for i in "${keys[@]}"; do
       echo "$i: ${_array[$i]}" >&$fd_original_err
