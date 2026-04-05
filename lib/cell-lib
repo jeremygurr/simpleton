@@ -4900,14 +4900,30 @@ set_function_cross_dims_single() {
 
       value=${values[$i]}
 
+      local dims
+      get_plural $field dims
       local -n ddim=d_${field}
 
-      if [[ "${ddim:-}" ]] \
-         && dim=$field \
-         single_member="$value" \
-         target_member="${ddim:-}" \
+      local current_single_value= current_multi_value=() current_multi_value_var=
+
+      if [[ $set_dims_directly == t ]]; then
+        current_single_value=${ddim:-}
+        current_multi_value_var=d_$dims
+      else
+        current_multi_value=( ${current_dim_values[$field]:-} )
+        current_multi_value_var=current_multi_value
+      fi
+
+      if dim=$field \
+         single_member=$current_single_value \
+         multi_member=$current_multi_value_var \
+         target_member="$value" \
          member_conflicts; then
-        conflict=$field
+        local v=$current_single_value
+        if [[ ! "$v" ]]; then
+          v=$current_multi_value
+        fi
+        conflict="$field = $value vs. $v (via ${derive_fun}.fun)"
         break
       else
         if [[ "$value" && "$value" != all \
@@ -5040,6 +5056,7 @@ build_constellation_table() {
         allow_dims=${con_table_fields[*]} \
         set_cross_dims || fail
         if [[ "$conflict" ]]; then
+          log_debug "Conflict found: $conflict"
           abort
         fi
       fi
