@@ -1514,7 +1514,7 @@ write_index_to_context() {
 
     local c_rows=$(( c_count / c_fields_count ))
 
-    for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+    begin_for (( field_index = 0; field_index < c_fields_count; field_index++ )); doo
 
       field=${c_fields[$field_index]}
 
@@ -1540,7 +1540,7 @@ write_index_to_context() {
         echo "${table}_index_multi_${field}=$index_multi" >>$context_file || fail
       fi
 
-    done
+    end_for
 
   end_function
   handle_return
@@ -4616,7 +4616,7 @@ build_constellation_table_handle_tab_inner() {
 
     local target_field_index i
 
-    for (( i = 1; i < field_count; i++ )); do
+    for (( i = 0; i < field_count; i++ )); do
       if [[ ${table_fields[$i]} == $current_dim ]]; then
         target_field_index=$i
         break
@@ -4634,16 +4634,18 @@ build_constellation_table_handle_tab_inner() {
 
     for (( i = 0; i < field_count; i++ )); do
       local f=${table_fields[$i]}
-      local -n table_index=derive_table_${tool%.tab}_index_$f
-      possibilities=()
-      for val in ${current_dim_values[$f]:-}; do
-        if [[ -v table_index[$val] ]]; then
-          local a=( ${table_index[$val]} )
-          array_to_set a new_possibilities
-          add_to_set new_possibilities possibilities
-        fi
-      done
-      intersect_with_all new_matching_rows possibilities new_matching_rows
+      if [[ -v current_dim_values[$f] ]]; then
+        local -n table_index=derive_table_${tool%.tab}_index_$f
+        possibilities=()
+        for val in ${current_dim_values[$f]}; do
+          if [[ -v table_index[$val] ]]; then
+            local a=( ${table_index[$val]} )
+            array_to_set a new_possibilities
+            add_to_set new_possibilities possibilities
+          fi
+        done
+        intersect_with_all new_matching_rows possibilities new_matching_rows
+      fi
     done
 
     for (( row = 0; row < row_count; row++ )); do
@@ -4792,64 +4794,76 @@ set_table_cross_dims_single() {
     local row_count=$((data_count / field_count))
 
     local -n dt_index=derive_table_${derive_table}_index_${dim}
-    if [[ -v dt_index[$member] ]]; then
-      row_index=( ${dt_index[$member]} )
+    if [[ ! -v dt_index[$member] ]]; then
+      #log_debug "Member ($member) doesn't exist in derive table ($derive_table)"
+      abort
+    fi
 
-      if (( ${#row_index[*]} > 1 )); then
-        log_debug "Too many rows found in derive table $derive_table matching cross dim $dim / $member: ${#row_index[*]}, skipping cross dim setting"
-        abort
+    row_index=( ${dt_index[$member]} )
+    if (( ${#row_index[*]} > 1 )); then
+      log_debug "Too many rows found in derive table $derive_table matching cross dim $dim / $member: ${#row_index[*]}, skipping cross dim setting"
+      abort
+    fi
+
+    for (( column_index = 0; column_index < field_count; column_index++ )); do
+
+      field=${derive_fields[$column_index]}
+
+      if [[ " $allow_dims " != *" $field "* ]]; then
+        continue
       fi
 
-      for (( column_index = 0; column_index < field_count; column_index++ )); do
+      local fields
+      get_plural $field fields
+      if [[ $field != $dim && -v all_dims[$field] ]]; then
+        (( data_index = row_index * field_count + column_index ))
+        value=${derive_data[$data_index]}
+        local -n field_dim=d_$field
+        local current_single_value= current_multi_value=() current_multi_value_var=
 
-        field=${derive_fields[$column_index]}
-
-        if [[ " $allow_dims " != *" $field "* ]]; then
-          continue
+        if [[ $set_dims_directly == t ]]; then
+          current_single_value=${field_dim:-}
+          current_multi_value_var=d_$fields
+        else
+          current_multi_value=( ${current_dim_values[$field]:-} )
+          current_multi_value_var=current_multi_value
         fi
 
-        local fields
-        get_plural $field fields
-        if [[ $field != $dim && -v all_dims[$field] ]]; then
-          (( data_index = row_index * field_count + column_index ))
-          value=${derive_data[$data_index]}
-          local -n field_dim=d_$field
-          if dim=$field \
-             single_member="${field_dim:-}" \
-             multi_member=d_$fields \
-             target_member="$value" \
-             member_conflicts; then
-            conflict="$field = $value vs. $field_dim (via ${derive_table}.tab)"
-            break
-          else
-            if [[ "$value" && "$value" != all \
-               && ! -v cross_dims_tried[$field] ]]; then
-              log_debug "Cross dim set: $dim=$member -> $field=$value (via ${derive_table}.tab)"
+        if dim=$field \
+           single_member=$current_single_value \
+           multi_member=$current_multi_value_var \
+           target_member="$value" \
+           member_conflicts; then
+          local v=$current_single_value
+          if [[ ! "$v" ]]; then
+            v=$current_multi_value
+          fi
+          conflict="$field = $value vs. $v (via ${derive_table}.tab)"
+          break
+        else
+          if [[ "$value" && "$value" != all \
+             && ! -v cross_dims_tried[$field] ]]; then
+            log_debug "Cross dim set: $dim=$member -> $field=$value (via ${derive_table}.tab)"
 
-              if [[ $set_dims_directly == t ]]; then
-                field_dim=$value
-              else
-                current_dim_values[$field]=$value
-              fi
-
-              validated_dims+=" $field"
-              cross_dims_tried[$field]=1
-
-              # recursive
-              dim=$field \
-              member=$value \
-              set_cross_dims || fail
-
+            if [[ $set_dims_directly == t ]]; then
+              field_dim=$value
+            else
+              current_dim_values[$field]=$value
             fi
+
+            validated_dims+=" $field"
+            cross_dims_tried[$field]=1
+
+            # recursive
+            dim=$field \
+            member=$value \
+            set_cross_dims || fail
+
           fi
         fi
-      
-      done
-    else
-      log_debug "Member ($member) doesn't exist in derive table ($derive_table)"
-      # it's okay if a member doesn't exist
-      #conflict='(missing from table)'
-    fi
+      fi
+    
+    done
 
   end_function
   handle_return
@@ -4942,6 +4956,9 @@ set_cross_dims_internal() {
 
       begin_for derive_fun in $key_functions; doo
         set_function_cross_dims_single || fail
+        if [[ "$conflict" ]]; then
+          abort
+        fi
       end_for
     fi
 
@@ -4950,6 +4967,9 @@ set_cross_dims_internal() {
 
       begin_for derive_table in $key_tables; doo
         set_table_cross_dims_single || fail
+        if [[ "$conflict" ]]; then
+          abort
+        fi
       end_for
     fi
 
@@ -4975,7 +4995,6 @@ set_cross_dims() {
 
   begin_function
 
-    conflict=
     local -n key_tables=dim_${dim}_key_tables \
       key_functions=dim_${dim}_key_functions \
 
@@ -5009,19 +5028,20 @@ build_constellation_table() {
     cross_dims_tried \
 
   begin_function
-    if [[ $con == component_name ]]; then
-      zombie_debug
-    fi
     if [[ "$member" ]]; then
       current_row+=( "$member" )
       current_dim_values[$current_dim]=$member
 
       if (( field_index + 1 < field_count )); then
+        local conflict=
         # takes from the callers current_dim before it is localized here
         dim=$current_dim \
         set_dims_directly=f \
         allow_dims=${con_table_fields[*]} \
         set_cross_dims || fail
+        if [[ "$conflict" ]]; then
+          abort
+        fi
       fi
     fi
 
@@ -5350,11 +5370,15 @@ make_derive_cache_constellation() {
 
       write_vars_to_context con_${con}_table_fields con_${con}_table_data || fail
 
+      if [[ $con == long_host ]]; then
+        zombie_debug
+      fi
+
       table=con_${con}_table \
       make_table_index || fail
 
       table=con_${con}_table \
-      write_index_to_context
+      write_index_to_context || fail
     fi
   end_function
   handle_return
