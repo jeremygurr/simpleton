@@ -4509,7 +4509,8 @@ make_derive_cache_handle_function() {
         fi
 
         local required_dim
-        for required_dim in ${required_dims//,/ } ${target_dims//,/ }; do
+#        for required_dim in ${required_dims//,/ } ${target_dims//,/ }; do
+        for required_dim in ${required_dims//,/ }; do
           local -n member_type=dim_${required_dim}_member_type
           if [[ ${member_type:-dynamic} != static ]]; then
             found_all_static=f
@@ -5150,31 +5151,40 @@ build_constellation_table() {
   handle_return
 }
 
-make_derive_cache_tools() {
+make_derive_cache_tables() {
   begin_function
-    local type files
-    begin_for type in fun tab; doo
+    local files
 
-      if [[ $type == fun ]]; then
-        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.fun' | sort -g) || fail
-      else
-        files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
-      fi
+    files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.*tab' | sort -g) || fail
 
-      local name code derive_path
-      begin_for derive_path in $files; doo
-        name=${derive_path##*/}
-        name=${name%.*}
-        name=${name#derive_}
-        if [[ $type == fun ]]; then
-          make_derive_cache_handle_function || fail
-        else
-          make_derive_cache_handle_table || fail
-        fi
-      end_for
+    local name code derive_path
+    begin_for derive_path in $files; doo
+      name=${derive_path##*/}
+      name=${name%.*}
+      name=${name#derive_}
+      make_derive_cache_handle_table || fail
     end_for
 
-    write_vars_to_context derive_tables derive_functions || fail
+    write_vars_to_context derive_tables || fail
+  end_function
+  handle_return
+}
+
+make_derive_cache_functions() {
+  begin_function
+    local files
+
+    files=$(find -L $lib_dt_path \( -type f -or -type l \) -not -name '.*' -name '*.fun' | sort -g) || fail
+
+    local name code derive_path
+    begin_for derive_path in $files; doo
+      name=${derive_path##*/}
+      name=${name%.*}
+      name=${name#derive_}
+      make_derive_cache_handle_function || fail
+    end_for
+
+    write_vars_to_context derive_functions || fail
   end_function
   handle_return
 }
@@ -5441,7 +5451,7 @@ make_derive_cache() {
       fi
     done
 
-    make_derive_cache_tools || fail
+    make_derive_cache_tables || fail
     grip_fence
 
     local con dim
@@ -5449,6 +5459,9 @@ make_derive_cache() {
     for dim in ${!all_dims[*]}; do
       make_derive_cache_dim_info || fail
     done
+
+    make_derive_cache_functions || fail
+    grip_fence
 
     if [[ $dim_resolver == brute ]]; then
 
