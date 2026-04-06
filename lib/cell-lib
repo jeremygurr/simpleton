@@ -984,7 +984,6 @@ load_derive_table() {
 
   if [[ ! -v derive_table_data ]]; then
 
-    log_debug "Loading derive table $name"
     local -n dtp=derive_table_${name}_path
 
     if [[ ! -v dtp ]]; then
@@ -4315,6 +4314,7 @@ make_derive_cache_handle_table() {
     local -n dtp=derive_table_${name}_path
     dtp=$derive_path
 
+    log_debug "Processing derive table $name"
     load_derive_table $name || fail
     derive_tables+=( $name )
 
@@ -4470,6 +4470,7 @@ merge_dim_constellations() {
 make_derive_cache_handle_function() {
   begin_function
 
+    log_debug "Processing derive function $name"
     load_fun_to_code $derive_path derive_function_$name || fail
     eval "$code" || fail
     derive_functions+=( $name )
@@ -4967,6 +4968,7 @@ set_function_cross_dims_single() {
 #   key_tables
 #   allow_dims
 #   cross_dims_tried (set)
+#   conflict (should be set to empty)
 # output:
 #   {dims}
 #   conflict
@@ -5419,7 +5421,7 @@ make_derive_cache() {
   local interesting_vars=lib_dt_path
   begin_function
 
-    log_verbose "Generating derive cache for $lib_dt_path"
+    log_info "Generating derive cache for $lib_dt_path"
     deriving_dims=t
 
     if [[ -f $cache_path.new ]]; then
@@ -6461,7 +6463,7 @@ calc_coordinates_next_dim_member() {
 
     if [[ $is_valid == t ]]; then
 
-      conflict=
+      local conflict=
 
       if [[ "$member" != $empty_member ]]; then
         allow_dims=${coordinate_fields[*]} \
@@ -6816,9 +6818,14 @@ calc_coordinates_slow() {
       fi
 
       if [[ "${ddim:-}" && $ddim != $empty_member ]]; then
+        local conflict=
         member=$ddim \
         allow_dims=${coordinate_fields[*]} \
         set_cross_dims || fail
+        if [[ "$conflict" ]]; then
+          log_fatal "Conflict between dims found: $conflict. Make sure you don't specify contradictory dims."
+          fail1
+        fi
       fi
 
     end_for
