@@ -4430,6 +4430,7 @@ merge_dim_constellations() {
         dim=${dims[$i]}
         if [[ ! -v is_breaker[$dim] ]]; then
           king_con=$dim
+          break
         fi
       done
       if [[ ! -v king_con ]]; then
@@ -5235,22 +5236,19 @@ calculate_constellation_dims() {
       end_for
     end_while
 
-    local c tmp_file
+    local c tmp_file dim size
     get_tmp_file con_sorting || fail
 
     begin_for con in ${constellations[*]}; doo
+      grip_fence
+      log_debug "Sorting $con dims"
       local sorted_dims=()
 
       if [[ "${constellation_static_dims[$con]:-}" ]]; then
 
         for dim in ${constellation_static_dims[$con]}; do
-          local -n members_of=members_of_$dim
-          if [[ -v members_of[*] ]]; then
-            local cardinality=${#members_of[*]}
-            echo "$cardinality $dim"
-          else
-            echo "0 $dim"
-          fi
+          get_size_of_set members_of_$dim
+          echo "$size $dim"
         done | sort -rn >$tmp_file || fail
 
         while read c dim; do
@@ -5285,10 +5283,11 @@ make_derive_cache_dim_info() {
       dim_derive_tables=dim_${dim}_derive_tables \
       members_of=members_of_$dim \
 
+    local size
+    get_size_of_set members_of_$dim
+
     if [[ ! -v dim_members ]] \
-       && [[ -v members_of ]] \
-       && is_set members_of \
-       && (( ${#members_of[*]} > 0 )) \
+       && (( size > 0 )) \
        ; then
       calc_missing_members || fail
     fi
@@ -5424,6 +5423,8 @@ make_derive_cache() {
 
     for dim in ${!all_dims[*]}; do
       local -A members_of_$dim
+      local -n members_of=members_of_$dim
+      members_of=()
       local -n breaker=dim_${dim}_constellation_breaker
       if [[ ${breaker:-f} == t ]]; then
         is_breaker[$dim]=t
@@ -5440,10 +5441,8 @@ make_derive_cache() {
     done
 
     if [[ $dim_resolver == brute ]]; then
-      calculate_constellation_dims || fail
-    fi
 
-    if [[ $dim_resolver == brute ]]; then
+      calculate_constellation_dims || fail
 
       begin_for con in ${constellations[*]}; doo
         grip_fence
