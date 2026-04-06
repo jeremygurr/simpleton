@@ -182,6 +182,37 @@ write_vars_to_context() {
   handle_return
 }
 
+# input:
+#   $1      name of table var (without the _fields and _data)
+write_table_to_context() {
+  local table=$1
+  begin_function
+    local var content
+
+    write_vars_to_context ${table}_fields
+
+    local -n fields=${table}_fields \
+      data=${table}_data \
+
+    local field_count=${#fields[*]} i v
+    var=${table}_data
+    content="$var=("
+    for (( i = 0; i < ${#data[*]}; i++ )); do
+      if (( i % field_count == 0 )); then
+        content=${content% }
+        content+="$NL  "
+      fi
+      v=${data[$i]}
+      shell_quote_var v
+      content+="$v "
+    done
+
+    write_to_context var content || fail
+    
+  end_function
+  handle_return
+}
+
 # inputs:
 #   item_name 
 #   prefix
@@ -4320,9 +4351,8 @@ make_derive_cache_handle_table() {
 
     write_vars_to_context \
       derive_table_${name}_path \
-      derive_table_${name}_fields \
-      derive_table_${name}_data \
-      || fail
+
+    write_table_to_context derive_table_${name} || fail
 
     grip_fence
 
@@ -5412,7 +5442,7 @@ make_derive_cache_constellation() {
       log_debug "Building constellation table for $con"
       field_index=0 member= build_constellation_table || fail
 
-      write_vars_to_context con_${con}_table_fields con_${con}_table_data || fail
+      write_table_to_context con_${con}_table || fail
 
       table=con_${con}_table \
       make_table_index || fail
