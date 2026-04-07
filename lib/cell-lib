@@ -474,7 +474,7 @@ load_derive_table_keys() {
       key_tables+="$name "
       key_fields+="$first_field "
     fi
-    primary_tables+="$name "
+    primary_tables+=( $name )
 
     local start_of_key=1 end_of_key=$((field_count - 1))
 
@@ -485,16 +485,8 @@ load_derive_table_keys() {
       local -n dim_derive_tables=dim_${field}_derive_tables \
         dim_primary_tables=dim_${field}_primary_tables \
 
-      if (( compound_cardinality == row_count )) \
-        && [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $name "* ]] \
-        ; then
+      if (( compound_cardinality == row_count )); then
         dim_derive_tables+=( $name )
-      fi
-
-      if [[ ! "${dim_primary_tables:-}" \
-         || " ${dim_primary_tables[*]} " != *" $name "* ]] \
-        ; then
-        dim_primary_tables+=( $name )
       fi
     done
     key_fields="${key_fields%,} "
@@ -503,10 +495,12 @@ load_derive_table_keys() {
       local other_dim=$field
       local -n \
         other_key_tables=dim_${other_dim}_key_tables \
-        other_dim_derive_tables=dim_${other_dim}_derive_tables \
+        other_primary_tables=dim_${other_dim}_primary_tables \
       
-      other_key_tables+="$name "
-      other_dim_derive_tables+=( $name )
+      if (( compound_cardinality == row_count )); then
+        other_key_tables+="$name "
+      fi
+      other_primary_tables+="$name "
     fi
 
   end_function
@@ -4864,9 +4858,11 @@ set_table_cross_dims_single() {
     fi
 
     row_indexes=( ${dt_index[$member]} )
-    if (( ${#row_indexes[*]} > 1 )) && [[ $allow_multiple_members == f ]]; then
-      log_debug "Too many rows found in derive table $derive_table matching cross dim $dim / $member: ${#row_indexes[*]}, skipping cross dim setting"
-      abort
+    if (( ${#row_indexes[*]} > 1 )); then
+      if [[ $allow_multiple_members == f ]]; then
+        log_debug "Too many rows found in derive table $derive_table matching cross dim $dim / $member: ${#row_indexes[*]}, skipping cross dim setting"
+        abort
+      fi
     fi
 
     begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
@@ -4877,17 +4873,17 @@ set_table_cross_dims_single() {
         continue
       fi
 
-      local fields
+      local fields values=()
       get_plural $field fields
       if [[ $field != $dim && -v all_dims[$field] ]]; then
-        local values=()
+        local -A value_set=()
 
         local -n field_dim=d_$field \
           field_dims=d_$fields \
 
         begin_for row_index in ${row_indexes[*]}; doo
           (( data_index = row_index * field_count + column_index ))
-          values+=( "${derive_data[$data_index]}" )
+          value_set[${derive_data[$data_index]}]=1
         end_for # row_index
 
         local current_single_value= current_multi_value=() current_multi_value_var=
@@ -4900,6 +4896,7 @@ set_table_cross_dims_single() {
           current_multi_value_var=current_multi_value
         fi
 
+        set_to_array value_set values
         if [[ "$values" && "$values" != all \
            && ! -v cross_dims_tried[$field] ]]; then
 
@@ -5095,7 +5092,7 @@ set_cross_dims() {
     if [[ "${key_tables:-}" ]]; then
       local derive_table
 
-      begin_for derive_table in $key_tables; doo
+      begin_for derive_table in ${key_tables[*]}; doo
         set_table_cross_dims_single || fail
         if [[ "$conflict" ]]; then
           abort
@@ -5162,7 +5159,7 @@ build_constellation_table() {
     interesting_vars+=' current_dim'
 
     if [[ -v current_dim_values[$current_dim] ]]; then
-      dim_members=( "${current_dim_values[$current_dim]}" )
+      dim_members=( ${current_dim_values[$current_dim]} )
       log_debug "Dim $current_dim already known to have ${#dim_members[*]} members"
     elif [[ $field_index == 0 ]]; then
       if [[ ! "${current_dim_members:-}" ]]; then
