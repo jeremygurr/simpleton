@@ -4920,115 +4920,94 @@ set_function_cross_dims_single() {
 
   begin_function
 
-    local action=derive fields=() values=() i field value
+    local action fields=() values=() i field value \
+      targets= target_dims target_dim derive_paths derive_path required_dims optional_dims \
 
-    target_dim=$dim \
+    action=info \
     derive_function_$derive_fun || fail
 
-    begin_for (( i = 0; i < ${#fields[*]}; i++ )); doo
-
-      field=${fields[$i]}
-
-      if [[ " $allow_dims " != *" $field "* ]]; then
-        continue
+    for derive_path in "${derive_paths[@]}"; do
+      target_dims=${derive_path#*->}
+      required_dims=${derive_path%->*}
+      required_dims=${required_dims//,/ }
+      if [[ "$required_dims" == */* ]]; then
+        optional_dims=${required_dims#*/}
+        required_dims=${required_dims%/*}
       fi
-
-      if [[ ! -v values[$i] ]]; then
-        log_fatal "Missing value for field $field in derive function $derive_fun"
-        fail1
+      if [[ ! "${optional_dims:-}" ]]; then
+        target_dim=${target_dims%%,*}
+        targets+="$target_dim "
       fi
+    done
 
-      value=${values[$i]}
+    begin_for target_dim in $targets; doo
+      action=derive \
+      derive_function_$derive_fun || fail
 
-      local dims
-      get_plural $field dims
-      local -n ddim=d_${field}
+      begin_for (( i = 0; i < ${#fields[*]}; i++ )); doo
 
-      local current_single_value= current_multi_value=() current_multi_value_var=
+        field=${fields[$i]}
 
-      if [[ $set_dims_directly == t ]]; then
-        current_single_value=${ddim:-}
-        current_multi_value_var=d_$dims
-      else
-        current_multi_value=( ${current_dim_values[$field]:-} )
-        current_multi_value_var=current_multi_value
-      fi
-
-      if dim=$field \
-         single_member=$current_single_value \
-         multi_member=$current_multi_value_var \
-         target_member="$value" \
-         member_conflicts; then
-        local v=$current_single_value
-        if [[ ! "$v" ]]; then
-          v=$current_multi_value
+        if [[ " $allow_dims " != *" $field "* ]]; then
+          continue
         fi
-        conflict="$field = $value vs. $v (via ${derive_fun}.fun)"
-        break
-      else
-        if [[ "$value" && "$value" != all \
-           && ! -v cross_dims_tried[$field] ]]; then
-          log_debug "Cross dim set: $dim=$member -> $field=$value (via ${derive_fun}.fun)"
 
-          if [[ $set_dims_directly == t ]]; then
-            ddim=$value
-          else
-            current_dim_values[$field]=$value
+        if [[ ! -v values[$i] ]]; then
+          log_fatal "Missing value for field $field in derive function $derive_fun"
+          fail1
+        fi
+
+        value=${values[$i]}
+
+        local dims
+        get_plural $field dims
+        local -n ddim=d_${field}
+
+        local current_single_value= current_multi_value=() current_multi_value_var=
+
+        if [[ $set_dims_directly == t ]]; then
+          current_single_value=${ddim:-}
+          current_multi_value_var=d_$dims
+        else
+          current_multi_value=( ${current_dim_values[$field]:-} )
+          current_multi_value_var=current_multi_value
+        fi
+
+        if dim=$field \
+           single_member=$current_single_value \
+           multi_member=$current_multi_value_var \
+           target_member="$value" \
+           member_conflicts; then
+          local v=$current_single_value
+          if [[ ! "$v" ]]; then
+            v=$current_multi_value
           fi
+          conflict="$field = $value vs. $v (via ${derive_fun}.fun)"
+          break
+        else
+          if [[ "$value" && "$value" != all \
+             && ! -v cross_dims_tried[$field] ]]; then
+            log_debug "Cross dim set: $dim=$member -> $field=$value (via ${derive_fun}.fun)"
 
-          validated_dims+=" $field"
-          cross_dims_tried[$field]=1
+            if [[ $set_dims_directly == t ]]; then
+              ddim=$value
+            else
+              current_dim_values[$field]=$value
+            fi
 
-          # recursive
-          dim=$field \
-          member=$value \
-          set_cross_dims || fail
+            validated_dims+=" $field"
+            cross_dims_tried[$field]=1
 
+            # recursive
+            dim=$field \
+            member=$value \
+            set_cross_dims || fail
+
+          fi
         fi
-      fi
 
-    end_for
-
-  end_function
-  handle_return
-}
-
-# input: 
-#   dim
-#   member
-#   key_functions
-#   key_tables
-#   allow_dims
-#   cross_dims_tried (set)
-#   conflict (should be set to empty)
-# output:
-#   {dims}
-#   conflict
-set_cross_dims_internal() {
-  local member=${member}
-  begin_function
-
-    if [[ "${key_functions:-}" ]]; then
-      local derive_fun
-
-      begin_for derive_fun in $key_functions; doo
-        set_function_cross_dims_single || fail
-        if [[ "$conflict" ]]; then
-          abort
-        fi
-      end_for
-    fi
-
-    if [[ "${key_tables:-}" ]]; then
-      local derive_table
-
-      begin_for derive_table in $key_tables; doo
-        set_table_cross_dims_single || fail
-        if [[ "$conflict" ]]; then
-          abort
-        fi
-      end_for
-    fi
+      end_for # i
+    end_for # target_dim
 
   end_function
   handle_return
@@ -5057,7 +5036,27 @@ set_cross_dims() {
 
     cross_dims_tried[$dim]=1
 
-    set_cross_dims_internal || fail
+    if [[ "${key_functions:-}" ]]; then
+      local derive_fun
+
+      begin_for derive_fun in $key_functions; doo
+        set_function_cross_dims_single || fail
+        if [[ "$conflict" ]]; then
+          abort
+        fi
+      end_for
+    fi
+
+    if [[ "${key_tables:-}" ]]; then
+      local derive_table
+
+      begin_for derive_table in $key_tables; doo
+        set_table_cross_dims_single || fail
+        if [[ "$conflict" ]]; then
+          abort
+        fi
+      end_for
+    fi
 
   end_function
   handle_return
@@ -6867,10 +6866,11 @@ calc_coordinates_slow() {
         member=$ddim \
         allow_dims=${coordinate_fields[*]} \
         set_cross_dims || fail
-        if [[ "$conflict" ]]; then
-          log_fatal "Conflict between dims found: $conflict. Make sure you don't specify contradictory dims."
-          fail1
-        fi
+#       we deliberately ignore conflicts here since we haven't had a chance to set defaults yet. That will happen later and then we can handle conflicts if they arise.
+#        if [[ "$conflict" ]]; then
+#          log_fatal "Conflict between dims found: $conflict. Make sure you don't specify contradictory dims."
+#          fail1
+#        fi
       fi
 
     end_for
