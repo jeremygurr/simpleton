@@ -4830,6 +4830,119 @@ build_constellation_table_handle_fun() {
   handle_return
 }
 
+set_cross_dims_no_conflict() {
+  begin_function
+
+    local changed=f
+    if [[ $set_dims_directly == t ]]; then
+      if (( ${#values[*]} == 1 )); then
+        if [[ "$field_dim" != "$values" ]]; then
+          field_dim=$values
+          field_dims=()
+          changed=t
+        fi
+      else
+
+        local result=
+        if [[ ! "$fields_dims" ]]; then
+          result="${values[*]}"
+        else
+          intersect_strings "${field_dims[*]}" "${values[*]}" result
+        fi
+
+        if [[ ! "$result" ]]; then
+          log_fatal "Internal error: result should never be empty"
+          fail1
+        fi
+
+        if [[ "${field_dims[*]}" != "$result" ]]; then
+          field_dims=( $result )
+          field_dim=
+          changed=t
+        fi
+
+      fi
+    else
+
+      local result=
+      if [[ ! -v current_dim_values[$field] ]]; then
+        result="${values[*]}"
+      else
+        intersect_strings "${current_dim_values[$field]}" "${values[*]}" result
+      fi
+
+      if [[ "${current_dim_values[$field]}" != "$result" ]]; then
+        current_dim_values[$field]=$result
+        changed=t
+      fi
+
+    fi
+
+    if [[ $changed == t ]]; then
+      log_debug "Cross dim set: $dim=$member -> $field=( ${values[*]} ) (via ${derive_table}.tab)"
+      cross_dims_tried[$field]=1
+
+      if (( ${#values[*]} == 1 )); then
+        # recursive
+        dim=$field \
+        member=$value \
+        set_cross_dims || fail
+      fi
+    fi
+
+    if [[ " ${validated_dims:-} " != *" $field "* ]]; then
+      validated_dims+=" $field"
+    fi
+
+  end_function
+  handle_return
+}
+
+set_cross_dims_column() {
+  begin_function
+    local -A value_set=()
+
+    local -n field_dim=d_$field \
+      field_dims=d_$fields \
+
+    begin_for row_index in ${row_indexes[*]}; doo
+      (( data_index = row_index * field_count + column_index ))
+      value_set[${derive_data[$data_index]}]=1
+    end_for # row_index
+
+    local current_single_value= current_multi_value=() current_multi_value_var=
+
+    if [[ $set_dims_directly == t ]]; then
+      current_single_value=${field_dim:-}
+      current_multi_value_var=d_$fields
+    else
+      current_multi_value=( ${current_dim_values[$field]:-} )
+      current_multi_value_var=current_multi_value
+    fi
+
+    set_to_array value_set values
+    if [[ "$values" && "$values" != all \
+       && ! -v cross_dims_tried[$field] ]]; then
+
+      if dim=$field \
+         single_member=$current_single_value \
+         multi_member=$current_multi_value_var \
+         target_members="${values[*]}" \
+         member_conflicts; then
+        local v=$current_single_value
+        if [[ ! "$v" ]]; then
+          v=$current_multi_value
+        fi
+        conflict="$field = ( ${values[*]} ) vs. $v (via ${derive_table}.tab)"
+        break
+      else
+        set_cross_dims_no_conflict || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
 # inputs:
 #   derive_table
 #   dim
@@ -4876,68 +4989,7 @@ set_table_cross_dims_single() {
       local fields values=()
       get_plural $field fields
       if [[ $field != $dim && -v all_dims[$field] ]]; then
-        local -A value_set=()
-
-        local -n field_dim=d_$field \
-          field_dims=d_$fields \
-
-        begin_for row_index in ${row_indexes[*]}; doo
-          (( data_index = row_index * field_count + column_index ))
-          value_set[${derive_data[$data_index]}]=1
-        end_for # row_index
-
-        local current_single_value= current_multi_value=() current_multi_value_var=
-
-        if [[ $set_dims_directly == t ]]; then
-          current_single_value=${field_dim:-}
-          current_multi_value_var=d_$fields
-        else
-          current_multi_value=( ${current_dim_values[$field]:-} )
-          current_multi_value_var=current_multi_value
-        fi
-
-        set_to_array value_set values
-        if [[ "$values" && "$values" != all \
-           && ! -v cross_dims_tried[$field] ]]; then
-
-          if dim=$field \
-             single_member=$current_single_value \
-             multi_member=$current_multi_value_var \
-             target_members="${values[*]}" \
-             member_conflicts; then
-            local v=$current_single_value
-            if [[ ! "$v" ]]; then
-              v=$current_multi_value
-            fi
-            conflict="$field = ( ${values[*]} ) vs. $v (via ${derive_table}.tab)"
-            break
-          else
-            log_debug "Cross dim set: $dim=$member -> $field=( ${values[*]} ) (via ${derive_table}.tab)"
-
-            if [[ $set_dims_directly == t ]]; then
-              if (( ${#values[*]} == 1 )); then
-                field_dim=$values
-                field_dims=()
-              else
-                field_dims=( "${values[@]}" )
-                field_dim=
-              fi
-            else
-              current_dim_values[$field]=${values[*]}
-            fi
-
-            validated_dims+=" $field"
-            cross_dims_tried[$field]=1
-
-            if (( ${#values[*]} == 1 )); then
-              # recursive
-              dim=$field \
-              member=$value \
-              set_cross_dims || fail
-            fi
-
-          fi
-        fi
+        set_cross_dims_column || fail
       fi
     end_for # column_index
 
@@ -5069,6 +5121,12 @@ set_cross_dims() {
 
   begin_function
 
+    if is_set cross_dims_tried; then
+      local -I cross_dims_tried
+    else
+      local -A cross_dims_tried=()
+    fi
+
     local -n key_tables=dim_${dim}_key_tables \
       key_functions=dim_${dim}_key_functions \
 
@@ -5123,7 +5181,6 @@ build_constellation_table() {
 
   local -I current_dim_values \
     current_row \
-    cross_dims_tried \
 
   begin_function
     progress_bar_nudge .
@@ -5469,7 +5526,6 @@ make_derive_cache_constellation() {
     # constellation tables are only created for multi-dim constellations
     if (( ${#con_table_fields[*]} > 1 )); then
       local -A current_dim_values \
-        cross_dims_tried \
 
       local current_row=() new_con dim
       for (( i = 0; i < ${#con_table_fields[*]}; i++ )); do
@@ -6568,8 +6624,6 @@ calc_coordinates_next_dim_member() {
     log_debug "Processing $dim = $member in phase $phase"
     local validated_dims=${validated_dims:-} conflicting_values=() is_valid=t
 
-    local -I cross_dims_tried
-
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
       calc_coords_validate_member "$member" || fail
       interesting_vars='dim member'
@@ -6874,8 +6928,6 @@ calc_coordinates_refine_multi() {
     begin_for (( row_index = 0; row_index < coordinate_rows; row_index++ )); doo
       if [[ -v matching_rows[all] || -v matching_rows[$row_index] ]]; then
 
-        local -A cross_dims_tried=()
-
         table=${coord_type}_coordinate \
         convert_table_to_dims || fail
 
@@ -6925,7 +6977,6 @@ calc_coordinates_slow() {
 
     local dim
 
-    local -A cross_dims_tried=()
     begin_for dim in ${!all_dims[*]}; doo
 
       local -n idim=i_$dim \
