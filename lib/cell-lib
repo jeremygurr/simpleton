@@ -5350,8 +5350,6 @@ make_derive_cache_dim_info() {
       ;;
     esac
 
-    write_vars_to_context dim_${dim}_member_type dim_${dim}_effective_member_type || fail
-     
   end_function
   handle_return
 }
@@ -5483,14 +5481,6 @@ make_derive_cache() {
 
     make_derive_cache_functions || fail
 
-    ignore_missing=t \
-    write_vars_to_context \
-      dim_${dim}_key_tables \
-      dim_${dim}_key_functions \
-      dim_${dim}_derived_from \
-      dim_${dim}_narrowed_from \
-      || fail
-
     grip_fence
 
     if [[ $dim_resolver == brute ]]; then
@@ -5502,17 +5492,26 @@ make_derive_cache() {
         make_derive_cache_constellation || fail
       end_for
 
-      for dim in ${!all_dims[*]}; do
-        grip_fence
-        if [[ -v constellation_of[$dim] ]]; then
-          local dim_${dim}_con
-          local -n dim_con=dim_${dim}_con
-          dim_con=${constellation_of[$dim]}
-          write_vars_to_context dim_${dim}_con || fail
-        fi
-      done
-
     fi
+
+    for dim in ${!all_dims[*]}; do
+      grip_fence
+      ignore_missing=t \
+      write_vars_to_context \
+        dim_${dim}_key_tables \
+        dim_${dim}_key_functions \
+        dim_${dim}_derived_from \
+        dim_${dim}_narrowed_from \
+        dim_${dim}_member_type \
+        dim_${dim}_effective_member_type \
+        || fail
+      if [[ $dim_resolver == brute && -v constellation_of[$dim] ]]; then
+        local dim_${dim}_con
+        local -n dim_con=dim_${dim}_con
+        dim_con=${constellation_of[$dim]}
+        write_vars_to_context dim_${dim}_con || fail
+      fi
+    done
 
     if [[ -f $cache_path.new ]]; then
       mv $cache_path.new $cache_path || fail
@@ -6509,7 +6508,8 @@ calc_coordinates_next_dim_member() {
       local conflict=
 
       if [[ "$member" != $empty_member ]]; then
-        allow_dims=${coordinate_fields[*]} \
+        #allow_dims=${coordinate_fields[*]} \
+        allow_dims=${related_dims_expanded[*]} \
         set_cross_dims || fail
 
         if [[ "$conflict" ]]; then
@@ -6612,8 +6612,10 @@ calc_coordinates_next_dim() {
           ms=( "${members[@]}" )
         fi
 
-        result_var=ms \
-        narrow_dim || fail
+        if [[ $dim_resolver != brute ]]; then
+          result_var=ms \
+          narrow_dim || fail
+        fi
         needs_validation=f
 
         if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
