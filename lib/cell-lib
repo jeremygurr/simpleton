@@ -4519,6 +4519,7 @@ make_derive_cache_handle_function() {
     for derived_dim in ${fields[*]}; do
 
       local -n derive_from=dim_${derived_dim}_derived_from \
+        narrow_from=dim_${derived_dim}_narrowed_from \
         key_functions=dim_${derived_dim}_key_functions \
 
       local is_key=f key_field_group
@@ -4558,6 +4559,8 @@ make_derive_cache_handle_function() {
 
           tool=${name}.fun \
           add_derive_from || fail
+
+          narrow_from+=( "${name}.fun $required_dims" )
 
         fi
 
@@ -4821,6 +4824,7 @@ build_constellation_table_handle_fun() {
 #   dim
 #   member
 #   allow_dims
+#   allow_multiple_members
 set_table_cross_dims_single() {
   local member=$member dim=$dim derive_table=$derive_table \
     interesting_vars='${interesting_vars:-} derive_table' \
@@ -4831,7 +4835,7 @@ set_table_cross_dims_single() {
 
     local field_count=${#derive_fields[*]} \
       data_count=${#derive_data[*]} \
-      row_index data_index=0 column_index \
+      row_indexes row_index data_index=0 column_index \
       value= field \
 
     local row_count=$((data_count / field_count))
@@ -4842,13 +4846,13 @@ set_table_cross_dims_single() {
       abort
     fi
 
-    row_index=( ${dt_index[$member]} )
-    if (( ${#row_index[*]} > 1 )); then
-      log_debug "Too many rows found in derive table $derive_table matching cross dim $dim / $member: ${#row_index[*]}, skipping cross dim setting"
+    row_indexes=( ${dt_index[$member]} )
+    if (( ${#row_indexes[*]} > 1 )) && [[ $allow_multiple_members == f ]]; then
+      log_debug "Too many rows found in derive table $derive_table matching cross dim $dim / $member: ${#row_indexes[*]}, skipping cross dim setting"
       abort
     fi
 
-    for (( column_index = 0; column_index < field_count; column_index++ )); do
+    begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
 
       field=${derive_fields[$column_index]}
 
@@ -4859,9 +4863,16 @@ set_table_cross_dims_single() {
       local fields
       get_plural $field fields
       if [[ $field != $dim && -v all_dims[$field] ]]; then
-        (( data_index = row_index * field_count + column_index ))
-        value=${derive_data[$data_index]}
-        local -n field_dim=d_$field
+        local values=()
+
+        local -n field_dim=d_$field \
+          field_dims=d_$fields \
+
+        begin_for row_index in ${row_indexes[*]}; doo
+          (( data_index = row_index * field_count + column_index ))
+          values+=( "${derive_data[$data_index]}" )
+        end_for # row_index
+
         local current_single_value= current_multi_value=() current_multi_value_var=
 
         if [[ $set_dims_directly == t ]]; then
@@ -4872,41 +4883,49 @@ set_table_cross_dims_single() {
           current_multi_value_var=current_multi_value
         fi
 
-        if dim=$field \
-           single_member=$current_single_value \
-           multi_member=$current_multi_value_var \
-           target_member="$value" \
-           member_conflicts; then
-          local v=$current_single_value
-          if [[ ! "$v" ]]; then
-            v=$current_multi_value
-          fi
-          conflict="$field = $value vs. $v (via ${derive_table}.tab)"
-          break
-        else
-          if [[ "$value" && "$value" != all \
-             && ! -v cross_dims_tried[$field] ]]; then
-            log_debug "Cross dim set: $dim=$member -> $field=$value (via ${derive_table}.tab)"
+        if [[ "$values" && "$values" != all \
+           && ! -v cross_dims_tried[$field] ]]; then
+
+          if dim=$field \
+             single_member=$current_single_value \
+             multi_member=$current_multi_value_var \
+             target_members="${values[*]}" \
+             member_conflicts; then
+            local v=$current_single_value
+            if [[ ! "$v" ]]; then
+              v=$current_multi_value
+            fi
+            conflict="$field = ( ${values[*]} ) vs. $v (via ${derive_table}.tab)"
+            break
+          else
+            log_debug "Cross dim set: $dim=$member -> $field=( ${values[*]} ) (via ${derive_table}.tab)"
 
             if [[ $set_dims_directly == t ]]; then
-              field_dim=$value
+              if (( ${#values[*]} == 1 )); then
+                field_dim=$values
+                field_dims=()
+              else
+                field_dims=( "${values[@]}" )
+                field_dim=
+              fi
             else
-              current_dim_values[$field]=$value
+              current_dim_values[$field]=${value[*]}
             fi
 
             validated_dims+=" $field"
             cross_dims_tried[$field]=1
 
-            # recursive
-            dim=$field \
-            member=$value \
-            set_cross_dims || fail
+            if (( ${#values[*]} == 1 )); then
+              # recursive
+              dim=$field \
+              member=$value \
+              set_cross_dims || fail
+            fi
 
           fi
         fi
       fi
-    
-    done
+    end_for # column_index
 
   end_function
   handle_return
@@ -5022,6 +5041,7 @@ set_function_cross_dims_single() {
 #   allow_dims
 #   set_dims_directly (bool)  if true, sets d_{dim} values, otherwise sets current_dim_values[{dim}
 #   cross_dims_tried (set)
+#   allow_multiple_members    if true, can use tables that have more than one result for this dim
 # output:
 #   {dims}
 #   conflict
@@ -5030,7 +5050,8 @@ set_cross_dims() {
     allow_dims=$allow_dims \
     dim=$dim \
     member=$member \
-    interesting_vars='dim member set_dims_directly'
+    allow_multiple_members=${allow_multiple_members:-f} \
+    interesting_vars='dim member set_dims_directly' \
 
   begin_function
 
@@ -5048,6 +5069,10 @@ set_cross_dims() {
           abort
         fi
       end_for
+    fi
+
+    if [[ $allow_multiple_members == t ]]; then
+      local -n key_tables=dim_${dim}_primary_tables
     fi
 
     if [[ "${key_tables:-}" ]]; then
@@ -5098,6 +5123,7 @@ build_constellation_table() {
         dim=$current_dim \
         set_dims_directly=f \
         allow_dims=${con_table_fields[*]} \
+        allow_multiple_members=t \
         set_cross_dims || fail
         if [[ "$conflict" ]]; then
           log_debug "Conflict found: $conflict"
@@ -5120,16 +5146,18 @@ build_constellation_table() {
 
     if [[ -v current_dim_values[$current_dim] ]]; then
       dim_members=( "${current_dim_values[$current_dim]}" )
+      log_debug "Dim $current_dim already known to have ${#dim_members[*]} members"
     elif [[ $field_index == 0 ]]; then
       if [[ ! "${current_dim_members:-}" ]]; then
         log_fatal "$current_dim is marked as a static dim, but there are no known members."
         fail1
       fi
       array_to_set current_dim_members dim_members
+      log_debug "Starting with all ${#dim_members[*]} members of $current_dim"
     else # $dim_index > 0
       # loop over all derive tools related to the current dim
       local -n derived_from=dim_${current_dim}_narrowed_from
-      local row tool row_array tool_dims tool_valid
+      local row tool row_array tool_dims tool_valid before_count after_count before_is_all after_is_all
       local -A tool_possibilities=()
       dim_members=( all )
 
@@ -5141,6 +5169,12 @@ build_constellation_table() {
         tool_dims=${row_array[1]}
         tool_dims=${tool_dims//,/ }
         tool_valid=f
+        before_count=${#dim_members[*]}
+        if [[ -v dim_members[all] ]]; then
+          before_is_all=t
+        else
+          before_is_all=f
+        fi
 
         if [[ $tool == *.tab ]]; then
           build_constellation_table_handle_tab || fail
@@ -5153,9 +5187,19 @@ build_constellation_table() {
 
         if [[ $tool_valid == t ]]; then
           intersect_with_all dim_members tool_possibilities dim_members
-          if (( ${#dim_members[*]} == 0 )); then
+          after_count=${#dim_members[*]}
+          if [[ -v dim_members[all] ]]; then
+            after_is_all=t
+          else
+            after_is_all=f
+          fi
+          if (( after_count == 0 )); then
             log_debug "Row (${current_row[*]}) invalidated by tool: $tool (dim: $current_dim)"
             abort
+          elif [[ $before_is_all == t && $after_is_all != t ]]; then
+            log_debug "Narrowed dim $current_dim from all to $after_count (via $tool)"
+          elif [[ $before_is_all == f ]] && (( before_count != after_count )); then
+            log_debug "Narrowed dim $current_dim from $before_count to $after_count (via $tool)"
           fi
         fi
 
