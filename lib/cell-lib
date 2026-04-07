@@ -5084,6 +5084,7 @@ build_constellation_table() {
     cross_dims_tried \
 
   begin_function
+    progress_bar_nudge .
     if [[ "$member" ]]; then
       current_row+=( "$member" )
       current_dim_values[$current_dim]=$member
@@ -5160,7 +5161,7 @@ build_constellation_table() {
     fi
     
     if (( ${#dim_members[*]} == 0 )) || [[ -v dim_members[all] ]]; then
-      log_debug "No tools found which can be used to derive $current_dim in this row, will use all possibilities"
+      log_debug "No tools found which can be used to derive $current_dim in this row, will use all ${#current_dim_members[*]} possibilities"
       if [[ ! "${current_dim_members:-}" ]]; then
         log_fatal "$current_dim is marked as a static dim, but there are no known members."
         fail1
@@ -5174,6 +5175,7 @@ build_constellation_table() {
       sort_array sorted_members
     fi
     begin_for member in "${sorted_members[@]}"; doo
+      log_debug "Processing $current_dim=$member"
       field_index=$((field_index+1)) build_constellation_table || fail
     end_for
 
@@ -5189,6 +5191,7 @@ make_derive_cache_tables() {
 
     local name code derive_path
     begin_for derive_path in $files; doo
+      progress_bar_nudge T
       name=${derive_path##*/}
       name=${name%.*}
       name=${name#derive_}
@@ -5208,6 +5211,7 @@ make_derive_cache_functions() {
 
     local name code derive_path
     begin_for derive_path in $files; doo
+      progress_bar_nudge F
       name=${derive_path##*/}
       name=${name%.*}
       name=${name#derive_}
@@ -5427,7 +5431,7 @@ make_derive_cache_constellation() {
 
       fi
 
-      log_debug "Building constellation table for $con"
+      log_debug "Building constellation table for $con (${con_table_fields[*]})"
       field_index=0 member= build_constellation_table || fail
 
       write_table_to_context con_${con}_table || fail
@@ -5451,6 +5455,7 @@ make_derive_cache() {
 
     log_info "Generating derive cache for $lib_dt_path"
     deriving_dims=t
+    progress_bar_start
 
     if [[ -f $cache_path.new ]]; then
       rm $cache_path.new || fail
@@ -5474,6 +5479,7 @@ make_derive_cache() {
 
     local con dim
 
+    progress_bar_nudge .
     for dim in ${!all_dims[*]}; do
       make_derive_cache_dim_info || fail
     done
@@ -5484,15 +5490,18 @@ make_derive_cache() {
 
     if [[ $dim_resolver == brute ]]; then
 
+      progress_bar_nudge .
       calculate_constellation_dims || fail
 
       begin_for con in ${constellations[*]}; doo
+        progress_bar_nudge C
         grip_fence
         make_derive_cache_constellation || fail
       end_for
 
     fi
 
+    progress_bar_nudge .
     for dim in ${!all_dims[*]}; do
       grip_fence
       ignore_missing=t \
@@ -5516,6 +5525,7 @@ make_derive_cache() {
       mv $cache_path.new $cache_path || fail
     fi
     unset deriving_dims
+    progress_bar_stop
 
   end_function
   handle_return
