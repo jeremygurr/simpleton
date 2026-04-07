@@ -467,34 +467,46 @@ load_derive_table_keys() {
 
     local -n index=derive_table_${name}_index_${first_field} \
       key_tables=dim_${first_field}_key_tables \
+      primary_tables=dim_${first_field}_primary_tables \
       dim_derive_tables=dim_${first_field}_derive_tables \
 
     if (( ${#index[*]} == row_count )); then
       key_tables+="$name "
       key_fields+="$first_field "
     fi
+    primary_tables+="$name "
 
     local start_of_key=1 end_of_key=$((field_count - 1))
 
     get_compound_cardinality || fail
-    if (( compound_cardinality == row_count )); then
-      for (( field_index = 1; field_index < field_count; field_index++ )); do
-        field=${table_fields[$field_index]}
-        key_fields+="$field,"
-        if [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $name "* ]]; then
-          dim_derive_tables+=( $name )
-        fi
-      done
-      key_fields="${key_fields%,} "
-      if (( field_count == 2 )); then
-        local other_dim=$field
-        local -n \
-          other_key_tables=dim_${other_dim}_key_tables \
-          other_dim_derive_tables=dim_${other_dim}_derive_tables \
-        
-        other_key_tables+="$name "
-        other_dim_derive_tables+=( $name )
+    for (( field_index = 1; field_index < field_count; field_index++ )); do
+      field=${table_fields[$field_index]}
+      key_fields+="$field,"
+      local -n dim_derive_tables=dim_${field}_derive_tables \
+        dim_primary_tables=dim_${field}_primary_tables \
+
+      if (( compound_cardinality == row_count )) \
+        && [[ ! "${dim_derive_tables:-}" || " ${dim_derive_tables[*]} " != *" $name "* ]] \
+        ; then
+        dim_derive_tables+=( $name )
       fi
+
+      if [[ ! "${dim_primary_tables:-}" \
+         || " ${dim_primary_tables[*]} " != *" $name "* ]] \
+        ; then
+        dim_primary_tables+=( $name )
+      fi
+    done
+    key_fields="${key_fields%,} "
+
+    if (( field_count == 2 )); then
+      local other_dim=$field
+      local -n \
+        other_key_tables=dim_${other_dim}_key_tables \
+        other_dim_derive_tables=dim_${other_dim}_derive_tables \
+      
+      other_key_tables+="$name "
+      other_dim_derive_tables+=( $name )
     fi
 
   end_function
@@ -4625,10 +4637,13 @@ calc_missing_members() {
 #   dim            Dim of the member being checked. can't be empty
 #   single_member  The member to be checked, if there is only one. may be empty
 #   multi_member   The name of array var containing members to be checked, if more than one.  may be empty
-#   target_member  what to check against. can't be empty
+#   target_member  what to check against. either this or target_members must be set
+#   target_members  what to check against, can be more than one member, space separated
 # outputs:
 #   returns 0 if there are conflicts
 member_conflicts() {
+  local target_members=${target_members:-${target_member}}
+  local target_member=$target_members
   if [[ "$single_member" ]]; then
     if [[ "$single_member" != "$target_member" && "$target_member" != all && "$single_member" != all ]]; then
       return 0
@@ -4641,10 +4656,12 @@ member_conflicts() {
       dim_var=$dim expand_dim_members $multi_member || return 0
 
       for v in "${new_values[@]}"; do
-        if [[ "$v" == "$target_member" || "$target_member" == all || "$v" == all ]]; then
-          found=t
-          break
-        fi
+        for target_member in $target_members; do
+          if [[ "$v" == "$target_member" || "$target_member" == all || "$v" == all ]]; then
+            found=t
+            break
+          fi
+        done
       done
 
       if [[ $found == f ]]; then
