@@ -2153,7 +2153,7 @@ expand_dim_members() {
     dim=$dim_var \
     expand_dim value values || return 1
     if [[ "$values" ]]; then
-      for value in $values; do
+      for value in ${values[*]}; do
         new_values_set[$value]=1
       done
     fi
@@ -4360,18 +4360,18 @@ find_constellations_of_dims() {
 }
 
 # inputs:
-#   from         constellation to copy over the other cons
-#   to           other cons to be overwritten
+#   new         constellation to copy over the other cons
+#   old         other cons to be overwritten
 merge_constellations() {
-  local from=$from to=$to cons new_cons con dim
+  local new=$new old=$old cons new_cons con dim
   for dim in ${!constellation_of[*]}; do
     cons=${constellation_of[$dim]}
     if [[ -v is_breaker[$dim] ]]; then
       new_cons=
       for con in $cons; do
-        if [[ $to == $con ]]; then
-          if [[ " $new_cons " != *" $from "* ]]; then
-            new_cons+="$from "
+        if [[ $old == $con ]]; then
+          if [[ " $new_cons " != *" $new "* ]]; then
+            new_cons+="$new "
           fi
         else
           if [[ " $new_cons " != *" $con "* ]]; then
@@ -4382,11 +4382,22 @@ merge_constellations() {
       constellation_of[$dim]=$new_cons
     else
       con=$cons
-      if [[ " $to " == *" $con "* ]]; then
-        constellation_of[$dim]=$from
+      if [[ " $old " == *" $con "* ]]; then
+        constellation_of[$dim]=$new
       fi
     fi
   done
+
+  local -n new_dts=con_${new}_derive_tables \
+    old_dts=con_${old}_derive_tables \
+
+  if [[ "${old_dts:-}" ]]; then
+    local dt
+    for dt in $old_dts; do
+      new_dts+="$dt "
+    done
+  fi
+  unset con_${old}_derive_tables
 }
 
 # inputs: 
@@ -4416,7 +4427,7 @@ merge_dim_constellations() {
     fi
 
     if (( ${#cons_found[*]} > 1 )); then
-      from=$king_con to=${cons_found[*]:1} merge_constellations || fail
+      new=$king_con old=${cons_found[*]:1} merge_constellations || fail
     fi
 
     for dim in ${dims[*]}; do
@@ -4843,7 +4854,7 @@ set_cross_dims_no_conflict() {
     local changed=f
     if [[ $set_dims_directly == t ]]; then
       if (( ${#values[*]} == 1 )); then
-        if [[ "$field_dim" != "$values" ]]; then
+        if [[ ! "${field_dim:-}" || "$field_dim" != "$values" ]]; then
           field_dim=$values
           field_dims=()
           changed=t
@@ -4851,7 +4862,7 @@ set_cross_dims_no_conflict() {
       else
 
         local result=
-        if [[ ! "$fields_dims" ]]; then
+        if [[ ! "${fields_dims:-}" ]]; then
           result="${values[*]}"
         else
           intersect_strings "${field_dims[*]}" "${values[*]}" result
@@ -5195,7 +5206,7 @@ build_constellation_table() {
       current_row+=( "$member" )
       current_dim_values[$current_dim]=$member
 
-      if (( field_index + 1 < field_count )); then
+      #if (( field_index + 1 < field_count )); then
         local conflict=
         # takes from the callers current_dim before it is localized here
         dim=$current_dim \
@@ -5207,7 +5218,7 @@ build_constellation_table() {
           log_debug "Conflict found: $conflict"
           abort
         fi
-      fi
+      #fi
     fi
 
     if (( field_index + 1 > field_count )); then
@@ -5242,10 +5253,10 @@ build_constellation_table() {
       local -A tool_possibilities=()
       dim_members=( all )
 
+      interesting_vars+=' tool'
       begin_for row in "${derived_from[@]}"; doo
         row_array=( $row )
         tool=${row_array[0]}
-        interesting_vars+=' tool'
         tool_possibilities=()
         tool_dims=${row_array[1]}
         tool_dims=${tool_dims//,/ }
@@ -5441,11 +5452,13 @@ calculate_constellation_dims() {
             get_size_of_set members_of_$dim
           fi
           echo "$size $dim"
-        done | sort -rn >$tmp_file || fail
+        done >$tmp_file-1 || fail
+
+        sort -rn $tmp_file-1 >$tmp_file-2 
 
         while read c dim; do
           sorted_dims+=( $dim )
-        done < <(cat $tmp_file) || fail
+        done < <(cat $tmp_file-2) || fail
 
         constellation_static_dims[$con]=${sorted_dims[*]}
 
@@ -7302,7 +7315,7 @@ get_group_dims() {
 make_dim_cache() {
   begin_function
 
-    log_debug "Generating dim cache for $lib_dim_path"
+    log_info "Generating dim cache for $lib_dim_path"
 
     if [[ -f $cache_path.new ]]; then
       rm $cache_path.new || fail
