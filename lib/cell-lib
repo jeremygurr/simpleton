@@ -4862,6 +4862,7 @@ build_constellation_table_handle_fun() {
           if [[ "$ddim" == *" "* ]]; then
             # we don't support multiple members here at this time
             ddim=
+            continue 2
           fi
         done
         for dim in $optional_dims; do
@@ -4871,6 +4872,7 @@ build_constellation_table_handle_fun() {
             if [[ "$ddim" == *" "* ]]; then
               # we don't support multiple members here at this time
               ddim=
+              continue 2
             fi
           fi
         done
@@ -5340,8 +5342,10 @@ validate_members() {
 #   con_table_fields
 #   con_table_data
 build_constellation_table() {
+  local previous_dim=${current_dim:-}
+  local current_dim=${con_table_fields[$field_index]:-}
   local field_index=$field_index con=$con \
-    interesting_vars='con field_index member' \
+    interesting_vars='con previous_dim member current_dim' \
     member=${member:-} \
 
   local -I current_dim_values \
@@ -5351,12 +5355,11 @@ build_constellation_table() {
     progress_bar_nudge .
     if [[ "$member" ]]; then
       current_row+=( "$member" )
-      current_dim_values[$current_dim]=$member
+      current_dim_values[$previous_dim]=$member
 
       #if (( field_index + 1 < field_count )); then
         local conflict=
-        # takes from the callers current_dim before it is localized here
-        dim=$current_dim \
+        dim=$previous_dim \
         set_dims_directly=f \
         allow_dims=${con_table_fields[*]} \
         allow_multiple_members=t \
@@ -5369,16 +5372,13 @@ build_constellation_table() {
     fi
 
     if (( field_index + 1 > field_count )); then
-      log_debug "Wrote constellation row: ${current_row[@]}"
+      strong_log=t log_debug "Wrote constellation row: ${current_row[@]}"
       con_table_data+=( "${current_row[@]}" )
       abort
     fi
 
-    local current_dim=${con_table_fields[$field_index]}
     local -A dim_members=()
     local -n current_dim_members=dim_${current_dim}_members
-
-    interesting_vars+=' current_dim'
 
     if [[ -v current_dim_values[$current_dim] ]]; then
 
@@ -5452,7 +5452,7 @@ build_constellation_table() {
             after_is_all=f
           fi
           if (( after_count == 0 )); then
-            log_debug "Row (${current_row[*]}) invalidated by tool: $tool (dim: $current_dim)"
+            log_debug "Invalidated row (${current_row[*]}) because of tool: $tool (dim: $current_dim)"
             abort
           elif [[ $before_is_all == t && $after_is_all != t ]]; then
             log_debug "Narrowed dim $current_dim from all to $after_count (via $tool)"
@@ -7451,6 +7451,7 @@ make_dim_cache() {
         get_group_dims $dim_path || fail
         dim_group[$dim]="$group_dims"
       else
+        progress_bar_nudge .
         build_dim_info_single $dim_path || fail
       fi
     done
