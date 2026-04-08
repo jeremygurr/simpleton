@@ -4889,20 +4889,28 @@ build_constellation_table_handle_fun() {
   handle_return
 }
 
+# inputs:
+#   field_dim           d_$field 
+#   field_dims          d_$fields
+#   set_dims_directly
+#   values              array of values extracted from derive table
+# outputs:
+#   field_dim           d_$field 
+#   field_dims          d_$fields
 set_cross_dims_no_conflict() {
   begin_function
 
-    local changed=f
+    local changed=f result=
     if [[ $set_dims_directly == t ]]; then
       if (( ${#values[*]} == 1 )); then
         if [[ ! "${field_dim:-}" || "$field_dim" != "$values" ]]; then
           field_dim=$values
+          result=values
           field_dims=()
           changed=t
         fi
-      else
+      else # multiple values
 
-        local result=
         if [[ ! "${fields_dims:-}" ]]; then
           result="${values[*]}"
         else
@@ -4921,9 +4929,8 @@ set_cross_dims_no_conflict() {
         fi
 
       fi
-    else
+    else # set_dims_directly == f
 
-      local result=
       if [[ ! -v current_dim_values[$field] ]]; then
         result="${values[*]}"
       else
@@ -5008,6 +5015,7 @@ set_cross_dims_column() {
 #   member
 #   allow_dims
 #   allow_multiple_members
+#   set_dims_directly
 set_table_cross_dims_single() {
   local member=$member dim=$dim derive_table=$derive_table \
     interesting_vars='${interesting_vars:-} derive_table' \
@@ -5029,7 +5037,18 @@ set_table_cross_dims_single() {
     begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
       grip_fence
       field=${derive_fields[$column_index]}
-      values=${current_dim_values[$field]:-}
+
+      if [[ $set_dims_directly == t ]]; then
+        local fields
+        get_plural $field fields
+        local -n ddim=d_$field \
+          ddims=d_$fields \
+
+        values=${ddim:-${ddims[*]:-}}
+      else
+        values=${current_dim_values[$field]:-}
+      fi
+
       if [[ "$values" ]]; then
         row_indexes_set=()
         local -n dt_index=derive_table_${derive_table}_index_${field}
