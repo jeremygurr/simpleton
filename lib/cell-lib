@@ -2270,7 +2270,13 @@ extract_from_derive_table_find_row_indexes() {
           fi
         fi
       else
-        local -n ddim=d_$field
+
+        if [[ $use_direct_dims == t ]]; then
+          local -n ddim=d_$field
+        else
+          local ddim=${current_dim_values[$field]:-}
+        fi
+
         if [[ "${ddim:-}" ]]; then
 
           if [[ -v dt_index[$ddim] ]]; then
@@ -2373,19 +2379,21 @@ extract_from_derive_table_check_row() {
 
 # if derive table is incomplete, will not change value_set
 # inputs:
-#   derive_table            name of var of derive table
-#   full_table              auto generated if derive_table is given
-#   value_set               starting value set, should usually be 
-#                           initialized with all before calling this function
+#   derive_table      name of var of derive table
+#   full_table        auto generated if derive_table is given
+#   value_set         starting value set, should usually be 
+#                     initialized with all before calling this function
 #   dim
 #   ignore_dims
+#   use_direct_dims   if f, will use current_dim_values instead
 # outputs:
-#   value_set               the var out_set points to will contain a set of all matches
+#   value_set         the var out_set points to will contain a set of all matches
 #   derive_found
 #   tools_used
 extract_from_derive_table() {
   local derive_table=${derive_table:-} full_table=${full_table:-} \
     skip_if_incomplete=${skip_if_incomplete:-f} \
+    use_direct_dims=${use_direct_dims:-t} \
 
   begin_function
       
@@ -2528,6 +2536,13 @@ narrow_dim_fun() {
     local -I $dims_to_localize || fail
     clear_empty_vars $dims_to_localize
 
+    if [[ $use_direct_dims == f ]]; then
+      for d in ${required_dims//,/ } ${optional_dims//,/ }; do
+        local -n ddim=d_$d
+        ddim=${current_dim_values[$d]:-}
+      done
+    fi
+
     if [[ $phase == derive_optional_functions ]] \
        || all_dims_are_set ${optional_dims//,/ }; then
       if all_dims_are_set ${required_dims//,/ }; then
@@ -2569,9 +2584,10 @@ narrow_dim_fun() {
 
 # inputs:
 #   dim          
-#   result_var   name of array variable containing members
+#   result_var        name of array variable containing members
 #   phase
 #   use_narrow_from
+#   use_direct_dims   if f, will use current_dim_values instead
 # outputs:
 #   (result_var) array variable
 #   derive_found
@@ -2580,6 +2596,7 @@ narrow_dim() {
   local dim=$dim result_var=$result_var \
     phase=${phase:-all} \
     use_narrow_from=${use_narrow_from:-f} \
+    use_direct_dims=${use_direct_dims:-t} \
 
   local -n result=$result_var
   begin_function
@@ -2597,10 +2614,10 @@ narrow_dim() {
     array_to_set result value_set
 
     if [[ $use_narrow_from == t ]]; then
-      log_debug "Narrowing down $dim"
+      #log_debug "Narrowing down $dim"
       array_from=( "${narrow_from[@]}" )
     else
-      log_debug "Deriving $dim"
+      #log_debug "Deriving $dim"
       array_from=( "${derive_from[@]}" )
     fi
 
@@ -2618,7 +2635,12 @@ narrow_dim() {
       if [[ $use_narrow_from == f ]]; then
         local required_dim
         for required_dim in ${required_dims//,/ }; do
-          local -n d=d_$required_dim
+          if [[ $use_direct_dims == t ]]; then
+            local -n d=d_$required_dim
+          else
+            local d=${current_dim_values[$required_dim]:-}
+          fi
+
           if [[ ! "${d:-}" ]]; then
             continue 2
           fi
@@ -2689,6 +2711,7 @@ narrow_dim() {
 #   phase
 #   skip_dims       should be set to blank when starting. Is use to avoid failing to derive the same
 #                   dim multiple times.
+#   use_direct_dims if f, will use current_dim_values instead to get existing dim data
 # output:
 #   values          array of members
 #   derive_found    whether a derive function or derive table exists for the given dim
@@ -2702,6 +2725,7 @@ attempt_derive() {
     derive_exactly_one=${derive_exactly_one:-t} \
     use_narrow_from=${use_narrow_from:-f} \
     use_derive_from=${use_derive_from:-t} \
+    use_direct_dims=${use_direct_dims:-t} \
 
   local interesting_vars='dim from_dim'
   begin_function
@@ -2767,17 +2791,20 @@ attempt_derive() {
 
     if [[ $derive_found == t ]]; then
       if [[ $derive_exactly_one == t && ${#values[*]} -gt 1 ]]; then
-        log_debug "Derive of $dim failed, too many possibilities"
+        #log_debug "Derive of $dim failed, too many possibilities"
         values=()
       elif [[ ! "${values:-}" ]]; then
-        log_debug "Derive of $dim failed, no possibilities found"
+        :
+        #log_debug "Derive of $dim failed, no possibilities found"
       else
-        local v
-        max_count=10 get_var_value values v
+        :
+        #local v
+        #max_count=10 get_var_value values v
         #log_debug "Derive of $dim successful: $v"
       fi
     else
-      log_debug "No derive options found for $dim for this phase"
+      #log_debug "No derive options found for $dim for this phase"
+      :
     fi
 
   end_function
@@ -4897,7 +4924,7 @@ set_cross_dims_no_conflict() {
     fi
 
     if [[ $changed == t ]]; then
-      log_debug "Cross dim set: $dim=$member -> $field=( ${values[*]} ) (via ${derive_table}.tab)"
+      log_debug "Cross dim set: $dim=$member -> $field=( ${result} ) (via ${derive_table}.tab)"
       cross_dims_tried[$field]=1
 
       if (( ${#values[*]} == 1 )); then
@@ -4972,28 +4999,46 @@ set_table_cross_dims_single() {
     interesting_vars='${interesting_vars:-} derive_table' \
 
   begin_function
+    #log_debug "set_table_cross_dims_single dim=$dim member=$member"
+
     local -n derive_fields=derive_table_${derive_table}_fields \
              derive_data=derive_table_${derive_table}_data \
 
     local field_count=${#derive_fields[*]} \
       data_count=${#derive_data[*]} \
       row_indexes row_index data_index=0 column_index \
-      value= field \
+      values= value= field \
 
     local row_count=$((data_count / field_count))
+    local -A row_indexes_set all_row_indexes_set=( all )
 
-    local -n dt_index=derive_table_${derive_table}_index_${dim}
-    if [[ ! -v dt_index[$member] ]]; then
-      #log_debug "Member ($member) doesn't exist in derive table ($derive_table)"
+    begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
+      field=${derive_fields[$column_index]}
+      values=${current_dim_values[$field]:-}
+      if [[ "$values" ]]; then
+        row_indexes_set=()
+        local -n dt_index=derive_table_${derive_table}_index_${field}
+        for value in $values; do
+          row_indexes=( ${dt_index[$value]:-} )
+          array_to_set row_indexes row_indexes_set
+        done
+        intersect_with_all row_indexes_set all_row_indexes_set all_row_indexes_set
+      fi
+    end_for
+
+    row_indexes=()
+    set_to_array all_row_indexes_set row_indexes
+
+    if (( ${#row_indexes[*]} == 0 )); then
       abort
     fi
 
-    row_indexes=( ${dt_index[$member]} )
     if (( ${#row_indexes[*]} > 1 )); then
       if [[ $allow_multiple_members == f ]]; then
         log_debug "Too many rows found in derive table $derive_table matching cross dim $dim / $member: ${#row_indexes[*]}, skipping cross dim setting"
         abort
       fi
+      sort_array row_indexes
     fi
 
     begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
@@ -5009,7 +5054,8 @@ set_table_cross_dims_single() {
       if [[ $field != $dim && -v all_dims[$field] ]]; then
         set_cross_dims_column || fail
       fi
-    end_for # column_index
+
+    end_for
 
   end_function
   handle_return
@@ -5234,11 +5280,27 @@ build_constellation_table() {
     interesting_vars+=' current_dim'
 
     if [[ -v current_dim_values[$current_dim] ]]; then
-      local m
+
+      local m old_count new_count
       for m in ${current_dim_values[$current_dim]}; do
         dim_members[$m]=1
       done
-      log_debug "Dim $current_dim already known to have ${#dim_members[*]} members"
+      old_count=${#dim_members[*]}
+      log_debug "Dim $current_dim already known to have $old_count members"
+
+      local -A valid_members=()
+      dim=$current_dim \
+      use_direct_dims=f \
+      validate_members "${current_dim_values[$current_dim]}" || fail
+      intersect_with_all valid_members dim_members dim_members
+      new_count=${#dim_members[*]}
+      if (( new_count < old_count )); then
+        log_debug "Members reduced through validation from $old_count to $new_count"
+      fi
+      if (( new_count == 0 )); then
+        abort
+      fi
+
     elif [[ $field_index == 0 ]]; then
       if [[ ! "${current_dim_members:-}" ]]; then
         log_fatal "$current_dim is marked as a static dim, but there are no known members."
@@ -6589,23 +6651,29 @@ calc_coordinates_next_unknown_dim() {
 
 # inputs:
 #   dim
-calc_coords_validate_member() {
-  local member=$1 interesting_vars='dim member'
+#   $1                 members to validate (space separataed string)
+#   valid_members      should be initialized to an empty set
+#   required_dims      set of what dims are required to be set, others are considered optional
+#   use_direct_dims    defaults to true. If set to false, will use current_dim_values instead.
+# outputs:
+#   valid_members
+#   conflicting_values
+validate_members() {
+  local members=$1 interesting_vars='dim members' use_direct_dims=${use_direct_dims:-t}
   begin_function
 
-    is_valid=t
     conflicting_values=()
 
-    log_debug "Validating $dim = $member"
+    log_debug "Validating $dim = $members"
 
     # all needs to be permitted here in the case of a dim that doesn't have explicit members
     #   but where the user needs to communicate that all are acceptable based on derivation of others?
-    if [[ "$member" == all ]]; then
+    if [[ "$members" == all ]]; then
       log_debug "Dim $dim is all, so it's valid"
       abort
     fi
 
-    if [[ ! -v required_dims[$dim] && ( ! "$member" || $member == $empty_member ) ]]; then
+    if [[ ! -v required_dims[$dim] && ( ! "$members" || $members == $empty_member ) ]]; then
       log_debug "Dim $dim is optional and missing, so it's valid"
       abort
     fi
@@ -6621,13 +6689,19 @@ calc_coords_validate_member() {
     if [[ $derive_found == t ]]; then
 
       if [[ ! "${values[0]:-}" ]]; then
-        is_valid=f
-      elif ! array_contains values "$member" && ! array_contains values all; then
-        conflicting_values=( "${values[@]}" )
-        is_valid=f
+        :
+      elif ! array_contains values all; then
+        local member
+        for member in $members; do
+          if ! array_contains values "$member"; then
+            conflicting_values=( "${values[@]}" )
+          else
+            valid_members[$member]=1
+          fi
+        done
       fi
 
-      if [[ $is_valid == f ]]; then
+      if (( ${#valid_members[*]} == 0 )); then
         log_debug "Dim $dim is not valid because it couldn't be derived from existing dims"
         abort
       fi
@@ -6652,15 +6726,18 @@ calc_coordinates_next_dim_member() {
     local -n member=d_$dim
     member=$m
     log_debug "Processing $dim = $member in phase $phase"
-    local validated_dims=${validated_dims:-} conflicting_values=() is_valid=t
+    local validated_dims=${validated_dims:-} conflicting_values=()
+    local -A valid_members=()
 
     if [[ $needs_validation == t && " $validated_dims " != *" $dim "* ]]; then
-      calc_coords_validate_member "$member" || fail
+      validate_members "$member" || fail
       interesting_vars='dim member'
       fence
+    else
+      valid_members[$member]=1
     fi
 
-    if [[ $is_valid == t ]]; then
+    if (( ${#valid_members[*]} > 0 )); then
 
       local conflict=
 
