@@ -2575,7 +2575,7 @@ narrow_dim_fun() {
     local -A new_values=()
 
     if [[ ! "${fields:-}" || ! "${values:-}" ]]; then
-      log_fatal "Error is derive function $derive_fun: not returning fields and values arrays"
+      log_fatal "Derive function $derive_fun could not produce a value for $dim, which most likely means required dims have invalid values, although it could also be a bug in the derive function."
       fail1
     fi
 
@@ -2670,14 +2670,21 @@ narrow_dim() {
         fi
       done
 
-      if [[ $use_narrow_from == t && $some_required_set == f ]]; then
-        continue
-      elif [[ $use_narrow_from == f && $all_required_set == f ]]; then
-        continue
-      fi
-
       target=$row_array
       type=${target##*.}
+
+      if [[ $type == fun ]]; then
+        if [[ $all_required_set == f ]]; then
+          continue
+        fi
+      else # type == tab
+        if [[ $use_narrow_from == t && $some_required_set == f ]]; then
+          continue
+        elif [[ $use_narrow_from == f && $all_required_set == f ]]; then
+          continue
+        fi
+      fi
+
       case $type in
         fun)
           local derive_fun=${target%.*}
@@ -5456,8 +5463,6 @@ build_constellation_table() {
         log_debug "Dim $current_dim already known to have $old_count members"
       else
         dim_members[all]=1
-
-        local derive_found=f
 
         log_debug "Deriving members for dim $current_dim"
         dim=$current_dim \
