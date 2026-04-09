@@ -1557,8 +1557,8 @@ debug_command_loop() {
         echo "   prefix with ! to show declare output for this var" >&$fd_original_err
         echo "   prefix with * to show declare output for all set variables matching that" >&$fd_original_err
         echo "   prefix with $ to use a raw variable expression which is fed into echo" >&$fd_original_err
-        echo "   prefix with @ to show an array in long view, with one element per row" >&$fd_original_err
-        echo "   prefix with @@ to show an array in table form, requiring a {var}_data and {var}_fields variables" >&$fd_original_err
+        echo "   prefix with @ to show an array in long view, with one element per row. Can use [...] after to select an element." >&$fd_original_err
+        echo "   prefix with @@ to show an array in table form, requiring a {var}_data and {var}_fields variables. Can use [...] after to select a row." >&$fd_original_err
         echo "   prefix with ^ to show all dim forms of that var" >&$fd_original_err
         echo "   you can also display the result of a test, example: [[ -v index ]]   or   (( x > 3 ))" >&$fd_original_err
         echo "D  repeat last display command" >&$fd_original_err
@@ -2124,18 +2124,31 @@ show_array() {
 }
 
 show_table() {
-  local -n fields=$1_fields data=$1_data
+  local table_with_row=$1
+
+  local table_var=${table_with_row%%\[*} \
+    row_index=${table_with_row##*\[} \
+
+  row_index=${row_index%\]}
+  if [[ $row_index == $table_var ]]; then
+    row_index=
+  fi
+
+  local -n fields=${table_var}_fields data=${table_var}_data
   if [[ -v fields && -v data ]]; then
 
     set +T
     {
     echo "${fields[*]}"
-    local line= field_count=${#fields[*]} f
+    local line= field_count=${#fields[*]} f row
 
     for (( i = 0; i <= ${#data[*]}; i++ )); do
       (( f = i % field_count ))
+      (( row = i / field_count - 1 ))
       if (( f == 0 )) && [[ "$line" ]]; then
-        echo "$line"
+        if [[ ! "$row_index" ]] || (( row_index == row )); then
+          echo "$line"
+        fi
         line=
       fi
       if (( i < ${#data[*]} )); then
@@ -2146,7 +2159,7 @@ show_table() {
     set -T
 
   else
-    echo "Invalid table variable: $1" >&$fd_original_err
+    echo "Invalid table variable: $table_var" >&$fd_original_err
   fi
 }
 

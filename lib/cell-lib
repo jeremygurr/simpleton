@@ -316,9 +316,10 @@ load_arr_to_code() {
 }
 
 # inputs:
-#   table     name of table variable prefix
+#   table                         name of table variable prefix
 #   ignore_unknown_dims
 #   include_implicit_dims
+#   expand_values                 whether to expand dims or not
 # outputs:
 #   ${table}_index_${field}       map of field value to spaced array of row indexes
 #   ${table}_index_multi_${field} t if index holds multi-values (like an 'all')
@@ -327,6 +328,7 @@ make_table_index() {
 
   local table=$table ignore_unknown_dims=${ignore_unknown_dims:-f} \
     include_implicit_dims=${include_implicit_dims:-f} \
+    expand_values=${expand_values:-t} \
     interesting_vars='table field value' \
 
   begin_function
@@ -359,6 +361,8 @@ make_table_index() {
 
     begin_for (( field_index = 0; field_index < field_count; field_index++ )); doo
 
+      log_debug "Indexing field $field_index of $table"
+      progress_bar_nudge .
       field=${table_fields[$field_index]}
 
       if [[ -v all_dims[$field] || $include_implicit_dims == t ]]; then
@@ -371,17 +375,19 @@ make_table_index() {
 
         begin_for (( row_index = 0; row_index < row_count; row_index++ )); doo
 
-          grip_fence
-
           (( data_offset = row_index * field_count + field_index ))
           value=${table_data[$data_offset]}
 
           if [[ -v all_dims[$field] ]]; then
-            values=()
 
-            dim=$field \
-            ignore_problems=t \
-            expand_dim || fail
+            if [[ $expand_values == t ]]; then
+              values=()
+              dim=$field \
+              ignore_problems=t \
+              expand_dim || fail
+            else
+              values=( "$value" )
+            fi
 
             local count=0
             for value in "${values[@]}"; do
@@ -2250,6 +2256,19 @@ expand_dims() {
   handle_return
 }
 
+# inputs:
+#   matching_rows    initial set of rows (can be 'all')
+#   d_{dims}         any dimensions that may be present in this table
+#   full_table       name of table variable (without the _data)
+#   field_count  
+#   row_count
+#   ignore_dims
+#   dim              which is the output dim
+#   use_direct_dims
+# outputs
+#   matching_rows    filtered set of rows
+#   output_dim_index
+#   
 extract_from_derive_table_find_row_indexes() {
 
   begin_function
@@ -2258,8 +2277,13 @@ extract_from_derive_table_find_row_indexes() {
       row_index_count \
       column_index \
       field \
+      ignore_dims=${ignore_dims:-} \
+      dim=${dim:-} \
+      use_direct_dims=${use_direct_dims:-t} \
 
     local -A new_matching_rows
+
+    local -n derive_fields=${full_table}_fields
 
     for (( column_index = 0; column_index < field_count; column_index++ )); do
 
@@ -2271,14 +2295,8 @@ extract_from_derive_table_find_row_indexes() {
         continue
       fi
       local -n dt_index=${full_table}_index_${field}
-      if [[ $field == $dim ]]; then
+      if [[ "$dim" && $field == $dim ]]; then
         output_dim_index=$column_index
-        #  This isn't used anywhere?
-        #local -n member_type=dim_${dim}_effective_member_type
-        #if [[ ${member_type:-dynamic} == static ]]; then
-        #  local -n members=dim_${dim}_members
-        #  local member_count=${#members[*]}
-        #fi
       else
 
         if [[ $use_direct_dims == t ]]; then
@@ -2300,10 +2318,6 @@ extract_from_derive_table_find_row_indexes() {
             if [[ -v dt_index[$ddim] ]]; then
               row_indexes=( ${dt_index[$ddim]} )
               array_to_set row_indexes new_matching_rows
-            #else
-            #  matching_rows=()
-            #  log_debug "No rows exist in $full_table for $field = $ddim"
-            #  break 2
             fi
           done
 
@@ -2315,7 +2329,6 @@ extract_from_derive_table_find_row_indexes() {
           intersect_with_all matching_rows new_matching_rows matching_rows
 
           if (( ${#matching_rows[*]} == 0 )); then
-            # Accoridng to the index, no values exist in this table which match the known dim value
             log_debug "Couldn't find any rows in $full_table which match all existing dims (last checked: $field = $ddim)"
             matching_rows=()
             break
@@ -6125,14 +6138,14 @@ check_table_row() {
       local expected_value=${table_data[$t]}
 
       local shorter_field=$field prefix
-      while true; do
+#      while true; do
         check_table_field $shorter_field
-        if [[ $shorter_field != *_* || $is_valid == f ]]; then
-          break
-        fi
-        prefix=${shorter_field%%_*}
-        shorter_field=${shorter_field#${prefix}_}
-      done
+#        if [[ $shorter_field != *_* || $is_valid == f ]]; then
+#          break
+#        fi
+#        prefix=${shorter_field%%_*}
+#        shorter_field=${shorter_field#${prefix}_}
+#      done
 
       if [[ $is_valid == f ]]; then
         break
