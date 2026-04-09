@@ -2265,9 +2265,6 @@ extract_from_derive_table_find_row_indexes() {
         if [[ ${member_type:-dynamic} == static ]]; then
           local -n members=dim_${dim}_members
           local member_count=${#members[*]}
-          if (( ${#dt_index[*]} == member_count )); then
-            complete_table=t
-          fi
         fi
       else
 
@@ -2390,19 +2387,20 @@ extract_from_derive_table_check_row() {
 # inputs:
 #   derive_table      name of var of derive table
 #   full_table        auto generated if derive_table is given
-#   value_set         starting value set, should usually be 
+#   _value_set        starting value set, should usually be 
 #                     initialized with all before calling this function
 #   dim
 #   ignore_dims
 #   use_direct_dims   if f, will use current_dim_values instead
 # outputs:
-#   value_set         the var out_set points to will contain a set of all matches
+#   _value_set        the var out_set points to will contain a set of all matches
 #   derive_found
 #   tools_used
 extract_from_derive_table() {
   local derive_table=${derive_table:-} full_table=${full_table:-} \
     skip_if_incomplete=${skip_if_incomplete:-f} \
     use_direct_dims=${use_direct_dims:-t} \
+    interesting_vars='derive_table full_table dim'
 
   begin_function
       
@@ -2433,46 +2431,53 @@ extract_from_derive_table() {
       invalid=f \
       row_index \
       output_dim_index \
-      complete_table \
 
-    local -n index=${full_table}_index_${dim} \
-      dim_members=dim_${dim}_members \
-      member_type=dim_${dim}_effective_member_type \
+    local row_count=$(( data_count / field_count ))
 
-    local row_count=$(( data_count / field_count )) \
+    local -n index=${full_table}_index_${dim}
 
-    complete_table=f
+    local -A \
+      matching_rows=() \
+      new_value_set=() \
+      exempt_values=() \
 
-    local -A matching_rows=() new_value_set=()
     matching_rows[all]=1
 
     extract_from_derive_table_find_row_indexes
 
-    if [[ $complete_table == t || $skip_if_incomplete == f ]]; then
-
-      if [[ -v matching_rows[all] ]]; then
-        add_to_set index new_value_set
-      else
-        for value in "${!index[@]}"; do
-          local row_indexes=${index[$value]}
-          for row_index in $row_indexes; do
-            if [[ -v matching_rows[$row_index] ]]; then
-              new_value_set[$value]=1
-            fi
-          done
+    if [[ -v matching_rows[all] ]]; then
+      add_to_set index new_value_set
+    else
+      for value in "${!index[@]}"; do
+        local row_indexes=${index[$value]}
+        for row_index in $row_indexes; do
+          if [[ -v matching_rows[$row_index] ]]; then
+            new_value_set[$value]=1
+          fi
         done
-      fi
-
-      derive_found=t
-
-      rows_matched=${#new_value_set[*]}
-
-      intersect_with_all value_set new_value_set value_set
-      tools_used+="${derive_table}.tab "
-
+      done
     fi
 
-    debug_return_vars=value_set
+    if [[ -v _value_set[all] ]]; then
+      local -n all_members=dim_${dim}_members
+      _value_set=()
+      array_to_set all_members _value_set
+    fi
+
+    # we should only filter values that exist within this table
+    # any other values bypass the narrowing
+    add_to_set _value_set exempt_values
+    remove_from_set exempt_values index
+    add_to_set exempt_values new_value_set
+
+    derive_found=t
+
+    rows_matched=${#new_value_set[*]}
+
+    intersect_with_all _value_set new_value_set _value_set
+    tools_used+="${derive_table}.tab "
+
+    debug_return_vars=_value_set
   end_function
   handle_return
 }
@@ -2557,75 +2562,69 @@ narrow_dim_fun() {
       done
     fi
 
-    if [[ $phase == derive_optional_functions ]] \
-       || all_dims_are_set ${optional_dims//,/ }; then
-      if all_dims_are_set ${required_dims//,/ }; then
-        can_derive=t
-      fi
+    action=derive
+    derive_found=t
+    $f_name || fail
+    local -A new_values=()
+
+    if [[ ! "${fields:-}" || ! "${values:-}" ]]; then
+      log_fatal "Error is derive function $derive_fun: not returning fields and values arrays"
+      fail1
     fi
 
-    if [[ $can_derive == t ]]; then
-
-      action=derive
-      derive_found=t
-      $f_name || fail
-      local -A new_values=()
-
-      if [[ ! "${fields:-}" || ! "${values:-}" ]]; then
-        log_fatal "Error is derive function $derive_fun: not returning fields and values arrays"
-        fail1
-      fi
-
-      local field i value
-      for (( i = 0; i < ${#fields[*]}; i++ )); do
-        field=${fields[$i]}
-        if [[ $field == $dim ]]; then
-          value=${values[$i]}
-          if [[ "$value" ]]; then
-            new_values[$value]=1
-          fi
-          break
+    local field i value
+    for (( i = 0; i < ${#fields[*]}; i++ )); do
+      field=${fields[$i]}
+      if [[ $field == $dim ]]; then
+        value=${values[$i]}
+        if [[ "$value" ]]; then
+          new_values[$value]=1
         fi
-      done
-      intersect_with_all new_values value_set value_set
-      tools_used+="${f_name}.fun "
+        break
+      fi
+    done
+    intersect_with_all new_values _value_set _value_set
+    tools_used+="${f_name}.fun "
 
-    fi
-    
   end_function
   handle_return
 }
 
 # inputs:
 #   dim          
-#   result_var        name of array variable containing members
+#   value_set_var     name of set variable containing members
 #   phase
 #   use_narrow_from
 #   use_direct_dims   if f, will use current_dim_values instead
 # outputs:
-#   (result_var) array variable
+#   value_set_var     name of set variable containing members
 #   derive_found
+#   tools_used
 narrow_dim() {
 
-  local dim=$dim result_var=$result_var \
+  local dim=$dim \
     phase=${phase:-all} \
     use_narrow_from=${use_narrow_from:-f} \
     use_direct_dims=${use_direct_dims:-t} \
+    interesting_vars=dim \
 
-  local -n result=$result_var
+  local -n _value_set=$value_set_var
   begin_function
+
+    if ! is_set $value_set_var; then
+      log_fatal "Internal error: narrow_dim was called without declaring a set variable and passing it into value_set_var"
+      fail1
+    fi
+
     local -n \
       derive_from=dim_${dim}_derived_from \
       narrow_from=dim_${dim}_narrowed_from \
 
+    tools_used=
     local row type target row_array \
-      original_count=${#result[*]} new_count \
-      original_first=${result:-} \
+      original_count=${#_value_set[*]} new_count \
+      original_first=${_value_set:-} \
       array_from \
-      tools_used= \
-
-    local -A value_set=()
-    array_to_set result value_set
 
     if [[ $use_narrow_from == t ]]; then
       #log_debug "Narrowing down $dim"
@@ -2638,12 +2637,15 @@ narrow_dim() {
     begin_for derived_from_row in "${array_from[@]}"; doo
       row_array=( $derived_from_row )
 
-      local required_dims=${row_array[1]} \
-        optional_dims \
+      local input_dims=${row_array[1]} \
+        required_dims= \
+        optional_dims= \
       
-      if [[ "$required_dims" == */* ]]; then
-        optional_dims=${required_dims#*/}
-        required_dims=${required_dims%/*}
+      if [[ "$input_dims" == */* ]]; then
+        optional_dims=${input_dims#*/}
+        required_dims=${input_dims%/*}
+      else
+        required_dims=$input_dims
       fi
 
       if [[ $use_narrow_from == f ]]; then
@@ -2676,8 +2678,8 @@ narrow_dim() {
              && $phase == derive_optional_functions \
              ]]; then
             continue
-          elif [[ $use_narrow_from == t ]]; then
-            continue
+#          elif [[ $use_narrow_from == t ]]; then
+#            continue
           fi
 
           narrow_dim_fun || fail
@@ -2695,24 +2697,24 @@ narrow_dim() {
           fail1
         ;;
       esac
-      if (( ${#value_set[*]} == 0 )); then
+      if (( ${#_value_set[*]} == 0 )); then
         break
       fi
     end_for
 
-    set_to_array value_set result
-    if (( ${#result[*]} > 1 )); then
-      sort_array result
-    fi
+    #set_to_array _value_set result
+    #if (( ${#result[*]} > 1 )); then
+    #  sort_array result
+    #fi
 
-    new_count=${#result[*]}
-    if [[ $new_count != $original_count || "$original_first" != $result ]]; then
-      local from=$original_count
-      if [[ "$original_first" == all ]]; then
-        from=all
-      fi
-      #log_debug "Narrowed down $dim from $from to $new_count (via ${tools_used% })"
-    fi
+    #new_count=${#result[*]}
+    #if [[ $new_count != $original_count || "$original_first" != $result ]]; then
+    #  local from=$original_count
+    #  if [[ "$original_first" == all ]]; then
+    #    from=all
+    #  fi
+    #  #log_debug "Narrowed down $dim from $from to $new_count (via ${tools_used% })"
+    #fi
 
   end_function
   handle_return
@@ -2785,22 +2787,27 @@ attempt_derive() {
     deriving+="$dim "
     derive_found=f
 
+    local -A value_set=()
+    array_to_set values value_set
+
     if [[ $use_derive_from == t 
        && "${derive_from:-}" ]]; then
-      result_var=values \
+      value_set_var=value_set \
       use_narrow_from=f \
       narrow_dim || fail
     fi
 
     if [[ $use_narrow_from == t 
        && "${narrow_from:-}" ]]; then
-      result_var=values \
+      value_set_var=value_set \
       use_narrow_from=t \
       narrow_dim || fail
     fi
 
-    if [[ $values == all ]]; then
+    if [[ -v value_set[all] ]]; then
       values=()
+    else
+      set_to_array value_set values
     fi
 
     if [[ $derive_found == t ]]; then
@@ -4590,22 +4597,25 @@ make_derive_cache_handle_function() {
       local is_key=f key_field_group
       for key_field_group in ${derive_paths[*]}; do
 
-        local required_dims=$key_field_group \
+        local input_dims=$key_field_group
+          required_dims= \
           optional_dims= \
           target_dims= \
 
-        if [[ "$required_dims" == *'->'* ]]; then
-          target_dims=${required_dims#*->}
-          required_dims=${required_dims%->*}
+        if [[ "$input_dims" == *'->'* ]]; then
+          target_dims=${input_dims#*->}
+          input_dims=${input_dims%->*}
         else
           log_fatal "Wrong derive_path format: $key_field_group . This is generated in the info function in the file derive_$name.fun in the .lib/derive folder"
           log_fatal "The add_derive_path function should be being called in that info function to add the necessary paths."
           fail1
         fi
 
-        if [[ "$required_dims" == */* ]]; then
-          optional_dims=${required_dims#*/}
-          required_dims=${required_dims%/*}
+        if [[ "$input_dims" == */* ]]; then
+          optional_dims=${input_dims#*/}
+          required_dims=${input_dims%/*}
+        else
+          required_dims=$input_dims
         fi
 
         local required_dim
@@ -5329,6 +5339,58 @@ validate_members() {
   handle_return
 }
 
+# This is getting merged into narrow_dim
+old_con_narrow() {
+  # loop over all derive tools related to the current dim
+  local -n derived_from=dim_${current_dim}_narrowed_from
+  local row tool row_array tool_dims tool_valid before_count after_count before_is_all after_is_all
+  local -A tool_possibilities=()
+  dim_members=( all )
+
+  interesting_vars+=' tool'
+  begin_for row in "${derived_from[@]}"; doo
+    row_array=( $row )
+    tool=${row_array[0]}
+    tool_possibilities=()
+    tool_dims=${row_array[1]}
+    tool_dims=${tool_dims//,/ }
+    tool_valid=f
+    before_count=${#dim_members[*]}
+    if [[ -v dim_members[all] ]]; then
+      before_is_all=t
+    else
+      before_is_all=f
+    fi
+
+    if [[ $tool == *.tab ]]; then
+      build_constellation_table_handle_tab || fail
+    elif [[ $tool == *.fun ]]; then
+      build_constellation_table_handle_fun || fail
+    else
+      log_fatal "Unknown tool type: $tool in derived_from of $current_dim"
+      fail1
+    fi
+
+    if [[ $tool_valid == t ]]; then
+      intersect_with_all dim_members tool_possibilities dim_members
+      after_count=${#dim_members[*]}
+      if [[ -v dim_members[all] ]]; then
+        after_is_all=t
+      else
+        after_is_all=f
+      fi
+      if (( after_count == 0 )); then
+        log_debug "Invalidated row (${current_row[*]}) because of tool: $tool (dim: $current_dim)"
+        abort
+      elif [[ $before_is_all == t && $after_is_all != t ]]; then
+        log_debug "Narrowed dim $current_dim from all to $after_count (via $tool)"
+      elif [[ $before_is_all == f ]] && (( before_count != after_count )); then
+        log_debug "Narrowed dim $current_dim from $before_count to $after_count (via $tool)"
+      fi
+    fi
+
+  end_for
+}
 # inputs:
 #   con
 #   field_index
@@ -5356,19 +5418,16 @@ build_constellation_table() {
     if [[ "$member" ]]; then
       current_row+=( "$member" )
       current_dim_values[$previous_dim]=$member
-
-      #if (( field_index + 1 < field_count )); then
-        local conflict=
-        dim=$previous_dim \
-        set_dims_directly=f \
-        allow_dims=${con_table_fields[*]} \
-        allow_multiple_members=t \
-        set_cross_dims || fail
-        if [[ "$conflict" ]]; then
-          log_debug "Conflict found: $conflict"
-          abort
-        fi
-      #fi
+      local conflict=
+      dim=$previous_dim \
+      set_dims_directly=f \
+      allow_dims=${con_table_fields[*]} \
+      allow_multiple_members=t \
+      set_cross_dims || fail
+      if [[ "$conflict" ]]; then
+        log_debug "Conflict found: $conflict"
+        abort
+      fi
     fi
 
     if (( field_index + 1 > field_count )); then
@@ -5380,32 +5439,7 @@ build_constellation_table() {
     local -A dim_members=()
     local -n current_dim_members=dim_${current_dim}_members
 
-    if [[ -v current_dim_values[$current_dim] ]]; then
-
-      local m old_count new_count
-      for m in ${current_dim_values[$current_dim]}; do
-        dim_members[$m]=1
-      done
-      old_count=${#dim_members[*]}
-      log_debug "Dim $current_dim already known to have $old_count members"
-
-      local derive_found=f
-      local -A valid_members=()
-      dim=$current_dim \
-      use_direct_dims=f \
-      validate_members "${current_dim_values[$current_dim]}" || fail
-      if [[ $derive_found == t ]]; then
-        intersect_with_all valid_members dim_members dim_members
-        new_count=${#dim_members[*]}
-        if (( new_count < old_count )); then
-          log_debug "Members reduced through validation from $old_count to $new_count"
-        fi
-        if (( new_count == 0 )); then
-          abort
-        fi
-      fi
-
-    elif [[ $field_index == 0 ]]; then
+    if [[ $field_index == 0 ]]; then
       if [[ ! "${current_dim_members:-}" ]]; then
         log_fatal "$current_dim is marked as a static dim, but there are no known members."
         fail1
@@ -5413,55 +5447,38 @@ build_constellation_table() {
       array_to_set current_dim_members dim_members
       log_debug "Starting with all ${#dim_members[*]} members of $current_dim"
     else # $dim_index > 0
-      # loop over all derive tools related to the current dim
-      local -n derived_from=dim_${current_dim}_narrowed_from
-      local row tool row_array tool_dims tool_valid before_count after_count before_is_all after_is_all
-      local -A tool_possibilities=()
-      dim_members=( all )
 
-      interesting_vars+=' tool'
-      begin_for row in "${derived_from[@]}"; doo
-        row_array=( $row )
-        tool=${row_array[0]}
-        tool_possibilities=()
-        tool_dims=${row_array[1]}
-        tool_dims=${tool_dims//,/ }
-        tool_valid=f
-        before_count=${#dim_members[*]}
-        if [[ -v dim_members[all] ]]; then
-          before_is_all=t
-        else
-          before_is_all=f
+      local m old_count=all new_count
+      if [[ -v current_dim_values[$current_dim] ]]; then
+        for m in ${current_dim_values[$current_dim]}; do
+          dim_members[$m]=1
+        done
+        old_count=${#dim_members[*]}
+        log_debug "Dim $current_dim already known to have $old_count members"
+      else
+        dim_members[all]=1
+
+        dim=$current_dim \
+        value_set_var=dim_members \
+        use_narrow_from=t \
+        use_direct_dims=f \
+        narrow_dim || fail
+
+      fi
+
+      local derive_found=f
+      local -A valid_members=()
+
+      if [[ $derive_found == t ]]; then
+        intersect_with_all valid_members dim_members dim_members
+        new_count=${#dim_members[*]}
+        if [[ $old_count == all ]] || (( new_count < old_count )); then
+          log_debug "Members reduced through narrowing from $old_count to $new_count"
         fi
-
-        if [[ $tool == *.tab ]]; then
-          build_constellation_table_handle_tab || fail
-        elif [[ $tool == *.fun ]]; then
-          build_constellation_table_handle_fun || fail
-        else
-          log_fatal "Unknown tool type: $tool in derived_from of $current_dim"
-          fail1
+        if (( new_count == 0 )); then
+          abort
         fi
-
-        if [[ $tool_valid == t ]]; then
-          intersect_with_all dim_members tool_possibilities dim_members
-          after_count=${#dim_members[*]}
-          if [[ -v dim_members[all] ]]; then
-            after_is_all=t
-          else
-            after_is_all=f
-          fi
-          if (( after_count == 0 )); then
-            log_debug "Invalidated row (${current_row[*]}) because of tool: $tool (dim: $current_dim)"
-            abort
-          elif [[ $before_is_all == t && $after_is_all != t ]]; then
-            log_debug "Narrowed dim $current_dim from all to $after_count (via $tool)"
-          elif [[ $before_is_all == f ]] && (( before_count != after_count )); then
-            log_debug "Narrowed dim $current_dim from $before_count to $after_count (via $tool)"
-          fi
-        fi
-
-      end_for
+      fi
 
     fi
     
@@ -6478,8 +6495,11 @@ calc_coordinates_next_unknown_dim_found() {
     fi
 
     if [[ $needs_narrowing == t ]] && (( ${#ms[*]} > 0 )); then
-      result_var=ms \
+      local -A ms_set
+      array_to_set ms ms_set
+      value_set_var=ms_set \
       narrow_dim || fail
+      set_to_array ms_set ms
     fi
 
     if [[ "${ms:-}" ]]; then
@@ -6889,8 +6909,11 @@ calc_coordinates_next_dim() {
         fi
 
         if [[ $dim_resolver != brute ]]; then
-          result_var=ms \
+          local -A ms_set
+          array_to_set ms ms_set
+          value_set_var=ms_set \
           narrow_dim || fail
+          set_to_array ms_set ms
         fi
         needs_validation=f
 
