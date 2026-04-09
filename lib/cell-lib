@@ -230,12 +230,12 @@ load_fun_to_code() {
     else
       #  can't indent the code because it may contain multiline strings, which this would corrupt
       #content=$(echo -n "$content" | sed 's/^/    /')
-      level=_lo
+      local level=_lo
       if [[ $name == update_op ]]; then
         level=
       fi
       code="$name() {
-begin_function$level
+begin_function
 $content
 end_function
 handle_return
@@ -1948,6 +1948,7 @@ seed_coordinates() {
       table_fields=seed_fields \
       table_data=seed_data \
 
+    local -A coordinates_added=()
     begin_for (( row_index = 0; row_index < seed_table_rows; row_index++ )); doo
       seed_coordinates_handle_row || fail
     end_for
@@ -2455,27 +2456,21 @@ extract_from_derive_table() {
         value=${derive_data[$data_index]}
         new_value_set[$value]=1
       done
-#      for value in "${!index[@]}"; do
-#        local row_indexes=${index[$value]}
-#        for row_index in $row_indexes; do
-#          if [[ -v matching_rows[$row_index] ]]; then
-#            new_value_set[$value]=1
-#          fi
-#        done
-#      done
     fi
 
-    if [[ -v _value_set[all] ]]; then
-      local -n all_members=dim_${dim}_members
-      _value_set=()
-      array_to_set all_members _value_set
-    fi
+    local -n all_members=dim_${dim}_members
+    if [[ -v all_members ]]; then
+      if [[ -v _value_set[all] ]]; then
+        _value_set=()
+        array_to_set all_members _value_set
+      fi
 
-    # we should only filter values that exist within this table
-    # any other values bypass the narrowing
-    add_to_set _value_set exempt_values
-    remove_from_set exempt_values index
-    add_to_set exempt_values new_value_set
+      # we should only filter values that exist within this table
+      # any other values bypass the narrowing
+      add_to_set _value_set exempt_values
+      remove_from_set exempt_values index
+      add_to_set exempt_values new_value_set
+    fi
 
     derive_found=t
 
@@ -6151,9 +6146,9 @@ check_table_row() {
 #   row_is_valid
 calc_coordinates_add_row() {
   local ignore_missing=${ignore_missing:-f}
-  begin_function_lo
+  begin_function
 
-    local i new_coords=()
+    local i new_coords=() coord_added_string=
     for (( i = 0; i < coordinate_fields_count; i++ )); do
       local dim_var=${coordinate_fields[$i]}
       local -n dim_value=d_$dim_var
@@ -6163,15 +6158,22 @@ calc_coordinates_add_row() {
           fail1
         fi
         new_coords+=( "" )
+        coord_added_string+="'' "
       else
         new_coords+=( "$dim_value" )
+        coord_added_string+="$dim_value "
       fi
     done
 
-    new_coordinate_data+=( "${new_coords[@]}" )
+    if [[ ! -v coordinates_added[$coord_added_string] ]]; then
+      new_coordinate_data+=( "${new_coords[@]}" )
+      (( total_coord_rows_added++ ))
+      progress_bar_nudge +
+    else
+      coordinates_added[$coord_added_string]=1
+      progress_bar_nudge -
+    fi
     log_debug "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
-    progress_bar_nudge +
-    (( total_coord_rows_added++ ))
 
   end_function
   handle_return
@@ -7175,6 +7177,7 @@ calc_coordinates_slow() {
     end_for
 
     local total_coord_rows_added=0 needs_validation=t
+    local -A coordinates_added=()
 
     progress_bar_start
     if (( coordinate_rows > 0 )); then
