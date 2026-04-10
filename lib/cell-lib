@@ -2622,6 +2622,41 @@ narrow_dim_fun() {
 }
 
 # inputs:
+#   type
+#   required_dims
+tool_requirements_met() {
+  local required_dims=$required_dims \
+    required_dim all_required_set=t some_required_set=f \
+
+  for required_dim in ${required_dims//,/ }; do
+    if [[ $use_direct_dims == t ]]; then
+      local -n d=d_$required_dim
+    else
+      local d=${current_dim_values[$required_dim]:-}
+    fi
+
+    if [[ ! "${d:-}" ]]; then
+      all_required_set=f
+    else
+      some_required_set=t
+    fi
+  done
+
+#    if [[ $type == fun ]]; then
+#      if [[ $all_required_set == f ]]; then
+#        continue
+#      fi
+#    else # type == tab
+#      if [[ $use_narrow_from == t && $some_required_set == f ]]; then
+#        continue
+#      elif [[ $use_narrow_from == f && $all_required_set == f ]]; then
+#        continue
+#      fi
+#    fi
+  [[ $all_required_set == t ]]
+}
+
+# inputs:
 #   dim          
 #   value_set_var     name of set variable containing members
 #   phase
@@ -2652,7 +2687,7 @@ narrow_dim() {
       narrow_from=dim_${dim}_narrowed_from \
 
     tools_used=
-    local row type target row_array \
+    local row type tool row_array \
       original_count=${#_value_set[*]} new_count \
       original_first=${_value_set:-} \
       array_from \
@@ -2666,7 +2701,11 @@ narrow_dim() {
     fi
 
     begin_for derived_from_row in "${array_from[@]}"; doo
+      grip_fence
+
       row_array=( $derived_from_row )
+      tool=$row_array
+      type=${tool##*.}
 
       local input_dims=${row_array[1]} \
         required_dims= \
@@ -2679,39 +2718,13 @@ narrow_dim() {
         required_dims=$input_dims
       fi
 
-      local required_dim all_required_set=t some_required_set=f
-      for required_dim in ${required_dims//,/ }; do
-        if [[ $use_direct_dims == t ]]; then
-          local -n d=d_$required_dim
-        else
-          local d=${current_dim_values[$required_dim]:-}
-        fi
-
-        if [[ ! "${d:-}" ]]; then
-          all_required_set=f
-        else
-          some_required_set=t
-        fi
-      done
-
-      target=$row_array
-      type=${target##*.}
-
-      if [[ $type == fun ]]; then
-        if [[ $all_required_set == f ]]; then
-          continue
-        fi
-      else # type == tab
-        if [[ $use_narrow_from == t && $some_required_set == f ]]; then
-          continue
-        elif [[ $use_narrow_from == f && $all_required_set == f ]]; then
-          continue
-        fi
+      if ! tool_requirements_met; then
+        continue
       fi
 
       case $type in
         fun)
-          local derive_fun=${target%.*}
+          local derive_fun=${tool%.*}
 
           if [[ "${optional_dims:-}" \
              && $phase != derive_optional_functions \
@@ -2732,7 +2745,7 @@ narrow_dim() {
           if [[ $phase == derive_optional_functions ]]; then
             continue
           fi
-          local derive_table=${target%.*}
+          local derive_table=${tool%.*}
           skip_if_incomplete=t \
           extract_from_derive_table || fail
         ;;
@@ -5491,7 +5504,7 @@ build_constellation_table() {
         log_debug "Deriving members for dim $current_dim"
         dim=$current_dim \
         value_set_var=dim_members \
-        use_narrow_from=t \
+        use_narrow_from=f \
         use_direct_dims=f \
         narrow_dim || fail
 
@@ -5789,16 +5802,21 @@ make_derive_cache_constellation() {
 
       fi
 
-      log_debug "Building constellation table for $con (${con_table_fields[*]})"
-      field_index=0 member= build_constellation_table || fail
+      # only_con is used for debugging, to make it faster to test one particular con
+      if [[ ! "${only_con:-}" || "$only_con" == $con ]]; then
+        log_debug "Building constellation table for $con (${con_table_fields[*]})"
+        field_index=0 member= build_constellation_table || fail
 
-      write_table_to_context con_${con}_table || fail
+        write_table_to_context con_${con}_table || fail
 
-      table=con_${con}_table \
-      make_table_index || fail
+        table=con_${con}_table \
+        make_table_index || fail
 
-      table=con_${con}_table \
-      write_index_to_context || fail
+        table=con_${con}_table \
+        write_index_to_context || fail
+      else
+        log_debug "Skipping constellation table for $con (${con_table_fields[*]})"
+      fi
     fi
   end_function
   handle_return
@@ -7592,9 +7610,6 @@ build_context() {
       local constellations=()
     fi
 
-    load_dim_caches $cell_path || fail
-    load_derive_caches $cell_path || fail
-
     if [[ ! -f $context_path-trunk ]]; then
       local trunk_context_path=$trunk_cell/.cyto/context
       if [[ $cell_is_trunk == t || ! -f $trunk_context_path-trunk ]]; then
@@ -8417,7 +8432,7 @@ build_cyto() {
     load_branch_info || fail
     find_seed_path $cell_path || fail
 
-    if [[ ! -f $context_path || ${clean_cache:-f} == t ]]; then
+    if [[ ! -f $context_path ]]; then
       build_context $cell_path || fail
     fi
 
@@ -8522,7 +8537,10 @@ switch_context() {
 
         #check_foundation || fail
 
-        if [[ ! -f $context_path || ${clean_cache:-f} == t ]]; then
+        load_dim_caches $cell_path || fail
+        load_derive_caches $cell_path || fail
+
+        if [[ ! -f $context_path ]]; then
           fork build_cyto $cell_path || fail
         fi
 
