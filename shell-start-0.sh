@@ -30,7 +30,7 @@ NL=$'\n'
 #export LC_ALL=en_US.UTF-8
 
 # cell aliases
-alias get='cell get'
+alias get='yolo=t cell get'
 alias update='cell update'
 alias upd='cell update'
 alias clean='cell clean'
