@@ -5817,9 +5817,10 @@ make_derive_cache_constellation() {
 
     # constellation tables are only created for multi-dim constellations
     if (( ${#con_table_fields[*]} > 1 )) && (( ${#con_table_tools[@]} > 1 )); then
-      local -A current_dim_values \
-
+      progress_bar_nudge C
+      local -A current_dim_values
       local current_row=() new_con dim
+
       for (( i = 0; i < ${#con_table_fields[*]}; i++ )); do
         dim=${con_table_fields[$i]}
         if [[ ! -v is_breaker[$dim] ]]; then
@@ -5843,6 +5844,7 @@ make_derive_cache_constellation() {
 
       fi
 
+      final_constellations[$con]=1
       # only_con is used for debugging, to make it faster to test one particular con
       if [[ ! "${only_con:-}" || "$only_con" == $con ]]; then
         log_debug "Building constellation table for $con (${con_table_fields[*]})"
@@ -5918,8 +5920,8 @@ make_derive_cache() {
       progress_bar_nudge .
       calculate_constellation_dims || fail
 
+      local -A final_constellations=()
       begin_for con in ${constellations[*]}; doo
-        progress_bar_nudge C
         grip_fence
         make_derive_cache_constellation || fail
       end_for
@@ -5942,7 +5944,9 @@ make_derive_cache() {
         local dim_${dim}_con
         local -n dim_con=dim_${dim}_con
         dim_con=${constellation_of[$dim]}
-        write_vars_to_context dim_${dim}_con || fail
+        if [[ -v final_constellations[$dim_con] ]]; then
+          write_vars_to_context dim_${dim}_con || fail
+        fi
       fi
     done
 
