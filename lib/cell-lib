@@ -2645,18 +2645,20 @@ tool_requirements_met() {
     fi
   done
 
-#    if [[ $type == fun ]]; then
-#      if [[ $all_required_set == f ]]; then
-#        continue
-#      fi
-#    else # type == tab
-#      if [[ $use_narrow_from == t && $some_required_set == f ]]; then
-#        continue
-#      elif [[ $use_narrow_from == f && $all_required_set == f ]]; then
-#        continue
-#      fi
-#    fi
-  [[ $all_required_set == t ]]
+  local requirements_met=f
+  if [[ $type == fun ]]; then
+    if [[ $all_required_set == t ]]; then
+      requirements_met=t
+    fi
+  else # type == tab
+    if [[ $allow_partials == t && $some_required_set == t ]]; then
+      requirements_met=t
+    elif [[ $allow_partials == f && $all_required_set == t ]]; then
+      requirements_met=t
+    fi
+  fi
+
+  [[ $requirements_met == t ]]
 }
 
 # inputs:
@@ -2665,6 +2667,7 @@ tool_requirements_met() {
 #   phase
 #   use_narrow_from
 #   use_direct_dims   if f, will use current_dim_values instead
+#   allow_partials    if t, will allow derive tables to be used even if all required dims aren't available
 # outputs:
 #   value_set_var     name of set variable containing members
 #   derive_found
@@ -2676,6 +2679,7 @@ narrow_dim() {
     use_narrow_from=${use_narrow_from:-f} \
     use_direct_dims=${use_direct_dims:-t} \
     interesting_vars=dim \
+    allow_partials=${allow_partials:-f} \
 
   local -n _value_set=$value_set_var
   begin_function
@@ -5521,10 +5525,20 @@ build_constellation_table() {
         value_set_var=dim_members \
         use_narrow_from=f \
         use_direct_dims=f \
+        allow_partials=t \
         narrow_dim || fail
 
-        new_count=${#dim_members[*]}
-        if [[ $old_count == all ]] || (( new_count < old_count )); then
+        if [[ -v dim_members[all] ]]; then
+          new_count=all
+        else
+          new_count=${#dim_members[*]}
+        fi
+
+        if [[ $old_count == all && $new_count != all ]] \
+          || (
+            [[ $old_count != all && $new_count != all ]] \
+            && (( new_count < old_count )) \
+          ); then
           log_debug "Members reduced through narrowing from $old_count to $new_count (via ${tools_used% })"
         fi
 
@@ -5800,8 +5814,6 @@ make_derive_cache_constellation() {
         done
       fi
     done
-
-    zombie_debug
 
     # constellation tables are only created for multi-dim constellations
     if (( ${#con_table_fields[*]} > 1 )) && (( ${#con_table_tools[@]} > 1 )); then
