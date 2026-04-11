@@ -361,7 +361,7 @@ make_table_index() {
 
     begin_for (( field_index = 0; field_index < field_count; field_index++ )); doo
 
-      log_debug "Indexing field $field_index of $table"
+      #log_debug "Indexing field $field_index of $table"
       progress_bar_nudge .
       field=${table_fields[$field_index]}
 
@@ -1091,6 +1091,9 @@ tab_get_derive_from() {
         derive_from=dim_${derived_dim}_derived_from \
         narrow_from=dim_${derived_dim}_narrowed_from \
         index_multi=derive_table_${name}_index_multi_$derived_dim \
+        derive_tools=dim_${derived_dim}_derive_tools \
+
+      derive_tools+="${name}.tab "
 
       for key_field_group in $first_field $remaining_fields; do
         #  was:
@@ -4441,6 +4444,7 @@ build_context_trunk_dna() {
 find_constellations_of_dims() {
   local dims=$dims dim con
   for dim in $dims; do
+    grip_fence
     if [[ ! -v is_breaker[$dim] ]]; then
       con=${constellation_of[$dim]:-}
       if [[ "$con" && " ${cons_found[*]} " != *" $con "* ]]; then
@@ -4543,6 +4547,7 @@ merge_dim_constellations() {
 #   derive_path
 #   cache_path
 make_derive_cache_handle_table() {
+  local interesting_vars=name
   begin_function
 
     local -n dtp=derive_table_${name}_path
@@ -4636,6 +4641,9 @@ make_derive_cache_handle_function() {
       local -n derive_from=dim_${derived_dim}_derived_from \
         narrow_from=dim_${derived_dim}_narrowed_from \
         key_functions=dim_${derived_dim}_key_functions \
+        derive_tools=dim_${derived_dim}_derive_tools \
+
+      derive_tools+="${name}.fun "
 
       local is_key=f key_field_group
       for key_field_group in ${derive_paths[*]}; do
@@ -4953,6 +4961,7 @@ build_constellation_table_handle_fun() {
 #   field_dim           d_$field 
 #   field_dims          d_$fields
 set_cross_dims_no_conflict() {
+  local interesting_vars='field values'
   begin_function
 
     local changed=f result=
@@ -5045,6 +5054,11 @@ set_cross_dims_column() {
     if [[ "$values" && "$values" != all \
        && ! -v cross_dims_tried[$field] ]]; then
 
+      local new_values=()
+      dim_var=$field \
+      expand_dim_members values || fail
+      values=( "${new_values[@]}" )
+
       if dim=$field \
          single_member=$current_single_value \
          multi_member=$current_multi_value_var \
@@ -5130,6 +5144,7 @@ set_table_cross_dims_single() {
       sort_array row_indexes
     fi
 
+    interesting_vars+=" field"
     begin_for (( column_index = 0; column_index < field_count; column_index++ )); doo
 
       field=${derive_fields[$column_index]}
@@ -5770,12 +5785,26 @@ make_derive_cache_constellation() {
       con_table_data=con_${con}_table_data \
 
     local field_count=${#static_dims[*]}
+    local -A con_table_tools=()
 
     con_table_fields=( ${static_dims[*]} )
     con_table_data=()
 
+    local dim
+    for dim in ${con_table_fields[*]}; do
+      if [[ ! -v is_breaker[$dim] ]]; then
+        local -n derive_tools=dim_${dim}_derive_tools
+        local dt
+        for dt in $derive_tools; do
+          con_table_tools[$dt]=1
+        done
+      fi
+    done
+
+    zombie_debug
+
     # constellation tables are only created for multi-dim constellations
-    if (( ${#con_table_fields[*]} > 1 )); then
+    if (( ${#con_table_fields[*]} > 1 )) && (( ${#con_table_tools[@]} > 1 )); then
       local -A current_dim_values \
 
       local current_row=() new_con dim
@@ -5832,6 +5861,14 @@ make_derive_cache() {
     log_info "Generating derive cache for $lib_dt_path"
     deriving_dims=t
     progress_bar_start
+
+    if [[ $dim_resolver == brute ]]; then
+      local -A constellation_of \
+        constellation_static_dims \
+        constellation_dynamic_dims \
+
+      local constellations=()
+    fi
 
     if [[ -f $cache_path.new ]]; then
       rm $cache_path.new || fail
@@ -7599,16 +7636,6 @@ build_branch_seed_coords() {
 build_context() {
   local cell_path=$1
   begin_function
-
-    if [[ $dim_resolver == brute ]]; then
-      local -A dim_cardinality \
-        con_cardinality \
-        constellation_of \
-        constellation_static_dims \
-        constellation_dynamic_dims \
-
-      local constellations=()
-    fi
 
     if [[ ! -f $context_path-trunk ]]; then
       local trunk_context_path=$trunk_cell/.cyto/context
