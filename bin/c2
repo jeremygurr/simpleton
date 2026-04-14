@@ -26,6 +26,16 @@ if [[ ! -v fd_original_in ]]; then
   exec {fd_original_err}>&2
 fi
 
+alias zombie_log='echo >&$fd_original_err'
+alias zombie_debug=debug
+
+yolo=${yolo:-f}
+if [[ $yolo == t ]]; then
+  echo >&2
+  echo ">>>> YOLO MODE: Disabling all debug features to boost speed to the max >>>>" >&2
+  echo >&2
+fi
+
 # don't actually need the fds, only need the allocated descriptor numbers
 exec 10<&0
 exec 11>&1
@@ -33,12 +43,22 @@ exec 12>&2
 
 handle_special_vars() {
   local -n vars=$1
-  local t new_vars=
+  local t clean_t new_vars=
   for t in $vars; do
-    if [[ ! "${t#^}" =~ ^[a-zA-Z0-9_]+$ ]]; then
-      echo "Invalid var name: ${t#^}" >&$fd_original_err
+
+    clean_t=${t#^}
+    clean_t=${clean_t%%\[*}
+    if [[ ! "$clean_t" =~ ^[a-zA-Z0-9_]+$ ]]; then
+      echo "handle_special_vars: Invalid var name: ${t#^}" >&$fd_original_err
       vars=
       return 1
+    fi
+
+    if [[ $t == ^* ]]; then
+      t=${t#^}
+      new_vars+="p_$t p_${t}s d_$t d_${t}s s_$t s_${t}s "
+    else
+      new_vars+="$t "
     fi
   done
   vars=${new_vars% }
@@ -132,10 +152,6 @@ lifted_bash_init() {
     slow_down=0.1
   fi
 
-  if [[ "${yolo:-f}" == t ]]; then
-    echo "${DEBUG_COLOR}Disabling all debug features to boost speed to max" >&2
-  fi
-
   parameter_questions=() 
 
   declare -gA log_level_num_map=( 
@@ -184,11 +200,21 @@ lifted_bash_init() {
 }
 
 debugger_init() {
+  local first_run=${first_run:-t}
+  # used by debugger, in case input or output is redirected from somewhere else during debugging
+  if [[ ! -v fd_original_in ]]; then
+    : {fd_original_in}<&0
+    : {fd_original_out}>&1
+    : {fd_original_err}>&2
+    : {fd_original_trace}>&${fd_trace:-2}
+  fi
+
   debug_output=${debug_output:-f} \
   debug_ignore=${debug_ignore:-} \
   tracing_depth=${tracing_depth:-0} \
   tmp_folder=${tmp_folder:-/tmp} \
   debug_state_file=$tmp_folder/debug-state-$$ \
+  debug_persistent_state_file=$tmp_folder/debug-persistent-state \
   debug_id_current=0 \
   debugger_available=t \
   debug_list_stack_pos=0 \
@@ -197,38 +223,48 @@ debugger_init() {
   fork_id_current= \
   fork_debug_id=0 \
 
-  if [[ ! "${debug_ignore:-}" ]]; then
-    debug_ignore="
-      debug
-      debug_id_inc
-      debug_load_state
-      debug_start
-      get_var_value
-      handle_user_interrupt
-      is_array
-      is_set
-      log_debug
-      log_error
-      log_fatal
-      log_info
-      log_level_at_least
-      log_common
-      log_trace
-      log_verbose
-      log_warn
-      micro_time_diff
-      reached_debug_id
-      shell_quote_var
-      show_trace_vars
-      show_time_update
-      " 
-  fi
-  debug_ignore=( $debug_ignore )
-  debug_ignore="${debug_ignore[*]}"
+  debug_ignore+="
+    debug
+    debug_id_inc
+    debug_ignore_remove
+    debug_load_state
+    debug_start
+    get_var_value
+    handle_user_interrupt
+    is_array
+    is_set
+    load_interesting_vars_and_write_to_log
+    log_debug
+    log_debug_debug
+    log_error
+    log_fatal
+    log_info
+    log_level_at_least
+    log_quick
+    log_trace
+    log_verbose
+    log_warn
+    log_direct
+    micro_time_diff
+    pause_tee
+    reached_debug_id
+    shell_quote_var
+    show_time_update
+    show_trace_vars
+    snapshot_source_location
+    unpause_tee
+    write_to_log
+    write_to_log_console_out
+    write_to_log_log_var
+    write_to_log_process_vars
+    write_to_log_update_cooked
+    " 
+  local debug_ignore_tmp=( $debug_ignore )
+  unset debug_ignore
+  debug_ignore="${debug_ignore_tmp[*]}"
 
-  if [[ "${first_run:-t}" == t ]]; then
-    first_run=f
-    rm $tmp_folder/debug-* $tmp_folder/side-log-* &>/dev/null || true
+  if [[ "$first_run" == t ]]; then
+    rm $tmp_folder/debug-out-* $tmp_folder/debug-state-* $tmp_folder/side-log-* &>/dev/null || true
   fi
 
   # used to debug complex debugger internal issues
@@ -254,6 +290,8 @@ debugger_init() {
     rm -rf $tmp_folder/debug_highlight &>/dev/null
     mkdir -p $tmp_folder/debug_highlight || exit 1
   fi
+
+  debug_setup
 }
 
 resolve_log_var() {
@@ -550,7 +588,11 @@ handle_user_interrupt() {
         local log=
         read -u $fd_original_in -e -p "New log level: " log >&$fd_original_err
         if [[ "$log" ]]; then
+          if function_exists resolve_log_var; then
           resolve_log_var
+          else
+            log_level_filter=$log
+          fi
           log_format=default
           log_level_filter_changed
           debug_log_level_filter=$log
@@ -676,7 +718,7 @@ get_var_value() {
 }
 
 show_trace_vars() {
-  local indent=0 prefix= showed_something=f 
+  local indent=0 prefix= new_time
 
   if [[ ${show_debug_id:-f} == a ]]; then
     show_time_update
@@ -715,23 +757,30 @@ show_trace_vars() {
 
   stack_detail[$stack_pos]=
   if [[ "${interesting_vars:-}" ]]; then
-    local var value show_vars
+    local var value show_vars=
     for var in $interesting_vars; do
       value=
       local real_var=${var#^}
       real_var=${real_var#*=}
+      if [[ -v $real_var ]]; then
       get_var_value $real_var
       show_vars+="$real_var=$value "
+      fi
     done
     stack_detail[$stack_pos]+="${show_vars% } "
   fi
 
   if [[ "${trace_vars:-}" ]]; then
-    local var value
+    local var value base_var
     for var in $trace_vars; do
       get_var_value $var
       local show_val=$value
-      if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $var "* ]]; then
+      if [[ $var == *\[* ]]; then
+        base_var=${var%%\[*}
+      else
+        base_var=$var
+      fi
+      if [[ "${secret_vars:-}" && " ${secret_vars} " == *" $base_var "* ]]; then
         show_val='****'
       fi
       stack_detail[$stack_pos]+="$var=$show_val "
@@ -744,7 +793,9 @@ show_trace_vars() {
             handle_user_interrupt "Var changed: $var."
           fi
         fi
-        unset trace_var_sub[$var]
+        #unset trace_var_sub[$var]   Isn't working?
+        unset trace_var_sub
+        declare -Ag trace_var_sub
         trace_var_old[$var]=$value
       elif [[ "${trace_var_old[$var]:-}" != "$value" || ${trace_var_always:-f} == t ]]; then
         if [[ $fork_debug_id != 1 || "$value" != '(unset)' ]]; then
@@ -755,7 +806,8 @@ show_trace_vars() {
             handle_user_interrupt "Var changed: $var."
           fi
         fi
-        unset trace_var_sub[$var]
+        unset trace_var_sub
+        declare -Ag trace_var_sub
         trace_var_old[$var]=$value
       fi
     done
@@ -882,6 +934,7 @@ debug_id_inc() {
   local debug_id_prev=$debug_id_current
 
   (( debug_id_current++ )) || true
+  local showed_something=f 
 
   fork_debug_id=$debug_id_current
   fork_debug_id_minus_one=$debug_id_prev
@@ -961,14 +1014,23 @@ debug_id_inc() {
   fi
 
   if [[ "${debug_quick_stop_less_than_depth:-}" ]]; then
-    local debug_quick_stop_less_than_depth=$debug_quick_stop_less_than_depth
-    if [[ "${struct_type:-}" == end ]]; then
-      debug_quick_stop_less_than_depth=$((debug_quick_stop_less_than_depth+1))
-    fi
     if (( ${#FUNCNAME[*]} <= debug_quick_stop_less_than_depth )); then
       debug_quick_stop_less_than_depth=
       debug_immediate=t
       unignore_this_function=2 \
+      debug_skip_breakpoints=f \
+      debug_start n
+    fi
+  fi
+
+  if [[ "${debug_quick_stop_out_less_than_depth:-}" ]]; then
+    if [[ "${struct_type:-}" == end ]]; then
+      local debug_quick_stop_out_less_than_depth=$((debug_quick_stop_out_less_than_depth+1))
+    fi
+    if (( ${#FUNCNAME[*]} <= debug_quick_stop_out_less_than_depth )); then
+      debug_quick_stop_out_less_than_depth=
+      debug_immediate=t
+      unignore_this_function=3 \
       debug_skip_breakpoints=f \
       debug_start n
     fi
@@ -1084,6 +1146,8 @@ trace_time_summarize() {
 
 }
 
+: ${trace_time:=f}
+
 alias timebox_open='
   (( no_trace_depth++ )) || true
   timebox_stack+=( $timebox )
@@ -1119,7 +1183,7 @@ alias trace_time_close='
   fi
 '
 
-if [[ "${yolo:-f}" == f ]]; then
+if [[ $yolo == f ]]; then
 
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 alias begin_function_hi='
@@ -1129,7 +1193,6 @@ alias begin_function_hi='
     trace_time_open
   fi
   struct_type=start debug_id_inc
-  interesting_vars= interesting_vars=
   stack_debug_id[$stack_pos]=$fork_debug_id
   stack_high_level[$stack_pos]=1
   while true; do
@@ -1153,7 +1216,7 @@ alias begin_function_hi='
 
 fi
   
-if [[ "${yolo:-f}" == f ]]; then
+if [[ $yolo == f ]]; then
 
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 alias begin_function='
@@ -1163,7 +1226,6 @@ alias begin_function='
     trace_time_open
   fi
   struct_type=start debug_id_inc
-  interesting_vars= interesting_vars=
   stack_debug_id[$stack_pos]=$fork_debug_id
   while true; do
   if [[ ${debug_step_to_mid_function:-f} == t ]]; then
@@ -1186,7 +1248,7 @@ alias begin_function='
 
 fi
   
-if [[ "${yolo:-f}" == f ]]; then
+if [[ $yolo == f ]]; then
 
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 # This one switches between a low level and a mid level function, based on the grip variable
@@ -1199,7 +1261,6 @@ alias begin_function_grip='
       trace_time_open
     fi
     struct_type=start debug_id_inc
-    interesting_vars= interesting_vars=
     stack_debug_id[$stack_pos]=$fork_debug_id
   fi
   while true; do
@@ -1228,7 +1289,7 @@ fi
 # The local vars in this alias MUST be on the same line (no \ separators) or debugging doesn't have correct line numbers
 alias begin_function_lo='
   (( no_trace_depth++ ))
-  local return_value=0 break_out=f function_level=0 repair_attempted=f function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur interesting_vars= interesting_vars=
+  local return_value=0 break_out=f function_level=0 repair_attempted=f function_override= timebox_stack=( $FUNCNAME ) trace_time_start trace_time_start_debug_id trace_time_stop time_dur
   while true; do
   (( no_trace_depth-- )) || true
 '
@@ -1291,18 +1352,18 @@ alias         doo=do
 #   except unlike begin_function this may be placed anywhere within a function,
 #   providing a stopping point for debugging of larger blocks of code that otherwise
 #   can't be split up.
-if [[ "${yolo:-f}" == f ]]; then
+if [[ $yolo == f ]]; then
 
-alias fence='allow_breaker_update=f debug_id_inc; interesting_vars='
-alias grip_fence='(( grip < default_grip )) && allow_breaker_update=f debug_id_inc; interesting_vars='
+alias fence='allow_breaker_update=f debug_id_inc'
+alias grip_fence='(( grip < default_grip )) && allow_breaker_update=f debug_id_inc'
 # Same as fence, but denotes that it is intended to be only for a brief debug session and should be removed before committing
-alias zombie_fence='allow_breaker_update=f debug_id_inc; interesting_vars='
+alias zombie_fence='allow_breaker_update=f debug_id_inc'
 alias zombie_pause=pause_qd
 
 else
 
 alias fence=
-alias fence_grip=
+alias grip_fence=
 alias zombie_fence=
 alias zombie_pause=
 
@@ -1319,8 +1380,8 @@ alias unfail='return_value=0; break_out=f;'
 # used as a standalone command triggering the failed state and exiting the block
 alias fail1='{ return_value=1; attempt_autorepair $FUNCNAME && { repair_attempted=t; continue; }; break_out=t; break; }'
 alias fail2='{ return_value=2; attempt_autorepair $FUNCNAME && { repair_attempted=t; continue; }; break_out=t; break; }'
-alias abort='{ return_value=0; break_out=t; break; }'
 alias succeed='{ return_value=100; break_out=t; break; }'
+alias abort='{ return_value=0; break_out=t; break; }'
 
 # used to check if something failed: failed && break
 alias failed='(( return_value > 0 && return_value < 100 ))'
@@ -1779,11 +1840,14 @@ progress_bar_stop() {
   if (( ${progress_bar_nesting:-0} > 0 )); then
     (( progress_bar_nesting-- ))
     if (( progress_bar_nesting == 0 )); then
-      local time_taken current_time=${EPOCHREALTIME/./}
-      (( time_taken = current_time - progress_bar_start_time ))
-      micros_to_minute time_taken
-      if (( time_taken > 0 )); then
-        echo "...Completed in $time_taken minutes." >&$fd_original_err
+      local minutes micros current_time=${EPOCHREALTIME/./}
+      (( micros = current_time - progress_bar_start_time ))
+      micros_to_minutes micros minutes
+      micros_to_seconds micros seconds
+      if (( minutes > 2 )); then
+        echo "...Completed in $minutes minutes." >&$fd_original_err
+      elif (( seconds > 10 )); then
+        echo "...Completed in $seconds seconds." >&$fd_original_err
       else
         echo -n "${CLEAR_LINE}" >&$fd_original_err
       fi
@@ -1792,6 +1856,21 @@ progress_bar_stop() {
             progress_bar_current
     fi
   fi
+}
+
+# input:
+#   $1   previous timestamp (in microseconds, as from EPOCHREALTIME
+#   $2   next timestamp
+#   $3   var name to write result to, writes time in seconds with .
+micro_time_diff() {
+  local before=$1 after=$2
+  local -n to_var=$3
+  local diff=$((after-before)) p1 p2
+  diff="000000$diff"
+  p1=${diff%%??????}
+  p2=${diff#$p1}
+  p1=${p1##*(0)}
+  to_var="${p1:-0}.$p2"
 }
 
 find1() {
@@ -1966,6 +2045,20 @@ union() {
   debug_return_vars=$unioned_var
 }
 
+intersect_strings() {
+  local xs=$1 ys=$2 x y
+  local -n _r=$3
+
+  for x in $xs; do
+    for y in $ys; do
+      if [[ "$x" == "$y" ]]; then
+        _r+="$x "
+      fi
+    done
+  done
+  _r=${_r% }
+}
+
 intersect_lists() {
   local -n _from=$1 _to=$2
   local v1 v2 result=()
@@ -2056,6 +2149,15 @@ intersect_with_all() {
   debug_return_vars=$3
 }
 
+# removes keys of the second set from the first set
+remove_from_set() {
+  local x_var=$1 y_var=$2 v
+  local -n _x=$1 _y=$2
+  for v in "${!_y[@]}"; do
+    unset _x[$v]
+  done
+}
+
 clear_set() {
   local -n _x=$1
   _x=()
@@ -2106,9 +2208,6 @@ add_to_string_if_missing() {
 is_array() {
   local -n _array=$1
   local rc
-  if [[ ! -v _array[*] ]]; then
-    return 1
-  fi
   set +u
   [[ ${_array@a} == a ]]; rc=$?
   set -u
@@ -2119,13 +2218,19 @@ is_array() {
 is_set() {
   local -n _set=$1
   local rc
-  if [[ ! -v _set[*] ]]; then
-    return 1
-  fi
   set +u
   [[ ${_set@a} == A ]]; rc=$?
   set -u
   return $rc
+}
+
+get_size_of_set() {
+  local _set_var=$1
+  local -n _set=$_set_var
+  size=0
+  if [[ -v _set ]] || is_set $_set_var; then
+    size=${#_set[@]}
+  fi
 }
 
 split_to_array() {
@@ -3342,13 +3447,21 @@ show_array() {
   set -u
 
   echo "size=$size" >&$fd_original_err
-  for i in "${!_array[@]}"; do
-    if [[ ! -v _array[$i] ]]; then
-      echo "$i: << MISSING >>" >&$fd_original_err
-    else
-      echo "$i: ${_array[$i]:-}" >&$fd_original_err
-    fi
-  done
+  if is_set _array; then
+    local keys=( ${!_array[*]} )
+    sort_array keys
+    for i in "${keys[@]}"; do
+      echo "$i: ${_array[$i]}" >&$fd_original_err
+    done
+  else
+    for i in "${!_array[@]}"; do
+      if [[ ! -v _array[$i] ]]; then
+        echo "$i: << MISSING >>" >&$fd_original_err
+      else
+        echo "$i: ${_array[$i]:-}" >&$fd_original_err
+      fi
+    done
+  fi
 }
 
 rcp() {
@@ -3522,7 +3635,7 @@ setup_exit_trap() {
   failure_handler_already_dumped_stack=f
   trap '
     rc=$?
-    #echo "EXIT TRAP $BASHPID, BASH_SUBSHELL=$BASH_SUBSHELL" >&$fd_original_err
+    log_debug_debug "EXIT TRAP $BASHPID, BASH_SUBSHELL=$BASH_SUBSHELL"
     if [[ ${debug_on_exit:-} == t ]]; then
       exiting=t
       debug_start
@@ -3551,23 +3664,23 @@ setup_exit_trap() {
       fi
     fi
     trap - DEBUG ERR EXIT RETURN QUIT &>/dev/null
-    #echo "Cleaning up: $cleanup_on_exit" >&$fd_original_err
+    log_debug_debug "Cleaning up: ${cleanup_on_exit:-}"
     eval "${cleanup_on_exit:-}" &>/dev/null
     if (( rc > 0 )); then
       jobs="$(jobs -p)"
-      #echo "Killing jobs $jobs" >&$fd_original_err
+      log_debug_debug "Killing jobs $jobs"
       if [[ "$jobs" ]]; then
         { kill $jobs; } 2>/dev/null || true
       fi
     fi
     set +TeuExv
-    #echo "debug_restart_command=$debug_restart_command" >&$fd_original_err
+    log_debug_debug "debug_restart_command=$debug_restart_command"
     if [[ "${debug_restart_command:-}" ]]; then
       if [[ $BASH_SUBSHELL == 0 ]]; then
         eval "exec $debug_restart_command"
       else
         quotes=single shell_quote_var debug_restart_command
-        #echo "Passing up debug_restart_command=$debug_restart_command" >&$fd_original_err
+        log_debug_debug "Passing up debug_restart_command=$debug_restart_command"
         reply_to_caller "debug_restart_command=$debug_restart_command"
       fi
     fi
@@ -3866,9 +3979,20 @@ debug_display_source() {
   fi
 }
 
+debug_load_persistent_state() {
+  if [[ -f "$debug_persistent_state_file" ]]; then
+    log_debug_debug "Loading persistent state from $debug_persistent_state_file"
+    source "$debug_persistent_state_file" || return 1
+    if [[ "${trace_vars:-}" ]]; then
+      debug_watch+=" $trace_vars"
+    fi
+  fi
+  return 0
+}
+
 debug_load_state() {
   if [[ -f "$debug_state_file" && "${debug_needs_to_load_state:-t}" == t ]]; then
-    [[ ${debug_debug:-f} == t ]] && echo "${CYAN}Loading state from $debug_state_file${RESET}" >&$fd_original_err
+    log_debug_debug "Loading state from $debug_state_file"
     #pause_qd "Loading state"
     debug_needs_to_load_state=f
     source "$debug_state_file" || return 1
@@ -3879,10 +4003,16 @@ debug_load_state() {
   return 0
 }
 
+debug_save_persistent_state() {
+  echo "
+debug_watch='$debug_watch'
+" >"$debug_persistent_state_file"
+}
+
 debug_save_state() {
   # We don't need to save the state if there are no parent shells to recall that state
   if [[ $BASH_SUBSHELL -gt 0 || ${force_save:-f} == t ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Saving debug_state_file${RESET}" >&$fd_original_err
+    log_debug_debug "Saving debug_state_file"
     echo "
 debug_buffered_commands='$debug_buffered_commands'
 debug_condition='$debug_condition'
@@ -3936,7 +4066,7 @@ debug_ignore_remove() {
   local remove_functions="$*"
   local x
   for x in $remove_functions; do
-    [[ ${debug_debug:-f} == t ]] && echo "${CYAN}debug_debug: Removing $x from debug_ignore${RESET}" >&$fd_original_err
+    log_debug_debug "debug_debug: Removing $x from debug_ignore"
     remove_word_from_string debug_ignore "$x"
   done
 }
@@ -3972,7 +4102,7 @@ debug_output_stop() {
     if [[ -e $debug_out_path  ]]; then
       rm $debug_out_path
     fi
-    [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Stopping debug output expansion${RESET}" >&$fd_original_err
+    log_debug_debug "debug_debug: Stopping debug output expansion"
   fi
 }
 
@@ -4270,7 +4400,11 @@ debug_shell() {
 }
 
 debug_show_var() {
-  local display_var=$1 val=
+  local display_var=$1 val= show_var_name=${show_var_name:-f}
+  local base_var=${display_var%%\[*}
+  if [[ $show_var_name == t ]]; then
+    echo -n "$display_var: " >&$fd_original_err
+  fi
   if [[ "$display_var" == \[\[* || "$display_var" == \(\(* ]]; then
     eval "$display_var"
     local result=$?
@@ -4279,7 +4413,7 @@ debug_show_var() {
     else
       echo "FALSE ($result)" >&$fd_original_err
     fi
-  elif [[ "$display_var" =~ ^[][a-zA-Z_0-9]+$ ]]; then
+  elif [[ "$base_var" =~ ^[a-zA-Z_0-9]+$ ]]; then
     get_var_value $display_var val
     echo "$val" >&$fd_original_err 
   elif [[ "$display_var" == @@* ]]; then
@@ -4298,6 +4432,8 @@ debug_show_var() {
         echo "$var=$val" >&$fd_original_err 
       fi
     done
+  elif [[ "$display_var" == \!* ]]; then
+    eval "declare -p '${display_var#\!}'" >&$fd_original_err
   elif [[ "$display_var" == \** ]]; then
     eval "declare -p | grep '${display_var#\*}' | grep -Ev 'declare -a BASH_ARGV|declare -- _=|declare -- debug_display=|declare -n derive_fields=|declare -- display_var=|.*trace_var.*|.*debug_.*|.*cooked_stack.*|.*stack_detail.*|.*watch_output.*|.*debug_watch.*|.*original_cmd.*|.*localize_.*dims.*|.*watch_var.*'" >&$fd_original_err
   elif [[ "${display_var:-}" == \$* ]]; then
@@ -4340,11 +4476,12 @@ debug_command_loop() {
     fi
 
     if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
-      set +u
       local watch_var watch_output='+ ' __value
       for watch_var in $debug_watch; do
         if [[ "$watch_var" == *\$* ]]; then
+          set +u
           eval "__value=\"$watch_var\""
+          set -u
         else
           get_var_value $watch_var __value
         fi
@@ -4451,7 +4588,7 @@ debug_command_loop() {
         echo >&$fd_original_err
         read -u $fd_original_in -e -p "Display: " debug_display >&$fd_original_err
         set +u 
-        if [[ "$debug_display" =~ ^\$?[0-9@]+$ ]]; then
+        if [[ "$debug_display" =~ ^\$?[0-9]+ ]]; then
           set -- "${debug_saved_params[@]}"
           eval "echo \$${debug_display#\$}" >&$fd_original_err
         else
@@ -4479,7 +4616,7 @@ debug_command_loop() {
         read -u $fd_original_in -er -p "Eval: " debug_expression >&$fd_original_err
         set +u -- "${debug_saved_params[@]}"
         eval "$debug_expression" >&$fd_original_err
-        echo "Return code: $?" >&$fd_original_err
+        debugger_out "Return code: $?" >&$fd_original_err
         no_follow_once=t
         ;;
       E)
@@ -4487,6 +4624,7 @@ debug_command_loop() {
           debugger_out "# Evaluating $debug_expression"
           set +u -- "${debug_saved_params[@]}"
           eval "$debug_expression" >&$fd_original_err
+          debugger_out "Return code: $?" >&$fd_original_err
         else
           debugger_out "# No previous expression to evaluate"
         fi
@@ -4605,6 +4743,18 @@ debug_command_loop() {
         debug_save_state
         export -n debug
         ;;
+      I)
+        debugger_out "# Show interesting vars"
+        if [[ "${interesting_vars:-}" ]]; then
+          local iv
+          for iv in $interesting_vars; do
+            if [[ -v $iv ]]; then
+              show_var_name=t debug_show_var "$iv"
+            fi
+          done
+        fi
+        no_follow_once=t
+        ;;
       l)
         if [[ $debug_path_to_source_file == none ]]; then
           debugger_out "# Source not available"
@@ -4680,7 +4830,7 @@ debug_command_loop() {
         debug_untrap=t
         debugging=f
         debug_long_command=t
-        debug_quick_stop_less_than_depth=$((debug_current_depth - 1))
+        debug_quick_stop_out_less_than_depth=$((debug_current_depth - 1))
         debug_save_state
         ;;
       p)
@@ -4822,6 +4972,7 @@ debug_command_loop() {
         local new_watch w
         read -u $fd_original_in -e -p "Watch: " new_watch >&$fd_original_err
         debug_set_watch "$new_watch"
+        debug_save_persistent_state
         debug_save_state
         no_follow_once=t
         ;;
@@ -5011,10 +5162,11 @@ debug_command_loop() {
         echo "c  list debug_list_window/2 lines of source code before and after current line" >&$fd_original_err
         echo "C  continue execution without stopping" >&$fd_original_err
         echo "d  display a variable. Works with arrays and sets also." >&$fd_original_err
+        echo "   prefix with ! to show declare output for this var" >&$fd_original_err
         echo "   prefix with * to show declare output for all set variables matching that" >&$fd_original_err
         echo "   prefix with $ to use a raw variable expression which is fed into echo" >&$fd_original_err
-        echo "   prefix with @ to show an array in long view, with one element per row" >&$fd_original_err
-        echo "   prefix with @@ to show an array in table form, requiring a {var}_data and {var}_fields variables" >&$fd_original_err
+        echo "   prefix with @ to show an array in long view, with one element per row. Can use [...] after to select an element." >&$fd_original_err
+        echo "   prefix with @@ to show an array in table form, requiring a {var}_data and {var}_fields variables. Can use [...] after to select a row." >&$fd_original_err
         echo "   prefix with ^ to show all dim forms of that var" >&$fd_original_err
         echo "   you can also display the result of a test, example: [[ -v index ]]   or   (( x > 3 ))" >&$fd_original_err
         echo "D  repeat last display command" >&$fd_original_err
@@ -5026,6 +5178,7 @@ debug_command_loop() {
         echo "G  continue until the previously given function is reached" >&$fd_original_err
         echo "h  toggle syntax highlighting" >&$fd_original_err
         echo "i  next instruction, stepping into function calls" >&$fd_original_err
+        echo "I  show interesting vars (displays all vars in the interesting_vars variable)." >&$fd_original_err
         echo "l  list next debug_list_window (default 20) lines of source code" >&$fd_original_err
         echo "L  list previous debug_list_window (default 20) lines of source code" >&$fd_original_err
         echo "n  next line of code (even if it resolves to several different statements)," >&$fd_original_err
@@ -5099,7 +5252,7 @@ debug_command_loop() {
 debug_update_expansion() {
   if [[ $debug_recording_trace == f && debug_expansion -gt 0 && $debug_long_command == f ]]; then
     debug_recording_trace=t
-    [[ $debug_debug == t ]] && echo "${CYAN}debug_debug: Starting debug output expansion${RESET}" >&$fd_original_err
+    log_debug_debug "debug_debug: Starting debug output expansion"
     if [[ ! "${fd_bash_trace:-}" ]]; then
       exec {fd_bash_trace}>"$debug_out_path"
     else
@@ -5113,7 +5266,7 @@ debug_update_expansion() {
 
 debug_get_ok_to_debug() {
   if [[ $debug_immediate == t ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_immediate${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_immediate"
     ok_to_debug=t
     debug_immediate=f
 
@@ -5121,7 +5274,7 @@ debug_get_ok_to_debug() {
           && -z "$file_part" \
           && "$debug_line_num" -eq "$line_part" \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_line${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_line"
     ok_to_debug=t
     debug_line_old=$debug_line
     debug_line=
@@ -5133,7 +5286,7 @@ debug_get_ok_to_debug() {
              && "$debug_source_file" == "$file_part" \
              ) \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_line${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_line"
     ok_to_debug=t
     debug_line_old=$debug_line
     debug_line=
@@ -5141,7 +5294,7 @@ debug_get_ok_to_debug() {
   elif [[ $debug_stepping == t \
           && $debug_current_depth -le $debug_max_depth \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_stepping${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_stepping"
     debug_stepping=f
     debug_max_depth=$debug_current_depth
     ok_to_debug=t
@@ -5162,7 +5315,7 @@ debug_get_ok_to_debug() {
           || "$debug_search" \
           && $debug_search == $debug_current_function \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_function${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_function"
     if [[ "$debug_function" ]]; then
       debug_function_old=$debug_function
       debug_search_old=$debug_function
@@ -5183,7 +5336,7 @@ debug_get_ok_to_debug() {
              || " $expanded_command " =~ $debug_search \
              ) \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_search${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_search"
     debug_search=
     debug_max_depth=$debug_current_depth
     ok_to_debug=t
@@ -5192,7 +5345,7 @@ debug_get_ok_to_debug() {
           && "$raw_debug_path_to_source_file $debug_line_num" != "$debug_last_location" \
           && $debug_current_depth -le $debug_max_depth \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_line${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_step_to_next_line"
     ok_to_debug=t
 
   elif [[ $debug_step_to_later_line == t \
@@ -5200,7 +5353,7 @@ debug_get_ok_to_debug() {
           && $debug_current_function != none \
           && $debug_current_depth -le $debug_max_depth \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_later_line${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_step_to_later_line"
     debug_step_to_later_line=f
     ok_to_debug=t
 
@@ -5208,7 +5361,7 @@ debug_get_ok_to_debug() {
           && "$raw_debug_path_to_source_file $debug_line_num" == "$debug_stop_at" \
           && $debug_current_depth -le $debug_max_depth \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_stop_at${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_stop_at"
     debug_max_depth=$debug_current_depth
     debug_stop_at=
     ok_to_debug=t
@@ -5216,7 +5369,7 @@ debug_get_ok_to_debug() {
   elif [[ $debug_step_to_next_function == t \
           && "$debug_current_function" != "$debug_prev_function" \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_function${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_step_to_next_function"
     debug_step_to_next_function=f
     ok_to_debug=t
 
@@ -5224,10 +5377,12 @@ debug_get_ok_to_debug() {
           && "$debug_current_function" != "$debug_prev_function" \
           && "$debug_source_file" != "$debug_prev_source_file" \
        ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Stopping because of debug_step_to_next_file${RESET}" >&$fd_original_err
+    log_debug_debug "Stopping because of debug_step_to_next_file"
     debug_step_to_next_file=f
     ok_to_debug=t
 
+  else
+    log_debug_debug "Not stopping"
   fi
 }
 
@@ -5240,7 +5395,7 @@ maybe_enable_debug_tracing() {
           && $debug_current_depth -le $debug_max_depth \
           || $debug_expansion -ge 2 ]]; then
       debug_tracing=t
-      [[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
+      log_debug_debug "debug_tracing=$debug_tracing"
     fi
   fi
 }
@@ -5366,6 +5521,7 @@ debug_inner() {
   debug_step_to_next_file=f
   debug_step_to_hi_function=f
   debug_step_to_mid_function=f
+  debug_restart_command=
 
   if [[ $debug_silent_command == f ]]; then
     debug_show_extra_backlog
@@ -5393,9 +5549,7 @@ debug_inner() {
   fi
 
   if [[ "$debug_exit" ]]; then
-    if [[ "$debug_debug" == t ]]; then
-      echo "${CYAN}Exiting because debug_exit=$debug_exit${RESET}" >&$fd_original_err
-    fi
+    log_debug_debug "Exiting because debug_exit=$debug_exit"
     exit $debug_exit
   fi
 
@@ -5435,9 +5589,7 @@ debug_trap() {
     BASH_XTRACEFD=2
   fi
 
-  if [[ $debug_debug == t ]]; then
     log_debug_debug "debug_id=$fork_debug_id ${BASH_SOURCE[1]:-no_source}:${saved_lineno:-${BASH_LINENO[0]:-no_line}} ${FUNCNAME[1]:-no_func} ${BASH_COMMAND}" 
-  fi
 
   local debug_path_to_source_file \
     raw_debug_path_to_source_file="${BASH_SOURCE[1]:-none}" \
@@ -5450,7 +5602,6 @@ debug_trap() {
     debug_source_file \
 
   debug_tracing=f
-  #[[ $debug_debug == t ]] && echo "${CYAN}debug_tracing=$debug_tracing${RESET}" >&$fd_original_err
   local prev_debug_out_path=$debug_out_path
   debug_out_path=$tmp_folder/debug-out.$BASHPID
   if [[ "$prev_debug_out_path" != $debug_out_path && -v cleanup_on_exit ]]; then
@@ -5459,14 +5610,12 @@ debug_trap() {
   debug_recording_trace=f
 
   if [[ "$debug_exit" ]]; then
-    if [[ "$debug_debug" == t ]]; then
-      echo "${CYAN}Exiting because debug_exit=$debug_exit${RESET}" >&$fd_original_err
-    fi
+    log_debug_debug "Exiting because debug_exit=$debug_exit"
     exit $debug_exit
   fi
 
   if [[ " $debug_ignore " == *" $debug_current_function "* && $debug_skip_ignore == f ]]; then
-    [[ $debug_debug == t ]] && echo "${CYAN}Ignoring $debug_current_function${RESET}" >&$fd_original_err
+    log_debug_debug "Ignoring $debug_current_function"
     debug_output_stop
   else
 
@@ -5510,7 +5659,7 @@ debug_trap() {
       debug_output_expansion
       debug_inner
     else
-      [[ $debug_debug == t ]] && echo "${CYAN}Not stopping.${RESET}" >&$fd_original_err
+      log_debug_debug "Not stopping."
       debug_output_stop
     fi
 
@@ -5552,18 +5701,31 @@ reserve_tmp_file() {
 }
 
 show_table() {
-  local -n fields=$1_fields data=$1_data
+  local table_with_row=$1
+
+  local table_var=${table_with_row%%\[*} \
+    row_index=${table_with_row##*\[} \
+
+  row_index=${row_index%\]}
+  if [[ $row_index == $table_var ]]; then
+    row_index=
+  fi
+
+  local -n fields=${table_var}_fields data=${table_var}_data
   if [[ -v fields && -v data ]]; then
 
     set +T
     {
     echo "${fields[*]}"
-    local line= field_count=${#fields[*]} f
+    local line= field_count=${#fields[*]} f row
 
     for (( i = 0; i <= ${#data[*]}; i++ )); do
       (( f = i % field_count ))
+      (( row = i / field_count - 1 ))
       if (( f == 0 )) && [[ "$line" ]]; then
+        if [[ ! "$row_index" ]] || (( row_index == row )); then
         echo "$line"
+        fi
         line=
       fi
       if (( i < ${#data[*]} )); then
@@ -5574,7 +5736,7 @@ show_table() {
     set -T
 
   else
-    echo "Invalid table variable: $1" >&$fd_original_err
+    echo "Invalid table variable: $table_var" >&$fd_original_err
   fi
 }
 
@@ -5591,12 +5753,11 @@ debug_start() {
     return 0
   fi
   debug_skip_breakpoints=t
+  debug_immediate=${debug_immediate:-t}
 
   local unignore_this_function=${unignore_this_function:-0}
 
-  if [[ ${debug_debug:-f} == t ]]; then
-    echo "${CYAN}debug_start() debug_immediate=$debug_immediate debugging=$debugging${RESET}" >&$fd_original_err
-  fi
+  log_debug_debug "debug_start() debug_immediate=$debug_immediate debugging=$debugging"
   debug_buffered_commands=$*
   if [[ "${exiting:-f}" == t ]]; then
     echo "${NL}Exiting. Starting debugger." >&$fd_original_err
@@ -5613,6 +5774,7 @@ debug_start() {
 
   debug_needs_to_load_state=t \
   debug_load_state || return 1
+  debug_load_persistent_state
   if [[ "${debug_expansion_prev:-}" ]]; then
     debug_expansion=$debug_expansion_prev
     unset debug_expansion_prev
@@ -5622,7 +5784,6 @@ debug_start() {
     debug_ignore_remove ${FUNCNAME[*]:$unignore_this_function}
   fi
 
-  debug_immediate=${debug_immediate:-t}
   if [[ $debugging == f ]]; then
     # export \
     debugging=t \
@@ -5633,7 +5794,6 @@ debug_start() {
     debug_dir=$PWD \
     debug_display=${debug_display:-none} \
     debug_exit=${debug_exit:-} \
-    debug_expanded_search=${debug_expanded_search:-f} \
     debug_expanded_search=${debug_expanded_search:-f} \
     debug_expansion=${debug_expansion:-1} \
     debug_expression=${debug_expression:-echo none} \
@@ -5657,7 +5817,9 @@ debug_start() {
     debug_prev_line=${debug_prev_line:-0} \
     debug_prev_source_file=${debug_prev_source_file:-none} \
     debug_quick_function=${debug_quick_function:-} \
-    debug_restart_command= \
+    debug_quick_stop_less_than_depth=${debug_quick_stop_out_less_than_depth:-} \
+    debug_quick_stop_out_less_than_depth=${debug_quick_stop_out_less_than_depth:-} \
+    debug_restart_command=${debug_restart_command:-} \
     debug_rewind=${debug_rewind:-f} \
     debug_saved_params=${debug_saved_params:-} \
     debug_saved_shell_options=${debug_saved_shell_options:-} \
@@ -5680,7 +5842,7 @@ debug_start() {
     debug_untrap=f \
     debug_var=${debug_var:-} \
     debug_var_regex=${debug_var_regex:-} \
-    new_debug_watch=${debug_watch:-${debug_var:-${trace_vars:-${trace_var:-${trace_expression:-}}}}} \
+    new_debug_watch=${debug_watch:-${debug_var:-}} \
 
     debug_set_watch "$new_debug_watch"
 
@@ -5705,8 +5867,9 @@ debug_start() {
 }
 
 debug() {
-  local function_to_debug=$*
-  debug_immediate=t
+  local function_to_debug=$* \
+    unignore_this_function=${unignore_this_function:-2} \
+
   if [[ "$function_to_debug" ]]; then
     debug_start
     $function_to_debug
@@ -5844,6 +6007,7 @@ command_lib_init() {
 
   help_depth=0
   recursive_command=${recursive_command:-${recursive:-f}}
+  setup_commands || exit 1
 }
 
 # overrides what is in lifted-bash
@@ -5892,58 +6056,60 @@ handle_flag_custom() {
   return 1;
 }
 
-commands=()
+setup_commands() {
+  commands=()
 
-name=update description="Updates product of this cell" new_command 
+  name=update description="Updates product of this cell" new_command 
 
-name=fresh default=inf description="Minimum freshness required. 
-  0 = update no matter what. 
-  5m = update if fresh within 5 minutes. 
-  2h = update if fresh within 2 hours. 
-  inf = ignore freshness." add_parameter 
+  name=fresh default=inf description="Minimum freshness required. 
+    0 = update no matter what. 
+    5m = update if fresh within 5 minutes. 
+    2h = update if fresh within 2 hours. 
+    inf = ignore freshness." add_parameter 
 
-name=refresh default=f description="Allows for direct control over whether a cell needs to be updated.
-  t = mark all cells in this tree as stale (needing to be updated).
-  f = only update cells which need to be updated
-" add_parameter
+  name=refresh default=f description="Allows for direct control over whether a cell needs to be updated.
+    t = mark all cells in this tree as stale (needing to be updated).
+    f = only update cells which need to be updated
+  " add_parameter
 
-name=risk_tolerance short=risk default=low description="Maximum risk tolerance. Low risk means only operations with virtually
-  no chance of causing problems will be allowed. If you attept to update a cell that is higher risk than the
-  tolerance specified, that update will fail.
-  0 = low = restriced to read only operations, no changes will be made to anything.
-  1 = medium = very safe changes are allowed which can only result in low impact outages at worst.
-  2 = high = production outage may occur if you aren't sure of what you are doing, but there will be many 
-    checks in place to minimize the chance of this.
-  3 = very_high = production outage may occur, and there aren't a lot of safe guards in place, so you really
-    need to know what you are doing and what these scripts do on a low level before attempting these commands.
-" add_parameter
+  name=risk_tolerance short=risk default=low description="Maximum risk tolerance. Low risk means only operations with virtually
+    no chance of causing problems will be allowed. If you attept to update a cell that is higher risk than the
+    tolerance specified, that update will fail.
+    0 = low = restriced to read only operations, no changes will be made to anything.
+    1 = medium = very safe changes are allowed which can only result in low impact outages at worst.
+    2 = high = production outage may occur if you aren't sure of what you are doing, but there will be many 
+      checks in place to minimize the chance of this.
+    3 = very_high = production outage may occur, and there aren't a lot of safe guards in place, so you really
+      need to know what you are doing and what these scripts do on a low level before attempting these commands.
+  " add_parameter
 
-name=mock description="Switch to the given mocked cell result. 
-Set mock=f to turn off mocking and go back to real cell computation.
-" add_parameter
+  name=mock description="Switch to the given mocked cell result. 
+  Set mock=f to turn off mocking and go back to real cell computation.
+  " add_parameter
 
-name=confirm_dims default=t description="Will ask user before running a top level command if the derived dims are valid before updating.
-If set to 'a' it will confirm for every cell, not just the top one.
-" add_parameter
+  name=confirm_dims default=t description="Will ask user before running a top level command if the derived dims are valid before updating.
+  If set to 'a' it will confirm for every cell, not just the top one.
+  " add_parameter
 
-name=show_dims default=t description="Will display the dims for the top cell if set to t.
-If set to 'a' it will show the dims for every cell.
-" add_parameter
+  name=show_dims default=t description="Will display the dims for the top cell if set to t.
+  If set to 'a' it will show the dims for every cell.
+  " add_parameter
 
-name=pre_validate default=t description="Whether validation cells/functions should be run before update
-" add_parameter
+  name=pre_validate default=t description="Whether validation cells/functions should be run before update
+  " add_parameter
 
-name=post_validate default=t description="Whether validation cells/functions should be run after update
-" add_parameter
+  name=post_validate default=t description="Whether validation cells/functions should be run after update
+  " add_parameter
 
-name=validate default=t description="Sets both pre_validate and post_validate to this value
-" add_parameter
+  name=validate default=t description="Sets both pre_validate and post_validate to this value
+  " add_parameter
 
-name=up_only description="Only runs upstreams matching the given values
-" add_parameter
+  name=up_only description="Only runs upstreams matching the given values
+  " add_parameter
 
-name=debug_log description="Starts debugger when a log line containing this string is written
-" add_parameter
+  name=debug_log description="Starts debugger when a log line containing this string is written
+  " add_parameter
+}
 
 show_usage() {
   begin_function
@@ -6280,9 +6446,73 @@ top_level() {
   handle_return
 }
 
+# Used by the help system to describe a command and it's parameters to the user
+new_command() {
+  local name=$name description=$description
+  command_description=$description
+  unset \
+    parameter_aliases \
+    parameter_choices \
+    parameter_defaults \
+    parameter_delay_questions \
+    parameter_descriptions \
+    parameter_names \
+    parameter_required \
+
+}
+
+add_parameter() {
+
+  local type=${type:-command} \
+    name=$name \
+    description=$description \
+    default=${default:-} \
+    choices=${choices:-} \
+    aliases=${aliases:-${alias:-}} \
+    required=${required:-f} \
+    delay_questions=${delay_questions:-f} \
+
+  local -n parameter_names=parameter_names_$type \
+    parameter_descriptions=parameter_descriptions_$type \
+    parameter_choices=parameter_choices_$type \
+    parameter_defaults=parameter_defaults_$type \
+    parameter_aliases=parameter_aliases_$type \
+    parameter_delay_questions=parameter_delay_questions_$type \
+    parameter_required=parameter_required_$type \
+
+  parameter_names+=( "$name" ) 
+  parameter_descriptions+=( "$description" ) 
+  parameter_defaults+=( "$default" ) 
+  parameter_choices+=( "$choices" )
+  parameter_aliases+=( "$aliases" )
+  parameter_delay_questions+=( $delay_questions )
+  parameter_required+=( $required )
+
+  local a
+  for a in ${parameter_aliases[*]:-}; do
+    if [[ -v ${a}_append ]]; then
+      eval "${name}_append=\$${a}_append"
+    fi
+    if [[ -v ${a}_prepend ]]; then
+      eval "${name}_prepend=\$${a}_prepend"
+    fi
+    if [[ -v ${a}_remove ]]; then
+      eval "${name}_remove=\$${a}_remove"
+    fi
+  done
+
+}
+
+add_command_alias() {
+  local name=$name command=$command
+  command_aliases+=( "$name" )
+  command_alias_command+=( "$command" )
+}
+
 ### file: ./03-pack-command-lib.bash
 #!/usr/bin/env bash
 
+# Usage: pack >/path/to/packed_file
 pack() {
   local file short files
   files=$(find . -depth 1 -name "*.bash" | sort -g) || return 1
@@ -6295,6 +6525,7 @@ pack() {
   done
 }
 
+# Usage: cat /path/to/packed_file | unpack
 unpack() {
   local line current_file folder
   while IFS=$'\n' read -r line || [[ "$line" ]]; do 
@@ -6307,7 +6538,7 @@ unpack() {
         folder=
       fi
     else
-      if [[ "$current_file" ]]; then
+      if [[ "${current_file:-}" ]]; then
         echo "$line" >>$current_file || return 1
         line=
       fi
