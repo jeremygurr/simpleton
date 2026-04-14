@@ -26,7 +26,9 @@ if [[ ! -v fd_original_in ]]; then
   exec {fd_original_err}>&2
 fi
 
-alias zombie_log='echo >&$fd_original_err'
+set -u +Hm -o pipefail
+shopt -s expand_aliases extglob dotglob globstar huponexit
+
 alias zombie_debug=debug
 
 yolo=${yolo:-f}
@@ -69,13 +71,12 @@ handle_special_vars() {
 lifted_bash_init() {
 
   declare -Ag trace_var_old trace_var_sub lifted_breaker_time lifted_breaker_open
-  set -u +Hm -o pipefail
-  shopt -s expand_aliases extglob dotglob globstar huponexit
   umask 0077  # to make created files readable only by the user by default
 
   first_run=${first_run:-t}
 
   debug_id_current=0
+  show_debug_id=${show_debug_id:-f}
 
   # this is empty, meaning we haven't forked yet. the top level process having a blank id
   fork_id_current=
@@ -209,6 +210,7 @@ debugger_init() {
     : {fd_original_trace}>&${fd_trace:-2}
   fi
 
+  debugging=${debugging:-f} \
   debug_output=${debug_output:-f} \
   debug_ignore=${debug_ignore:-} \
   tracing_depth=${tracing_depth:-0} \
@@ -291,7 +293,6 @@ debugger_init() {
     mkdir -p $tmp_folder/debug_highlight || exit 1
   fi
 
-  debug_setup
 }
 
 resolve_log_var() {
@@ -5741,7 +5742,9 @@ show_table() {
 }
 
 log_debug_debug() {
-  echo "${CYAN}debug_debug: $*$RESET" >&$fd_original_err
+  if [[ "${debug_debug:-f}" == t ]]; then
+    echo "${CYAN}debug_debug: $*$RESET" >&$fd_original_err
+  fi
 }
 
 debug_always() {
@@ -5757,7 +5760,7 @@ debug_start() {
 
   local unignore_this_function=${unignore_this_function:-0}
 
-  log_debug_debug "debug_start() debug_immediate=$debug_immediate debugging=$debugging"
+  log_debug_debug "debug_start() debug_immediate=$debug_immediate debugging=${debugging:-f}"
   debug_buffered_commands=$*
   if [[ "${exiting:-f}" == t ]]; then
     echo "${NL}Exiting. Starting debugger." >&$fd_original_err
@@ -5878,8 +5881,6 @@ debug() {
   fi
 }
 
-alias zombie_debug=debug_start
-
 debug_setup() {
   debugging=f
 
@@ -5988,9 +5989,7 @@ debug_setup() {
 if [[ ${auto_setup_lifted:-t} == t ]]; then
   command_detail=${command_detail:-0}
   parameters_to_env "$@" || exit 1
-  if [[ "${real_params:-}" ]]; then
-    set -- "${real_params[@]}"
-  fi
+  set -- "${real_params[@]}"
   lifted_bash_init "$@" || exit 1
   debugger_init || exit 1
 fi
@@ -5999,11 +5998,11 @@ fi
 #!/usr/bin/env bash
 
 command_lib_init() {
-  command_detail=${command_detail:-0}
-  parameters_to_env "$@" || exit 1
-  if [[ "${real_params:-}" ]]; then
-    set -- "${real_params[@]}"; shift
-  fi
+#  command_detail=${command_detail:-0}
+#  parameters_to_env "$@" || exit 1
+#  if [[ "${real_params:-}" ]]; then
+#    set -- "${real_params[@]}"; shift
+#  fi
 
   help_depth=0
   recursive_command=${recursive_command:-${recursive:-f}}
@@ -6324,10 +6323,9 @@ handle_cell() {
 }
 
 get_help_depth_and_flags() {
-  local parameters=( "$@" )
   begin_function
-
-    for parameter in ${parameters[*]}; do
+    local new_parameters=()
+    for parameter in "${parameters[@]}"; do
       case $parameter in
         help|--help|-h|\?)
           (( help_depth++ )) 
@@ -6338,13 +6336,16 @@ get_help_depth_and_flags() {
         \?\?)
           (( help_depth += 2 )) 
         ;;
+        *)
+          new_parameters+=( "$parameter" )
+        ;;
       esac
     done
   end_function
   if (( help_depth >= 2 )); then
     (( command_detail++ ))
   fi
-  debug_return_vars=help_depth
+  parameter=( "${new_parameters[@]}" )
   handle_return
 }
 
@@ -6360,7 +6361,8 @@ top_level() {
       multi_commands=f \
       clean_cells=${clean_cells:-${clean_cell:-${clean:-}}} \
 
-    get_help_depth_and_flags "${parameters[@]}" || fail
+    zombie_debug
+    get_help_depth_and_flags || fail
 
     local current_parameter_index=0 leftovers=() leftover_command handled=0
     begin_while true; doo
@@ -6818,7 +6820,7 @@ walk_execute() {
 echo "Command: $0"
 
 if [[ $0 == */c2 ]]; then
-  command_lib_init || exit 1
+  command_lib_init "$@" || exit 1
   top_level "${real_params[@]}" || exit 1
 fi
 
