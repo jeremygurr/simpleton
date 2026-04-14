@@ -127,71 +127,70 @@ eval "printf -v hbar_minus '%.s-' {1..${COLUMNS:-80}}"
 
 umask 0077  # to make created files readable only by the user by default
 
+declare -A trace_var_old trace_var_sub lifted_breaker_time lifted_breaker_open
+debug_id_current=0
+
+first_run=${first_run:-t}
+
+show_debug_id=${show_debug_id:-f}
+
+# this is empty, meaning we haven't forked yet. the top level process having a blank id
+fork_id_current=
+fork_debug_id=0
+
+autorepair_level=${autorepair_level:-${repair:-1}}
+
+trace_vars=${trace_vars:-${trace_var:-${traces:-${trace:-}}}}
+: ${trace_time:=f}
+
+handle_special_vars trace_vars || return 1
+
+trace_structure=${trace_structure:-${trace_struct:-}}
+trace_stack=${trace_stack:-}
+if [[ "$trace_stack" == t ]]; then
+  trace_stack=0
+fi
+
+default_grip=1000
+grip=${grip:-$default_grip}
+if [[ $grip == t ]]; then
+  grip=100
+fi
+
+slow_down=${slow_down:-${slow:-}}
+if [[ $slow_down == t ]]; then
+  slow_down=0.1
+fi
+
+parameter_questions=() 
+
+declare -gA log_level_num_map=( 
+  [off]=0
+  [fatal]=1 
+  [error]=2 
+  [warn]=3 
+  [info]=4 
+  [verbose]=5 
+  [debug]=6 
+  [trace]=7 
+  [all]=8
+  )
+
+declare -gA log_level_color_map=( 
+  [all]= 
+  [trace]= 
+  [debug]= 
+  [verbose]= 
+  [info]=
+  [warn]=$YELLOW
+  [error]=$RED 
+  [fatal]=$RED 
+  [off]=
+  )
+
 # Run this near the top of scripts using this functionality, after the commandline parameters 
 #   have been processed
 lifted_bash_init() {
-
-  declare -Ag trace_var_old trace_var_sub lifted_breaker_time lifted_breaker_open
-
-  first_run=${first_run:-t}
-
-  debug_id_current=0
-  show_debug_id=${show_debug_id:-f}
-
-  # this is empty, meaning we haven't forked yet. the top level process having a blank id
-  fork_id_current=
-  fork_debug_id=0
-
-  autorepair_level=${autorepair_level:-${repair:-1}}
-
-  trace_vars=${trace_vars:-${trace_var:-${traces:-${trace:-}}}}
-  : ${trace_time:=f}
-
-  handle_special_vars trace_vars || return 1
-
-  trace_structure=${trace_structure:-${trace_struct:-}}
-  trace_stack=${trace_stack:-}
-  if [[ "$trace_stack" == t ]]; then
-    trace_stack=0
-  fi
-
-  default_grip=1000
-  grip=${grip:-$default_grip}
-  if [[ $grip == t ]]; then
-    grip=100
-  fi
-
-  slow_down=${slow_down:-${slow:-}}
-  if [[ $slow_down == t ]]; then
-    slow_down=0.1
-  fi
-
-  parameter_questions=() 
-
-  declare -gA log_level_num_map=( 
-    [off]=0
-    [fatal]=1 
-    [error]=2 
-    [warn]=3 
-    [info]=4 
-    [verbose]=5 
-    [debug]=6 
-    [trace]=7 
-    [all]=8
-    )
-
-  declare -gA log_level_color_map=( 
-    [all]= 
-    [trace]= 
-    [debug]= 
-    [verbose]= 
-    [info]=
-    [warn]=$YELLOW
-    [error]=$RED 
-    [fatal]=$RED 
-    [off]=
-    )
-
   # Make sure that Control-C exits this script, even if running a subcommand which doesn't handle Control-C properly.
   trap '
 	trap - INT # restore default INT handler
