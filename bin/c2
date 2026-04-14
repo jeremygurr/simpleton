@@ -6590,7 +6590,231 @@ cell_lib_init() {
   trace_dims=${trace_dims:-${trace_dim:-}}
 }
 
-### file: ./05-main-command.bash
+### file: ./05-walk-lib.bash
+walk_get_choice() {
+  local i=$1
+  key=${choices[$i]}
+  response=${choices[$((i+1))]}
+  message1=${choices[$((i+2))]}
+  message2=${choices[$((i+3))]}
+}
+
+walk_get_hidden_choice() {
+  local i=$1
+  key=${hidden_choices[$i]}
+  response=${hidden_choices[$((i+1))]}
+  message1=${hidden_choices[$((i+2))]}
+  message2=${hidden_choices[$((i+3))]}
+}
+
+walk_menu_output() {
+  local key response message1 message2 
+
+  for (( i = 0; i < ${#choices[*]}; i+=4 )); do
+    walk_get_choice $i
+    if [[ $digits_to_show == 1 ]]; then
+      if [[ "$key" != ? ]]; then
+        key=/
+      fi
+    else
+      if [[ "$key" == ? && "$key" =~ [0-9] ]]; then
+        key=0$key
+      elif [[ "$key" == ???* ]]; then
+        key=/
+      fi
+    fi
+
+    echo -n "$key $message1"
+    if [[ "$message2" ]]; then
+      echo -n " $key $message2"
+    fi
+    echo
+
+  done
+}
+
+walk_menu() {
+
+  local prompt=${prompt:-Choose:} \
+    i choice key message1 message2 output \
+    choice_count=${#choices[*]} \
+
+  if (( walk_index < 10 )); then
+    digits_to_show=1
+  else
+    digits_to_show=2
+  fi
+
+  output=$(walk_menu_output) 
+  if [[ "$output" ]]; then
+    echo "$output" | column -tl $column_alignment
+  fi
+
+  local input found=f
+
+  if [[ "$walk_filter" ]]; then
+    echo "${YELLOW}Current filter:${RESET} $walk_filter"
+  fi
+
+  read -sp "$prompt" -n1 input || return 1
+  if [[ $input =~ [0-9] && $digits_to_show == 2 ]]; then
+    local first=$input
+    echo -n "$input"
+
+    read -s -n1 input || return 1
+    echo "$input"
+
+    input=$first$input
+  else
+    echo "$input"
+  fi
+
+  if [[ $clear_screen == t ]]; then
+    echo -n "$CLEAR_SCREEN$prompt"
+  fi
+
+  for (( i = 0; i < ${#choices[*]}; i+=4 )); do
+    walk_get_choice $i
+    if [[ "$key" == "$input" || "0$key" == "$input" || "$key" == enter && "$input" == '' ]]; then
+      found=t
+      break
+    fi
+  done
+
+  if [[ $found == f ]]; then
+    for (( i = 0; i < ${#hidden_choices[*]}; i+=4 )); do
+      walk_get_hidden_choice $i
+      if [[ "$key" == "$input" || "$key" == enter && "$input" == '' ]]; then
+        found=t
+        break
+      fi
+    done
+  fi
+
+  if [[ $found == t ]]; then
+    echo "$message2"
+  else
+    echo "Invalid key: $input"
+    response=
+  fi
+
+}
+ 
+walk_add_choice() {
+  local hidden=${hidden:-f} key=$1 response=$2 message1=${3:-$2} message2=${4:-}
+  if [[ $hidden == f ]]; then
+    choices+=( "$key" "$response" "$message1" "$message2" )
+  else
+    hidden_choices+=( "$key" "$response" "$message1" "$message2" )
+  fi
+}
+
+walk_add_choice_i() {
+  (( walk_index++ ))
+  walk_add_choice "$walk_index" "$1" "${2:-$1}" "${3:-}"
+}
+
+walk_add_dirs() {
+  local dirs d extra current_selection=$1 display_prefix=${display_prefix:-}
+  dirs=$(find -L $current_selection -mindepth 1 -maxdepth 1 -type d -not -name ".*" | sort -g) || return 1
+  if [[ "$dirs" ]]; then
+    for d in $dirs; do
+      extra=
+      if [[ -L $d ]]; then
+        local r=$(realpath $d)
+        r=${r#/work/*/}
+        extra+=" -> $r"
+      fi
+      if [[ -f $d/.member ]]; then
+        local member="$(<$d/.member)"
+        if (( ${#member} > 60 )); then
+          extra+=" ${member:0:60}..."
+        else
+          extra+=" ${member}"
+        fi
+      fi
+      if [[ "${walk_filter:-}" && "${d##*/}$extra" != *"$walk_filter"* ]]; then
+        continue
+      fi
+      walk_add_choice_i "${d#./}" "$display_prefix${d##*/}$extra"
+    done
+  fi
+}
+
+walk_init() {
+  show_selection() { :; }
+  adjust_choices() { :; }
+  handle_walk_responses() { :; }
+}
+
+walk_execute() {
+  begin_function
+    local current_selection=$1 \
+      hidden_choices choices \
+      choice path i real_stack=() \
+      walk_filter= \
+      prompt=${prompt:-Choose: } \
+      clear_screen=${clear_screen:-t} \
+      column_alignment=${column_alignment:-2} \
+      digits_to_show=${digits_to_show:-2} \
+
+    if [[ $clear_screen == t ]]; then
+      echo -n "$CLEAR_SCREEN"
+    fi
+    begin_while true; doo
+
+      show_selection || fail
+
+      hidden_choices=() choices=()
+
+      hidden=t walk_add_choice "enter" "accept"
+      hidden=t walk_add_choice "q" "quit"
+      hidden=t walk_add_choice "?" "help"
+      hidden=t walk_add_choice "/" "filter"
+
+      local walk_index=0
+      adjust_choices || fail
+
+      walk_menu || break
+      if [[ "$response" == help ]]; then
+        echo
+        echo "Press one of the characters in the menu to select one of the choices, enter or space to accept the choice, or q to quit/abort this command."
+        echo "You can also use / to enter a filter to narrow down results."
+        echo "Using / again after a filter is applied will remove the filter."
+        if [[ "${hidden_choices:-}" ]]; then
+          echo "${NL}Hidden commands:"
+          local h
+          for (( i = 0; i < ${#hidden_choices[*]}; i+=4 )); do
+            walk_get_hidden_choice $i
+            echo "$key $message1"
+          done | column -tl 2 | indent_stream
+          pause
+        fi
+      elif [[ "$response" == quit ]]; then
+        return 1
+      elif [[ "$response" == accept ]]; then
+        break
+      elif [[ "$response" == filter ]]; then
+        read -p "New filter (leave blank to remove): " walk_filter
+      else
+        local invalid_response=f
+        handle_walk_responses || fail
+        if [[ $invalid_response == t ]]; then
+          echo "Invalid selection, try again."
+          continue
+        fi
+        if [[ "$response" == accept ]]; then
+          break
+        fi
+      fi
+
+    end_while
+    result=$current_selection
+  end_function
+  handle_return
+}
+
+### file: ./10-main-command.bash
 echo "Command: $0"
 
 if [[ $0 == */c2 ]]; then
