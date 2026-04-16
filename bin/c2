@@ -6937,6 +6937,43 @@ forge_add_roots() {
   handle_return
 }
 
+make_ancestors_stale() {
+  local folder=$1
+  if [[ $folder == */.seed/* ]]; then
+    make_ancestors_stale_inner ${folder%%/.seed/*} || return 1
+  elif [[ $folder == */seed/* ]]; then
+    make_ancestors_stale_inner ${folder/\/seed\//\/work\/}} || return 1
+  else
+    make_ancestors_stale_inner $folder || return 1
+  fi
+  return 0
+}
+
+make_ancestors_stale_inner() {
+  local folder=$1
+  if [[ -d $folder/in ]]; then
+    touch $folder/in || return 1
+  fi
+  if [[ $folder == /*/*/*/* ]]; then
+    make_ancestors_stale ${folder%/*} || return 1
+  fi
+  return 0
+}
+
+# Edit a file in a cell
+# if a dna / seed file is edited, this will automatically clear the context files so they can be regenerated
+edit() {
+  local file=$1
+  $EDITOR "$file" || return 1
+  if [[ $file == */.dna/* ]]; then
+    local cell=${file%%/.dna/*}
+    rm $cell/.cyto/context* &>/dev/null
+  elif [[ $file == */.seed/* || $file == */seed/* ]]; then
+    make_ancestors_stale ${file%/*} || return 1
+  fi
+  return 0
+}
+
 forge() {
   local colorize=${colorize:-t} original_pwd=$PWD
   begin_function
@@ -7655,6 +7692,7 @@ forge_v2() {
         read -p "Name of new directory: " new_name
         if [[ "${new_name:-}" ]]; then
           mkdir "$new_target/$new_name"
+          make_ancestors_stale $new_target
         fi
       elif [[ "$response" == "*new-file*" ]]; then
         local new_name
@@ -7663,6 +7701,7 @@ forge_v2() {
         read -p "Name of new file: " new_name
         if [[ "${new_name:-}" ]]; then
           edit "$new_target/$new_name"
+          make_ancestors_stale $new_target
         fi
       elif [[ "$response" == "*expand*" ]]; then
         if [[ $link_expansion == f ]]; then
@@ -7799,6 +7838,7 @@ forge_v2() {
               if (( ${#selected[*]} > 0 )); then
                 echo rsync -av "${selected[@]}" $target/
                 rsync -av "${selected[@]}" $target/
+                make_ancestors_stale $target
               else
                 echo "No files were selected. Use the select action to choose some files before using this action."
               fi
@@ -7808,6 +7848,7 @@ forge_v2() {
               elif (( ${#selected[*]} == 1 )); then
                 echo rsync -av $selected $target
                 rsync -av $selected $target
+                make_ancestors_stale $target
               else
                 echo "No files were selected. Use the select action to choose some files before using this action."
               fi
@@ -7822,6 +7863,7 @@ forge_v2() {
                 for s in "${selected[@]}"; do
                   echo rsync -av "$s/" $target/
                   rsync -av "$s/" $target/
+                  make_ancestors_stale $target
                 done
               else
                 echo "No files were selected. Use the select action to choose some files before using this action."
@@ -7837,6 +7879,7 @@ forge_v2() {
               if (( ${#selected[*]} > 0 )); then
                 echo mv "${selected[@]}" $target/
                 mv "${selected[@]}" $target/
+                make_ancestors_stale $target
               else
                 echo "No files were selected. Use the select action to choose some files before using this action."
               fi
@@ -7846,6 +7889,7 @@ forge_v2() {
               elif (( ${#selected[*]} == 1 )); then
                 echo mv $selected $target
                 mv $selected $target
+                make_ancestors_stale $target
               else
                 echo "No files were selected. Use the select action to choose some files before using this action."
               fi
@@ -7872,9 +7916,11 @@ forge_v2() {
             elif [[ -f "$target" || -L "$target" ]]; then
               echo rm "$target"
               rm "$target"
+              make_ancestors_stale $target
             elif [[ -d "$target" ]]; then
               echo rm -rf "$target"
               rm -rf "$target"
+              make_ancestors_stale $target
             fi
             #recursive=t remove_empty_parents ${target%/*}
           ;;
@@ -7885,9 +7931,11 @@ forge_v2() {
               if [[ -d $target ]]; then
                 echo rsync $target/ $target1/$new_name/
                 rsync $target/ $target1/$new_name/
+                make_ancestors_stale $target1
               else
                 echo rsync $target $target1/$new_name
                 rsync $target $target1/$new_name
+                make_ancestors_stale $target1
               fi
             fi
           ;;
@@ -7944,6 +7992,7 @@ forge_v2() {
                 else
                   out_exec rsync -av $target $target1/$new_name
                 fi
+                make_ancestors_stale $target1
               fi
             else
               echo "I don't know how to handle this object type yet"
@@ -7977,6 +8026,7 @@ forge_v2() {
                     out_exec mv $target $dest_target/$new_name || return 1
                   fi
                 fi
+                make_ancestors_stale $dest_target
               else
                 echo "ERROR: source doesn't exist: $target" >&2
                 return 1
