@@ -55,6 +55,7 @@ alias ??='cell . ??'
 alias safe='cell safe'
 alias w=walk
 alias f=forge
+alias f2=forge_v2
 
 alias sp='source /etc/profile'
 alias ls='ls --color=auto'

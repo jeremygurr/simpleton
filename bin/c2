@@ -6,7 +6,6 @@
 ##########################################################
 # LIFTED-BASH
 # A bash library of functions to increase debugability of bash scripts.
-# depends on: omni-log bash-debugger bash-lib 
 ##########################################################
 
 # avoid executing this multiple times
@@ -7429,7 +7428,624 @@ forge() {
   handle_return
 }
 
-### file: ./07-walk.bash
+### file: ./07-forge-v2.bash
+
+forge_add_subs_v2() {
+  local base=$1 from=${2:-$1}
+  begin_function_lo
+
+    local file file1 file2 files short_path short_file colored_base
+    colorize_path base colored_base
+    get_short_path $colored_base
+    files=$(find1 $from | sort -g)
+    for file in $files; do
+      colorize_path file short_file
+      short_file=${short_file#$base/}
+
+      file2=${file#$base/}
+      file1=${file%/$file2}
+
+      if [[ ! "${walk_filter:-}" || "$short_path $short_file" == *"$walk_filter"* ]]; then
+        if [[ -d $file ]]; then
+          short_file+=/
+        fi
+
+        forge_add_choice "$file1 $file2" "$short_path" "$short_file"
+      fi
+
+      if [[ -d $file
+         && ( ! -L $file || ! -d $file/.dna ) 
+         ]]; then
+
+        if [[ ! -L $file || $link_expansion == t ]]; then
+          if [[ ${file##*/} == .dna || ${file##*/} == .root ]]; then
+            forge_add_subs $file
+          else
+            forge_add_subs $base $file
+          fi
+        fi
+
+      fi
+
+    done
+  end_function
+  handle_return
+}
+ 
+forge_add_choice_v2() {
+  local file=$1 \
+    short_path=$2 \
+    short_file=$3 \
+
+  if [[ "${walk_filter:-}" && "$short_path $short_file" != *"$walk_filter"* ]]; then
+    return 0
+  fi
+
+  walk_add_choice_i "$current_action $file" "$short_path" "$current_action $short_file"
+}
+
+forge_add_dims_v2() {
+  local base=$1 from=${2:-$1}
+  begin_function_lo
+
+    if [[ $current_selection == */.lib* ]]; then
+      abort
+    fi
+
+    local lib_path= file1 file2 lib_path_color short_path short_file file file_color file_part
+    find_lib $current_selection
+    if [[ $lib_path ]]; then
+      for file_part in dim derive; do
+        colorize_path lib_path lib_path_color
+        get_short_path $lib_path_color
+        file=$lib_path/$file_part
+        if [[ -d $file ]]; then
+          colorize_path file file_color
+          short_file=${file_color#$lib_path/}
+          file1=$lib_path
+          file2=$file_part
+          forge_add_choice "$file1 $file2" "$short_path" "$short_file"
+        fi
+      done
+
+      local dim_type dims dim dim_path
+      for dim_type in trunk_dims sub_dims control_props data_props; do
+        file=$current_selection/.dna/$dim_type.arr
+        if [[ -f $file ]]; then
+          for dims in $(<$file); do
+            dim=$dims
+            dim_path=$lib_path/dim/$dim
+            if [[ -d $dim_path ]]; then
+              file1=$lib_path/dim
+              file2=$dim
+              forge_add_choice "$file1 $file2" "$dim_type" "$dim"
+            else
+              get_unplural $dims dim
+              dim_path=$lib_path/dim/$dim
+              if [[ -d $dim_path ]]; then
+                file1=$lib_path/dim
+                file2=$dim
+                forge_add_choice "$file1 $file2" "$dim_type" "$dim"
+                echo "${YELLOW}Warning: dim doesn't exist: $dim (defined in $dim_type)$RESET"
+              fi
+            fi
+          done
+        fi
+      done
+    fi
+
+  end_function
+  handle_return
+}
+ 
+forge_add_roots_v2() {
+  local path=$1
+  begin_function_lo
+
+    if [[ $path == /*/*/* ]]; then
+      forge_add_roots_v2 ${path%/*}
+    fi
+
+    if [[ -d $path/.lib ]]; then
+      forge_add_subs_v2 $path/.lib
+    fi
+
+  end_function
+  handle_return
+}
+
+forge_v2() {
+  local colorize=${colorize:-t} original_pwd=$PWD
+  begin_function
+
+    walk_init || fail
+    local back_stack=() \
+      current_action=go \
+      link_expansion=f \
+      add_roots=f \
+      selected=() \
+
+    show_selection() {
+      local extra= branches=() branch member \
+        current_selection=$current_selection short_path
+      get_short_path ${current_selection#/seed/*/}
+      echo "$HIGHLIGHT$hbar_equals$NL$short_path$RESET"
+
+      while [[ $current_selection == *:* && $current_selection == /*/*/* ]]; do
+        if [[ -f $current_selection/.member ]]; then
+          member=" $(<$current_selection/.member)"
+          if (( ${#member} > 60 )); then
+            member="${member:0:60}..."
+          fi
+        else
+          member=
+        fi
+        branch=${current_selection##*/}
+        current_selection=${current_selection%/*}
+        if [[ $branch == *:* ]]; then
+          branches+=( "$branch$member" )
+        fi
+      done
+
+      local i
+      for (( i = ${#branches[*]} - 1; i >= 0; i-- )); do
+        branch=${branches[$i]}
+        echo "$branch"
+      done
+
+      if [[ "${selected:-}" ]]; then
+        echo "$DIM_GREEN(${#selected[*]} files/folders selected)$RESET"
+      fi
+    }
+
+    adjust_choices() {
+      if [[ -d $current_selection/.. ]]; then
+        hidden=t walk_add_choice "." "*up*" "Go up a folder"
+      fi
+
+      hidden=t walk_add_choice "a" "*action*" "Change action"
+      hidden=t walk_add_choice "b" "*back*" "Go back to previous directory"
+      hidden=t walk_add_choice "c" "*compare*" "Compare the previously selected files"
+      hidden=t walk_add_choice "d" "*new-dir*" "Create a new directory here"
+      hidden=t walk_add_choice "e" "*edit*" "Edit the previously selected items"
+      hidden=t walk_add_choice "f" "*new-file*" "Create a new file here"
+      hidden=t walk_add_choice "j" "*jump*" "Go to other jump point"
+      hidden=t walk_add_choice "J" "*jump-set*" "Set current jump point to this location"
+      hidden=t walk_add_choice "r" "*real*" "Go to real (not linked) path of the current directory"
+      hidden=t walk_add_choice "R" "*roots*" "Toggle whether to include roots"
+      hidden=t walk_add_choice "x" "*expand*" "Toggle link expansion"
+
+      local path
+
+      #if [[ $add_roots == t ]]; then
+      #  forge_add_roots_v2 ${current_selection%/*} || fail
+      #fi
+      forge_add_subs_v2 $current_selection || fail
+      #forge_add_dims_v2 $current_selection || fail
+
+      return 0
+    }
+
+    handle_walk_responses() {
+      local new_target
+      if [[ "$response" == "*back*" ]]; then
+        if [[ -v back_stack[-1] ]]; then
+          current_selection=${back_stack[-1]}
+          unset back_stack[-1]
+        else
+          echo "Back stack is empty"
+        fi
+        walk_filter=
+      elif [[ "$response" == "*compare*" ]]; then
+        if (( ${#selected[*]} > 1 )); then
+          vimdiff "${selected[@]}"
+        else
+          echo "Not enough files selected for comparison. Set the current action to 'select' and choose 2 or more files to compare."
+        fi
+      elif [[ "$response" == "*edit*" ]]; then
+        if (( ${#selected[*]} > 0 )); then
+          edit "${selected[@]}"
+        else
+          echo "Not enough files selected for edit. Set the current action to 'select' and choose 1 or more files to edit."
+        fi
+      elif [[ "$response" == "*new-dir*" ]]; then
+        local new_name
+        new_target=${current_selection}
+        echo "New directory will be created here: $new_target"
+        read -p "Name of new directory: " new_name
+        if [[ "${new_name:-}" ]]; then
+          mkdir "$new_target/$new_name"
+        fi
+      elif [[ "$response" == "*new-file*" ]]; then
+        local new_name
+        new_target=${current_selection}
+        echo "New file will be created here: $new_target"
+        read -p "Name of new file: " new_name
+        if [[ "${new_name:-}" ]]; then
+          edit "$new_target/$new_name"
+        fi
+      elif [[ "$response" == "*expand*" ]]; then
+        if [[ $link_expansion == f ]]; then
+          link_expansion=t
+        else
+          link_expansion=f
+        fi
+      elif [[ "$response" == "*jump*" ]]; then
+        if [[ "${walk_jump_other:-}" ]]; then
+          current_selection=$walk_jump_other
+        fi
+        local o=$walk_jump_other
+        walk_jump_other=$walk_jump_current
+        walk_jump_current=$o
+      elif [[ "$response" == "*jump-set*" ]]; then
+        walk_jump_current=$current_selection
+      elif [[ "$response" == "*real*" ]]; then
+        back_stack+=( $current_selection )
+        current_selection=$(realpath $current_selection)
+      elif [[ "$response" == "*roots*" ]]; then
+        if [[ $add_roots == t ]]; then
+          add_roots=f
+        else
+          add_roots=t
+        fi
+      elif [[ "$response" == "*up*" ]]; then
+        back_stack+=( $current_selection )
+        current_selection=${current_selection%/*}
+      elif [[ "$response" == "*action*" ]]; then
+        local choice
+        while true; do
+
+          read -n1 -sp "Choose action (? = list actions): " choice
+          case "$choice" in
+            c)
+              echo "copy selected items to target"
+              current_action=copy
+              break
+            ;;
+            C)
+              echo "copy contents of selected folders to target"
+              current_action=copy-contents
+              break
+            ;;
+            d)
+              echo "delete"
+              current_action=delete
+              break
+            ;;
+            D)
+              echo "duplicate"
+              current_action=duplicate
+              break
+            ;;
+            #i)
+            #  echo "info"
+            #  current_action=info
+            #  break
+            #;;
+            g)
+              echo "go"
+              current_action=go
+              break
+            ;;
+            #l)
+            #  echo "link"
+            #  current_action=link
+            #  break
+            #;;
+            m)
+              echo "add item to move list"
+              current_action=move
+              break
+            ;;
+            n)
+              echo "new"
+              current_action=new
+              break
+            ;;
+            q)
+              echo "abort"
+              break
+            ;;
+            r)
+              echo "rename"
+              current_action=rename
+              break
+            ;;
+            s)
+              echo "select files or folders"
+              current_action=select
+              selected=()
+              break
+            ;;
+            t)
+              echo "$copy_type to"
+              current_action=to
+              break
+            ;;
+            v)
+              echo "view"
+              current_action=view
+              break
+            ;;
+            \?)
+              echo "c copy selected items to target dir (select items to copy using select action, then use c action to set destination)"
+              echo "C copy contents of selected items to target dir (select folders to copy from using select action, then use C action to set destination folder))"
+              echo "d delete"
+              echo "D duplicate"
+              #echo "i info"
+              echo "g go"
+              #echo "l link to target dir (use t command to set destination)"
+              echo "m move selected items to target dir (select items to move using select action, then use m command to set destination)"
+              echo "n create a new instance by cloning the chosen item (clones a file/dim/cell intelligently)"
+              echo "q cancel action change"
+              echo "r rename"
+              echo "s select items for a future command (copy/move/compare). Select list will be cleared when this action is chosen."
+              echo "v view file"
+            ;;
+            *)
+              echo "Invalid action"
+            ;; 
+          esac
+        done
+      elif [[ "$response" == *" "* ]]; then
+
+        local target target1 target2
+        read action target1 target2 <<<$response
+        target=$target1/$target2
+
+        case $action in
+          copy)
+            if [[ -d $target ]]; then
+              if (( ${#selected[*]} > 0 )); then
+                echo rsync -av "${selected[@]}" $target/
+                rsync -av "${selected[@]}" $target/
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            elif [[ -f $target ]]; then
+              if (( ${#selected[*]} > 1 )); then
+                echo "To many files were selected to copy onto a single file. Either target a folder, or use the select action again to choose only one file."
+              elif (( ${#selected[*]} == 1 )); then
+                echo rsync -av $selected $target
+                rsync -av $selected $target
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            else
+              echo "Target $target doesn't exist or is a special file"
+            fi
+          ;;
+          copy-contents)
+            if [[ -d $target ]]; then
+              if (( ${#selected[*]} > 0 )); then
+                local s
+                for s in "${selected[@]}"; do
+                  echo rsync -av "$s/" $target/
+                  rsync -av "$s/" $target/
+                done
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            elif [[ -f $target ]]; then
+              echo "Can't copy the contents of a folder to a file"
+            else
+              echo "Target $target doesn't exist or is a special file"
+            fi
+          ;;
+          move)
+            if [[ -d $target ]]; then
+              if (( ${#selected[*]} > 0 )); then
+                echo mv "${selected[@]}" $target/
+                mv "${selected[@]}" $target/
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            elif [[ -f $target ]]; then
+              if (( ${#selected[*]} > 1 )); then
+                echo "To many files were selected to move onto a single file. Either target a folder, or use the select action again to choose only one file."
+              elif (( ${#selected[*]} == 1 )); then
+                echo mv $selected $target
+                mv $selected $target
+              else
+                echo "No files were selected. Use the select action to choose some files before using this action."
+              fi
+            else
+              echo "Target $target doesn't exist or is a special file"
+            fi
+          ;;
+          delete)
+            if [[ "$target" == */.lib/dim/* && -d "$target" \
+               && -d "$current_selection/.dna" \
+               ]]; then
+              local dim_type dim
+              for dim_type in trunk_dims sub_dims control_props data_props; do
+                file=$current_selection/.dna/$dim_type.arr
+                if [[ -f $file ]]; then
+                  for dim in $(<$file); do
+                    if [[ $dim == $target2 ]]; then
+                      echo "Removing dim from $file"
+                      sed -i "/^$dim\$/d" $file
+                    fi
+                  done
+                fi
+              done
+            elif [[ -f "$target" || -L "$target" ]]; then
+              echo rm "$target"
+              rm "$target"
+            elif [[ -d "$target" ]]; then
+              echo rm -rf "$target"
+              rm -rf "$target"
+            fi
+            #recursive=t remove_empty_parents ${target%/*}
+          ;;
+          duplicate)
+            local new_name=
+            read -p "New name: (leave empty to cancel) " new_name 
+            if [[ "$new_name" ]]; then
+              if [[ -d $target ]]; then
+                echo rsync $target/ $target1/$new_name/
+                rsync $target/ $target1/$new_name/
+              else
+                echo rsync $target $target1/$new_name
+                rsync $target $target1/$new_name
+              fi
+            fi
+          ;;
+          go)
+            if [[ -f $target ]]; then
+              edit "$target"
+            else
+              back_stack+=( $current_selection )
+
+              if [[ -f $target ]]; then
+                target=${target%/*}
+              fi
+
+              target=$(realpath $target)
+
+              if [[ $target != /seed/* ]]; then
+                target=/seed${target#/work}
+              fi
+
+              current_selection=$target
+              walk_filter=
+            fi
+          ;;
+          new)
+            local new_name=
+            if [[ "$target" == */.lib/dim/* && -d "$target" ]]; then
+              echo "Cloning a dim"
+              read -p "New dim name: (leave empty to cancel) " new_name 
+              out_exec rsync -av $target/ $target1/$new_name/
+
+              local dim_type dim
+              for dim_type in trunk_dims sub_dims control_props data_props; do
+                file=$current_selection/.dna/$dim_type.arr
+                if [[ -f $file ]]; then
+                  for dim in $(<$file); do
+                    if [[ $dim == $target2 ]]; then
+                      echo "Adding new dim to $file"
+                      echo $new_name >>$file
+                      break
+                    fi
+                  done
+                fi
+              done
+
+            elif [[ "$target" == */.dna || -d "$target/.dna" ]]; then
+              echo "Cloning a cell"
+              echo "Not implemented yet"
+            elif [[ -f "$target" ]]; then
+              echo "Cloning a file"
+              read -p "New name: (leave empty to cancel) " new_name 
+              if [[ "$new_name" ]]; then
+                if [[ -d $target ]]; then
+                  out_exec rsync -av $target/ $target1/$new_name/
+                else
+                  out_exec rsync -av $target $target1/$new_name
+                fi
+              fi
+            else
+              echo "I don't know how to handle this object type yet"
+            fi
+          ;;
+          rename)
+            local new_name=
+            read -p "New name: (leave empty to cancel) " new_name 
+            if [[ "$new_name" ]]; then
+              if [[ -e "$target" ]]; then
+                local dest_target=$target1
+                if [[ "$new_name" == ^* ]]; then
+                  new_name=${new_name#^}
+                  local after_module=${dest_target#/*/*/} module
+                  module=${dest_target%/$after_module}
+                  dest_target=$module
+                fi
+                local parent_dir=$dest_target/$new_name
+                parent_dir=${parent_dir%/*}
+                if [[ ! -d $parent_dir ]]; then
+                  out_exec mkdir -p $parent_dir || return 1
+                fi
+                if [[ -d $target/.dna ]]; then
+                  out_exec relink $target $dest_target/$new_name /seed
+                  out_exec relink $target $dest_target/$new_name /work
+                  target=/work/${target#/seed/}
+                  dest_target=/work/${dest_target#/seed/}
+                  out_exec relink $target $dest_target/$new_name /work
+                else
+                  if [[ -d $dest_target ]]; then
+                    out_exec mv $target $dest_target/$new_name || return 1
+                  fi
+                fi
+              else
+                echo "ERROR: source doesn't exist: $target" >&2
+                return 1
+              fi
+            fi
+          ;;
+          select)
+            echo "Added $target to selection list"
+            selected+=( "$target" )
+          ;;
+          view)
+            echo "Viewing $target"
+            echo "$HIGHLIGHT$hbar_equals$RESET"
+            if [[ -f $target ]]; then
+              cat "$target"
+            else
+              ls -la "$target"
+              if [[ -L "$target" ]]; then
+                ls -la "$target/"
+              fi
+            fi
+            echo "$HIGHLIGHT$hbar_equals$RESET"
+            pause
+          ;;
+          *)
+            echo "ERROR: unknown action: $action." >&2
+            return 1
+          ;; 
+        esac
+      elif [[ -d "$response" ]]; then
+        current_selection=$(unrealpath $response)
+        walk_filter=
+      fi
+    }
+
+    local result= current_selection=$PWD \
+      walk_jump_current=$PWD walk_jump_other=$PWD
+
+    if [[ $current_selection != /seed/* ]]; then
+      current_selection=/seed${current_selection#/work}
+      while [[ ! -d $current_selection && $current_selection == /*/*/* ]]; do
+        current_selection=${current_selection%/*}
+      done
+      if [[ ! -d $current_selection ]]; then
+        echo "Current folder is invalid" >&2
+        return 1
+      fi
+    fi
+
+    prompt="Choose (press enter to stop here): " \
+      clear_screen=f \
+      column_alignment=4 \
+      walk_execute $current_selection || fail
+
+    if [[ -d "$result" ]]; then
+      local target=$(realpath $result)
+      target=/work/${target#/seed/}
+      while [[ ! -d $target ]]; do
+        target=${target%/*}
+      done
+      cd $target || fail
+    fi
+
+  end_function
+  cd $original_pwd
+  handle_return
+}
+
+### file: ./08-walk.bash
 walk() {
 
   begin_function
