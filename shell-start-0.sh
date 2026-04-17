@@ -612,11 +612,6 @@ ifout() {
   awk 'BEGIN { rc=1 } length($0) > 0 { rc=0; print } END { exit rc }'
 }
 
-alias f1='find . -maxdepth 1 -not -path "*/.git*"'
-alias f2='find . -maxdepth 2 -not -path "*/.git*"'
-alias f3='find . -maxdepth 3 -not -path "*/.git*"'
-alias f4='find . -maxdepth 4 -not -path "*/.git*"'
-
 fql() {
   local return_code=0
   if [ "$*" ]; then
