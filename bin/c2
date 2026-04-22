@@ -354,51 +354,6 @@ resolve_log_var() {
   esac
 }
 
-log_level_filter_changed() {
-
-  case $log_level_filter in
-    none)
-      log_format=
-    ;;
-    fatal|error|warn|info|verbose)
-      if [[ "$log_format" == default ]]; then
-        log_format='$level_color$message$RESET'
-      fi
-    ;;
-    debug)
-      if [[ "$log_format" == default ]]; then
-        log_format='$level_color$message$RESET'
-      fi
-    ;;
-    trace|all)
-      if [[ "$log_format" == default ]]; then
-        log_format='$level_color$action$COL25$function$COL50$interesting_vars$message$RESET'
-      fi
-    ;;
-    *)
-      log_fatal "Invalid log_level value. Must be one of: none, error, warn, info, verbose, debug, trace"
-      exit 1
-    ;;
-  esac
-
-  case $log_format in
-    tiny)
-      log_format='$level_color$message$RESET'
-    ;;
-    short)
-      log_format='$level_color$action$COL15$function$COL45$interesting_vars$message$RESET'
-    ;;
-    compact)
-      log_format='$level_color$action$function$interesting_vars$message$RESET'
-    ;;
-  esac
-
-  if [[ $show_debug_id == t || $show_debug_id == a ]]; then
-    log_format='$debug_id$level_color$message$RESET'
-  fi
-
-}
-
 # Used to pass vars to parent of forked processes
 # Must set reply_file to a valid location for this to work
 reply_to_caller() {
@@ -497,8 +452,6 @@ after_fork() {
       if [[ "${debug_log_level_filter:-}" ]]; then
         local log=$debug_log_level_filter
         resolve_log_var
-        log_format=default
-        log_level_filter_changed
       fi
       rm $reply_file
       reply_file=
@@ -592,12 +545,10 @@ handle_user_interrupt() {
         read -u $fd_original_in -e -p "New log level: " log >&$fd_original_err
         if [[ "$log" ]]; then
           if function_exists resolve_log_var; then
-          resolve_log_var
+            resolve_log_var
           else
             log_level_filter=$log
           fi
-          log_format=default
-          log_level_filter_changed
           debug_log_level_filter=$log
           reply_to_caller "debug_log_level_filter=$debug_log_level_filter"
           echo "Log level changed to $log_level_filter" >&$fd_original_err
@@ -1551,6 +1502,7 @@ handle_flag() {
         d)
           show_debug_id=t
           log=debug
+          resolve_log_var
           ;;
         g)
           (( grip /= 10 )) || true
@@ -1580,6 +1532,7 @@ handle_flag() {
               log=fatal
             ;;
           esac
+          resolve_log_var
           ;;
         r)
           recursive_command=t
@@ -1603,6 +1556,7 @@ handle_flag() {
               trace_structure=t
             ;;
           esac
+          resolve_log_var
           ;;
         x)
           debug_on_exit=t
@@ -4955,10 +4909,6 @@ debug_command_loop() {
           else
             log_level_filter=$log
           fi
-          log_format=default
-          if function_exists log_level_filter_changed; then
-            log_level_filter_changed
-          fi
           debug_log_level_filter=$log_level_filter
           debugger_out "# Log level changed to $log_level_filter"
         fi
@@ -4968,9 +4918,10 @@ debug_command_loop() {
         debug_original_log_level=${debug_original_log_level:-$log_level_filter}
         debugger_out "# Restored log level to $debug_original_log_level"
         log_level_filter=$debug_original_log_level
-        log_format=default
-        if function_exists log_level_filter_changed; then
-          log_level_filter_changed
+        if function_exists resolve_log_var; then
+          resolve_log_var
+        else
+          log_level_filter=$log
         fi
         debug_log_level_filter=$log_level_filter
         no_follow_once=t
