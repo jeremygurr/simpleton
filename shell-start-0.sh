@@ -68,7 +68,7 @@ alias uu='builtin cd ../..'
 alias uuu='builtin cd ../../..'
 alias vi=vim
 alias vis='vim /etc/profile.d/shell-start-0.sh'
-alias dockerv='docker ps --format "{{.Names}} [{{.Label \"artifact_version\" }}] ({{.Image}})"'
+alias dockerv='docker ps --format "{{.Names}} [{{.Label \"artifact_version\" }}] <{{.Label \"ois_version\" }}> ({{.Image}})"'
 
 # used by /etc/profile, this avoids a warning
 BB_ASH_VERSION=
