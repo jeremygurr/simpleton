@@ -343,6 +343,8 @@ make_table_index() {
     local -n table_fields=${table}_fields \
       table_data=${table}_data \
 
+    log_debug "Making table index for $table"
+
     if [[ ! -v table_fields ]]; then
       log_fatal "Internal error: Table not defined: $table"
       fail1
@@ -381,33 +383,37 @@ make_table_index() {
           if [[ -v all_dims[$field] ]]; then
 
             if [[ $expand_values == t ]]; then
+              local -I dim_${field}_effective_member_type
+              local -n member_type=dim_${field}_effective_member_type
+              if [[ ! "${member_type:-}" ]]; then
+                member_type=static
+              fi
               values=()
+
               dim=$field \
               ignore_problems=t \
               expand_dim || fail
             else
-              values=( "$value" )
+              values=( $value )
             fi
-
-            local count=0
-            for value in "${values[@]}"; do
-              if [[ "$value" ]]; then
-                index[$value]+="$row_index "
-                (( count++ )) || true
-                if (( count == 2 )); then
-                  index_multi=t
-                fi
-              fi
-            done
 
           else
             if [[ "$value" == all ]]; then
               index_multi=t
             fi
+            values=( $value )
+          fi
+
+          local count=0
+          for value in "${values[@]}"; do
             if [[ "$value" ]]; then
               index[$value]+="$row_index "
+              (( count++ )) || true
+              if (( count == 2 )); then
+                index_multi=t
+              fi
             fi
-          fi
+          done
 
         end_for
 
@@ -1514,6 +1520,8 @@ build_context_expand_members() {
       fi
     elif [[ ! -v member_type || \$member_type == dynamic ]]; then
       _out=( \"\$_in\" )
+    elif [[ \$member_type == static ]]; then
+      _out=( \$_in )
     else
       problem=\"Invalid dim member for $dim: \$_in\"
     fi
@@ -5476,6 +5484,7 @@ build_constellation_table() {
     current_row \
 
   begin_function
+    log_debug "Generating rows for constellation $con, $previous_dim = $member"
     progress_bar_nudge .
     if [[ "$member" ]]; then
       current_row+=( "$member" )
@@ -5563,6 +5572,12 @@ build_constellation_table() {
     if (( "${#sorted_members[*]}" > 1 )); then
       sort_array sorted_members
     fi
+
+    #  This is useful when debugging one particular host, instead of waiting for all the others to be processed
+    #if [[ " ${sorted_members[*]} " == *" lpdosput50471.phx.aexp.com "* ]]; then
+    #  sorted_members=( lpdosput50471.phx.aexp.com )
+    #fi
+
     begin_for member in "${sorted_members[@]}"; doo
       log_debug "Processing $current_dim=$member"
       field_index=$((field_index+1)) build_constellation_table || fail
