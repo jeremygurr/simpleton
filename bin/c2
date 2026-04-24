@@ -361,159 +361,6 @@ reply_to_caller() {
   return 0
 }
 
-prep_fork() {
-  begin_function_lo
-
-    if [[ "$fork_id_current" ]]; then
-      fork_id_current=$fork_id_current.$debug_id_current
-    else
-      fork_id_current=$debug_id_current
-    fi
-    debug_id_current=0
-    fork_debug_id=$fork_id_current.0
-
-    cleanup_on_exit=
-    setup_exit_trap
-
-  end_function
-  handle_return
-}
-
-# this should be run in a subshell
-fork_inside() {
-  begin_function_lo
-
-    local change_log2
-    prep_fork || fail
-
-    if [[ "$to_var" ]]; then
-      eval "$to_var=\$($fork_command)"; return_code=$?
-      reply_to_caller "$to_var='${!to_var}'" || fail
-    else
-      eval "$fork_command"; return_code=$?
-    fi
-
-    if [[ "${debugging:-}" == t ]]; then
-      reply_to_caller "debugging=t" || fail
-    fi
-
-    if (( return_code != 0 )); then
-      reply_to_caller "return_code=$return_code" || fail
-      return_value=$return_code
-    fi
-
-    if [[ "${command_successful:-}" ]]; then
-      reply_to_caller "command_successful=$command_successful" || fail
-    fi
-
-    if [[ "${debug_log_level_filter:-}" ]]; then
-      reply_to_caller "debug_log_level_filter=$debug_log_level_filter" || fail
-    fi
-
-    if [[ "${trace_vars:-}" ]]; then
-      copy_map trace_var_old trace_var_sub
-      local s="unset trace_var_sub; $(declare -p trace_var_sub)" 
-      s=${s/ -A / -Ag }
-      reply_to_caller "$s" || fail
-    fi
-
-    if (( ${progress_bar_nesting:-0} > 0 )); then
-      reply_to_caller "progress_bar_total=${progress_bar_total:-}
-progress_bar_nesting=${progress_bar_nesting:-}
-progress_bar_front_load=${progress_bar_front_load:-}
-progress_bar_start_time=${progress_bar_start_time:-}
-progress_bar_current=${progress_bar_current:-}
-" || fail
-    fi
-
-  end_function
-  handle_return
-}
-
-# run outside of the subshell afterwards
-after_fork() {
-  begin_function_lo
-    if [[ -f "${reply_file:-}" ]]; then
-      source $reply_file || fail
-      if [[ ${debugging:-f} == t ]]; then
-        [[ "${debug_debug:-f}" == t ]] && echo "debugging=$debugging, so starting debugging after fork" >&$fd_original_err
-
-        debug_immediate=f \
-        first_run=f \
-        debugging=f \
-        debug_skip_breakpoints=f \
-        debug_start
-
-      fi
-      if [[ "${debug_log_level_filter:-}" ]]; then
-        local log=$debug_log_level_filter
-        resolve_log_var
-      fi
-      rm $reply_file
-      reply_file=
-    fi
-  end_function
-  handle_return
-}
-
-get_new_reply_file() {
-  reply_file=$tmp_folder/reply.$BASHPID
-  if [[ -f $reply_file ]]; then
-    log_fatal "reply_file already exists: $reply_file"
-    return 1
-  fi
-  return 0
-}
-
-before_fork() {
-  begin_function_lo
-
-    if [[ ${background:-f} == t ]]; then
-      change_log=t
-    fi
-
-    get_new_reply_file || fail
-    defer "rm $reply_file"
-
-  end_function
-  handle_return
-}
-
-# usage: fork {command to execute}
-#  background=f (whether to run as a background process)
-#  change_log=f (whether to change the log)
-#  to_var       (write output to the given var instead of stdout)
-fork() {
-  local fork_command=$*
-  begin_function_lo
-    local reply_file return_code=0 \
-      background=${background:-f} \
-      change_log=${change_log:-f} \
-      to_var=${to_var:-}
-
-    before_fork || fail
-
-    if [[ $background == t ]]; then
-      ( fork_inside ) &
-    else
-      ( fork_inside )
-      return_code=$?
-      after_fork || (( return_code++ ))
-    fi
-
-    return_value=$return_code
-  end_function
-  handle_return
-}
-
-fork_fg() {
-  background=f fork "$@"
-}
-
-fork_bg() {
-  background=t fork "$@"
-}
-
 handle_user_interrupt() {
   local c silent=f prompt=${1:-Paused.}
   echo >&$fd_original_err
@@ -3765,6 +3612,159 @@ log_and_run() {
   fi
 
   return 0
+}
+
+prep_fork() {
+  begin_function_lo
+
+    if [[ "$fork_id_current" ]]; then
+      fork_id_current=$fork_id_current.$debug_id_current
+    else
+      fork_id_current=$debug_id_current
+    fi
+    debug_id_current=0
+    fork_debug_id=$fork_id_current.0
+
+    cleanup_on_exit=
+    setup_exit_trap
+
+  end_function
+  handle_return
+}
+
+# this should be run in a subshell
+fork_inside() {
+  begin_function_lo
+
+    local change_log2
+    prep_fork || fail
+
+    if [[ "$to_var" ]]; then
+      eval "$to_var=\$($fork_command)"; return_code=$?
+      reply_to_caller "$to_var='${!to_var}'" || fail
+    else
+      eval "$fork_command"; return_code=$?
+    fi
+
+    if [[ "${debugging:-}" == t ]]; then
+      reply_to_caller "debugging=t" || fail
+    fi
+
+    if (( return_code != 0 )); then
+      reply_to_caller "return_code=$return_code" || fail
+      return_value=$return_code
+    fi
+
+    if [[ "${command_successful:-}" ]]; then
+      reply_to_caller "command_successful=$command_successful" || fail
+    fi
+
+    if [[ "${debug_log_level_filter:-}" ]]; then
+      reply_to_caller "debug_log_level_filter=$debug_log_level_filter" || fail
+    fi
+
+    if [[ "${trace_vars:-}" ]]; then
+      copy_map trace_var_old trace_var_sub
+      local s="unset trace_var_sub; $(declare -p trace_var_sub)" 
+      s=${s/ -A / -Ag }
+      reply_to_caller "$s" || fail
+    fi
+
+    if (( ${progress_bar_nesting:-0} > 0 )); then
+      reply_to_caller "progress_bar_total=${progress_bar_total:-}
+progress_bar_nesting=${progress_bar_nesting:-}
+progress_bar_front_load=${progress_bar_front_load:-}
+progress_bar_start_time=${progress_bar_start_time:-}
+progress_bar_current=${progress_bar_current:-}
+" || fail
+    fi
+
+  end_function
+  handle_return
+}
+
+# run outside of the subshell afterwards
+after_fork() {
+  begin_function_lo
+    if [[ -f "${reply_file:-}" ]]; then
+      source $reply_file || fail
+      if [[ ${debugging:-f} == t ]]; then
+        [[ "${debug_debug:-f}" == t ]] && echo "debugging=$debugging, so starting debugging after fork" >&$fd_original_err
+
+        debug_immediate=f \
+        first_run=f \
+        debugging=f \
+        debug_skip_breakpoints=f \
+        debug_start
+
+      fi
+      if [[ "${debug_log_level_filter:-}" ]]; then
+        local log=$debug_log_level_filter
+        resolve_log_var
+      fi
+      rm $reply_file
+      reply_file=
+    fi
+  end_function
+  handle_return
+}
+
+get_new_reply_file() {
+  reply_file=$tmp_folder/reply.$BASHPID
+  if [[ -f $reply_file ]]; then
+    log_fatal "reply_file already exists: $reply_file"
+    return 1
+  fi
+  return 0
+}
+
+before_fork() {
+  begin_function_lo
+
+    if [[ ${background:-f} == t ]]; then
+      change_log=t
+    fi
+
+    get_new_reply_file || fail
+    defer "rm $reply_file"
+
+  end_function
+  handle_return
+}
+
+# usage: fork {command to execute}
+#  background=f (whether to run as a background process)
+#  change_log=f (whether to change the log)
+#  to_var       (write output to the given var instead of stdout)
+fork() {
+  local fork_command=$*
+  begin_function_lo
+    local reply_file return_code=0 \
+      background=${background:-f} \
+      change_log=${change_log:-f} \
+      to_var=${to_var:-}
+
+    before_fork || fail
+
+    if [[ $background == t ]]; then
+      ( fork_inside ) &
+    else
+      ( fork_inside )
+      return_code=$?
+      after_fork || (( return_code++ ))
+    fi
+
+    return_value=$return_code
+  end_function
+  handle_return
+}
+
+fork_fg() {
+  background=f fork "$@"
+}
+
+fork_bg() {
+  background=t fork "$@"
 }
 
 ######################################################
