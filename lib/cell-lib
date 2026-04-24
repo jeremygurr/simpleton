@@ -567,7 +567,8 @@ init_context() {
 
     declare -Ag all_dims=() \
       dim_shorts=() \
-      required_dims=() \
+      cell_required_dims=() \
+      cell_optional_dims=() \
 
     all_if_blank= \
     auto_loads=() \
@@ -606,7 +607,7 @@ init_context() {
     prev_branch_info_cell= \
     refresh_less_than=${refresh_less_than:-1} \
     related_dims_expanded=() \
-    required_dims_array=() \
+    cell_required_dims_array=() \
     retry_delay=2 \
     retry_delay_max=16 \
     retry_scale=2 \
@@ -3491,9 +3492,13 @@ add_required_dims() {
   for dim in $dims; do
     local -n default_value=dim_${dim}_default
     if [[ $dim != _ && " $all_optional_dims " != *" $dim "* && ! "${default_value:-}" ]]; then
-      if [[ ! -v required_dims[$dim] ]]; then
-        required_dims[$dim]=1
-        required_dims_array+=( $dim )
+      if [[ ! -v cell_required_dims[$dim] ]]; then
+        cell_required_dims[$dim]=1
+        cell_required_dims_array+=( $dim )
+      fi
+    else
+      if [[ ! -v cell_optional_dims[$dim] ]]; then
+        cell_optional_dims[$dim]=1
       fi
     fi
   done
@@ -3688,8 +3693,9 @@ setup_dims() {
 
     execute_dim_upstreams || fail
 
-    required_dims=()
-    required_dims_array=()
+    cell_required_dims=()
+    cell_optional_dims=()
+    cell_required_dims_array=()
     calc_anchor_dims || fail
 
     get_dim_parameters || fail
@@ -3709,7 +3715,7 @@ setup_dims() {
     fi
 
     local required_dims_sorted=()
-    set_to_array required_dims required_dims_sorted
+    set_to_array cell_required_dims required_dims_sorted
     sort_array required_dims_sorted
 
     if (( ${#required_dims_sorted[*]} > 0 )); then
@@ -3740,7 +3746,7 @@ setup_dims() {
 
       else
         if [[ $command_requires_resolved_dims == t ]]; then
-          target_dims="${required_dims_array[*]}" \
+          target_dims="${cell_required_dims_array[*]}" \
           get_support_dims || fail
         fi
         log_debug "Calculated support dims: ${support_dims_expanded[*]}"
@@ -5371,7 +5377,7 @@ validate_members() {
       abort
     fi
 
-    if [[ ! -v required_dims[$dim] && ( ! "$members" || $members == $empty_member ) ]]; then
+    if [[ ! -v cell_required_dims[$dim] && ( ! "$members" || $members == $empty_member ) ]]; then
       log_debug "Dim $dim is optional and missing, so it's valid"
       abort
     fi
@@ -6268,7 +6274,8 @@ calc_coordinates_add_row() {
   begin_function
 
     local i new_coords=() coord_added_string=
-    for (( i = 0; i < coordinate_fields_count; i++ )); do
+    begin_for (( i = 0; i < coordinate_fields_count; i++ )); doo
+      grip_fence
       local dim_var=${coordinate_fields[$i]}
       local -n dim_value=d_$dim_var
       if [[ ! "${dim_value:-}" ]]; then
@@ -6277,16 +6284,16 @@ calc_coordinates_add_row() {
           fail1
         fi
         new_coords+=( "" )
-        if [[ -v required_dims[$dim_var] ]]; then
+        if [[ -v cell_required_dims[$dim_var] || -v cell_optional_dims[$dim_var] ]]; then
           coord_added_string+="'' "
         fi
       else
         new_coords+=( "$dim_value" )
-        if [[ -v required_dims[$dim_var] ]]; then
+        if [[ -v cell_required_dims[$dim_var] || -v cell_optional_dims[$dim_var] ]]; then
           coord_added_string+="$dim_value "
         fi
       fi
-    done
+    end_for
 
     log_debug "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
     if [[ ! -v coordinates_added[$coord_added_string] ]]; then
@@ -6484,7 +6491,7 @@ attempt_default() {
 
     if [[ ! "${values:-}" ]]; then
 
-      #if [[ ! -v required_dims[$dim] ]]; then
+      #if [[ ! -v cell_required_dims[$dim] ]]; then
       #  values=( $empty_member )
       #  needs_narrowing=f
       #fi
@@ -6501,7 +6508,7 @@ calc_coordinates_row_end() {
 
     local unknown_dim new_unknown_dims=
     for unknown_dim in $unknown_dims; do
-      if [[ -v required_dims[$unknown_dim] ]]; then
+      if [[ -v cell_required_dims[$unknown_dim] ]]; then
         new_unknown_dims+="$unknown_dim "
       fi
     done
@@ -6590,7 +6597,7 @@ calc_coordinates_next_unknown_dim_found() {
 
     local -n member_type=dim_${dim}_effective_member_type
     if [[ $values == all && $member_type == dynamic ]]; then
-      if [[ -v required_dims[$dim] ]]; then
+      if [[ -v cell_required_dims[$dim] ]]; then
         log_fatal "Missing required dim: $dim"
         fail1
       else
@@ -7287,6 +7294,7 @@ prep_seed_dims() {
 }
 
 calc_coordinates_slow() {
+  local interesting_vars=coordinate_fields
   begin_function
 
     local row_index=${row_index:-} \
