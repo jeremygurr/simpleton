@@ -5934,6 +5934,288 @@ debug_setup() {
 ### file: ./02-command-lib.bash
 #!/usr/bin/env bash
 
+# Used by the help system to describe a command and it's parameters to the user
+new_command() {
+  local name=$name description=$description
+  command_description=$description
+  commands+=( $name )
+  current_command=$name
+  unset \
+    parameter_aliases \
+    parameter_choices \
+    parameter_defaults \
+    parameter_delay_questions \
+    parameter_descriptions \
+    parameter_names \
+    parameter_required \
+
+}
+
+add_parameter() {
+
+  local \
+    name=$name \
+    description=$description \
+    default=${default:-} \
+    choices=${choices:-} \
+    aliases=${aliases:-${alias:-}} \
+    required=${required:-f} \
+    delay_questions=${delay_questions:-f} \
+
+  local -n parameter_names=parameter_names_${current_command} \
+    parameter_descriptions=parameter_descriptions_${current_command} \
+    parameter_choices=parameter_choices_${current_command} \
+    parameter_defaults=parameter_defaults_${current_command} \
+    parameter_aliases=parameter_aliases_${current_command} \
+    parameter_delay_questions=parameter_delay_questions_${current_command} \
+    parameter_required=parameter_required_${current_command} \
+
+  parameter_names+=( "$name" ) 
+  parameter_descriptions+=( "$description" ) 
+  parameter_defaults+=( "$default" ) 
+  parameter_choices+=( "$choices" )
+  parameter_aliases+=( "$aliases" )
+  parameter_delay_questions+=( $delay_questions )
+  parameter_required+=( $required )
+
+  local a
+  for a in ${parameter_aliases[*]:-}; do
+    if [[ -v ${a}_append ]]; then
+      eval "${name}_append=\$${a}_append"
+    fi
+    if [[ -v ${a}_prepend ]]; then
+      eval "${name}_prepend=\$${a}_prepend"
+    fi
+    if [[ -v ${a}_remove ]]; then
+      eval "${name}_remove=\$${a}_remove"
+    fi
+  done
+
+}
+
+setup_commands() {
+  begin_function
+    current_command=global name=log default= description="Log shortcuts
+    shortcuts for log_level_filter=... (can also use first letter of each as a shortcut)
+      off
+      fatal
+      error
+      warn
+      info
+      verbose
+      trace
+      all
+    shortcuts for log_to_file and log_to_out:
+      file   send logs to a file (default) (log_to_file=t)
+      out    send logs to console (log_to_out=t)
+    shortcuts for show_debug_id
+      id     show debug ids per log line output (show_debug_id=t)
+      id2    show all debug ids (show_debug_id=a)
+    " add_parameter 
+
+    current_command=global name=trace_vars aliases='trace_var trace' default= description="Trace a variables changes throughout the execution of a command.
+    May include one or more vars or arrays or sets.
+    If var is prepended with ^, then it will include all dimensional forms of that variable: d_var s_var d_vars s_vars, etc.
+    " add_parameter 
+
+    current_command=global name=trace_condition default= description="Shows each time a condition changes throughout the execution of a command.
+    Can include anything that can be put after an 'if' command. Example: [[ -f /tmp/test-file ]]
+    " add_parameter 
+
+    current_command=global name=trace_dims alias=trace_dim default= \
+      description="Trace a dimension(s). Will log details each time it is derived or calculated." add_parameter 
+
+    current_command=global name=trace_structure alias=trace_struct default= \
+      description="Traces every function entrance and exit." add_parameter 
+
+    current_command=global name=trace_stack default= \
+      description="Show a stack trace at each function call. trace_stack is a number which means the number of top stack frames to skip. Setting it to 't' is the same as 0 (meaning no frames are skipped)" add_parameter 
+
+    current_command=global name=pause_at_debug_id aliases='pause pause_at_debug' default= description="Will pause when the given debug_id is reached. Automatically adds these vars to trace_vars." add_parameter 
+
+    current_command=global name=pause_at_cells aliases='pause pause_at_cell' default= description="Will pause each time one of the given cells are executed." add_parameter 
+
+    current_command=global name=pause_at_functions aliases='pause pause_at_function' default= description="Will pause each time one of the given functions are entered." add_parameter 
+
+    current_command=global name=pause_at_vars aliases='pause pause_at_var' default= description="Will pause each time one of the given vars are changed. Automatically adds these vars to trace_vars." add_parameter 
+
+    current_command=global name=clean_cells aliases='clean clean_cell' default= description="Will clean the cells it comes across as it's executing the given command." add_parameter 
+
+    current_command=global name=autorepair_level alias=repair default= description="Autorepair level
+    0 = don't autorepair ever
+    1 = autorepair when it is guaranteed to fix something and will be reasonably fast to check
+    2 = autorepair when it could fix something, but still will execute fairly quickly
+    3 = autorepair if at all possible, even if it takes time
+    " add_parameter 
+
+    current_command=global name=trace_fun default= description="Trace when a function is entered or exited.
+    May include one or more functions.
+    " add_parameter 
+
+    current_command=global name=trace_time default= description="Set to 't' to see how much time is spent executing each function." add_parameter 
+    current_command=global name=show_time default= description="Set to 't' to show a timestamp next to each log line / debug_id output" add_parameter 
+
+    current_command=global name=grip default=0 description="Set to 1 to cause more debug increments to happen, making narrowing down problems and pausing easier, but slowing down execution. Use if you're having trouble pausing or getting a debug_id close enough to a problem." add_parameter 
+    current_command=global name=slow_down alias=slow default=0 description="Number of seconds (can be fractional) to pause after each log line, greatly slowing down execution. Recommend starting with something like 0.02 and see if that's slow enough" add_parameter 
+
+    current_command=global name=debug_id alias=debug default= description="start debugger at a given id or function
+    debug_id is used to stop at a specific debugger id
+    debug_quick_function can stop at a specific function
+    but the debug alias can be used for both. It can tell automatically which type it is. 
+    Multiple space separated breakpoints can be specified, and they will be hit in order, and only stop when the last is hit.
+    " add_parameter 
+
+    current_command=global name=debug_on_exit default=f description="start debugger when process exits for any reason.
+    -x is a shortcut flag for this.
+    " add_parameter 
+
+    current_command=global name=yolo default=f description="disable all debug mechanisms, speeding up execution. This must be set in the environment or before the cell command to work." add_parameter 
+
+    current_command=global name=log_light description="Highlights log lines that match this regex." add_parameter 
+
+    commands=()
+    local current_command
+
+    name=update description="Updates product of this cell" new_command 
+
+    name=fresh default=inf description="Minimum freshness required. 
+      0 = update no matter what. 
+      5m = update if fresh within 5 minutes. 
+      2h = update if fresh within 2 hours. 
+      inf = ignore freshness.
+    " add_parameter 
+
+    name=stop_after description="Instead of running the full update, will stop after the given step.
+      Intrinsic steps (those that don't explicitly exist as steps in the seed):
+      plant    # stop after the planting phase is complete
+    " add_parameter
+
+    name=refresh default=f description="Allows for direct control over whether a cell needs to be updated.
+      t = mark all cells in this tree as stale (needing to be updated).
+      f = only update cells which need to be updated
+    " add_parameter
+
+    name=risk_tolerance short=risk default=low description="Maximum risk tolerance. Low risk means only operations with virtually
+      no chance of causing problems will be allowed. If you attept to update a cell that is higher risk than the
+      tolerance specified, that update will fail.
+      0 = low = restriced to read only operations, no changes will be made to anything.
+      1 = medium = very safe changes are allowed which can only result in low impact outages at worst.
+      2 = high = production outage may occur if you aren't sure of what you are doing, but there will be many 
+        checks in place to minimize the chance of this.
+      3 = very_high = production outage may occur, and there aren't a lot of safe guards in place, so you really
+        need to know what you are doing and what these scripts do on a low level before attempting these commands.
+    " add_parameter
+
+    name=mock description="Switch to the given mocked cell result. 
+    Set mock=f to turn off mocking and go back to real cell computation.
+    " add_parameter
+
+    name=confirm_dims default=t description="Will ask user before running a top level command if the derived dims are valid before updating.
+    If set to 'a' it will confirm for every cell, not just the top one.
+    " add_parameter
+
+    name=show_dims default=t description="Will display the dims for the top cell if set to t.
+    If set to 'a' it will show the dims for every cell.
+    " add_parameter
+
+    name=pre_validate default=t description="Whether validation cells/functions should be run before update
+    " add_parameter
+
+    name=post_validate default=t description="Whether validation cells/functions should be run after update
+    " add_parameter
+
+    name=validate default=t description="Sets both pre_validate and post_validate to this value
+    " add_parameter
+
+    name=up_only description="Only runs upstreams matching the given values
+    " add_parameter
+
+    name=debug_log description="Starts debugger when a log line containing this string is written
+    " add_parameter
+
+  end_function
+  handle_return
+}
+
+mock_get_choices() {
+  choices=
+  local mock_path=${mock_path:-}
+
+  if [[ ! "$mock_path" ]]; then
+    local seed_path=${seed_path:-}
+    if [[ ! "$seed_path" ]]; then
+      local cell_path=${cell_path:-$PWD}
+      find_seed_path $cell_path || return 0
+      mock_path=$seed_path/.mock
+    fi
+  fi
+
+  if [[ "${mock_path:-}" && -d "${mock_path:-}" ]]; then
+    choices=( $(find1 $mock_path -not -name export -printf "%f\n" | sort) ) || return 0
+  fi
+}
+
+show_usage() {
+  begin_function
+    local indent=${indent:-0}
+    out "Usage: ${0##*/} ({cells..} {commands..}).."
+
+    indent
+    local d=
+    d+="Parameters are cells followed by commands to be run on those cells. "
+    d+="Any number of cell/command combinations can be given, which will be executed sequentially. "
+    d+="If two cells are given in a row with no command in between, the commands following the last "
+    d+="cell will be applied to all of the cells preceeding them. "
+    d+="key=value parameters may be put anywhere in the parameter list and will apply to all commands. "
+    d+="This also applies to flag shortcuts. "
+    d+="If no cell path is specified, the cell path is taken from the current folder. "
+    d+="If help or -h or --help or ? is given as any of the parameters, "
+    d+="documentation for the given cells or commands is printed instead of executing commands. "
+    d+="If ?? is given, more verbose help will be given if available. "
+    d+="key=? form can be used to get documentation about a specific variable/key/dimension. "
+    d+="-? can be used to get documentation for flags which are shortcuts of normal key parameters. "
+    d+="Soft interrupt feature: While a command is executing, you may press enter to pause execution. "
+    d+="$NL$NL"
+    d+="Use \`cell . help\` to see help specific to the current cell (you can replace . with any cell name also)."
+    echo "$d" | fold -s -w $((COLUMNS-2)) | indent_stream $indent
+
+    outdent
+    out "${NL}Possible Commands:"
+    indent
+    local name
+    {
+      begin_for name in ${commands[*]}; doo
+        local -n command_description=command_${name}_description
+        if [[ "$command_description" ]]; then
+          local short_desc=$command_description
+          trim_ws short_desc
+          short_desc=${short_desc%%$NL*}
+          echo "$name $short_desc"
+        else
+          echo "$name Please add a description to this command in $cell_command"
+        fi
+      end_for
+    } | column -l 2 -t | indent_stream $indent
+
+#    local -n command_aliases=command_${name}_aliases
+#    local -n command_alias_command=command_${name}_alias_command
+#    if [[ "${command_aliases:-}" ]]; then
+#      local i
+#      (( indent -= 2 ))
+#      out "${NL}Command aliases (may be used as shortcuts of the given commands):"
+#      (( indent += 2 ))
+#      {
+#        echo "ALIAS SUBSTITUTED-FOR"
+#        begin_for (( i = 0; i < ${#command_aliases[*]}; i++ )); doo
+#          echo "${command_aliases[$i]} ${command_alias_command[$i]}"
+#        end_for
+#      } | column -l 2 -t | indent_stream $indent
+#    fi
+
+  end_function
+  handle_return
+}
+
 command_lib_init() {
 #  command_detail=${command_detail:-0}
 #  parameters_to_env "$@" || exit 1
@@ -5990,122 +6272,6 @@ handle_flag_custom() {
 	  ;;
   esac
   return 1;
-}
-
-setup_commands() {
-  commands=()
-
-  name=update description="Updates product of this cell" new_command 
-
-  name=fresh default=inf description="Minimum freshness required. 
-    0 = update no matter what. 
-    5m = update if fresh within 5 minutes. 
-    2h = update if fresh within 2 hours. 
-    inf = ignore freshness." add_parameter 
-
-  name=refresh default=f description="Allows for direct control over whether a cell needs to be updated.
-    t = mark all cells in this tree as stale (needing to be updated).
-    f = only update cells which need to be updated
-  " add_parameter
-
-  name=risk_tolerance short=risk default=low description="Maximum risk tolerance. Low risk means only operations with virtually
-    no chance of causing problems will be allowed. If you attept to update a cell that is higher risk than the
-    tolerance specified, that update will fail.
-    0 = low = restriced to read only operations, no changes will be made to anything.
-    1 = medium = very safe changes are allowed which can only result in low impact outages at worst.
-    2 = high = production outage may occur if you aren't sure of what you are doing, but there will be many 
-      checks in place to minimize the chance of this.
-    3 = very_high = production outage may occur, and there aren't a lot of safe guards in place, so you really
-      need to know what you are doing and what these scripts do on a low level before attempting these commands.
-  " add_parameter
-
-  name=mock description="Switch to the given mocked cell result. 
-  Set mock=f to turn off mocking and go back to real cell computation.
-  " add_parameter
-
-  name=confirm_dims default=t description="Will ask user before running a top level command if the derived dims are valid before updating.
-  If set to 'a' it will confirm for every cell, not just the top one.
-  " add_parameter
-
-  name=show_dims default=t description="Will display the dims for the top cell if set to t.
-  If set to 'a' it will show the dims for every cell.
-  " add_parameter
-
-  name=pre_validate default=t description="Whether validation cells/functions should be run before update
-  " add_parameter
-
-  name=post_validate default=t description="Whether validation cells/functions should be run after update
-  " add_parameter
-
-  name=validate default=t description="Sets both pre_validate and post_validate to this value
-  " add_parameter
-
-  name=up_only description="Only runs upstreams matching the given values
-  " add_parameter
-
-  name=debug_log description="Starts debugger when a log line containing this string is written
-  " add_parameter
-}
-
-show_usage() {
-  begin_function
-    local indent=${indent:-0}
-    out "Usage: ${0##*/} ({cells..} {commands..}).."
-
-    indent
-    local d=
-    d+="Parameters are cells followed by commands to be run on those cells. "
-    d+="Any number of cell/command combinations can be given, which will be executed sequentially. "
-    d+="If two cells are given in a row with no command in between, the commands following the last "
-    d+="cell will be applied to all of the cells preceeding them. "
-    d+="key=value parameters may be put anywhere in the parameter list and will apply to all commands. "
-    d+="This also applies to flag shortcuts. "
-    d+="If no cell path is specified, the cell path is taken from the current folder. "
-    d+="If help or -h or --help or ? is given as any of the parameters, "
-    d+="documentation for the given cells or commands is printed instead of executing commands. "
-    d+="If ?? is given, more verbose help will be given if available. "
-    d+="key=? form can be used to get documentation about a specific variable/key/dimension. "
-    d+="-? can be used to get documentation for flags which are shortcuts of normal key parameters. "
-    d+="Soft interrupt feature: While a command is executing, you may press enter to pause execution. "
-    d+="$NL$NL"
-    d+="Use \`cell . help\` to see help specific to the current cell (you can replace . with any cell name also)."
-    echo "$d" | fold -s -w $((COLUMNS-2)) | indent_stream $indent
-
-    outdent
-    out "${NL}Possible Commands:"
-    indent
-    local name
-    {
-      begin_for name in ${commands[*]}; doo
-        local -n command_description=command_${name}_description
-        if [[ "$command_description" ]]; then
-          local short_desc=$command_description
-          trim_ws short_desc
-          short_desc=${short_desc%%$NL*}
-          echo "$name $short_desc"
-        else
-          echo "$name Please add a description to this command in $cell_command"
-        fi
-      end_for
-    } | column -l 2 -t | indent_stream $indent
-
-    local -n command_aliases=command_${name}_aliases
-    local -n command_alias_command=command_${name}_alias_command
-    if [[ "${command_aliases:-}" ]]; then
-      local i
-      (( indent -= 2 ))
-      out "${NL}Command aliases (may be used as shortcuts of the given commands):"
-      (( indent += 2 ))
-      {
-        echo "ALIAS SUBSTITUTED-FOR"
-        begin_for (( i = 0; i < ${#command_aliases[*]}; i++ )); doo
-          echo "${command_aliases[$i]} ${command_alias_command[$i]}"
-        end_for
-      } | column -l 2 -t | indent_stream $indent
-    fi
-
-  end_function
-  handle_return
 }
 
 is_command() {
@@ -6308,9 +6474,6 @@ top_level() {
       cell_commands=() \
       leftovers=() \
 
-      if [[ -e $path_to_commands/all.info ]]; then
-        source $path_to_commands/all.info || fail
-      fi
       handle_questions || fail
       get_cells || fail
       get_commands || fail
@@ -6383,69 +6546,6 @@ top_level() {
   fi
 
   handle_return
-}
-
-# Used by the help system to describe a command and it's parameters to the user
-new_command() {
-  local name=$name description=$description
-  command_description=$description
-  unset \
-    parameter_aliases \
-    parameter_choices \
-    parameter_defaults \
-    parameter_delay_questions \
-    parameter_descriptions \
-    parameter_names \
-    parameter_required \
-
-}
-
-add_parameter() {
-
-  local type=${type:-command} \
-    name=$name \
-    description=$description \
-    default=${default:-} \
-    choices=${choices:-} \
-    aliases=${aliases:-${alias:-}} \
-    required=${required:-f} \
-    delay_questions=${delay_questions:-f} \
-
-  local -n parameter_names=parameter_names_$type \
-    parameter_descriptions=parameter_descriptions_$type \
-    parameter_choices=parameter_choices_$type \
-    parameter_defaults=parameter_defaults_$type \
-    parameter_aliases=parameter_aliases_$type \
-    parameter_delay_questions=parameter_delay_questions_$type \
-    parameter_required=parameter_required_$type \
-
-  parameter_names+=( "$name" ) 
-  parameter_descriptions+=( "$description" ) 
-  parameter_defaults+=( "$default" ) 
-  parameter_choices+=( "$choices" )
-  parameter_aliases+=( "$aliases" )
-  parameter_delay_questions+=( $delay_questions )
-  parameter_required+=( $required )
-
-  local a
-  for a in ${parameter_aliases[*]:-}; do
-    if [[ -v ${a}_append ]]; then
-      eval "${name}_append=\$${a}_append"
-    fi
-    if [[ -v ${a}_prepend ]]; then
-      eval "${name}_prepend=\$${a}_prepend"
-    fi
-    if [[ -v ${a}_remove ]]; then
-      eval "${name}_remove=\$${a}_remove"
-    fi
-  done
-
-}
-
-add_command_alias() {
-  local name=$name command=$command
-  command_aliases+=( "$name" )
-  command_alias_command+=( "$command" )
 }
 
 ### file: ./03-pack-command-lib.bash
@@ -7635,6 +7735,7 @@ forge_v2() {
 
     walk_init || fail
     local back_stack=() \
+      current_seed \
       current_action=go \
       link_expansion=f \
       add_roots=f \
@@ -7643,7 +7744,7 @@ forge_v2() {
     show_selection() {
       local extra= branches=() branch member \
         current_selection=$current_selection short_path
-      get_short_path ${current_selection#/seed/*/}
+      get_short_path ${current_selection#/work/*/}
       echo "$HIGHLIGHT$hbar_equals$NL$short_path$RESET"
 
       while [[ $current_selection == *:* && $current_selection == /*/*/* ]]; do
@@ -7693,10 +7794,10 @@ forge_v2() {
       local path
 
       #if [[ $add_roots == t ]]; then
-      #  forge_add_roots_v2 ${current_selection%/*} || fail
+      #  forge_add_roots_v2 ${current_seed%/*} || fail
       #fi
-      forge_add_subs_v2 $current_selection || fail
-      #forge_add_dims_v2 $current_selection || fail
+      forge_add_subs_v2 $current_seed || fail
+      #forge_add_dims_v2 $current_seed || fail
 
       return 0
     }
@@ -8104,6 +8205,7 @@ forge_v2() {
     local result= current_selection=$PWD \
       walk_jump_current=$PWD walk_jump_other=$PWD
 
+    set -x
     if [[ $current_selection == /seed/* && -d /work ]]; then
       current_selection=/work${current_selection#/seed}
       while [[ ! -d $current_selection && $current_selection == /*/*/* ]]; do
@@ -8113,6 +8215,16 @@ forge_v2() {
         echo "Current folder is invalid" >&2
         return 1
       fi
+    fi
+    set +x
+
+    if [[ -d $current_selection/.seed ]]; then
+      current_seed=$current_selection/.seed
+    elif [[ -d /seed/${current_selection#/work/} ]]; then
+      current_seed=/seed/${current_selection#/work/}
+    else
+      echo "Could not find seed for this work path: $current_selection" >&2
+      return 1
     fi
 
     prompt="Choose (press enter to stop here): " \
@@ -8418,7 +8530,7 @@ if [[ ${auto_setup_lifted:-f} == t || $0 == */c2 ]]; then
   debugger_init || exit 1
 fi
 
-if [[ $0 == */c2 ]]; then
+if [[ $0 == */c2 || $0 == c2 ]]; then
   command_lib_init "$@" || exit 1
   top_level "${real_params[@]}" || exit 1
 fi
