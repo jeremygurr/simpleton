@@ -2,12 +2,8 @@
 
 SIMPLETON_LIB=/repo/simpleton/lib
 SIMPLETON_REPO=/repo/simpleton
-#source $SIMPLETON_LIB/lifted-bash || exit 1
-#source $SIMPLETON_LIB/bash-lib || exit 1
-#bash_lifted_init
-#source $SIMPLETON_LIB/walk-lib || exit 1
 source $SIMPLETON_REPO/bin/c2 || exit 1
-#lifted_bash_init "$@" || exit 1
+lifted_bash_init_light || exit 1
 
 COMP_WORDBREAKS=${COMP_WORDBREAKS//:}
 

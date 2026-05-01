@@ -323,6 +323,10 @@ from_background_process__record_line() {
     echo "$line" >>$background_log || return 1
   fi
 
+  if [[ ${output_responses:-f} == t ]]; then
+    echo "$PURPLE$line$RESET" >$fd_original_err || return 1
+  fi
+
   return 0
 }
 
@@ -704,21 +708,22 @@ handle_char_buffering() {
 }
 
 # input:
-#   pipe             path to pipe to receive commands from
-#   to_var           var to write result to
-#   timeout          0=never timeout, >0=timeout after that many seconds (may be fractional)
-#   fail_after       a newline separated list of regex strings. 
-#                      If a line matches any of these, failed will be set to 't', 
-#                      processing will stop and the remaining pipe output flushed.
-#                      Regex strings must have spaces escaped.
-#   succeed_after    a newline separated list of regex strings. If a line matches any of
-#                      these. If a line matches any of these, processing will stop and
-#                      the remaining pipe output flushed.
-#   required_output  A regex string which must be found in the output or failed will be 
-#                      set to 't'
-#   buffering        line, char, or burst. Affects how quickly input is pulled and how 
-#                      interactions can act
-#   interact         A string of pairs of text separated by newlines to look for in shell output. The text to look for is first, followed by a newline and the response to give.
+#   pipe              path to pipe to receive commands from
+#   to_var            var to write result to
+#   timeout           0=never timeout, >0=timeout after that many seconds (may be fractional)
+#   fail_after        a newline separated list of regex strings. 
+#                       If a line matches any of these, failed will be set to 't', 
+#                       processing will stop and the remaining pipe output flushed.
+#                       Regex strings must have spaces escaped.
+#   succeed_after     a newline separated list of regex strings. If a line matches any of
+#                       these. If a line matches any of these, processing will stop and
+#                       the remaining pipe output flushed.
+#   required_output   A regex string which must be found in the output or failed will be 
+#                       set to 't'
+#   buffering         line, char, or burst. Affects how quickly input is pulled and how 
+#                       interactions can act
+#   interact          A string of pairs of text separated by newlines to look for in shell output. The text to look for is first, followed by a newline and the response to give.
+#   output_responses  If t, will send responses to stdout
 # output:
 #   timed_out 
 #   failed
@@ -726,8 +731,7 @@ handle_char_buffering() {
 #   fail_string
 # will flush output at end
 from_background_process() {
-  local interesting_vars='pipe interact pipe_replay' \
-    interesting_vars='timeout required_output succeed_after fail_after'
+  local interesting_vars='interact timeout required_output succeed_after fail_after'
   begin_function
 
     local pipe_in=${pipe}_in pipe_out=${pipe}_out \
@@ -739,6 +743,7 @@ from_background_process() {
       pretending=f \
       timeout=${timeout:-0} \
       flush_time=${flush_time:-2} \
+      output_responses=${output_responses:-f} \
 
     local -n to=$to_var
 
@@ -846,6 +851,7 @@ magic_shell_prompt='>=-=>'
 #   fail_after           will override shell_prompt check if set
 #   interact             allow for automatic reactions to command output
 #   allow_return_codes   if set to all, will not fail if any code is received
+#   output_responses     if set to t, will write all responses to stdout
 # output: 
 #   result
 #   command_successful
@@ -858,6 +864,7 @@ run_pipe_command() {
     shell_prompt=${shell_prompt:-$magic_shell_prompt} \
     host_prompt=${host_prompt:-} \
     flush_time=${flush_time:-2} \
+    timeout=${timeout:-10} \
     succeed_after=${succeed_after:-} \
     fail_after=${fail_after:-} \
     interact=${interact:-} \
@@ -865,6 +872,7 @@ run_pipe_command() {
     allow_return_codes=${allow_return_codes:-} \
     succeed_string= \
     fail_string= \
+    output_responses=${output_responses:-f} \
 
   local interesting_vars=command interesting_vars='pipe shell_prompt buffering'
   begin_function_hi
