@@ -191,7 +191,7 @@ to_background_process_single() {
       fi
 
       if [[ ${output_responses:-f} == t ]]; then
-        echo "$YELLOW$masked_command$RESET" >$fd_original_err || return 1
+        echo "$YELLOW$masked_command$RESET" || return 1
       fi
 
       case $pipe_replay_state in recording|replaying|replay_unless_missing)
@@ -217,6 +217,10 @@ to_background_process_single() {
 
       if [[ "${background_log:-}" ]]; then
         echo -n "$YELLOW$masked_command$RESET" >>$background_log || fail
+      fi
+
+      if [[ ${output_responses:-f} == t ]]; then
+        echo "$YELLOW$masked_command$RESET" || return 1
       fi
 
       case $pipe_replay_state in recording|replaying|replay_unless_missing)
@@ -325,10 +329,6 @@ from_background_process__record_line() {
 
   if [[ "${background_log:-}" ]]; then
     echo "$line" >>$background_log || return 1
-  fi
-
-  if [[ ${output_responses:-f} == t ]]; then
-    echo "$PURPLE$line$RESET" >$fd_original_err || return 1
   fi
 
   return 0
@@ -462,8 +462,8 @@ from_background_process__prep() {
 
 flush_background_process() {
   local pipe_in=${pipe}_in pipe_out=${pipe}_out \
-    buffering=${buffering:-line} \
-    timeout=${timeout:-0} \
+    buffering=${buffering:-burst} \
+    timeout=${timeout:-0.5} \
     line char
 
   local interesting_vars='pipe timeout buffering'
@@ -507,7 +507,7 @@ flush_background_process() {
     line=
     case "$buffering" in
       char)
-        while IFS= read -n1 -r -t $timeout -u $back_fd -r char; [[ "${char:-}" ]]; do
+        while IFS= read -n1 -r -t $timeout -u $back_fd -r char; do
           if [[ "$char" ]]; then
             line+=$char
           else
@@ -515,10 +515,24 @@ flush_background_process() {
             effective_replay_state=none \
             from_background_process__record_line || fail
             line=
+            break
           fi
         done
         ;;
-      line|burst)
+      burst)
+        while IFS= read -n20 -r -t $timeout -u $back_fd -r char; do
+          if [[ "$char" ]]; then
+            line+=$char
+          else
+            log_debug "Flushing: $line" || fail
+            effective_replay_state=none \
+            from_background_process__record_line || fail
+            line=
+            break
+          fi
+        done
+        ;;
+      line)
         while IFS= read -r -t $timeout -u $back_fd -r line; [[ "${line:-}" ]]; do
           log_debug "Flushing: $line" || fail
           effective_replay_state=none \
@@ -555,6 +569,11 @@ handle_line_buffering() {
 
       if [[ "$line" ]]; then
         from_background_process__record_line || fail
+
+        if [[ ${output_responses:-f} == t ]]; then
+          echo "$PURPLE$line$RESET"
+        fi
+
         from_background_process__check_line || fail
         line=
         if [[ $succeeded == t || $failed == t ]]; then
@@ -593,18 +612,30 @@ handle_burst_buffering() {
       IFS=$NL read -r -t $current_timeout -u $back_fd line; rc=$?
 
       if (( rc > 128 )); then 
+
         #log_debug "burst timed out"
         timed_out=t
         (( timeout_total_ms += current_timeout_ms ))
         partial_line+=$line \
         current_timeout=$long_timeout \
         current_timeout_ms=$long_timeout_ms
+
+        if [[ ${output_responses:-f} == t ]]; then
+          echo -n "$PURPLE$line$RESET"
+        fi
+
       else
+
         #log_debug "burst normal read"
         complete_line=$partial_line$line \
         partial_line= \
         current_timeout=$short_timeout \
         current_timeout_ms=$short_timeout_ms
+
+        if [[ ${output_responses:-f} == t ]]; then
+          echo "$PURPLE$line$RESET"
+        fi
+
       fi
 
       if (( rc > 0 && rc < 129 )); then
@@ -619,7 +650,8 @@ handle_burst_buffering() {
 
       if (( timeout_total_ms > target_timeout_ms )); then
         log_debug "Max timeout of $timeout exceeded"
-        timed_out=t
+        # should be the only possibility here
+        #timed_out=t 
         loop_done=t
       fi
 
@@ -632,15 +664,13 @@ handle_burst_buffering() {
       line=
 
       if (( repeat_count > 3 )); then
-        log_debug "Line is repeating too much: '$line'"
         loop_done=t
-        timed_out=t
+        failed=t
+        problem="Line is repeating too much: '$line'"
+        log_debug "$problem"
       fi
 
-      if [[ $succeeded == t ]]; then
-        timed_out=f
-        loop_done=t
-      elif [[ $failed == t ]]; then
+      if [[ $succeeded == t || $failed == t ]]; then
         timed_out=f
         loop_done=t
       elif [[ $interacted == t ]]; then
@@ -652,7 +682,7 @@ handle_burst_buffering() {
         line=$complete_line from_background_process__record_line || fail
       elif [[ "$partial_line" && $loop_done == t ]]; then
         line=$partial_line from_background_process__record_line || fail
-        partial_line=
+        #partial_line=
       fi
 
       if [[ $loop_done == t ]]; then
@@ -683,6 +713,10 @@ handle_char_buffering() {
 
         if [[ "$char" != "$NL" ]]; then
           line+=$char
+        fi
+
+        if [[ ${output_responses:-f} == t ]]; then
+          echo -n "$PURPLE$char$RESET"
         fi
 
         from_background_process__check_line || fail
@@ -879,12 +913,12 @@ run_pipe_command() {
     output_responses=${output_responses:-f} \
 
   local interesting_vars=command interesting_vars='pipe shell_prompt buffering'
-  begin_function_hi
+  begin_function
 
     timed_out=f failed=f command_successful=f
 
     pipe_replay_hash=
-    timeout=$flush_time buffering=char flush_background_process || fail
+    timeout=$flush_time flush_background_process || fail
 
     from_var=command \
     to_background_process || fail
@@ -922,6 +956,7 @@ run_pipe_command() {
       fail_after="^\\[[1-9][0-9]+\\]\ .*$shell_prompt"
     fi
 
+    problem=
     to_var=result \
       from_background_process || fail
 
@@ -939,8 +974,13 @@ run_pipe_command() {
     fi
   elif failed; then
     if [[ $silence_errors == f ]]; then
-      interesting_vars=result \
-        log_fatal "Internal error while trying to execute remote command"
+      if [[ "$problem" ]]; then
+        interesting_vars=result \
+          log_fatal "$problem"
+      else
+        interesting_vars=result \
+          log_fatal "Internal error while trying to execute remote command"
+      fi
     fi
   elif [[ "$succeeded" == t ]]; then
     log_debug "Command execution successful"
