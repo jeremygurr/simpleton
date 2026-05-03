@@ -405,15 +405,20 @@ make_table_index() {
           fi
 
           local count=0
-          for value in "${values[@]}"; do
+          local -n members=dim_${field}_members
+          begin_for value in "${values[@]}"; doo
             if [[ "$value" ]]; then
+              if [[ -v members ]] && ! array_contains members "$value"; then
+                log_fatal "Bad derive table: $table. Member $value of dim $field does not belong to the static members defined in .lib/dim/$field/members.arr"
+                fail1
+              fi
               index[$value]+="$row_index "
               (( count++ )) || true
               if (( count == 2 )); then
                 index_multi=t
               fi
             fi
-          done
+          end_for
 
         end_for
 
@@ -6742,8 +6747,9 @@ calc_coordinates_next_unknown_dim_in_phase_con_row() {
 
 # inputs:
 #   con_of_dim
+#   dim
 calc_coordinates_next_unknown_dim_in_phase_con() {
-  local interesting_vars=con_of_dim
+  local interesting_vars=con_of_dim narrowing_down_dim=$dim
 
   begin_function
     local -n con_fields=con_${con_of_dim}_table_fields \
@@ -6780,7 +6786,7 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
       local new_size=${#matching_rows[*]}
       if [[ ! -v matching_rows[all] ]]; then
         if [[ $original != $new_size ]]; then
-          log_debug "Narrowed down using con $con_of_dim and dim $dim from $original to $new_size..."
+          log_debug "Narrowed down dim $narrowing_down_dim using con $con_of_dim / dim $dim from $original to $new_size..."
         fi
         original=$new_size
       fi
