@@ -5790,7 +5790,7 @@ make_derive_cache_dim_info() {
         effective_member_type=$member_type
       ;;
       unset)
-        if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]]; then
+        if [[ "${dim_members:-}" || "${dim_derive_tables:-}" ]] || function_exists dim_${dim}_get_members; then
           effective_member_type=static
         else
           effective_member_type=dynamic
@@ -6621,7 +6621,7 @@ calc_coordinates_next_unknown_dim_found() {
     local -n member_type=dim_${dim}_effective_member_type
     if [[ $values == all && $member_type == dynamic ]]; then
       if [[ -v cell_required_dims[$dim] ]]; then
-        log_fatal "Missing required dim: $dim"
+        log_fatal "Dim $dim is dynamic, but resolved value is 'all', which doesn't make sense."
         fail1
       else
         already_expanded=t
@@ -6849,11 +6849,11 @@ calc_coordinates_next_unknown_dim_in_phase() {
       if [[ $phase == default ]]; then
         attempt_default || fail
       elif [[ $phase == all_if_blank ]]; then
-        if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
+        if [[ $dim_resolver == brute || " ${all_if_blank:-} " == *" $dim "* ]]; then
           local -n dim_members=dim_${dim}_members
           if [[ "${dim_members:-}" ]]; then
             values=( "${dim_members[@]}" )
-          else
+          elif [[ $dim_resolver != brute ]]; then
             log_fatal "dim_members not defined for $dim. Either define it expliciting in the dim definition, or add a derive table containing the valid members."
             fail1
           fi
@@ -6909,14 +6909,9 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
-      begin_for phase in default con derive derive_optional_functions all_if_blank narrow; doo
+      begin_for phase in default con derive derive_optional_functions narrow all_if_blank; doo
 
         if [[ $default_completed == t && $phase == default ]]; then
-          continue
-        fi
-
-        if [[ $dim_resolver == brute && $phase == all_if_blank ]]; then
-          # brute resolver doesn't need this phase
           continue
         fi
 
