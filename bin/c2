@@ -463,7 +463,7 @@ show_time_update() {
 }
 
 get_var_value() {
-  local __var_name=$1 __val_name=${2:-value}
+  local __var_name=$1 __val_name=${2:-value} __limit=${__limit:-}
 
   if [[ ! "$__var_name" =~ ^[a-zA-Z0-9_]+$ ]]; then
     echo "Invalid variable name: $__var_name" >&$fd_original_err
@@ -491,25 +491,27 @@ get_var_value() {
       else
         _val+="$__k=(empty) "
       fi
-      (( __c++ ))
-      if (( __c > 20 )); then
-        _val+="... "
-        break
+      if [[ "$__limit" ]]; then
+        if (( __c++ > __limit )); then
+          _val+="... "
+          break
+        fi
       fi
     done
     _val+=")"
   elif is_array _var; then
-    #if [[ "${_var:-}" ]] && (( ${#_var[*]} > 20 )); then
-    #  _val="( ${_var[*]:0:20} ... )"
-    #else
-    #  _val="( ${_var[*]:-} )"
-    #fi
-    local __v
+    local __v __c=0
     _val="( "
     if (( "${#_var[*]}" > 0 )); then
       for __v in "${_var[@]}"; do
         quotes=single shell_quote_var __v
         _val+="$__v "
+        if [[ "$__limit" ]]; then
+          if (( __c++ > __limit )); then
+            _val+="... "
+            break
+          fi
+        fi
       done
     fi
     _val+=")"
@@ -565,7 +567,7 @@ show_trace_vars() {
       local real_var=${var#^}
       real_var=${real_var#*=}
       if [[ -v $real_var ]]; then
-      get_var_value $real_var
+      __limit=10 get_var_value $real_var
       show_vars+="$real_var=$value "
       fi
     done
@@ -575,7 +577,7 @@ show_trace_vars() {
   if [[ "${trace_vars:-}" ]]; then
     local var value base_var
     for var in $trace_vars; do
-      get_var_value $var
+      __limit=10 get_var_value $var
       local show_val=$value
       if [[ $var == *\[* ]]; then
         base_var=${var%%\[*}
@@ -4440,7 +4442,7 @@ debug_command_loop() {
           eval "__value=\"$watch_var\""
           set -u
         else
-          get_var_value $watch_var __value
+          __limit=10 get_var_value $watch_var __value
         fi
         watch_output+="$watch_var=$__value "
       done

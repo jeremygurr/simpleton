@@ -326,7 +326,9 @@ load_arr_to_code() {
 #   members_of
 make_table_index() {
 
-  local table=$table ignore_unknown_dims=${ignore_unknown_dims:-f} \
+  local table=$table \
+    ignore_unknown_dims=${ignore_unknown_dims:-f} \
+    ignore_unknown_members=${ignore_unknown_members:-f} \
     include_implicit_dims=${include_implicit_dims:-f} \
     expand_values=${expand_values:-t} \
     interesting_vars='table field value' \
@@ -408,7 +410,7 @@ make_table_index() {
           local -n members=dim_${field}_members
           begin_for value in "${values[@]}"; doo
             if [[ "$value" ]]; then
-              if [[ -v members && "$value" != none ]] && ! array_contains members "$value"; then
+              if [[ $ignore_unknown_members == f && -v members && "$value" != none ]] && ! array_contains members "$value"; then
                 log_fatal "Bad derive table: $table. Member $value of dim $field does not belong to the static members defined in .lib/dim/$field/members.arr"
                 fail1
               fi
@@ -2559,9 +2561,13 @@ fetch_column_from_table() {
     return 1
   fi
 
-  for (( ; data_index < data_count; data_index += field_count )); do
-    values+=( "${table_data[$data_index]}" )
-  done
+  if (( field_count == 1 )); then
+    values=( "${table_data[@]}" )
+  else
+    for (( ; data_index < data_count; data_index += field_count )); do
+      values+=( "${table_data[$data_index]}" )
+    done
+  fi
 
   return 0
 
@@ -3707,6 +3713,8 @@ setup_dims() {
     cell_optional_dims=()
     cell_required_dims_array=()
     calc_anchor_dims || fail
+
+    grip_fence
 
     get_dim_parameters || fail
     prep_dims || fail
@@ -6319,20 +6327,31 @@ calc_coordinates_add_row() {
     end_for
 
     log_debug "${coord_type}_coordinate_data+=( ${new_coords[*]} )"
-    if [[ ! -v coordinates_added[$coord_added_string] ]]; then
+    #if [[ ! -v coordinates_added[$coord_added_string] ]]; then
       coordinates_added[$coord_added_string]=1
       new_coordinate_data+=( "${new_coords[@]}" )
       (( total_coord_rows_added++ ))
       progress_bar_nudge +
-    else
-      progress_bar_nudge -
-      log_debug "Duplicate coordinate skipped"
-    fi
+    #else
+    #  progress_bar_nudge -
+    #  log_debug "Duplicate coordinate skipped"
+    #fi
 
   end_function
   handle_return
 }
 
+# inputs:
+#   coord_type
+#   target_form
+#   trunk_dims_expanded
+#   support_dims_one_expanded
+#   control_props_expanded
+#   data_props_expanded
+#   sub_dims_expanded
+# outputs:
+#   primary_dim_count
+#   coordinate_fields
 setup_coord_fields() {
   begin_function
 
@@ -6350,6 +6369,9 @@ setup_coord_fields() {
         else
           coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} )
         fi
+        if [[ "${trunk_dims_expanded:-}" ]]; then
+          primary_dim_count=${#trunk_dims_expanded[*]}
+        fi
       ;;
       leaf)
         coordinate_fields=( ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} )
@@ -6359,6 +6381,9 @@ setup_coord_fields() {
       ;;
       tree)
         coordinate_fields=( ${trunk_dims_expanded[*]:-} ${support_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} )
+        if [[ "${trunk_dims_expanded:-}" ]]; then
+          primary_dim_count=${#trunk_dims_expanded[*]}
+        fi
         # don't need to do deep derive if we are already include support dims, which come
         #   from a deep derive analysis
         derive_deep=f
@@ -6396,6 +6421,9 @@ setup_coord_fields() {
 
     fi
 
+    if [[ "${coordinate_fields:-}" ]]; then
+      secondary_dim_count=$(( ${#coordinate_fields[*]} - primary_dim_count ))
+    fi
     coordinate_fields_count=${#coordinate_fields[*]}
 
   end_function
@@ -7314,8 +7342,70 @@ prep_seed_dims() {
 
 }
 
+# inputs:
+#   new_coordinate_data
+#   primary_dim_count        number of dims that are part of the primary key per row
+# outputs:
+#   coordinate_data
+dedup_coordinates() {
+  local interesting_vars=primary_dim_count
+  begin_function
+
+    local -A primary_set
+    local value field_index data_offset row_index out_row_index field current_primary current_row=()
+    local c_fields_count=$coordinate_fields_count c_count=${#new_coordinate_data[*]} c_rows
+    local -n c_fields=coordinate_fields
+
+    c_rows=$(( c_count / c_fields_count ))
+
+    out_row_index=0
+    for (( row_index = 0; row_index < c_rows; row_index++ )); do
+      # it is assumed that the first fields will always be the trunk dims, followed by the other fields
+      current_primary=
+
+      for (( field_index = 0; field_index < primary_dim_count; field_index++ )); do
+        (( data_offset = row_index * c_fields_count + field_index ))
+        field=${c_fields[$field_index]}
+        value=${new_coordinate_data[$data_offset]}
+        current_row+=( "$value" )
+        current_primary+="$value$NL"
+      done
+
+      local is_duplicate_of=
+      if [[ -v primary_set[$current_primary] ]]; then
+        is_duplicate_of=${primary_set[$current_primary]}
+      else
+        primary_set[$current_primary]=$out_row_index
+      fi
+
+      local new_value
+      for (( field_index = primary_dim_count; field_index < c_fields_count; field_index++ )); do
+        (( data_offset = row_index * c_fields_count + field_index ))
+        field=${c_fields[$field_index]}
+        value=${new_coordinate_data[$data_offset]}
+        if [[ "$is_duplicate_of" ]]; then
+          (( data_offset = is_duplicate_of * c_fields_count + field_index ))
+          new_value="${coordinate_data[$data_offset]} $value"
+          coordinate_data[$data_offset]=$new_value
+        else
+          current_row+=( "$value" )
+        fi
+      done
+
+      if [[ ! "$is_duplicate_of" ]]; then
+        coordinate_data+=( "${current_row[@]}" )
+      fi
+
+    done
+
+  end_function
+  handle_return
+}
+
 calc_coordinates_slow() {
-  local interesting_vars=coordinate_fields
+  local interesting_vars=coordinate_fields \
+    primary_dim_count=${primary_dim_count:-0} \
+
   begin_function
 
     local row_index=${row_index:-} \
@@ -7350,26 +7440,53 @@ calc_coordinates_slow() {
       fi
 
     end_for
+    unset conflict
 
-    local total_coord_rows_added=0 needs_validation=t
+    local total_coord_rows_added=0 needs_validation=t refinement_needed=t
     local -A coordinates_added=()
 
-    progress_bar_start
-    if (( coordinate_rows > 0 )); then
-      log_debug "Refining existing $coord_type dim coordinates"
-      calc_coordinates_refine_multi || fail
-    else
-      # it is assumed that dims are already expanded before this point, and so ddims will be used
-      local extra=
-      if [[ $target_form == seed ]]; then
-        extra="seed of "
-      fi
-      log_debug "Calculating $extra$coord_type cell coordinates for dims: ${coordinate_fields[*]}"
-      calc_coordinates_next_dim || fail
-    fi
-    progress_bar_stop
+    if (( primary_dim_count + secondary_dim_count == 1 )); then
+      dim=${coordinate_fields[0]}
+      local -n ddim=d_$dim \
+        ddims=d_${dim}s \
 
-    coordinate_data=( "${new_coordinate_data[@]}" )
+      if [[ "${ddims:-}" == all ]]; then
+        log_fatal "Internal error: d_$dim == all , which should not be possible at this point"
+        fail1
+      fi
+
+      if [[ "${ddim:-}" ]]; then
+        coordinate_data=( "$ddim" )
+      elif [[ "${ddims:-}" ]]; then
+        coordinate_data=( "${ddims[@]}" )
+      fi
+      refinement_needed=f
+
+    fi
+      
+    if [[ $refinement_needed == t ]]; then
+      progress_bar_start
+      if (( coordinate_rows > 0 )); then
+        log_debug "Refining existing $coord_type dim coordinates"
+        calc_coordinates_refine_multi || fail
+      else
+        # it is assumed that dims are already expanded before this point, and so ddims will be used
+        local extra=
+        if [[ $target_form == seed ]]; then
+          extra="seed of "
+        fi
+        log_debug "Calculating $extra$coord_type cell coordinates for dims: ${coordinate_fields[*]}"
+        calc_coordinates_next_dim || fail
+      fi
+
+      if (( primary_dim_count > 0 && secondary_dim_count > 0 )) && [[ -v coordinate_fields ]]; then
+        dedup_coordinates || fail
+      else
+        coordinate_data=( "${new_coordinate_data[@]}" )
+      fi
+
+      progress_bar_stop
+    fi
 
   end_function
   handle_return
@@ -7447,6 +7564,10 @@ calc_coordinates() {
       target_form=seed
     fi
     
+    local coords_contain_trunk_dims=f \
+      primary_dim_count=0 \
+      secondary_dim_count=0 \
+
     setup_coord_fields || fail
 
     if [[ $clear_existing_coords == t ]]; then
@@ -7468,42 +7589,13 @@ calc_coordinates() {
     coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
     unknown_dims= resolved_dims=
 
-    #log_debug "Calculating ${coord_type} coordinates using fields: ${coordinate_fields[*]}"
-
-    #if (( coordinate_fields_count <= 1 )); then
-    #  if [[ $target_form == seed ]]; then
-    #    log_debug "Too few fields found ($coordinate_fields_count) to generate useful $coord_type seed coords"
-    #    refined=f
-    #    abort
-    #  else
-    #  fi
-    #fi
-
     if (( coordinate_fields_count == 0 )); then
       log_debug "No fields found to generate $coord_type coords"
       refined=t
       abort
     fi
 
-    #if [[ ${xlr8:-f} == t ]]; then
-    #  local -n fields=${coord_type}_coordinate_fields
-    #  local dt dt_fields=
-    #  for dt in ${derive_tables[*]}; do
-    #    dt_fields+="${dt}_fields ${dt}_data "
-    #  done
-    #  local coord_fields="
-    #    coordinate_data
-    #    coordinate_count
-    #    coordinate_rows
-    #    coordinate_fields_count
-    #  "
-    #  local dim_fields
-    #  local dim_type=trunk_dims
-    #  xlr8_get_dim_fields ${trunk_dims_expanded[*]}
-    #  xlr8 load_coordinates $coord_fields $dim_fields $fields $dt_fields || fail
-    #else
-      calc_coordinates_slow || fail
-    #fi
+    calc_coordinates_slow || fail
 
     coordinate_count=${#coordinate_data[*]}
     coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
@@ -7528,13 +7620,6 @@ calc_coordinates() {
         ;;
       esac
     fi
-
-    #  Allowing this for now, to handle situations where support dims split the rows
-    #if [[ $target_form == tree && $coord_type == branch && ${cell_is_leaf:-f} == t ]] \
-    #   && (( coordinate_rows > 1 )); then
-    #  log_fatal "Cell error: found more than one branch coordinate possibility on a leaf cell."
-    #  fail1
-    #fi
 
     # refine is used to determine if coords need to be calculated
     local -n refined=${coord_type}_coordinate_refined
@@ -8043,7 +8128,7 @@ cell_decrypt_file() {
       if [[ $ignore_failure == f ]]; then
         fail1
       else
-        log_warn "Failed to decrypt master key for $user in $key_path. Maybe public key needs to be updated."
+        log_warn "Failed to decrypt master key for $user in $key_path while decrypting $from_file. Maybe public key needs to be updated."
         abort
       fi
       }
@@ -9591,7 +9676,7 @@ decrypt_file_with_shared_key() {
 get_sane_value() {
   local -r value=$1 
   local -n _s=${2:-sane_value}
-  if [[ ${#value} -lt 40 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
+  if [[ ${#value} -lt 60 && "$value" =~ ^[A-Za-z0-9_\.:\-]+$ ]]; then
     _s=$value
   else
     hash=$(echo -n "$value" | sha1sum | awk '{ print $1 }')
