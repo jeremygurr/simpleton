@@ -4358,6 +4358,61 @@ debug_shell() {
   done
 }
 
+show_table() {
+  local table_with_row=$1
+
+  local table_var=${table_with_row%%\[*} \
+    row_index=${table_with_row##*\[} \
+
+  row_index=${row_index%\]}
+  if [[ $row_index == $table_var ]]; then
+    row_index=
+  fi
+
+  local -n fields=${table_var}_fields data=${table_var}_data
+  if [[ -v fields && -v data ]]; then
+
+    local field_count=${#fields[*]} f row field line
+    if (( field_count > 7 )); then
+      # vertical
+
+      for (( i = 0; i <= ${#data[*]}; i++ )); do
+        (( f = i % field_count ))
+        (( row = i / field_count ))
+        if (( f == 0 )); then
+          echo "******************* ROW $row **********************"
+        fi
+        field=${fields[$f]}
+        echo "$field: ${data[$i]}"
+      done
+    else
+      # horizontal
+      set +T
+      {
+      echo "${fields[*]}"
+
+      for (( i = 0; i <= ${#data[*]}; i++ )); do
+        (( f = i % field_count ))
+        (( row = i / field_count - 1 ))
+        if (( f == 0 )) && [[ "$line" ]]; then
+          if [[ ! "$row_index" ]] || (( row_index == row )); then
+          echo "$line"
+          fi
+          line=
+        fi
+        if (( i < ${#data[*]} )); then
+          line+="${data[$i]} "
+        fi
+      done
+      } | column -t >&$fd_original_err
+      set -T
+    fi
+
+  else
+    echo "Invalid table variable: $table_var" >&$fd_original_err
+  fi
+}
+
 debug_show_var() {
   local display_var=$1 val= show_var_name=${show_var_name:-f}
   local base_var=${display_var%%\[*}
@@ -5654,46 +5709,6 @@ reserve_tmp_file() {
   local internal_tmp_file=$(mktemp $tmp_folder/$base.$$.XXXXXX)
   eval "$var=$internal_tmp_file"
   eval "cleanup_on_exit+='rm ${internal_tmp_file} &>/dev/null || true;'"
-}
-
-show_table() {
-  local table_with_row=$1
-
-  local table_var=${table_with_row%%\[*} \
-    row_index=${table_with_row##*\[} \
-
-  row_index=${row_index%\]}
-  if [[ $row_index == $table_var ]]; then
-    row_index=
-  fi
-
-  local -n fields=${table_var}_fields data=${table_var}_data
-  if [[ -v fields && -v data ]]; then
-
-    set +T
-    {
-    echo "${fields[*]}"
-    local line= field_count=${#fields[*]} f row
-
-    for (( i = 0; i <= ${#data[*]}; i++ )); do
-      (( f = i % field_count ))
-      (( row = i / field_count - 1 ))
-      if (( f == 0 )) && [[ "$line" ]]; then
-        if [[ ! "$row_index" ]] || (( row_index == row )); then
-        echo "$line"
-        fi
-        line=
-      fi
-      if (( i < ${#data[*]} )); then
-        line+="${data[$i]} "
-      fi
-    done
-    } | column -t >&$fd_original_err
-    set -T
-
-  else
-    echo "Invalid table variable: $table_var" >&$fd_original_err
-  fi
 }
 
 log_debug_debug() {

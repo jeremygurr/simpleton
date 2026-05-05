@@ -67,6 +67,50 @@ get_tmp_file() {
   handle_return
 }
 
+# removes each of the given fields
+# inputs:
+#   table
+#   $1     to remove
+#   $2     to remove
+#   ...
+# outputs:
+#   ${table}_fields
+#   ${table}_data
+remove_table_fields() {
+  local table=$table to_remove \
+    i field new_fields new_data \
+
+  local -A columns_to_remove
+  local -n fields=${table}_fields \
+    data=${table}_data \
+
+  local field_count=${#fields[*]} f
+
+  while [[ "${1:-}" ]]; do
+    to_remove=$1; shift
+
+    new_fields=()
+    for (( i = 0; i < field_count; i++ )); do
+      field=${fields[$i]}
+      if [[ "$field" != "$to_remove" ]]; then
+        new_fields+=( $field )
+      else
+        columns_to_remove[$i]=1
+      fi
+    done
+  done
+
+  for (( i = 0; i < ${#data[*]}; i++ )); do
+    f=$(( i % field_count ))
+    if [[ ! -v columns_to_remove[$f] ]]; then
+      new_data+=( "${data[$i]}" )
+    fi
+  done
+
+  fields=( "${new_fields[@]}" )
+  data=( "${new_data[@]}" )
+}
+
 # renames the first field found with the given new name
 # inputs:
 #   table
@@ -1922,6 +1966,36 @@ write_coordinates_to_vtab_file() {
   handle_return
 }
 
+# will remove duplicate coordinates
+# inputs:
+#   coordinate_rows
+#   coordinate_data
+#   coordinate_fields_count
+calc_coordinates_dedup() {
+  begin_function
+
+    local prev_row_count=$coordinate_rows \
+      sorted_row_ids row_id row_start \
+      prev_coordinate_data=( "${coordinate_data[@]}" ) \
+
+    #sorted_row_ids=$(calc_coordinates_dedup_output_rows | tee /tmp/out | sort | sed -E 's/^(.*) ([0-9]+)$/\2 \1/' | tee /tmp/out2 | uniq -f 1 | awk '{print $1}')
+    sorted_row_ids=$(calc_coordinates_dedup_output_rows | sort | sed -E 's/^(.*) ([0-9]+)$/\2 \1/' | uniq -f 1 | awk '{print $1}')
+    coordinate_data=()
+    for row_id in $sorted_row_ids; do
+      (( row_start = row_id * coordinate_fields_count ))
+      coordinate_data+=( "${prev_coordinate_data[@]:$row_start:$coordinate_fields_count}" )
+    done
+
+    coordinate_count=${#coordinate_data[*]}
+    coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
+    if (( coordinate_rows != prev_row_count )); then
+      log_debug "Coord dedup reduced rows: $prev_row_count -> $coordinate_rows"
+    fi
+    
+  end_function
+  handle_return
+}
+
 # initialized coordinates with a table to speed up coordinate calculation
 #   of all possibilities
 # won't work if coordinates already has data
@@ -2356,25 +2430,28 @@ extract_from_derive_table_find_row_indexes() {
 
         if [[ "${ddims:-}" ]]; then
 
-          local ddim
+          local ddim found=f
           for ddim in $ddims; do
             if [[ -v dt_index[$ddim] ]]; then
               row_indexes=( ${dt_index[$ddim]} )
               array_to_set row_indexes new_matching_rows
+              found=t
             fi
           done
 
           if [[ -v dt_index[all] ]]; then
             row_indexes=( ${dt_index[all]} )
             array_to_set row_indexes new_matching_rows
+            found=t
           fi
 
-          intersect_with_all matching_rows new_matching_rows matching_rows
-
-          if (( ${#matching_rows[*]} == 0 )); then
-            log_debug "Couldn't find any rows in $full_table which match all existing dims (last checked: $field = $ddim)"
-            matching_rows=()
-            break
+          if [[ $found == t ]]; then
+            intersect_with_all matching_rows new_matching_rows matching_rows
+            if (( ${#matching_rows[*]} == 0 )); then
+              log_debug "Couldn't find any rows in $full_table which match all existing dims (last checked: $field = $ddim)"
+              matching_rows=()
+              break
+            fi
           fi
 
         fi
@@ -6601,36 +6678,6 @@ calc_coordinates_dedup_output_rows() {
   done
 }
 
-# will remove duplicate coordinates
-# inputs:
-#   coordinate_rows
-#   coordinate_data
-#   coordinate_fields_count
-calc_coordinates_dedup() {
-  begin_function
-
-    local prev_row_count=$coordinate_rows \
-      sorted_row_ids row_id row_start \
-      prev_coordinate_data=( "${coordinate_data[@]}" ) \
-
-    #sorted_row_ids=$(calc_coordinates_dedup_output_rows | tee /tmp/out | sort | sed -E 's/^(.*) ([0-9]+)$/\2 \1/' | tee /tmp/out2 | uniq -f 1 | awk '{print $1}')
-    sorted_row_ids=$(calc_coordinates_dedup_output_rows | sort | sed -E 's/^(.*) ([0-9]+)$/\2 \1/' | uniq -f 1 | awk '{print $1}')
-    coordinate_data=()
-    for row_id in $sorted_row_ids; do
-      (( row_start = row_id * coordinate_fields_count ))
-      coordinate_data+=( "${prev_coordinate_data[@]:$row_start:$coordinate_fields_count}" )
-    done
-
-    coordinate_count=${#coordinate_data[*]}
-    coordinate_rows=$(( coordinate_count / coordinate_fields_count ))
-    if (( coordinate_rows != prev_row_count )); then
-      log_debug "Coord dedup reduced rows: $prev_row_count -> $coordinate_rows"
-    fi
-    
-  end_function
-  handle_return
-}
-
 # input:
 #   $1   name of dim
 # output:
@@ -7370,7 +7417,9 @@ dedup_coordinates() {
     local -n c_fields=coordinate_fields
 
     c_rows=$(( c_count / c_fields_count ))
+    local before_count=$c_rows
 
+    log_debug "Deduping $before_count coordinates"
     out_row_index=0
     for (( row_index = 0; row_index < c_rows; row_index++ )); do
       # it is assumed that the first fields will always be the trunk dims, followed by the other fields
@@ -7413,6 +7462,10 @@ dedup_coordinates() {
       fi
 
     done
+    local after_count=$(( ${#coordinate_data[*]} / c_fields_count ))
+    if (( before_count != after_count )); then
+      log_debug "Removed $((before_count-after_count)) duplicates"
+    fi
 
   end_function
   handle_return
@@ -7496,7 +7549,13 @@ calc_coordinates_slow() {
       fi
 
       if (( primary_dim_count > 0 && secondary_dim_count > 0 )) && [[ -v coordinate_fields ]]; then
-        dedup_coordinates || fail
+        local c_fields_count=$coordinate_fields_count c_count=${#new_coordinate_data[*]}
+        c_rows=$(( c_count / c_fields_count ))
+        if (( c_rows > 1 )); then
+          dedup_coordinates || fail
+        else
+          coordinate_data=( "${new_coordinate_data[@]}" )
+        fi
       else
         coordinate_data=( "${new_coordinate_data[@]}" )
       fi
