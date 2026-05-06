@@ -229,7 +229,7 @@ write_vars_to_context() {
 # input:
 #   $1      name of table var (without the _fields and _data)
 write_table_to_context() {
-  local table=$1
+  local table=$1 interesting_vars=table
   begin_function
     local var content
 
@@ -5616,7 +5616,6 @@ build_constellation_table() {
     #  log_debug "Generating rows for constellation $con"
     #fi
 
-    progress_bar_nudge .
     if [[ "$member" ]]; then
       current_row+=( "$member" )
       current_dim_values[$previous_dim]=$member
@@ -5635,6 +5634,7 @@ build_constellation_table() {
     if (( field_index + 1 > field_count )); then
       strong_log=t log_debug "Wrote constellation row: ${current_row[@]}"
       con_table_data+=( "${current_row[@]}" )
+      progress_bar_nudge .
       abort
     fi
 
@@ -5697,6 +5697,7 @@ build_constellation_table() {
       fi
       clear_set dim_members
       array_to_set current_dim_members dim_members
+      dim_members[none]=1
     fi
 
     local sorted_members=( "${!dim_members[@]}" )
@@ -5995,6 +5996,11 @@ make_derive_cache_constellation() {
       if [[ ! "${only_con:-}" || "$only_con" == $con ]]; then
         log_debug "Building constellation table for $con (${con_table_fields[*]})"
         field_index=0 member= build_constellation_table || fail
+
+        if (( ${#con_table_data[*]} == 0 )); then
+          log_fatal "Could not find any rows for constellation $con"
+          fail1
+        fi
 
         write_table_to_context con_${con}_table || fail
 
