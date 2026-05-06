@@ -153,6 +153,7 @@ RUN mkdir -p $REPO_CACHE
 
 ARG TIME_ZONE=UTC
 RUN setup-timezone -z $TIME_ZONE
+ENV TIME_ZONE=$TIME_ZONE
 
 RUN mkdir -p $HOME/scripts
 RUN mkdir -p $HOME/.ssh
