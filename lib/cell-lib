@@ -409,6 +409,7 @@ make_table_index() {
 
     begin_for (( field_index = 0; field_index < field_count; field_index++ )); doo
 
+      grip_fence
       #log_debug "Indexing field $field_index of $table"
       progress_bar_nudge .
       field=${table_fields[$field_index]}
@@ -1636,8 +1637,8 @@ write_index_to_context() {
         index_multi=${table}_index_multi_${field} \
 
       if [[ ! "${!table_index[*]}" ]]; then
-        log_fatal "Internal error: Missing index ${table}_index_${field}"
-        fail1
+        echo "declare -Ag ${table}_index_${field}=()" >>$context_file || fail
+        continue
       fi
 
       echo "declare -Ag ${table}_index_${field}=(" >>$context_file || fail
@@ -2245,8 +2246,14 @@ expand_dim() {
     if [[ "${!in_var:-}" && "${!in_var}" != \? ]]; then
 
       if ! function_exists dim_${dim}_expand; then
-        log_fatal "Missing expand function for $dim"
-        fail1
+        if [[ $ignore_problems == t ]]; then
+          local -n out=$out_var in=$in_var
+          out=( "$in" )
+          abort
+        else
+          log_fatal "Missing expand function for $dim"
+          fail1
+        fi
       fi
 
       local problem
@@ -3800,6 +3807,22 @@ execute_dim_upstreams() {
   handle_return
 }
 
+load_implicit_dims() {
+  local from_file=${from_file:-$out_path/output.tab}
+  begin_function_lo
+    local d
+    if [[ -e $from_file ]]; then
+      for d in $(head -n1 $from_file); do
+        if [[ ! " ${trunk_dims_expanded[*]} ${sub_dims_expanded[*]} " == *" $d "* ]]; then
+          implicit_dims+=( $d )
+          all_dims[$d]=1
+        fi
+      done
+    fi
+  end_function
+  handle_return
+}
+
 setup_dims() {
   begin_function
 
@@ -3819,13 +3842,19 @@ setup_dims() {
     grip_fence
 
     load_child_dims || fail
+    local implicit_dims=()
     if [[ $cell_is_leaf == t ]]; then
       expand_dims ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} || fail
       load_implicit_dims || fail
-      add_required_dims ${trunk_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} $anchor_dims || fail
+      add_required_dims ${trunk_dims_expanded[*]:-} ${sub_dims_expanded[*]:-} ${control_props_expanded[*]:-} ${data_props_expanded[*]:-} $anchor_dims ${implicit_dims[*]} || fail
     else
       expand_dims ${trunk_dims_expanded[*]:-} ${dim_parameters[*]:-} $anchor_dims || fail
-      add_required_dims ${trunk_dims_expanded[*]:-} $anchor_dims || fail
+      local output_files
+      output_files=( $(find -type f -name output.tab) ) || fail
+      if [[ "${output_files:-}" ]]; then
+        from_file=$output_files load_implicit_dims || fail
+      fi
+      add_required_dims ${trunk_dims_expanded[*]:-} $anchor_dims ${implicit_dims[*]} || fail
     fi
 
     local required_dims_sorted=()
@@ -6530,22 +6559,6 @@ setup_coord_fields() {
     fi
     coordinate_fields_count=${#coordinate_fields[*]}
 
-  end_function
-  handle_return
-}
-
-load_implicit_dims() {
-  begin_function_lo
-    local d
-    implicit_dims=()
-    if [[ -e $out_path/output.tab ]]; then
-      for d in $(head -n1 $out_path/output.tab); do
-        if [[ ! " ${trunk_dims_expanded[*]} ${sub_dims_expanded[*]} " == *" $d "* ]]; then
-          implicit_dims+=( $d )
-          all_dims[$d]=1
-        fi
-      done
-    fi
   end_function
   handle_return
 }
