@@ -4271,8 +4271,11 @@ build_context_related_dims() {
       log_debug "Pulling related dims from constellations"
       for dim in ${!target_dims[*]}; do
         local -n dim_con=dim_${dim}_con
-        if [[ -v dim_con && $dim_con != *' '* ]]; then
-          cons_found[$dim_con]=1
+        if [[ "${dim_con:-}" ]]; then
+          local con
+          for con in $dim_con; do
+            cons_found[$con]=1
+          done
         else
           related_dims_set[$dim]=1
         fi
@@ -4870,7 +4873,8 @@ make_derive_cache_handle_function() {
 
     done # derived_dim
 
-    if [[ $dim_resolver == brute && $found_all_static == t ]]; then
+    #if [[ $dim_resolver == brute && $found_all_static == t ]]; then
+    if [[ $dim_resolver == brute ]]; then
       local cons_found=() king_con=
       dims=${fields[*]} find_constellations_of_dims || fail
       dims=${fields[*]} merge_dim_constellations || fail
@@ -5346,8 +5350,10 @@ set_table_cross_dims_single() {
 #   member
 #   allow_dims
 #   cross_dims_tried (set)
+#   set_dims_directly (bool)  if true, sets d_{dim} values, otherwise sets current_dim_values[{dim}
 set_function_cross_dims_single() {
-  local interesting_vars="${interesting_vars:-} derive_fun"
+  local interesting_vars="${interesting_vars:-} derive_fun" \
+    set_dims_directly=${set_dims_directly:-t} \
 
   begin_function
 
@@ -5357,6 +5363,7 @@ set_function_cross_dims_single() {
     action=info \
     derive_function_$derive_fun || fail
 
+    localize
     for derive_path in "${derive_paths[@]}"; do
       target_dims=${derive_path#*->}
       required_dims=${derive_path%->*}
@@ -5368,6 +5375,22 @@ set_function_cross_dims_single() {
       if [[ ! "${optional_dims:-}" ]]; then
         target_dim=${target_dims%%,*}
         targets+="$target_dim "
+      fi
+      if [[ $set_dims_directly == f ]]; then
+        for dim in ${required_dims:-} ${optional_dims:-}; do
+          local value=${current_dim_values[$dim]:-}
+          if [[ "$value" ]]; then
+            #if [[ "$value" == *" "* ]]; then
+            #  local dims
+            #  get_plural $dim dims
+            #  local -n ddims=d_$dims
+            #  ddims=$value
+            #else
+              local -n ddim=d_$dim
+              ddim=$value
+            #fi
+          fi
+        done
       fi
     done
 
@@ -5384,8 +5407,9 @@ set_function_cross_dims_single() {
         fi
 
         if [[ ! -v values[$i] ]]; then
-          log_fatal "Missing value for field $field in derive function $derive_fun"
-          fail1
+          continue
+          #log_fatal "Missing value for field $field in derive function $derive_fun"
+          #fail1
         fi
 
         value=${values[$i]}
@@ -5827,7 +5851,7 @@ calculate_constellation_dims() {
         local -n derived_from=dim_${dynamic_dim}_derived_from \
             original_member_type=dim_${dynamic_dim}_member_type \
 
-        if [[ $original_member_type == dynamic ]]; then
+        if [[ ${original_member_type:-none} == dynamic ]]; then
           # can't promote dims that are explicitly marked as dynamic
           continue
         fi
