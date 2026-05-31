@@ -6016,7 +6016,7 @@ handle_flag_custom() {
 }
 
 setup_commands() {
-  commands=()
+  cell_commands=()
 
   name=update description="Updates product of this cell" new_command 
 
@@ -6099,7 +6099,7 @@ show_usage() {
     indent
     local name
     {
-      begin_for name in ${commands[*]}; doo
+      begin_for name in ${cell_commands[*]}; doo
         local -n command_description=command_${name}_description
         if [[ "$command_description" ]]; then
           local short_desc=$command_description
@@ -6133,7 +6133,10 @@ show_usage() {
 
 is_command() {
   local parameter=$1
-  [[ " ${commands[*]} " == *" $parameter "* ]] \
+  if [[ ! "$parameter" ]]; then
+    return 1
+  fi
+  [[ " ${cell_commands[*]} " == *" $parameter "* ]] \
   || array_contains command_aliases $parameter
 }
 
@@ -6156,15 +6159,15 @@ get_cells_and_commands() {
             leftovers=()
             case $previous_parameter in
               cell)
-                commands+=( $parameter )
+                chosen_commands+=( $parameter )
               ;;
               none)
-                cells+=( . )
+                chosen_cells+=( . )
                 (( cell_count++ ))
-                commands+=( $parameter )
+                chosen_commands+=( $parameter )
               ;;
               command)
-                commands[-1]+=" $parameter"
+                chosen_commands[-1]+=" $parameter"
               ;;
               *)
                 log_fatal "Internal error: invalid previous_parameter variable: $previous_parameter"
@@ -6175,10 +6178,10 @@ get_cells_and_commands() {
           elif [[ -d $parameter ]]; then
             case $previous_parameter in
               cell|none)
-                cells[-1]+=" $parameter"
+                chosen_cells[-1]+=" $parameter"
               ;;
               command)
-                cells+=( $parameter )
+                chosen_cells+=( $parameter )
               ;;
               *)
                 log_fatal "Internal error: invalid previous_parameter variable: $previous_parameter"
@@ -6199,7 +6202,7 @@ get_cells_and_commands() {
 get_sub_commands() {
   local command_prefix=$1 command
   subs=()
-  for command in ${commands[*]}; do
+  for command in ${cell_commands[*]}; do
     if [[ $command == ${command_prefix}-* ]]; then
       subs+=( $command )
     fi
@@ -6295,11 +6298,11 @@ handle_cell() {
         }
     fi
 
-    if (( ${#commands[*]} > 0 )); then
-      if (( ${#commands[*]} > 1 )); then
-        fork execute_commands $cell_path ${commands[*]} || fail
+    if (( ${#chosen_commands[*]} > 0 )); then
+      if (( ${#chosen_commands[*]} > 1 )); then
+        fork execute_commands $cell_path ${chosen_commands[*]} || fail
       else
-        execute_commands $cell_path ${commands[*]} || fail
+        execute_commands $cell_path ${chosen_commands[*]} || fail
       fi
     elif [[ ! "${parameter_questions:-}" ]]; then
       show_cell_help $cell_path || fail
@@ -6353,13 +6356,13 @@ top_level() {
     get_help_depth_and_flags || fail
 
     local current_parameter_index=0 leftovers=() leftover_command \
-      handled=0 cell_count command_count cells commands \
+      handled=0 cell_count command_count chosen_cells chosen_commands \
       previous_parameter=none \
 
     begin_while true; doo
 
-      cells=() \
-      commands=() \
+      chosen_cells=() \
+      chosen_commands=() \
       leftovers=() \
       cell_count=0 \
       command_count=0 \
@@ -6398,7 +6401,7 @@ top_level() {
         abort
       fi
 
-      begin_for cell_path in ${cells[*]}; doo
+      begin_for cell_path in ${chosen_cells[*]}; doo
         handle_cell $cell_path || fail
         (( handled++ ))
       end_for
@@ -6426,7 +6429,7 @@ top_level() {
 # Used by the help system to describe a command and it's parameters to the user
 new_command() {
   local name=$name description=$description
-  commands+=( $name )
+  cell_commands+=( $name )
   command=$name
   local -n command_description=command_${name}_description
   command_description=$description
@@ -6655,15 +6658,21 @@ plant_seed_internal() {
   handle_return
 }
 
-# inputs: $1  work path to the cell
+# inputs: 
+#   cell_path   path that may not exist yet, but parent must exist
+#   seed_path
 plant_seed() {
-  local seed_path cell_path=$1 \
+  local seed_path=${seed_path} cell_path=${cell_path} \
     deep=${deep:-t} \
     ignore_nonexistent=${ignore_nonexistent:-f}
 
   begin_function
 
     # if in/ already exists, then consider it planted
+    if [[ -d $cell_path/in ]]; then
+      abort
+    fi
+
     # find seed if .seed doesn't exist
     # link seed
     # go through standard folders in seed and link/make
@@ -6714,7 +6723,8 @@ clean_command() {
 
 plant_command() {
   begin_function
-    plant_seed $cell_path || fail
+    # figure out seed path
+    plant_seed || fail
   end_function
   handle_return
 }
@@ -6793,6 +6803,7 @@ pool_status_command() {
 
 update_command() {
   begin_function
+    plant_command || fail
     # check if update is needed
     lock_cell || fail
     # make request
