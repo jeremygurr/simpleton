@@ -10,6 +10,7 @@ ARG HTTP_PROXY=
 ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine/
 
 COPY target/repositories /etc/apk/
+COPY target/copy-to-image /
 RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@$ALPINE_REPO@g" /etc/apk/repositories 
 
 ENV LANG=en_US.UTF-8

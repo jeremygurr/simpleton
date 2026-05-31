@@ -52,12 +52,13 @@ SIMPLETON_BASE=${SIMPLETON_BASE:-${PWD%/*}}
 SIMPLETON_REPO=$SIMPLETON_BASE/simpleton$instance
 SIMPLETON_HOME=${SIMPLETON_HOME:-$HOME/.simpletonHome$instance}
 SIMPLETON_WORK=${SIMPLETON_WORK:-$HOME/.simpletonWork$instance}
+SIMPLETON_CELL=${SIMPLETON_CELL:-$HOME/.simpletonCell$instance}
 
 # Sharing the cache across instances
 SIMPLETON_CACHE=${SIMPLETON_CACHE:-$HOME/.simpletonCache}
 
 if [[ $debug == t ]]; then
-  source $SIMPLETON_REPO/lib/bash-debugger || exit 1
+  source $SIMPLETON_REPO/bin/c2 || exit 1
   debug_start || exit 1
 fi
 
@@ -69,6 +70,10 @@ if [[ $clean == t ]]; then
   if [[ -d "$SIMPLETON_WORK" ]]; then
     echo "Cleaning $SIMPLETON_WORK"
     rm -rf $SIMPLETON_WORK || exit 1
+  fi
+  if [[ -d "$SIMPLETON_CELL" ]]; then
+    echo "Cleaning $SIMPLETON_CELL"
+    rm -rf $SIMPLETON_CELL || exit 1
   fi
   if [[ -d target ]]; then
     echo "Cleaning target"
@@ -90,6 +95,10 @@ fi
 
 if [[ ! -d $SIMPLETON_WORK ]]; then
   mkdir $SIMPLETON_WORK || exit 1
+fi
+
+if [[ ! -d $SIMPLETON_CELL ]]; then
+  mkdir $SIMPLETON_CELL || exit 1
 fi
 
 if [[ ! -d $SIMPLETON_CACHE ]]; then
@@ -117,6 +126,7 @@ repo_folders="$(find .. -mindepth 1 -maxdepth 1 | sort)"
 build_dir=target
 mkdir -p $build_dir || exit 1
 cp docker/* $build_dir/ || exit 1
+mkdir -p $build_dir/copy-to-image || exit 1
 
 uid=$UID
 user=$USER
@@ -132,6 +142,7 @@ echo -n '
 launch_command="
 docker run --init -it --rm -u $uid --name $name -h $name \
   -v $SIMPLETON_HOME:/home \
+  -v $SIMPLETON_CELL:/cell \
   -v $SIMPLETON_WORK:/work \'"$repo_mount"'
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /tmp:/tmp \
@@ -170,6 +181,10 @@ for repo_folder in $repo_folders; do
       echo "  -v $seed:/seed/$seed_name \\" >>$build_dir/launch-command-persist || exit 1
       echo "docker cp $seed \$name:/seed/$seed_name" >>$build_dir/docker-copy-command || exit 1
     done
+  fi
+
+  if [[ -d $repo_folder/copy-to-image ]]; then
+    rsync -a $repo_folder/copy-to-image/ $build_dir/copy-to-image/ || exit 1
   fi
 
 done
