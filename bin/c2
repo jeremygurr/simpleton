@@ -5964,6 +5964,36 @@ command_lib_init() {
 #    set -- "${real_params[@]}"; shift
 #  fi
 
+  if [[ ! "${SIMPLETON_CELL:-}" ]]; then
+    if [[ -d $HOME/.cell ]]; then
+      SIMPLETON_CELL=$HOME/.cell
+    elif [[ -d /cell ]]; then
+      SIMPLETON_CELL=/cell
+    fi
+  elif [[ ! -d "$SIMPLETON_CELL" ]]; then
+    log_fatal "SIMPLETON_CELL ($SIMPLETON_CELL) is not a directory. This must be set to a folder to use for cell storage."
+    exit 1
+  fi
+
+  if [[ "${SIMPLETON_CELL:-}" ]]; then
+    SIMPLETON_CELL=$(realpath $SIMPLETON_CELL) || exit 1
+  fi
+
+  if [[ ! "${SIMPLETON_SEED:-}" ]]; then
+    if [[ -d $HOME/.seed ]]; then
+      SIMPLETON_SEED=$HOME/.seed
+    elif [[ -d /cell ]]; then
+      SIMPLETON_SEED=/seed
+    fi
+  elif [[ ! -d "$SIMPLETON_SEED" ]]; then
+    log_fatal "SIMPLETON_SEED ($SIMPLETON_SEED) is not a directory. This must be set to a folder to use for cell storage."
+    exit 1
+  fi
+
+  if [[ "${SIMPLETON_SEED:-}" ]]; then
+    SIMPLETON_SEED=$(realpath $SIMPLETON_SEED) || exit 1
+  fi
+
   help_depth=0
   recursive_command=${recursive_command:-${recursive:-f}}
   setup_commands || exit 1
@@ -6142,6 +6172,7 @@ is_command() {
 
 get_cells_and_commands() {
   begin_function
+    local chosen_commands_current= chosen_cells_current= current_parameter_index=0 
     begin_for (( ; current_parameter_index < ${#parameters[*]}; current_parameter_index++ )); doo
       local parameter=${parameters[$current_parameter_index]}
       case $parameter in
@@ -6159,15 +6190,17 @@ get_cells_and_commands() {
             leftovers=()
             case $previous_parameter in
               cell)
-                chosen_commands+=( $parameter )
+                chosen_cells+=( "$chosen_cells_current" )
+                chosen_cells_current=
+                chosen_commands_current=$parameter
               ;;
               none)
                 chosen_cells+=( . )
                 (( cell_count++ ))
-                chosen_commands+=( $parameter )
+                chosen_commands_current=$parameter
               ;;
               command)
-                chosen_commands[-1]+=" $parameter"
+                chosen_commands_current+=" $parameter"
               ;;
               *)
                 log_fatal "Internal error: invalid previous_parameter variable: $previous_parameter"
@@ -6175,13 +6208,19 @@ get_cells_and_commands() {
               ;;
             esac
             (( command_count++ ))
+            previous_parameter=command
           elif [[ -d $parameter ]]; then
             case $previous_parameter in
-              cell|none)
-                chosen_cells[-1]+=" $parameter"
+              none)
+                chosen_cells_current=$parameter
+              ;;
+              cell)
+                chosen_cells_current+=" $parameter"
               ;;
               command)
-                chosen_cells+=( $parameter )
+                chosen_commands+=( "$chosen_commands_current" )
+                chosen_commands_current=
+                chosen_cells_current=$parameter
               ;;
               *)
                 log_fatal "Internal error: invalid previous_parameter variable: $previous_parameter"
@@ -6189,12 +6228,24 @@ get_cells_and_commands() {
               ;;
             esac
             (( cell_count++ ))
+            previous_parameter=cell
           else
             leftovers+=( $parameter )
           fi
         ;;
       esac
     end_for
+
+    if [[ "$chosen_commands_current" ]]; then
+      chosen_commands+=( "$chosen_commands_current" )
+      chosen_commands_current=
+    fi
+
+    if [[ "$chosen_cells_current" ]]; then
+      chosen_cells+=( "$chosen_cells_current" )
+      chosen_cells_current=
+    fi
+
   end_function
   handle_return
 }
@@ -6286,11 +6337,13 @@ execute_commands() {
 }
 
 handle_cell() {
-  local cell_path=$1
+  local cell_path=$1; shift
+  local chosen_commands=( $* )
 
-  local interesting_vars='cell_path'
+  local interesting_vars='cell_path chosen_commands'
   begin_function
 
+    local command_count=${#chosen_commands[*]}
     if [[ -e "$cell_path" ]]; then
       cell_path=$(unrealpath $cell_path) || {
         log_fatal "Invalid cell path: $cell_path"
@@ -6298,12 +6351,12 @@ handle_cell() {
         }
     fi
 
-    if (( ${#chosen_commands[*]} > 0 )); then
-      if (( ${#chosen_commands[*]} > 1 )); then
-        fork execute_commands $cell_path ${chosen_commands[*]} || fail
-      else
+    if (( command_count > 0 )); then
+#      if (( command_count > 1 )); then
+#        fork execute_commands $cell_path ${chosen_commands[*]} || fail
+#      else
         execute_commands $cell_path ${chosen_commands[*]} || fail
-      fi
+#      fi
     elif [[ ! "${parameter_questions:-}" ]]; then
       show_cell_help $cell_path || fail
     else # parameter_questions
@@ -6355,62 +6408,58 @@ top_level() {
     reset_flags
     get_help_depth_and_flags || fail
 
-    local current_parameter_index=0 leftovers=() leftover_command \
+    local leftovers=() leftover_command \
       handled=0 cell_count command_count chosen_cells chosen_commands \
       previous_parameter=none \
 
-    begin_while true; doo
+    chosen_cells=() \
+    chosen_commands=() \
+    leftovers=() \
+    cell_count=0 \
+    command_count=0 \
 
-      chosen_cells=() \
-      chosen_commands=() \
-      leftovers=() \
-      cell_count=0 \
-      command_count=0 \
+    handle_questions || fail
+    get_cells_and_commands || fail
+    handle_leftovers || fail
 
-      handle_questions || fail
-      get_cells_and_commands || fail
-      handle_leftovers || fail
-
-      if (( cell_count == 0 )); then
-        if (( command_count == 0 )) && [[ ! "${parameter_questions:-}" ]]; then
-          show_usage
-          abort
-        fi
-
-        local potential_cell=$(realpath .) seed_path=
-        if [[ $potential_cell == /seed/* ]]; then
-          seed_path=$potential_cell
-          potential_cell=/work${potential_cell#/seed}
-        fi
-        while [[ $potential_cell == */.* && $potential_cell == /*/*/* ]]; do
-          potential_cell=${potential_cell%/*}
-        done
-        if [[ "$seed_path" ]]; then
-          while [[ $seed_path == */.* && $seed_path == /seed/*/* ]]; do
-            seed_path=${seed_path%/*}
-          done
-        fi
-
-      fi
-
-      if [[ "${cell_commands:-}" && ! "${parameter_questions:-}" ]] && (( help_depth > 0 )); then
-        local cell_command
-        begin_for cell_command in ${cell_commands[*]}; doo
-          show_help_for_command $cell_command || fail
-        end_for
+    if (( cell_count == 0 )); then
+      if (( command_count == 0 )) && [[ ! "${parameter_questions:-}" ]]; then
+        show_usage
         abort
       fi
 
-      begin_for cell_path in ${chosen_cells[*]}; doo
-        handle_cell $cell_path || fail
+      local potential_cell=$(realpath .) seed_path=
+      if [[ $potential_cell == /seed/* ]]; then
+        seed_path=$potential_cell
+        potential_cell=/work${potential_cell#/seed}
+      fi
+      while [[ $potential_cell == */.* && $potential_cell == /*/*/* ]]; do
+        potential_cell=${potential_cell%/*}
+      done
+      if [[ "$seed_path" ]]; then
+        while [[ $seed_path == */.* && $seed_path == /seed/*/* ]]; do
+          seed_path=${seed_path%/*}
+        done
+      fi
+
+    fi
+
+    if [[ "${cell_commands:-}" && ! "${parameter_questions:-}" ]] && (( help_depth > 0 )); then
+      local cell_command
+      begin_for cell_command in ${cell_commands[*]}; doo
+        show_help_for_command $cell_command || fail
+      end_for
+      abort
+    fi
+
+    local cell_group_index cell_paths
+    begin_for (( cell_group_index = 0; cell_group_index < ${#chosen_cells[*]}; cell_group_index++ )); doo
+      cell_paths=${chosen_cells[$cell_group_index]}
+      begin_for cell_path in $cell_paths; doo
+        handle_cell $cell_path ${chosen_commands[$cell_group_index]} || fail
         (( handled++ ))
       end_for
-
-      if (( current_parameter_index >= ${#parameters[*]} )); then
-        abort
-      fi
-
-    end_while
+    end_for
 
   end_function
 
@@ -6668,32 +6717,14 @@ plant_seed() {
 
   begin_function
 
-    # if in/ already exists, then consider it planted
-    if [[ -d $cell_path/in ]]; then
+    # if .dna/ already exists, then consider it planted
+    if [[ -d $cell_path/.dna ]]; then
       abort
-    fi
-
-    # find seed if .seed doesn't exist
-    # link seed
-    # go through standard folders in seed and link/make
-    # go through _trunk _branch _leaf if matching
-    # figure out parent_branches
-    # go through *:_ if matching
-    # make in/
-
-    if [[ ! -d "$to" ]]; then
-      log_fatal "plant_seed called on a non-existant work path: $to"
-      fail1
-    fi
-
-    find_seed_path $from || fail
-    if [[ ! "$seed_path" ]]; then
-      log_fatal "No seed is associated with this path: $to"
-      fail1
     fi
 
     local dna_path=$seed_path
     if [[ $command_requires_cell == t ]]; then
+
       while [[ ! -d $dna_path/.dna ]]; do
         dna_path=${dna_path%/*}
         if [[ $dna_path != /*/* ]]; then
@@ -6801,8 +6832,183 @@ pool_status_command() {
   handle_return
 }
 
+# inputs:
+#   $1      current path 
+# outputs:
+#   base_seed_path  the base seed path which contains all seeds of the enclosing folders
+find_base_seed() {
+  local current_path=$1
+  if [[ -d $current_path/.seed ]]; then
+    base_seed_path=$current_path/.seed
+  elif [[ $current_path == /*/*/* ]]; then
+    find_base_seed ${current_path%/*} || fail
+  elif [[ -d $SIMPLETON_SEED ]]; then
+    base_seed_path=$SIMPLETON_SEED
+  else
+    # could not find seed
+    return 1
+  fi
+}
+
+# inputs:
+#   base_seed_path
+#   extend_path
+# outputs:
+#   seed_path       includes all folders to current cell's seed
+find_seed() {
+  local f d cell_type
+  seed_path=$base_seed_path
+  for f in ${extend_path//\// }; do
+
+    d=
+    if [[ $f == *:* ]]; then
+      d=${f%%:*}
+    fi
+
+    case $f in
+      *:*...)
+        cell_type=branch
+      ;;
+      *:*)
+        cell_type=leaf
+      ;;
+      *...)
+        cell_type='trunk branch'
+      ;;
+      *)
+        cell_type='trunk branch leaf'
+      ;;
+    esac
+
+    if [[ -d $seed_path/$f ]]; then
+      seed_path+=/$f
+    elif [[ -d $seed_path/$d:_ ]]; then
+      seed_path+=/$d:_
+    elif [[ -d $seed_path/_trunk && " $cell_type " == *" trunk "* ]]; then
+      seed_path+=/_trunk
+    elif [[ -d $seed_path/_branch && " $cell_type " == *" branch "* ]]; then
+      seed_path+=/_branch
+    elif [[ -d $seed_path/_leaf && " $cell_type " == *" leaf "* ]]; then
+      seed_path+=/_leaf
+    elif [[ -d $seed_path/_ ]]; then
+      seed_path+=/_
+    else
+      # could not find seed
+      log_fatal "Could not find seed matching $f in $seed_path"
+      return 1
+    fi
+
+  done
+}
+
+# input: cell_path
+# output:
+#   cell_path
+#   seed_path
+#   extend_path
+#   work_path
+#   step_path
+find_paths() {
+  begin_function
+    # figure out where we are
+    local base_path base_seed_path \
+      SIMPLETON_SEED=${SIMPLETON_SEED:-undefined} \
+      SIMPLETON_CELL=${SIMPLETON_CELL:-undefined} \
+
+    if [[ $cell_path == $SIMPLETON_SEED/* || $cell_path == */.seed/* ]]; then
+      unset work_path
+      if [[ $cell_path == $SIMPLETON_SEED/* ]]; then
+        base_path=
+        extend_path=${cell_path#$SIMPLETON_SEED/}
+        seed_path=$SIMPLETON_SEED
+      elif [[ $cell_path == */.seed/* ]]; then
+        base_path=${cell_path%%/.seed/*}
+        extend_path=${cell_path#$base_path/.seed/}
+        seed_path=$base_path
+      fi
+
+      if [[ -d $SIMPLETON_CELL ]]; then
+        cell_path=$SIMPLETON_CELL
+      elif [[ -d $base_path/.cell ]]; then
+        cell_path=$base_path/.cell
+      else
+        log_fatal "Could not determine cell path, since SIMPLETON_CELL isn't set or doesn't exist, nor does /cell or ~/.cell ."
+        fail1
+      fi
+
+      local extend_folder
+      for extend_folder in ${extend_path//\// }; do
+        case $extend_folder in
+          _leaf|_trunk|_branch|*:*)
+            # can't figure out cell past these pattern matching seeds
+            break
+          ;;
+        esac
+        cell_path+="/$extend_folder"
+        seed_path+="/$extend_folder"
+      done
+
+    elif [[ $cell_path == $SIMPLETON_CELL/* || $cell_path == */.cell/* ]]; then
+      unset work_path
+
+      if [[ $cell_path == $SIMPLETON_CELL/* ]]; then
+        base_path=
+        extend_path=${cell_path#$SIMPLETON_CELL/}
+      elif [[ $cell_path == */.cell/* ]]; then
+        base_path=${cell_path%%/.cell/*}
+        extend_path=${cell_path#$base_path/.cell/}
+      fi
+
+      find_base_seed $cell_path || fail
+      find_seed || {
+        log_fatal "Could not find seed for $cell_path. Either set SIMPLETON_SEED or make a ~/.seed or /seed folder."
+        fail1
+      }
+
+      local found_base_cell=f
+      step_path=$cell_path
+      begin_loop; doo
+        if [[ -d $seed_path/.dna ]]; then
+          found_base_cell=t
+          break
+        fi
+        seed_path=${seed_path%/*}
+        cell_path=${cell_path%/*}
+        if [[ $cell_path != /*/*/* ]]; then
+          log_fatal "Couldn't find cell in ancestors of $step_path"
+          fail1
+        fi
+      end_loop
+
+      if [[ $step_path == $cell_path ]]; then
+        unset step_path
+      fi
+
+    else # not a cell path or a seed path, so it must be a work path
+
+      work_path=$cell_path
+      base_path=
+      extend_path=$cell_path
+
+      find_base_seed $cell_path || fail
+      find_seed || {
+        log_fatal "Could not find seed for $cell_path. Either set SIMPLETON_SEED or make a ~/.seed or /seed folder."
+        fail1
+      }
+
+      cell_path="$SIMPLETON_CELL/$extend_path"
+
+    fi
+  end_function
+  handle_return
+}
+
 update_command() {
   begin_function
+    local step_path seed_path work_path extend_path \
+      cell_path=$cell_path \
+
+    find_paths || fail
     plant_command || fail
     # check if update is needed
     lock_cell || fail
