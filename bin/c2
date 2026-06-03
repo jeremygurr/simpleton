@@ -6685,8 +6685,9 @@ plant_seed_dir_pattern() {
 #   target
 #   x_part
 #   part
+#   x
 plant_seed_dir() {
-  local original_cell=$target recursive=${recursive:-f}
+  local original_cell=$target plant_subs is_pattern is_cell
   begin_function
     case $x_part in
       _*|*:_)
@@ -6696,6 +6697,9 @@ plant_seed_dir() {
         is_pattern=f
       ;;
     esac
+
+    [[ -d $x/.dna ]] && is_cell=t || is_cell=f
+    [[ $recursive == t || $is_cell == f ]] && plant_subs=t || plant_subs=f
 
     if [[ $is_pattern == f ]]; then
       if [[ "$part" && $part != $x_part ]]; then
@@ -6716,13 +6720,13 @@ plant_seed_dir() {
 
         if [[ $x_part == .dna ]]; then
           safe_link $(realpath $x) $to/ || fail
-          recursive=f
+          plant_subs=f
         elif [[ $x_part == .key ]]; then
           key_path=$x || fail
-          recursive=f
+          plant_subs=f
         elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
           safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
-          recursive=f
+          plant_subs=f
         elif [[ $x_part != .* ]]; then
           mkdir $target || {
             if [[ -d $target ]]; then
@@ -6733,16 +6737,21 @@ plant_seed_dir() {
               fail1
             fi
           }
+        else
+          plant_subs=f
         fi
 
       fi
-      if [[ $x_part != .* && -d $target && $recursive == t ]]; then
+
+      if [[ $plant_subs == t ]]; then
         # recursive
         top_level_plant=f plant_seed $x $target || fail
       fi
+
       if [[ $top_level_plant == t ]]; then
         mv $target $to/$x_part || fail
       fi
+
     else # $is_pattern == t
       plant_seed_dir_pattern || fail
     fi
@@ -7194,7 +7203,7 @@ update_command() {
     find_paths || fail
     get_needs_update || fail
     if [[ $needs_update == t ]]; then
-      plant_seed $seed_path $cell_path.new || fail
+      plant_seed $seed_path $cell_path || fail
       lock_out || fail
       # make request
       cell_path=$cell_path.new execute_update || fail
