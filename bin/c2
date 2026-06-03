@@ -6619,127 +6619,148 @@ cell_lib_init() {
   trace_dims=${trace_dims:-${trace_dim:-}}
 }
 
-plant_seed_internal() {
-  local from=$1 to=$2 contents x x_part deep=${deep:-t} \
-    cell_is_leaf=${cell_is_leaf:-t} key_path=${key_path:-} \
-
+plant_seed_dir_pattern() {
   begin_function
+    if [[ ! "$part" ]]; then
+      abort
+    fi
+    target=$to/$part
+    if [[ $x_part == _ || $x_part == __ ]]; then
+      if [[ ! -e $target ]]; then
+        mkdir $target || fail
+        if [[ $recursive == t ]]; then
+          if [[ $x_part == __ ]]; then
+            plant_seed $from $target || fail
+          else
+            plant_seed $x $target || fail
+          fi
+        fi
+      fi
+    elif [[ $x_part == *:* ]]; then
 
-    if [[ ! -d $to ]]; then
+      local from_dim_part=${x_part%%:*} \
+        from_mem_part=${x_part#*:} \
+        to_dim_part=${part%%:*} \
+        to_mem_part=${part#*:} \
 
-      log_verbose "Planting seed from $from to $to"
-
-      if [[ $from == /seed/* && -d $from ]]; then
-        plant_seed_internal ${from%/*} ${to%/*} || fail
-      else
-        log_fatal "Seed doesn't exist for $to"
+      if [[ ! $to_dim_part =~ ^[a-zA-Z0-9_]+$ ]]; then
+        log_fatal "Invalid dim name: $to_dim_part, found in $target"
         fail1
       fi
 
-    else
+      if [[ ! $from_dim_part =~ ^[a-zA-Z0-9_]+$ ]]; then
+        log_fatal "Invalid dim name: $from_dim_part, found in $x"
+        fail1
+      fi
 
-      contents=( $(find1 $from | sort -g) ) || fail
-      local target
-      begin_for x in ${contents[*]}; doo
-        x_part=${x##*/}
-        target=$to/$x_part
-        if [[ -d $x ]]; then
-          if [[ ! -e $target ]]; then
-
-            # remove broken links
-            if [[ -L $target ]]; then
-              rm $target || fail
-            fi
-
-            if [[ $x_part == .dna || $x_part == .root ]]; then
-              safe_link $(realpath $x) $to/ || fail
-            elif [[ $x_part == .key ]]; then
-              key_path=$x || fail
-            elif [[ $x_part == .lib ]]; then
-              mkdir $target || fail
-              safe_link $(realpath $x)/* $target/ || fail
-            elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
-              safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
-            elif [[ $x_part == *:* ]]; then
-
-              if [[ "${branch_coordinate_fields:-}" ]]; then
-                local dim_part=${x_part%%:*} \
-                  mem_part=${x_part#*:}
-
-                if [[ ! $dim_part =~ ^[a-zA-Z0-9_]+$ ]]; then
-                  log_fatal "Invalid dim name: $dim_part, found in $x"
-                  fail1
-                fi
-
-                local values
-                coord_type=branch \
-                dim=$dim_part \
-                fetch_values_from_coordinates $dim_part || fail
-
-                local value_count=${#values[*]}
-
-                # Hashed members currently not supported
-                # Not too hard to implement, but isn't likely to be needed
-                if (( value_count == 1 )) && [[ "$values" == "$mem_part" ]]; then
-                  plant_seed_internal $x $to || fail
-                fi
-              fi
-
-            elif [[ $x_part != .* ]]; then
-              mkdir $target || fail
-            fi
-          fi
-          if [[ $x_part != .* && -d $target && $deep == t ]]; then
-            plant_seed_internal $x $target || fail
-          fi
-        elif [[ $cell_is_leaf == t && ! -e $target && $x_part != .* ]]; then
-          if [[ $x == *.safe ]]; then
-            ignore_failure=t \
-            cell_decrypt_file $x ${target%.safe} || fail
-          else
-            ln -s $x $to/ || fail
-          fi
+      if [[ $from_dim_part == $to_dim_part && \
+        (  $from_mem_part == _ \
+        || $from_mem_part == $to_mem_part \
+        ) ]]; then
+        if [[ ! -e $target ]]; then
+          mkdir $target || fail
+          plant_seed $x $target || fail
         fi
-      end_for
+      fi
 
+    else # handle _trunk _branch _leaf patterns
+      local cell_type
+      get_cell_type $target || fail
+      if [[ _$cell_type == $x_part ]]; then
+        if [[ ! -e $target ]]; then
+          mkdir $target || fail
+          plant_seed $x $target || fail
+        fi
+      fi
     fi
   end_function
   handle_return
 }
 
+plant_seed_dir() {
+  begin_function
+    case $x_part in
+      _*|*:_)
+        is_pattern=t
+      ;;
+      *)
+        is_pattern=f
+      ;;
+    esac
+
+    if [[ $is_pattern == f ]]; then
+      if [[ "$part" && $part != $x_part ]]; then
+        continue
+      fi
+
+      if [[ ! -e $target ]]; then
+
+        # remove broken links
+        if [[ -L $target ]]; then
+          rm $target || fail
+        fi
+
+        if [[ $x_part == .dna ]]; then
+          safe_link $(realpath $x) $to/ || fail
+        elif [[ $x_part == .key ]]; then
+          key_path=$x || fail
+        elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
+          safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
+        elif [[ $x_part != .* ]]; then
+          mkdir $target || fail
+        fi
+      fi
+      if [[ $x_part != .* && -d $target && $recursive == t ]]; then
+        plant_seed $x $target || fail
+      fi
+    else # $is_pattern == t
+      plant_seed_dir_pattern || fail
+    fi
+  end_function
+  handle_return
+}
+
+# can plant cells or steps of cells or cell groups
 # inputs: 
-#   cell_path   path that may not exist yet, but parent must exist
-#   seed_path
+#   $1          from seed
+#   $2          to cell (should line up with seed path)
+#   $3          (optional) only plant this part
+#   recursive   whether to plant all descendents of this cell        
 plant_seed() {
-  local seed_path=${seed_path} cell_path=${cell_path} \
-    deep=${deep:-t} \
-    ignore_nonexistent=${ignore_nonexistent:-f}
+  local from=$1 to=$2 part=${3:-} \
+    recursive=${recursive:-f} \
+    key_path=${key_path:-} \
 
   begin_function
 
-    # if .dna/ already exists, then consider it planted
-    if [[ -d $cell_path/.dna ]]; then
-      abort
-    fi
+    if [[ ! -d $to ]]; then
 
-    local dna_path=$seed_path
-    if [[ $command_requires_cell == t ]]; then
-
-      while [[ ! -d $dna_path/.dna ]]; do
-        dna_path=${dna_path%/*}
-        if [[ $dna_path != /*/* ]]; then
-          log_fatal "Could not find dna in seed: $seed_path"
-          fail1
-        fi
-      done
-
-      if [[ $dna_path != $seed_path ]]; then
-        safe_link $dna_path/.dna $to/ || fail
+      if [[ $from =~ .*/\.?seed/.* && -d $from ]]; then
+        plant_seed ${from%/*} ${to%/*} ${to##*/} || fail
+      else
+        log_fatal "Seed doesn't exist for $to"
+        fail1
       fi
 
     fi
 
-    plant_seed_internal $seed_path $to || fail
+    local target contents x x_part is_pattern
+    contents=( $(find1 $from | sort -g) ) || fail
+    begin_for x in ${contents[*]}; doo
+      x_part=${x##*/}
+
+      target=$to/$x_part
+      if [[ -d $x ]]; then
+        plant_seed_dir || fail
+      elif [[ ! -e $target && $x_part != .* ]]; then
+        if [[ $x == *.safe ]]; then
+          ignore_failure=t \
+          cell_decrypt_file $x ${target%.safe} || fail
+        else
+          ln -s $x $to/ || fail
+        fi
+      fi
+    end_for
 
   end_function
   handle_return
@@ -6753,8 +6774,11 @@ clean_command() {
 }
 
 plant_command() {
+  local step_path seed_path work_path extend_path \
+    cell_path=$cell_path \
+
   begin_function
-    # figure out seed path
+    find_paths || fail
     plant_seed || fail
   end_function
   handle_return
@@ -6795,6 +6819,7 @@ request_promote_command() {
   handle_return
 }
 
+# assumes the cell is already planted and a request already prepared before it is run
 execute_update() {
   begin_function
     # fail if in/ is missing
@@ -6850,6 +6875,23 @@ find_base_seed() {
   fi
 }
 
+get_cell_type() {
+  case "$1" in
+    *:*...)
+      cell_type=branch
+    ;;
+    *:*)
+      cell_type=leaf
+    ;;
+    *...)
+      cell_type='trunk branch'
+    ;;
+    *)
+      cell_type='trunk branch leaf'
+    ;;
+  esac
+}
+
 # inputs:
 #   base_seed_path
 #   extend_path
@@ -6865,20 +6907,7 @@ find_seed() {
       d=${f%%:*}
     fi
 
-    case $f in
-      *:*...)
-        cell_type=branch
-      ;;
-      *:*)
-        cell_type=leaf
-      ;;
-      *...)
-        cell_type='trunk branch'
-      ;;
-      *)
-        cell_type='trunk branch leaf'
-      ;;
-    esac
+    get_cell_type $f || fail
 
     if [[ -d $seed_path/$f ]]; then
       seed_path+=/$f
@@ -7003,30 +7032,115 @@ find_paths() {
   handle_return
 }
 
-update_command() {
-  begin_function
-    local step_path seed_path work_path extend_path \
-      cell_path=$cell_path \
-
-    find_paths || fail
-    plant_command || fail
-    # check if update is needed
-    lock_cell || fail
-    # make request
-    # execute update
-    # watch status
-    # display results?
-  end_function
-  unlock_cell
-  handle_return
-}
-
 lock_cell() {
   folder_to_lock=$cell_path/out.new folder_lock
 }
 
 unlock_cell() {
   folder_to_lock=$cell_path/out folder_unlock
+}
+
+# output:
+#   required_freshness
+#   top_fresh
+get_required_freshness() {
+  required_freshness=${fresh:-${default_freshness:-}}
+  # this can be used in upstream prep functions to pass freshness to upstream
+  : ${top_fresh:=$required_freshness}
+  return 0
+}
+
+get_is_stale() {
+  local status_path=$status_path
+  begin_function
+    is_stale=t
+    if [[ ! "${required_freshness:-}" || "$required_freshness" == inf ]]; then
+      is_stale=f
+    elif [[ $required_freshness != 0 ]]; then
+      local fresh_seconds
+      convert_to_seconds $required_freshness fresh_seconds || fail
+      local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds)) \
+        out_timestamp= 
+      is_stale=f
+      if [[ -f $status_path/last-good-update-end ]]; then
+        out_timestamp=$(date -r $status_path/last-good-update-end +%s)
+      fi
+      if [[ "$out_timestamp" && $out_timestamp -lt $fresh_cutoff ]]; then
+        is_stale=t
+      fi
+    fi
+  end_function
+  handle_return
+}
+
+# output:
+#   needs_update
+#   reason
+get_needs_update() {
+  needs_update=t
+  begin_function
+    if [[ ! -d $cell_path/.dna ]]; then
+      reason="Needs update because cell hasn't been planted ('.dna' folder doesn't exist)"
+      abort
+    fi
+    #  This isn't needed because before new requests are created, this function is checked
+    #if [[ -d $cell_path/in.new ]]; then
+    #  reason="Needs update because a new request is waiting ('in.new' exists)"
+    #  abort
+    #fi
+    if [[ ! -d $cell_path/in ]]; then
+      reason="Needs update because 'in' folder doesn't exist"
+      abort
+    fi
+    if [[ ! -d $cell_path/out ]]; then
+      reason="Needs update because 'out' folder doesn't exist"
+      abort
+    fi
+    if [[ $cell_path/in -nt $cell_path/out ]]; then
+      reason="Needs update because 'in' folder is newer than 'out' folder"
+      abort
+    fi
+    if [[ -f $cell_path/.dna/check.bash ]]; then
+      source $cell_path/.dna/check.bash || return 0
+      local required_freshness is_stale
+      get_required_freshness
+      if [[ $required_freshness == 0 ]]; then
+        reason="Needs update because refresh is forced (fresh=0)"
+        abort
+      fi
+      if get_is_stale $status_path || fail
+         [[ $is_stale == t ]]; then
+        reason="Needs update because cell is stale"
+        abort
+      fi
+    fi
+    needs_update=f
+  end_function
+  handle_return
+}
+
+update_command() {
+  begin_function
+    local step_path seed_path work_path extend_path \
+      cell_path=$cell_path \
+      needs_update \
+
+    get_needs_update || fail
+    if [[ $needs_update == t ]]; then
+      lock_cell || fail
+      find_paths || fail
+      plant_seed $seed_path $cell_path || fail
+      # make request
+      execute_update || fail
+      # watch status
+      # display results?
+    else
+      log_verbose "No update needed."
+    fi
+
+  end_function
+  unlock_cell
+  handle_return
 }
 
 ### file: ./05-walk-lib.bash
