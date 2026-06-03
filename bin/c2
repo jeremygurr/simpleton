@@ -6630,9 +6630,11 @@ plant_seed_dir_pattern() {
         mkdir $target || fail
         if [[ $recursive == t ]]; then
           if [[ $x_part == __ ]]; then
-            plant_seed $from $target || fail
+            # recursive
+            top_level_plant=f plant_seed $from $target || fail
           else
-            plant_seed $x $target || fail
+            # recursive
+            top_level_plant=f plant_seed $x $target || fail
           fi
         fi
       fi
@@ -6659,7 +6661,8 @@ plant_seed_dir_pattern() {
         ) ]]; then
         if [[ ! -e $target ]]; then
           mkdir $target || fail
-          plant_seed $x $target || fail
+          # recursive
+          top_level_plant=f plant_seed $x $target || fail
         fi
       fi
 
@@ -6669,7 +6672,8 @@ plant_seed_dir_pattern() {
       if [[ _$cell_type == $x_part ]]; then
         if [[ ! -e $target ]]; then
           mkdir $target || fail
-          plant_seed $x $target || fail
+          # recursive
+          top_level_plant=f plant_seed $x $target || fail
         fi
       fi
     fi
@@ -6677,7 +6681,12 @@ plant_seed_dir_pattern() {
   handle_return
 }
 
+# input:
+#   target
+#   x_part
+#   part
 plant_seed_dir() {
+  local original_cell=$target recursive=${recursive:-f}
   begin_function
     case $x_part in
       _*|*:_)
@@ -6690,10 +6699,15 @@ plant_seed_dir() {
 
     if [[ $is_pattern == f ]]; then
       if [[ "$part" && $part != $x_part ]]; then
-        continue
+        abort
       fi
 
       if [[ ! -e $target ]]; then
+
+        if [[ $top_level_plant == t ]]; then
+          cell_path=$original_cell lock_cell || fail
+          target=$to/$x_part.new
+        fi
 
         # remove broken links
         if [[ -L $target ]]; then
@@ -6702,20 +6716,52 @@ plant_seed_dir() {
 
         if [[ $x_part == .dna ]]; then
           safe_link $(realpath $x) $to/ || fail
+          recursive=f
         elif [[ $x_part == .key ]]; then
           key_path=$x || fail
+          recursive=f
         elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
           safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
+          recursive=f
         elif [[ $x_part != .* ]]; then
-          mkdir $target || fail
+          mkdir $target || {
+            if [[ -d $target ]]; then
+              log_debug "Another process may be planting here, aborting."
+              abort
+            else
+              log_fail "Could not create dir $target"
+              fail1
+            fi
+          }
         fi
+
       fi
       if [[ $x_part != .* && -d $target && $recursive == t ]]; then
-        plant_seed $x $target || fail
+        # recursive
+        top_level_plant=f plant_seed $x $target || fail
+      fi
+      if [[ $top_level_plant == t ]]; then
+        mv $target $to/$x_part || fail
       fi
     else # $is_pattern == t
       plant_seed_dir_pattern || fail
     fi
+  end_function
+  cell_path=$original_cell unlock_cell
+  handle_return
+}
+
+# input:
+#   $1   seed_path
+#   $2   name of var to store cell path in
+convert_seed_path_to_cell() {
+  local seed_path=$1 cell_path_var=$2
+  local -n _cell_path=$cell_path_var
+  begin_function_lo
+    # this is a naive approach that works for simple cases
+    # need to make this more advanced to handle the more rare cases later
+    cell_path=${seed_path//\/seed\//\/cell\/}
+    cell_path=${cell_path//\/.seed\//\/.cell\/}
   end_function
   handle_return
 }
@@ -6730,13 +6776,16 @@ plant_seed() {
   local from=$1 to=$2 part=${3:-} \
     recursive=${recursive:-f} \
     key_path=${key_path:-} \
+    top_level_plant=${top_level_plant:-t} \
 
   begin_function
 
     if [[ ! -d $to ]]; then
 
       if [[ $from =~ .*/\.?seed/.* && -d $from ]]; then
-        plant_seed ${from%/*} ${to%/*} ${to##*/} || fail
+        # recursive
+        recursive=f plant_seed ${from%/*} ${to%/*} ${to##*/} || fail
+        top_level_plant=f
       else
         log_fatal "Seed doesn't exist for $to"
         fail1
@@ -6750,14 +6799,21 @@ plant_seed() {
       x_part=${x##*/}
 
       target=$to/$x_part
-      if [[ -d $x ]]; then
+      if [[ -L $x ]]; then
+        if [[ ! -e $to/$x ]]; then
+          local real_seed real_cell
+          real_seed=$(realpath $x) || fail
+          convert_seed_path_to_cell $real_seed real_cell || fail
+          safe_link $real_cell $to/ || fail
+        fi
+      elif [[ -d $x ]]; then
         plant_seed_dir || fail
       elif [[ ! -e $target && $x_part != .* ]]; then
         if [[ $x == *.safe ]]; then
           ignore_failure=t \
           cell_decrypt_file $x ${target%.safe} || fail
         else
-          ln -s $x $to/ || fail
+          safe_link $x $to/ || fail
         fi
       fi
     end_for
@@ -7033,10 +7089,18 @@ find_paths() {
 }
 
 lock_cell() {
-  folder_to_lock=$cell_path/out.new folder_lock
+  folder_to_lock=$cell_path.new folder_lock
 }
 
 unlock_cell() {
+  folder_to_lock=$cell_path folder_unlock
+}
+
+lock_out() {
+  folder_to_lock=$cell_path/out.new folder_lock
+}
+
+unlock_out() {
   folder_to_lock=$cell_path/out folder_unlock
 }
 
@@ -7073,6 +7137,8 @@ get_is_stale() {
   handle_return
 }
 
+# input:
+#   cell_path
 # output:
 #   needs_update
 #   reason
@@ -7125,13 +7191,22 @@ update_command() {
       cell_path=$cell_path \
       needs_update \
 
+    find_paths || fail
     get_needs_update || fail
     if [[ $needs_update == t ]]; then
-      lock_cell || fail
-      find_paths || fail
-      plant_seed $seed_path $cell_path || fail
+      plant_seed $seed_path $cell_path.new || fail
+      lock_out || fail
       # make request
-      execute_update || fail
+      cell_path=$cell_path.new execute_update || fail
+      
+      if [[ -e $cell_path.old ]]; then
+        rm -rf $cell_path.old
+      fi
+      if [[ -e $cell_path ]]; then
+        mv $cell_path $cell_path.old || fail
+      fi
+
+      mv $cell_path.new $cell_path || fail
       # watch status
       # display results?
     else
