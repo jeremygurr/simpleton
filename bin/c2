@@ -6681,6 +6681,57 @@ plant_seed_dir_pattern() {
   handle_return
 }
 
+plant_seed_dir_simple() {
+  begin_function
+    if [[ ! -e $target ]]; then
+
+      if [[ $top_level_plant == t ]]; then
+        cell_path=$original_cell lock_cell || fail
+        target=$to/$x_part.new
+      fi
+
+      # remove broken links
+      if [[ -L $target ]]; then
+        rm $target || fail
+      fi
+
+      if [[ $x_part == .dna ]]; then
+        safe_link $(realpath $x) $to/ || fail
+        plant_subs=f
+      elif [[ $x_part == .key ]]; then
+        key_path=$x || fail
+        plant_subs=f
+      elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
+        safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
+        plant_subs=f
+      elif [[ $x_part != .* ]]; then
+        mkdir $target || {
+          if [[ -d $target ]]; then
+            log_debug "Another process may be planting here, aborting."
+            abort
+          else
+            log_fail "Could not create dir $target"
+            fail1
+          fi
+        }
+      else
+        plant_subs=f
+      fi
+
+    fi
+
+    if [[ $plant_subs == t ]]; then
+      # recursive
+      top_level_plant=f plant_seed $x $target || fail
+    fi
+
+    if [[ $target == *.new ]]; then
+      mv $target ${target%.new} || fail
+    fi
+  end_function
+  handle_return
+}
+
 # input:
 #   target
 #   x_part
@@ -6689,6 +6740,7 @@ plant_seed_dir_pattern() {
 plant_seed_dir() {
   local original_cell=$target plant_subs is_pattern is_cell
   begin_function
+
     case $x_part in
       _*|*:_)
         is_pattern=t
@@ -6705,56 +6757,11 @@ plant_seed_dir() {
       if [[ "$part" && $part != $x_part ]]; then
         abort
       fi
-
-      if [[ ! -e $target ]]; then
-
-        if [[ $top_level_plant == t ]]; then
-          cell_path=$original_cell lock_cell || fail
-          target=$to/$x_part.new
-        fi
-
-        # remove broken links
-        if [[ -L $target ]]; then
-          rm $target || fail
-        fi
-
-        if [[ $x_part == .dna ]]; then
-          safe_link $(realpath $x) $to/ || fail
-          plant_subs=f
-        elif [[ $x_part == .key ]]; then
-          key_path=$x || fail
-          plant_subs=f
-        elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
-          safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
-          plant_subs=f
-        elif [[ $x_part != .* ]]; then
-          mkdir $target || {
-            if [[ -d $target ]]; then
-              log_debug "Another process may be planting here, aborting."
-              abort
-            else
-              log_fail "Could not create dir $target"
-              fail1
-            fi
-          }
-        else
-          plant_subs=f
-        fi
-
-      fi
-
-      if [[ $plant_subs == t ]]; then
-        # recursive
-        top_level_plant=f plant_seed $x $target || fail
-      fi
-
-      if [[ $top_level_plant == t ]]; then
-        mv $target $to/$x_part || fail
-      fi
-
-    else # $is_pattern == t
+      plant_seed_dir_simple || fail
+    else
       plant_seed_dir_pattern || fail
     fi
+
   end_function
   cell_path=$original_cell unlock_cell
   handle_return
@@ -6786,6 +6793,7 @@ plant_seed() {
     recursive=${recursive:-f} \
     key_path=${key_path:-} \
     top_level_plant=${top_level_plant:-t} \
+    interesting_vars='from to part' \
 
   begin_function
 
