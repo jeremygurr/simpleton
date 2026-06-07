@@ -6130,6 +6130,7 @@ show_usage() {
     local name
     {
       begin_for name in ${cell_commands[*]}; doo
+
         local -n command_description=command_${name}_description
         if [[ "$command_description" ]]; then
           local short_desc=$command_description
@@ -6139,23 +6140,27 @@ show_usage() {
         else
           echo "$name Please add a description to this command in $cell_command"
         fi
+
       end_for
     } | column -l 2 -t | indent_stream $indent
 
-    local -n command_aliases=command_${name}_aliases
-    local -n command_alias_command=command_${name}_alias_command
-    if [[ "${command_aliases:-}" ]]; then
-      local i
-      (( indent -= 2 ))
-      out "${NL}Command aliases (may be used as shortcuts of the given commands):"
-      (( indent += 2 ))
-      {
-        echo "ALIAS SUBSTITUTED-FOR"
-        begin_for (( i = 0; i < ${#command_aliases[*]}; i++ )); doo
-          echo "${command_aliases[$i]} ${command_alias_command[$i]}"
-        end_for
-      } | column -l 2 -t | indent_stream $indent
-    fi
+
+    begin_for name in ${cell_commands[*]}; doo
+      local -n command_aliases=command_${name}_aliases
+      local -n command_alias_command=command_${name}_alias_command
+      if [[ "${command_aliases:-}" ]]; then
+        local i
+        (( indent -= 2 ))
+        out "${NL}Command aliases (may be used as shortcuts of the given commands):"
+        (( indent += 2 ))
+        {
+          echo "ALIAS SUBSTITUTED-FOR"
+          begin_for (( i = 0; i < ${#command_aliases[*]}; i++ )); doo
+            echo "${command_aliases[$i]} ${command_alias_command[$i]}"
+          end_for
+        } | column -l 2 -t | indent_stream $indent
+      fi
+    end_for
 
   end_function
   handle_return
@@ -6174,6 +6179,7 @@ get_cells_and_commands() {
   begin_function
     local chosen_commands_current= chosen_cells_current= current_parameter_index=0 
     begin_for (( ; current_parameter_index < ${#parameters[*]}; current_parameter_index++ )); doo
+      grip_fence
       local parameter=${parameters[$current_parameter_index]}
       case $parameter in
         help|-*|\?|\?\?)
@@ -6186,8 +6192,30 @@ get_cells_and_commands() {
             leftover_command=${leftover_command// /-}-$parameter
           fi
 
-          if is_command "$parameter" || is_command "$leftover_command"; then
+          if is_command "$leftover_command"; then
             leftovers=()
+            case $previous_parameter in
+              cell)
+                chosen_cells+=( "$chosen_cells_current" )
+                chosen_cells_current=
+                chosen_commands_current=$leftover_command
+              ;;
+              none)
+                chosen_cells+=( . )
+                (( cell_count++ ))
+                chosen_commands_current=$leftover_command
+              ;;
+              command)
+                chosen_commands_current+=" $leftover_command"
+              ;;
+              *)
+                log_fatal "Internal error: invalid previous_parameter variable: $previous_parameter"
+                fail1
+              ;;
+            esac
+            (( command_count++ ))
+            previous_parameter=command
+          elif is_command "$parameter"; then
             case $previous_parameter in
               cell)
                 chosen_cells+=( "$chosen_cells_current" )
@@ -6209,7 +6237,7 @@ get_cells_and_commands() {
             esac
             (( command_count++ ))
             previous_parameter=command
-          elif [[ -d $parameter ]]; then
+          elif [[ -d $parameter || $parameter == */* ]]; then
             case $previous_parameter in
               none)
                 chosen_cells_current=$parameter
@@ -6263,19 +6291,20 @@ get_sub_commands() {
 handle_leftovers() {
   begin_function
     local leftover
-    for leftover in "${leftovers[@]}"; do
-      if (( help_depth > 0 )); then
-        local subs
-        get_sub_commands $leftover || fail
-        if [[ "$subs" ]]; then
-          out "Choose a subcommand of $leftover:$NL"
-          cell_commands+=( ${subs[*]} )
-          continue
-        fi
+    begin_for leftover in "${leftovers[@]}"; doo
+      local subs
+      get_sub_commands $leftover || fail
+      if [[ "${subs:-}" ]]; then
+        log_fatal "Choose a subcommand of $leftover:$NL"
+        cell_commands+=( ${subs[*]} )
+        continue
+      else
+        log_fatal "Could not identify command or cell: $leftover . If it's supposed to be a cell, make sure it has a / in the name, like ./some-cell"
+        fail1
       fi
       show_usage 
       fail_later1; break 2
-    done
+    end_for
   end_function
   handle_return
 }
@@ -6456,6 +6485,9 @@ top_level() {
     begin_for (( cell_group_index = 0; cell_group_index < ${#chosen_cells[*]}; cell_group_index++ )); doo
       cell_paths=${chosen_cells[$cell_group_index]}
       begin_for cell_path in $cell_paths; doo
+        if [[ $cell_path != /* ]]; then
+          cell_path=$PWD/$cell_path || fail
+        fi
         handle_cell $cell_path ${chosen_commands[$cell_group_index]} || fail
         (( handled++ ))
       end_for
@@ -6705,15 +6737,17 @@ plant_seed_dir_simple() {
         safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
         plant_subs=f
       elif [[ $x_part != .* ]]; then
-        mkdir $target || {
-          if [[ -d $target ]]; then
-            log_debug "Another process may be planting here, aborting."
-            abort
-          else
-            log_fail "Could not create dir $target"
-            fail1
-          fi
-        }
+        if [[ $top_level_plant == f ]]; then
+          mkdir $target || {
+            if [[ -d $target ]]; then
+              log_debug "Another process may be planting here, aborting."
+              abort
+            else
+              log_fail "Could not create dir $target"
+              fail1
+            fi
+          }
+        fi
       else
         plant_subs=f
       fi
@@ -6729,6 +6763,7 @@ plant_seed_dir_simple() {
       mv $target ${target%.new} || fail
     fi
   end_function
+  cell_path=$original_cell unlock_cell
   handle_return
 }
 
@@ -6763,7 +6798,6 @@ plant_seed_dir() {
     fi
 
   end_function
-  cell_path=$original_cell unlock_cell
   handle_return
 }
 
@@ -7067,7 +7101,7 @@ find_paths() {
         fail1
       }
 
-      local found_base_cell=f
+      local found_base_cell=f orig_cell_path=$cell_path orig_seed_path=$seed_path
       step_path=$cell_path
       begin_loop; doo
         if [[ -d $seed_path/.dna ]]; then
@@ -7077,8 +7111,9 @@ find_paths() {
         seed_path=${seed_path%/*}
         cell_path=${cell_path%/*}
         if [[ $cell_path != /*/*/* ]]; then
-          log_fatal "Couldn't find cell in ancestors of $step_path"
-          fail1
+          cell_path=$orig_cell_path
+          seed_path=$orig_seed_path
+          break
         fi
       end_loop
 
@@ -7110,7 +7145,7 @@ lock_cell() {
 }
 
 unlock_cell() {
-  folder_to_lock=$cell_path folder_unlock
+  folder_to_unlock=$cell_path folder_unlock
 }
 
 lock_out() {
@@ -7118,7 +7153,7 @@ lock_out() {
 }
 
 unlock_out() {
-  folder_to_lock=$cell_path/out folder_unlock
+  folder_to_unlock=$cell_path/out folder_unlock
 }
 
 # output:
@@ -7216,14 +7251,14 @@ update_command() {
       # make request
       cell_path=$cell_path.new execute_update || fail
       
-      if [[ -e $cell_path.old ]]; then
-        rm -rf $cell_path.old
+      if [[ -e $cell_path/out.old ]]; then
+        rm -rf $cell_path/out.old
       fi
-      if [[ -e $cell_path ]]; then
-        mv $cell_path $cell_path.old || fail
+      if [[ -e $cell_path/out ]]; then
+        mv $cell_path/out $cell_path/out.old || fail
       fi
 
-      mv $cell_path.new $cell_path || fail
+      mv $cell_path/out.new $cell_path/out || fail
       # watch status
       # display results?
     else
@@ -7231,7 +7266,7 @@ update_command() {
     fi
 
   end_function
-  unlock_cell
+  unlock_out
   handle_return
 }
 
