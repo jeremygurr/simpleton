@@ -115,8 +115,8 @@ DIM_DEBUG_COLOR=$DIM_CYAN
 export tmp_folder="${tmp_folder:-/tmp}"
 export EDITOR=${EDITOR:-vim}
 
-export tracing_depth=${tracing_depth:-0}
-export no_trace_depth=${no_trace_depth:-0}
+tracing_depth=${tracing_depth:-0}
+no_trace_depth=${no_trace_depth:-0}
 
 eval "printf -v hbar_tilde '%.s~' {1..${COLUMNS:-80}}"
 eval "printf -v hbar_equals '%.s=' {1..${COLUMNS:-80}}"
@@ -126,6 +126,7 @@ umask 0077  # to make created files readable only by the user by default
 
 declare -A trace_var_old trace_var_sub lifted_breaker_time lifted_breaker_open
 debug_id_current=0
+stack_pos=
 
 # this is empty, meaning we haven't forked yet. the top level process having a blank id
 fork_id_current=
@@ -706,7 +707,7 @@ debug_handle_resolve_next() {
 debug_id_inc() {
   (( no_trace_depth++ )) || true
 
-  local allow_breaker_update=${allow_breaker_update:-t}
+  local allow_breaker_update=${allow_breaker_update:-t} current_function=${current_function:-none}
 
   if [[ -v lifted_breaker_open[$current_function] ]]; then
     #echo "Skipping $current_function because breaker is open" >&2
@@ -6373,12 +6374,12 @@ handle_cell() {
   begin_function
 
     local command_count=${#chosen_commands[*]}
-    if [[ -e "$cell_path" ]]; then
+    #if [[ -e "$cell_path" ]]; then
       cell_path=$(unrealpath $cell_path) || {
         log_fatal "Invalid cell path: $cell_path"
         fail1
         }
-    fi
+    #fi
 
     if (( command_count > 0 )); then
 #      if (( command_count > 1 )); then
@@ -6486,7 +6487,7 @@ top_level() {
       cell_paths=${chosen_cells[$cell_group_index]}
       begin_for cell_path in $cell_paths; doo
         if [[ $cell_path != /* ]]; then
-          cell_path=$PWD/$cell_path || fail
+          cell_path=$PWD/${cell_path#./} || fail
         fi
         handle_cell $cell_path ${chosen_commands[$cell_group_index]} || fail
         (( handled++ ))
@@ -9052,7 +9053,6 @@ jwalk() {
   handle_return
 
 }
-
 
 ### file: ./10-main-command.bash
 if [[ ${auto_setup_lifted:-f} == t || $0 == */c2 ]]; then
