@@ -727,7 +727,9 @@ cd_to_branch() {
 }
 
 cd_to_seed() {
-  local seed=/seed${PWD#/work}
+  local work=${PWD#/work}
+  work=${work#/cell}
+  local seed=/seed$work
 
   while [[ ! -d $seed && ${#seed} -gt 5 ]]; do
     seed=${seed%/*}
@@ -737,6 +739,23 @@ cd_to_seed() {
     cd $seed || return 1
   else
     echo "Failed to find seed." >&2
+    return 1
+  fi
+   
+  return 0
+}
+
+cd_to_cell() {
+  local cell=/cell${PWD#/seed}
+
+  while [[ ! -d $cell && ${#cell} -gt 5 ]]; do
+    cell=${cell%/*}
+  done
+
+  if [[ -d $cell ]]; then
+    cd $cell || return 1
+  else
+    echo "Failed to find cell." >&2
     return 1
   fi
    
@@ -778,6 +797,10 @@ seed() {
 
 work() {
   cd_to_work
+}
+
+to_cell() {
+  cd_to_cell
 }
 
 parse_git_branch() {
