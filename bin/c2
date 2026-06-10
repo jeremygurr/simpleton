@@ -7492,8 +7492,6 @@ plant_seed_dir_simple() {
           fi
         }
       fi
-    else
-      plant_subs=f
     fi
 
     if [[ $plant_subs == t ]]; then
@@ -7505,7 +7503,11 @@ plant_seed_dir_simple() {
       mv $target ${target%.new} || fail
     fi
   end_function
-  cell_path=$original_cell unlock_cell
+
+  if [[ $is_cell == t ]]; then
+    cell_path=$original_cell unlock_cell
+  fi
+
   handle_return
 }
 
@@ -7515,7 +7517,7 @@ plant_seed_dir_simple() {
 #   part
 #   x
 plant_seed_dir() {
-  local original_cell=$target plant_subs is_pattern is_cell
+  local original_cell=$target plant_subs is_pattern is_cell inside_cell=${inside_cell:-}
   begin_function
 
     case $x_part in
@@ -7527,7 +7529,7 @@ plant_seed_dir() {
       ;;
     esac
 
-    [[ -d $x/.dna ]] && is_cell=t || is_cell=f
+    [[ -d $x/.dna ]] && { is_cell=t; inside_cell=t; } || is_cell=f
     [[ $recursive == t || $is_cell == f ]] && plant_subs=t || plant_subs=f
 
     if [[ $is_pattern == f ]]; then
@@ -7570,11 +7572,25 @@ plant_seed() {
     key_path=${key_path:-} \
     top_level_plant=${top_level_plant:-t} \
     interesting_vars='from to part' \
+    inside_cell=${inside_cell:-} \
 
   begin_function
 
-    if [[ ! -d $to ]]; then
+    if [[ ! "$inside_cell" ]]; then
+      local parent=$from
+      while [[ $parent == /*/*/* ]]; do
+        if [[ -e $parent/.dna ]]; then
+          inside_cell=t
+          break
+        fi
+        parent=${parent%/*}
+      done
+      if [[ ! "$inside_cell" ]]; then
+        inside_cell=f
+      fi
+    fi
 
+    if [[ ! -d $to ]]; then
       if [[ $from =~ .*/\.?seed/.* && -d $from ]]; then
         recursive=f plant_seed ${from%/*} ${to%/*} ${to##*/} || fail
         top_level_plant=f
@@ -7582,7 +7598,6 @@ plant_seed() {
         log_fatal "Seed doesn't exist for $to"
         fail1
       fi
-
     fi
 
     local target contents x x_part is_pattern
