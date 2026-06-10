@@ -6046,9 +6046,7 @@ handle_flag_custom() {
   return 1;
 }
 
-setup_commands() {
-  cell_commands=()
-
+create_update_command() {
   name=update description="Updates product of this cell" new_command 
 
   name=fresh default=inf description="Minimum freshness required. 
@@ -6099,6 +6097,16 @@ setup_commands() {
 
   name=debug_log description="Starts debugger when a log line containing this string is written
   " add_parameter
+}
+
+create_plant_command() {
+  name=plant description="Plants the seeds of the current folder in the workspace" new_command 
+}
+
+setup_commands() {
+  cell_commands=()
+  create_update_command || fail
+  create_plant_command || fail
 }
 
 show_usage() {
@@ -6737,7 +6745,7 @@ write_to_context() {
   handle_return
 }
 
-create_context_from_dna_handle_dir() {
+load_dna_handle_dir() {
   begin_function
     if [[ "$current_var" && $item_var != _* ]]; then
       array_content+=( "$item_name" )
@@ -6759,7 +6767,7 @@ create_context_from_dna_handle_dir() {
       fi
 
       # recursive
-      prefix=$new_prefix pass_thru=$new_pass_thru create_context_from_dna $item || fail
+      prefix=$new_prefix pass_thru=$new_pass_thru load_dna $item || fail
 
     fi
   end_function
@@ -7310,12 +7318,12 @@ save_dna_tab() {
   handle_return
 }
 
-create_context_from_dna_handle_item() {
+load_dna_handle_item() {
   begin_function
     local var_full_path=$1 prefix=${prefix:-} \
       suffix= \
       file_name \
-      to_context_file=$to_context_file \
+      to_context_file=${to_context_file:-} \
 
     last_type=${last_type:-var}
 
@@ -7343,23 +7351,17 @@ create_context_from_dna_handle_item() {
         load_type=fun
       ;;
       tab)
-        if [[ "${context_type:-}" ]]; then
+        if [[ "$to_context_file" ]]; then
           write_dna_tab_to_context $var_full_path $var_name || fail
         else
           load_dna_tab $var_full_path $var_name || fail
-          if [[ $auto_load_tab_vars == t ]]; then
-            auto_load_tab_vars || fail
-          fi
         fi
       ;;
       vtab)
-        if [[ "${context_type:-}" ]]; then
+        if [[ "$to_context_file" ]]; then
           write_dna_vtab_to_context $var_full_path $var_name || fail
         else
           load_dna_vtab $var_full_path $var_name || fail
-          if [[ $auto_load_tab_vars == t ]]; then
-            auto_load_tab_vars || fail
-          fi
         fi
       ;;
       *)
@@ -7371,7 +7373,7 @@ create_context_from_dna_handle_item() {
     esac
 
     if [[ "$code" ]]; then
-      if [[ "${context_type:-}${context_file:-}" ]]; then
+      if [[ "$to_context_file" ]]; then
         write_to_context $load_type code || fail
       else
         eval "$code" || fail
@@ -7382,14 +7384,14 @@ create_context_from_dna_handle_item() {
   handle_return
 }
 
-create_context_from_dna() {
-  local from_dna=$1 to_context_file=$2 prefix=${prefix:-} \
+load_dna() {
+  local from_dna=$1 to_context_file=${to_context_file:-} prefix=${prefix:-} \
     pass_thru=${pass_thru:-f} ignore_unknown=${ignore_unknown:-f} \
 
   begin_function
 
     local items new_items
-    items=$(find1 $folder -not -name '.*' | sort -g) || fail
+    items=$(find1 $from_dna -not -name '.*' | sort -g) || fail
 
     local current_var=${prefix%_} ord item_name item_var= result 
     if [[ $pass_thru == f ]]; then
@@ -7416,10 +7418,10 @@ create_context_from_dna() {
 
       if [[ -d $item ]]; then
         if [[ $recursive == t ]]; then
-          create_context_from_dna_handle_dir || fail
+          load_dna_handle_dir || fail
         fi
       elif [[ -f $item ]]; then
-        prefix=$new_prefix create_context_from_dna_handle_item $item || fail
+        prefix=$new_prefix load_dna_handle_item $item || fail
       elif [[ -L $item ]]; then
         log_fatal "Broken link in dna: $item . Update this link to point to the correct item in the seed."
         fail1
@@ -7441,9 +7443,10 @@ create_context_from_dna() {
 
 plant_seed_dir_simple() {
   begin_function
+
     if [[ ! -e $target ]]; then
 
-      if [[ $top_level_plant == t ]]; then
+      if [[ $top_level_plant == t && $is_cell == t ]]; then
         cell_path=$original_cell lock_cell || fail
         target=$to/$x_part.new
       fi
@@ -7453,33 +7456,44 @@ plant_seed_dir_simple() {
         rm $target || fail
       fi
 
-      if [[ $x_part == .dna ]]; then
+    fi
+
+    if [[ $x_part == .dna ]]; then
+      if [[ ! -e $target ]]; then
         safe_link $(realpath $x) $to/ || fail
         mkdir -p $to/in || fail
-        create_context_from_dna $x $to/in/context.bash || fail
-        plant_subs=f
-      elif [[ $x_part == .key ]]; then
-        key_path=$x || fail
-        plant_subs=f
-      elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
-        safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
-        plant_subs=f
-      elif [[ $x_part != .* ]]; then
-        if [[ $top_level_plant == f ]]; then
-          mkdir $target || {
-            if [[ -d $target ]]; then
-              log_debug "Another process may be planting here, aborting."
-              abort
-            else
-              log_fail "Could not create dir $target"
-              fail1
-            fi
-          }
-        fi
-      else
-        plant_subs=f
       fi
-
+      local context_bash=$to/in/context.bash
+      if [[ ! -e $context_bash ]]; then
+        if [[ -e $context_bash.new ]]; then
+          rm $context_bash.new || fail
+        fi
+        to_context_file=$context_bash.new load_dna $x || fail
+        mv $context_bash.new $context_bash || fail
+      fi
+      plant_subs=f
+    elif [[ $x_part == .key ]]; then
+      key_path=$x || fail
+      plant_subs=f
+    elif [[ $x_part == .mock && "${current_mock:-f}" != f && -d $x/$current_mock ]]; then
+      if [[ ! -e $target ]]; then
+        safe_link $(realpath $x)/$current_mock/!(export) $to/ || fail
+      fi
+      plant_subs=f
+    elif [[ $x_part != .* ]]; then
+      if [[ ! -e $target && $top_level_plant == f ]]; then
+        mkdir $target || {
+          if [[ -d $target ]]; then
+            log_debug "Another process may be planting here, aborting."
+            abort
+          else
+            log_fail "Could not create dir $target"
+            fail1
+          fi
+        }
+      fi
+    else
+      plant_subs=f
     fi
 
     if [[ $plant_subs == t ]]; then
@@ -7613,7 +7627,7 @@ plant_command() {
 
   begin_function
     find_paths || fail
-    plant_seed || fail
+    plant_seed $seed_path $cell_path || fail
   end_function
   handle_return
 }
@@ -7690,7 +7704,7 @@ request_new_command() {
   begin_function
     # plant seed if needed
     if [[ ! -d $cell_path ]]; then
-      plant_seed $cell_path || fail
+      plant_seed $seed_path $cell_path || fail
     fi
 
     # do nothing if request already exists
@@ -8001,8 +8015,8 @@ get_needs_update() {
     #  reason="Needs update because a new request is waiting ('in.new' exists)"
     #  abort
     #fi
-    if [[ ! -d $cell_path/in ]]; then
-      reason="Needs update because 'in' folder doesn't exist"
+    if [[ ! -f $cell_path/in/context.bash ]]; then
+      reason="Needs update because in/context hasn't been created"
       abort
     fi
     if [[ ! -d $cell_path/out ]]; then
