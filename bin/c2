@@ -6714,6 +6714,731 @@ plant_seed_dir_pattern() {
   handle_return
 }
 
+# usage: get_simple_name {from var} {ordinal var} {to var}
+extract_simple_name() {
+  local to_var=$3
+  local -n _from=$1 _ord=$2 _to=$to_var
+  split_ordinal _from _ord _to
+  debug_return_vars=$to_var
+}
+
+write_to_context() {
+  local new_type=$1 to_context_file=$to_context_file
+  local -n _content=$2
+  begin_function_lo
+    last_type=${last_type:-var}
+    if [[ $last_type == fun || $new_type == fun ]]; then
+      echo >>$to_context_file || fail
+    fi
+    trim_ws _content
+    echo "${_content}" >>$to_context_file || fail
+    last_type=$new_type
+  end_function
+  handle_return
+}
+
+create_context_from_dna_handle_dir() {
+  begin_function
+    if [[ "$current_var" && $item_var != _* ]]; then
+      array_content+=( "$item_name" )
+      if [[ -L $item || -d $item ]]; then
+        result="${current_var}_${item_var}_path=$real_path"
+        write_to_context var result || fail
+      fi
+      array_ord+=( $ord )
+    fi
+
+    if [[ ! -d $real_path/.dna ]]; then
+
+      local new_pass_thru=f
+
+      if [[ $item_var != _* ]]; then
+        new_prefix+=${item_var}_
+      else
+        new_pass_thru=t
+      fi
+
+      # recursive
+      prefix=$new_prefix pass_thru=$new_pass_thru create_context_from_dna $item || fail
+
+    fi
+  end_function
+  handle_return
+}
+ 
+# inputs:
+#   item_name 
+#   prefix
+# outputs:
+#   code
+load_var_to_code() {
+  local full_path=$1 name=$2 content append=f
+  begin_function_lo
+
+    content=$(<$full_path)
+    trim_ws content
+
+    if [[ "$content" == '+='* ]]; then
+      content=${content#'+='}
+      append=t
+    fi
+
+    if [[ "$content" != [\"\']* ]]; then
+      shell_quote_var content
+    fi
+
+    if [[ $append == t ]]; then
+      append_vars[$name]=1
+      code="$name+=$content"
+    else
+      code="$name=$content"
+    fi
+
+  end_function
+  handle_return
+}
+
+# will skip empty / whitespace lines
+load_arr_to_code() {
+  begin_function_lo
+
+    local full_path=$1 content name=$2 append=f
+    content=$(<$full_path)
+    trim_ws content
+
+    if [[ "$content" == '+='* ]]; then
+      content=${content#'+='}
+      append=t
+    fi
+
+    code="$name"
+    if [[ $append == t ]]; then
+      append_vars[$name]=1
+      code+="+=("
+    else
+      code+="=("
+    fi
+
+    while IFS= read -r line || [[ "$line" ]]; do
+      trim_ws line
+      if [[ "$line" ]]; then
+        if [[ "$line" != [\"\']* ]]; then
+          shell_quote_var line
+        fi
+        code+=" $line" || fail
+      fi
+    done < <(echo -n "$content")
+
+    code+=" )"
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   either context_type or context_file
+#   $*    vars to write to context file
+write_vars_to_context() {
+  local vars_to_write=$* ignore_missing=${ignore_missing:-f}
+  begin_function_lo
+    local var val quoted_val
+    for var in $vars_to_write; do
+      local -n val=$var
+      local is_set=f
+      if is_set val; then
+        set_to_string val quoted_val
+        is_set=t
+      elif is_array val; then
+        array_to_string val quoted_val
+      elif [[ $ignore_missing == t && ! -v $var ]]; then
+        continue
+      else
+        local quoted_val=${val:-}
+        shell_quote_var quoted_val
+      fi
+      local content="$var=$quoted_val"
+      if [[ $is_set == t ]]; then
+        content="declare -Ag $content"
+      fi
+      write_to_context var content || fail
+    done; maybe_break
+  end_function
+  handle_return
+}
+
+# input:
+#   $1      name of table var (without the _fields and _data)
+write_table_to_context() {
+  local table=$1 interesting_vars=table
+  begin_function
+    local var content
+
+    write_vars_to_context ${table}_fields
+
+    local -n fields=${table}_fields \
+      data=${table}_data \
+
+    local field_count=${#fields[*]} i v
+    var=${table}_data
+    content="$var=("
+    for (( i = 0; i < ${#data[*]}; i++ )); do
+      if (( i % field_count == 0 )); then
+        content=${content% }
+        content+="$NL  "
+      fi
+      v=${data[$i]}
+      shell_quote_var v
+      content+="$v "
+    done
+    content+="$NL)$NL"
+
+    write_to_context var content || fail
+    
+  end_function
+  handle_return
+}
+
+# inputs:
+#   item_name 
+#   prefix
+# outputs:
+#   code
+load_fun_to_code() {
+  local full_path=$1 content name=$2
+  begin_function_lo
+    content=$(<$full_path)
+    trim_ws content
+
+    if [[ "$content" =~ ^[a-zA-Z_]+\(\) ]]; then
+      code="$content"
+    else
+      #  can't indent the code because it may contain multiline strings, which this would corrupt
+      #content=$(echo -n "$content" | sed 's/^/    /')
+      local level=_lo
+      if [[ $name == update_op ]]; then
+        level=
+      fi
+      code="$name() {
+begin_function
+$content
+end_function
+handle_return
+}"
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   table                         name of table variable prefix
+#   ignore_unknown_dims
+#   include_implicit_dims
+#   expand_values                 whether to expand dims or not
+# outputs:
+#   ${table}_index_${field}       map of field value to spaced array of row indexes
+#   ${table}_index_multi_${field} t if index holds multi-values (like an 'all')
+#   members_of
+make_table_index() {
+
+  local table=$table \
+    ignore_unknown_dims=${ignore_unknown_dims:-f} \
+    ignore_unknown_members=${ignore_unknown_members:-f} \
+    include_implicit_dims=${include_implicit_dims:-f} \
+    expand_values=${expand_values:-t} \
+    interesting_vars='table field value' \
+
+  begin_function
+    local row_index \
+      field_index \
+      data_offset \
+      field \
+      value \
+      values \
+      row_count \
+
+    local -n table_fields=${table}_fields \
+      table_data=${table}_data \
+
+    log_debug "Making table index for $table"
+
+    if [[ ! -v table_fields ]]; then
+      log_fatal "Internal error: Table not defined: $table"
+      fail1
+    fi
+
+    local \
+      field_count=${#table_fields[*]} \
+      data_count=${#table_data[*]} \
+
+    if (( field_count == 0 )); then
+      log_warn "Internal warning: make_table_index called on a table with no fields."
+      abort
+    fi
+
+    (( row_count = data_count / field_count ))
+
+    begin_for (( field_index = 0; field_index < field_count; field_index++ )); doo
+
+      grip_fence
+      #log_debug "Indexing field $field_index of $table"
+      progress_bar_nudge .
+      field=${table_fields[$field_index]}
+
+      if [[ -v all_dims[$field] || $include_implicit_dims == t ]]; then
+
+        local -n index=${table}_index_${field} \
+          index_multi=${table}_index_multi_${field} \
+
+        index=
+        eval "declare -gA ${table}_index_${field}=()"
+
+        begin_for (( row_index = 0; row_index < row_count; row_index++ )); doo
+
+          (( data_offset = row_index * field_count + field_index ))
+          value=${table_data[$data_offset]}
+
+          if [[ -v all_dims[$field] ]]; then
+
+            if [[ $expand_values == t ]]; then
+              local -I dim_${field}_effective_member_type
+              local -n member_type=dim_${field}_effective_member_type
+              if [[ ! "${member_type:-}" ]]; then
+                member_type=static
+              fi
+              values=()
+
+              dim=$field \
+              ignore_problems=t \
+              expand_dim || fail
+            else
+              values=( $value )
+            fi
+
+          else
+            if [[ "$value" == all ]]; then
+              index_multi=t
+            fi
+            values=( $value )
+          fi
+
+          local count=0
+          local -n members=dim_${field}_members
+          begin_for value in "${values[@]}"; doo
+            if [[ "$value" ]]; then
+              if [[ $ignore_unknown_members == f && -v members && "$value" != none ]] && ! array_contains members "$value"; then
+                log_fatal "Bad derive table: $table. Member $value of dim $field does not belong to the static members defined in .lib/dim/$field/members.arr"
+                fail1
+              fi
+              index[$value]+="$row_index "
+              (( count++ )) || true
+              if (( count == 2 )); then
+                index_multi=t
+              fi
+            fi
+          end_for
+
+        end_for
+
+      elif [[ $ignore_unknown_dims == f ]]; then
+        log_fatal "Unknown dim found in derive table $table: $field"
+        fail1
+      fi
+
+      # we need to allow indexes to be generated outside of dim info collecting processes
+      if is_set members_of_$field; then
+        local -n members_of=members_of_$field
+        for value in ${!index[*]}; do
+          members_of[$value]=1
+        done
+      fi
+
+    end_for
+
+  end_function
+  handle_return
+}
+
+# not handling failure here for performance reasons
+# should be nearly impossible to fail at this point anyway
+maybe_write_newline_to_context() {
+  local new_type=$1
+  last_type=${last_type:-none}
+  if [[ $last_type != none ]]; then
+    if [[ $last_type == fun || $new_type == fun \
+       || $last_type == tab || $new_type == tab \
+       ]]; then
+      echo >>$context_path-$context_type.new
+    fi
+  fi
+  last_type=$new_type
+}
+
+make_array_assignment() {
+  local arr_name=$1 append=${append:-f}
+  local -n arr=${2:-$1}
+  begin_function_lo
+    if [[ $append == t ]]; then
+      array_assignment="$arr_name+=("
+    else
+      array_assignment="$arr_name=("
+    fi
+    local v
+    for v in "${arr[@]}"; do
+      shell_quote_var v
+      array_assignment+=" $v"
+    done
+    array_assignment+=" )"
+  end_function
+  debug_return_vars=array_assignment
+  handle_return
+}
+
+# inputs:
+#   $1            full path to vtab file. It is assumed existence check has already happened.
+#   $2            target var to store data in (includes prefix)
+#   context_type
+#   context_file
+write_dna_vtab_to_context() {
+
+  begin_function_lo
+    local full_path=$1 name=$2
+
+    load_dna_vtab $full_path $name
+    local array_assignment
+
+    make_array_assignment ${name}_fields || fail
+    write_to_context var array_assignment || fail
+
+    if [[ $name == *_derive ]]; then
+      eval "$array_assignment" || fail
+    fi
+
+    make_array_assignment ${name}_data || fail
+    write_to_context var array_assignment || fail
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1            full path to tab file. It is assumed existence check has already happened.
+#   $2            target var to store data in (includes prefix)
+#   context_file
+write_dna_tab_to_context() {
+
+  begin_function_lo
+    local full_path=$1 name=$2
+
+    maybe_write_newline_to_context tab
+    local content
+    content=$(
+      awk '
+      NR == 1 { print "'$name'_fields=( " $0 " )"; print "'$name'_data=(" }
+      NR > 1 { print "  " $0 }
+      END { print ")" }
+      ' $full_path
+    ) || fail
+
+    echo "$content" >>$context_file || fail
+
+  end_function
+  handle_return
+}
+
+# usage: split_ordinal {from_var} {ordinal_part_var} {base_part_var}
+split_ordinal() {
+  local -n _f=$1 _o=$2 _b=$3
+  if [[ $_f =~ ^([0-9]+)-([^/]*)$ ]]; then
+    _o=${BASH_REMATCH[1]}
+    _b=${BASH_REMATCH[2]}
+  else
+    _o=9999
+    _b=$_f
+  fi
+  debug_return_vars="$2 $3"
+}
+
+# usage: get_simple_name {from var} {ordinal var} {to var}
+extract_simple_name() {
+  local to_var=$3
+  local -n _from=$1 _ord=$2 _to=$to_var
+  split_ordinal _from _ord _to
+  debug_return_vars=$to_var
+}
+
+# usage: get_simple_name {from array} {to array}
+extract_simple_name_across_array() {
+  local -n _from=$1 _to=$2
+  local o i f t
+  for (( i = 0; i < ${#_from[*]}; i++ )); do
+    f=${_from[$i]}
+    extract_simple_name f o t
+    _to[$i]=$t
+  done
+  return 0
+}
+
+# this duplicates code from write_dna_tab_to_context on purpose for performance reasons
+# inputs:
+#   $1     full path to tab file. It is assumed existence check has already happened.
+#   $2     target var to store data in (includes prefix)
+load_dna_tab() {
+
+  begin_function_lo
+    local full_path=$1 name=$2
+
+    # must not indent data in case it's a multi-line string
+    eval "$(
+    awk '
+    NR == 1 { print "'$name'_fields=( " $0 " )"; print "'$name'_data=(" }
+    NR > 1 && $0 !~ /^#/ { print $0 }
+    END { print ")" }
+    ' $full_path
+    )" || fail
+
+  end_function
+  handle_return
+}
+
+# this duplicates code from write_dna_vtab_to_context on purpose for performance reasons
+# inputs:
+#   $1     full path to vtab file. It is assumed existence check has already happened.
+#   $2     target var to store data in (includes prefix)
+load_dna_vtab() {
+
+  begin_function_lo
+    local full_path=$1 name=$2
+
+    local -n fields=${name}_fields data=${name}_data
+
+    fields=( $(awk '{ print $1 }' $full_path) ) || fail
+    local field_count=${#fields[*]}
+    eval "local array=( $(<$full_path) )" || fail
+
+    local row_offset col_offset data_index array_index current_field_index=0 \
+      col_count=$(( ${#array[*]} / field_count )) \
+
+    for (( row_offset = 0; row_offset < ${#array[*]}; row_offset += col_count )); do
+      if [[ "${array[$row_offset]}" != ${fields[$current_field_index]} ]]; then
+        log_fatal "Bad data in file $full_path around line $current_field_index"
+        fail1
+      fi
+
+      for (( col_offset = 1; col_offset < col_count; col_offset++ )); do
+        (( array_index = row_offset + col_offset )) || true
+        (( data_index = ( col_offset - 1 ) * field_count + current_field_index ))
+        data[$data_index]=${array[$array_index]}
+      done
+
+      (( current_field_index++ )) || true
+    done; maybe_break
+
+  end_function
+  handle_return
+}
+
+save_dna_tab_inner() {
+  local write_to=${write_to:-}
+  begin_function
+    for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+      field=${c_fields[$field_index]}
+      apad line $field "$field "
+    done
+
+    if [[ "$write_to" ]]; then
+      echo "${line% }" >>$write_to || fail
+    fi
+
+    for (( row_index = 0; row_index < c_rows; row_index++ )); do
+      line=
+      for (( field_index = 0; field_index < c_fields_count; field_index++ )); do
+        (( data_offset = row_index * c_fields_count + field_index ))
+        field=${c_fields[$field_index]}
+        value=${c_data[$data_offset]}
+        shell_quote_var value
+        apad line $field "$value "
+      done
+
+      if [[ "$write_to" ]]; then
+        echo "${line% }" >>$write_to || fail
+      fi
+    done; maybe_break
+  end_function
+  handle_return
+}
+
+# writes a table to a file
+# inputs:
+#   tab_var       name of the table variable (without the _data or _fields)
+#   target_file   full path of file to write to
+save_dna_tab() {
+  local tab_var=$tab_var target_file=$target_file
+
+  begin_function
+
+    if [[ -f $target_file ]]; then
+      log_fatal "Target file $target_file already exists. It must be deleted before calling this function."
+      fail1
+    fi
+
+    local value field_index data_offset row_index field
+
+    local -n c_data=${tab_var}_data \
+      c_fields=${tab_var}_fields \
+
+    local c_fields_count=${#c_fields[*]} \
+      c_count=${#c_data[*]} \
+
+    local c_rows=$(( c_count / c_fields_count ))
+
+    if [[ ! "{c_fields:-}" ]]; then
+      log_fatal "No fields are defined for $coord_type coordinates"
+      fail1
+    fi
+
+    local line
+
+    line=
+    save_dna_tab_inner || fail
+
+    # done twice so we calculate width of each column before forming the final result
+    line=
+    write_to=$target_file save_dna_tab_inner || fail
+
+  end_function
+  handle_return
+}
+
+create_context_from_dna_handle_item() {
+  begin_function
+    local var_full_path=$1 prefix=${prefix:-} \
+      suffix= \
+      file_name \
+      to_context_file=$to_context_file \
+
+    last_type=${last_type:-var}
+
+    file_name=${var_full_path##*/}
+    if [[ $file_name == *.* ]]; then
+      suffix=${file_name##*.}
+      file_name=${file_name%.*}
+    fi
+
+    local var_name o code= load_type=var is_auto=f
+    extract_simple_name file_name o var_name
+
+    var_name=${var_name//-/_}
+    var_name=$prefix$var_name
+
+    case "$suffix" in
+      var)
+        load_var_to_code $var_full_path $var_name || fail
+      ;;
+      arr)
+        load_arr_to_code $var_full_path $var_name || fail
+      ;;
+      fun)
+        load_fun_to_code $var_full_path $var_name || fail
+        load_type=fun
+      ;;
+      tab)
+        if [[ "${context_type:-}" ]]; then
+          write_dna_tab_to_context $var_full_path $var_name || fail
+        else
+          load_dna_tab $var_full_path $var_name || fail
+          if [[ $auto_load_tab_vars == t ]]; then
+            auto_load_tab_vars || fail
+          fi
+        fi
+      ;;
+      vtab)
+        if [[ "${context_type:-}" ]]; then
+          write_dna_vtab_to_context $var_full_path $var_name || fail
+        else
+          load_dna_vtab $var_full_path $var_name || fail
+          if [[ $auto_load_tab_vars == t ]]; then
+            auto_load_tab_vars || fail
+          fi
+        fi
+      ;;
+      *)
+        if [[ $ignore_unknown == f ]]; then
+          log_fatal "Unknown dna object: $item."
+          fail1
+        fi
+      ;;
+    esac
+
+    if [[ "$code" ]]; then
+      if [[ "${context_type:-}${context_file:-}" ]]; then
+        write_to_context $load_type code || fail
+      else
+        eval "$code" || fail
+      fi
+    fi
+
+  end_function
+  handle_return
+}
+
+create_context_from_dna() {
+  local from_dna=$1 to_context_file=$2 prefix=${prefix:-} \
+    pass_thru=${pass_thru:-f} ignore_unknown=${ignore_unknown:-f} \
+
+  begin_function
+
+    local items new_items
+    items=$(find1 $folder -not -name '.*' | sort -g) || fail
+
+    local current_var=${prefix%_} ord item_name item_var= result 
+    if [[ $pass_thru == f ]]; then
+      local array_content=( )
+      local -n array_ord=${current_var}_ord
+    fi
+    current_var=${current_var//-/_}
+
+    begin_for item in $items; doo
+
+      item_name=${item##*/}
+
+      extract_simple_name item_name ord item_name
+      item_var=${item_name//-/_}
+      item_var=${item_var%%,*}
+      item_var=${item_var%%:*}
+
+      local new_prefix= 
+      if [[ "$current_var" ]]; then
+        new_prefix=${current_var}_
+      fi
+
+      local real_path=$(realpath -m $item)
+
+      if [[ -d $item ]]; then
+        if [[ $recursive == t ]]; then
+          create_context_from_dna_handle_dir || fail
+        fi
+      elif [[ -f $item ]]; then
+        prefix=$new_prefix create_context_from_dna_handle_item $item || fail
+      elif [[ -L $item ]]; then
+        log_fatal "Broken link in dna: $item . Update this link to point to the correct item in the seed."
+        fail1
+      fi
+
+    end_for
+
+    if [[ "$current_var" && "${array_content:-}" && $pass_thru == f ]]; then
+      local append=f
+      local -n v=$current_var
+      [[ "${v:-}" ]] && append=t
+      make_array_assignment $current_var array_content || fail
+      write_to_context var array_assignment || fail
+    fi
+
+  end_function
+  handle_return
+}
+
 plant_seed_dir_simple() {
   begin_function
     if [[ ! -e $target ]]; then
@@ -6730,6 +7455,8 @@ plant_seed_dir_simple() {
 
       if [[ $x_part == .dna ]]; then
         safe_link $(realpath $x) $to/ || fail
+        mkdir -p $to/in || fail
+        create_context_from_dna $x $to/in/context.bash || fail
         plant_subs=f
       elif [[ $x_part == .key ]]; then
         key_path=$x || fail
@@ -6835,7 +7562,6 @@ plant_seed() {
     if [[ ! -d $to ]]; then
 
       if [[ $from =~ .*/\.?seed/.* && -d $from ]]; then
-        # recursive
         recursive=f plant_seed ${from%/*} ${to%/*} ${to##*/} || fail
         top_level_plant=f
       else
@@ -6892,13 +7618,73 @@ plant_command() {
   handle_return
 }
 
-create_request() {
+# assumes cell is planted
+create_request() (  # forked
   local cell_path=$cell_path
   begin_function
-    
+    local req_path=$cell_path/req
+    if [[ ! -d $req_path ]]; then
+      mkdir -p $req_path/all \
+        $req_path/waiting \
+        $req_path/running \
+        $req_path/good \
+        $req_path/bad || fail
+    fi
+
+    if [[ ! -e $cell_path/in/context.bash ]]; then
+      log_fatal "Missing in/context.bash . Was this cell planted?"
+      fail1
+    else
+      source $cell_path/in/context.bash || fail
+    fi
+
+    local tmp_req_file=$req_path/all/new.$$ \
+      req_file=$req_path/all/req \
+      dim_string= \
+      hash \
+
+    # loop over related_dims
+    for dim in ${related_dims[*]}; do
+      local -n p_dim=p_${dim}
+      local value
+      if [[ "${p_dim:-}" ]]; then
+        value=$p_dim
+        shell_quote_var value
+        dim_string+="p_$dim=$value$NL"
+      fi
+    done
+
+    echo "$dim_string" >$tmp_req_file || fail
+    hash=( $(sha1sum $tmp_req_file) )
+    hash=${hash%% *}
+
+    req_file+=.$hash
+    if [[ -e $req_file ]]; then
+      rm $tmp_req_file $req_path/*/req.$hash
+    fi
+
+    mv $tmp_req_file $req_file || fail
+    ln $req_file $req_path/waiting/ || fail
+
+    local branch=${cell_path##*/}
+    local parent_cell=${cell_path%/*}
+    begin_while [[ $parent_cell == /*/*/*/* ]]; doo
+      if [[ -d $parent_cell/.dna ]]; then
+        local waiting_file=.waiting-$branch
+        if [[ -e $parent_cell/$waiting_file ]]; then
+          # we don't need to go further, since this entire branch has already been marked previously
+          break
+        else
+          ln -s $parent_cell/$branch $parent_cell/$waiting_file || fail
+        fi
+      fi
+      branch=${parent_cell##*/}
+      parent_cell=${parent_cell%/*}
+    end_while
+
   end_function
   handle_return
-}
+)
 
 request_new_command() {
   begin_function
