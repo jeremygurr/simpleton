@@ -124,6 +124,7 @@ get_short_path() {
   local o=$p
   if [[ "$p" == */*/*/* ]]; then
     p=${p#/work/*/}
+    p=${p#/cell/*/}
     p=${p#/seed/*/}
     o=$p
   fi
@@ -822,7 +823,7 @@ parse_git_branch() {
 cell_info() {
   local p=
 
-  if [[ $PWD == /work/* || $PWD == /seed/* ]]; then
+  if [[ $PWD == /work/* || $PWD == /seed/* || $PWD == /cell/* ]]; then
     local cell_name=$(realpath $PWD)
     cell_name=${cell_name#/*/*/}
     while [[ $cell_name == *:* || $cell_name == */.* ]]; do
@@ -838,18 +839,30 @@ cell_info() {
       elif [[ $PWD == */.dna || $PWD == */.dna/* ]]; then
         p+="[dna "
       else
-        local sub_branches=( $(find1 . -name "*:*") ) || return 1
-        if [[ "${sub_branches:-}" ]]; then
-          if [[ $PWD =~ : ]]; then
-            p+="[branch "
+        if [[ $PWD == /cell/* ]]; then
+          if [[ -d $PWD/.dna ]]; then
+            if [[ $PWD == *... ]]; then
+              p+="[branch "
+            else
+              p+="[leaf "
+            fi
           else
-            p+="[trunk "
+            p+="[cell "
           fi
         else
-          if [[ $PWD =~ : ]]; then
-            p+="[leaf "
+          local sub_branches=( $(find1 . -name "*:*") ) || return 1
+          if [[ "${sub_branches:-}" ]]; then
+            if [[ $PWD =~ : ]]; then
+              p+="[branch "
+            else
+              p+="[trunk "
+            fi
           else
-            p+="[trunk "
+            if [[ $PWD =~ : ]]; then
+              p+="[leaf "
+            else
+              p+="[trunk "
+            fi
           fi
         fi
       fi
