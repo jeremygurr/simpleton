@@ -4116,19 +4116,19 @@ debug_show_extra_backlog() {
   if [[ "$debug_prev_command" =~ for\ (.*)\ in\  || "$debug_prev_command" =~ case\ \$(.*)\ in\  ]]; then
     local w=${BASH_REMATCH[1]}
     w=${w#\$}
-    eval "local s=\"+ \$w=\$$w\""
+    eval "local s=\"# \$w=\$$w\""
     echo "$s" >&$fd_original_err
   elif [[ "$debug_prev_command" =~ for\ \(\(\ ?(.*)\ ?= ]]; then
     local w=${BASH_REMATCH[1]}
     w=${w%% *}
-    eval "local s=\"+ \$w=\$$w\""
+    eval "local s=\"# \$w=\$$w\""
     echo "$s" >&$fd_original_err
   elif [[ "$debug_prev_command" =~ (\[\[.*\]\]) && ! "$debug_buffered_commands" ]]; then
     local condition=${BASH_REMATCH[1]}
-    eval "$condition && echo \"+ $debug_prev_command => true\" || echo \"+ $debug_prev_command => false\"" >&$fd_original_err
+    eval "$condition && echo \"# true <- $debug_prev_command \" || echo \"# false <- $debug_prev_command\"" >&$fd_original_err
   elif [[ "$debug_prev_command" =~ if\ (\(\(.*\)\))\;\ then && ! "$debug_buffered_commands" ]]; then
     local condition=${BASH_REMATCH[1]}
-    eval "$condition && echo \"+ $debug_prev_command => true\" || echo \"+ $debug_prev_command => false\"" >&$fd_original_err
+    eval "$condition && echo \"# true <- $debug_prev_command\" || echo \"# false <- $debug_prev_command \"" >&$fd_original_err
   elif [[ "$debug_prev_command" =~ ^\ *([a-zA-Z_0-9]+)\ +.*\$ ]]; then
     local c=${BASH_REMATCH[1]}
     if [[ ! $c =~ ^(local|declare)$ ]]; then
@@ -4136,7 +4136,7 @@ debug_show_extra_backlog() {
       c=${c//\\/\\\\}
       c=${c//\"/\\\"}
       eval "local s=\"$c\""
-      echo "+ $s" >&$fd_original_err
+      echo "# $s" >&$fd_original_err
     fi
   elif [[ "$debug_prev_command" =~ ^\ *(\$?[a-zA-Z_0-9]+)\+?=\((.*)\) ]]; then
     local w=${BASH_REMATCH[1]}
@@ -4146,12 +4146,12 @@ debug_show_extra_backlog() {
     fi
     local v=( ${BASH_REMATCH[2]} )
     if [[ "${#v[*]}" -gt 0 ]]; then
-      eval "local s=\"+ \$w=( \${$w[*]} )\""
+      eval "local s=\"# \$w=( \${$w[*]} )\""
       echo "$s" >&$fd_original_err
     fi
   elif [[ "$debug_prev_command" =~ ^\ *\(\(\ *([a-zA-Z_0-9]+)(--|\+\+|\ ?=.*)\ *\)\) ]]; then
     local w=${BASH_REMATCH[1]}
-    eval "local s=\"+ \$w=\$$w\""
+    eval "local s=\"# \$w=\$$w\""
     echo "$s" >&$fd_original_err
   fi
 
@@ -4177,17 +4177,17 @@ debug_show_extra_backlog() {
               __result+=" $__v"
             else
               __short_mode=f
-              echo "+ $__var[$__i]=$__v" >&$fd_original_err
+              echo "# $__var[$__i]=$__v" >&$fd_original_err
             fi
           done
           if [[ $__short_mode == f ]]; then
-            echo "+ $__var __count=$__count" >&$fd_original_err
+            echo "# $__var __count=$__count" >&$fd_original_err
           else
-            echo "+ $__var[*]=( ${__result# } )" >&$fd_original_err
+            echo "# $__var[*]=( ${__result# } )" >&$fd_original_err
           fi
         else
           shell_quote_var __v
-          echo "+ $__var=$__v" >&$fd_original_err
+          echo "# $__var=$__v" >&$fd_original_err
         fi
       fi
     done
@@ -7471,6 +7471,7 @@ plant_seed_dir_simple() {
         if [[ -e $context_bash.new ]]; then
           rm $context_bash.new || fail
         fi
+        echo "# Generated from $x$NL" >$context_bash.new
         to_context_file=$context_bash.new load_dna $x || fail
         mv $context_bash.new $context_bash || fail
       fi
@@ -7532,8 +7533,9 @@ plant_seed_dir() {
       ;;
     esac
 
-    [[ -d $x/.dna ]] && { is_cell=t; inside_cell=t; } || is_cell=f
-    [[ $recursive == t || $is_cell == f ]] && plant_subs=t || plant_subs=f
+    [[ -d $x/.dna ]] && is_cell=t || is_cell=f
+    [[ $recursive == t || $is_cell == f || $inside_cell == f ]] && plant_subs=t || plant_subs=f
+    [[ $is_cell == t ]] && inside_cell=t
 
     if [[ $is_pattern == f ]]; then
       if [[ "$part" && $part != $x_part ]]; then
