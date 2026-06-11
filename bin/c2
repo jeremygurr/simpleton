@@ -3428,6 +3428,12 @@ check_process() {
   fi
 }
 
+log_debug_debug() {
+  if [[ "${debug_debug:-f}" == t ]]; then
+    echo "${CYAN}debug_debug: $*$RESET" >&$fd_original_err
+  fi
+}
+
 # make sure we clean up after ourselves whether we've launched a background job or allocated resources
 # this needs to be run again whenever forking to a subprocess
 setup_exit_trap() {
@@ -3985,7 +3991,7 @@ debug_ignore_remove() {
   local remove_functions="$*"
   local x
   for x in $remove_functions; do
-    log_debug_debug "debug_debug: Removing $x from debug_ignore"
+    log_debug_debug "Removing $x from debug_ignore"
     remove_word_from_string debug_ignore "$x"
   done
 }
@@ -4052,9 +4058,24 @@ debug_expansion_clean() {
   return 0
 }
 
+debug_update_expansion() {
+  if [[ $debug_recording_trace == f && $debug_expansion -gt 0 && $debug_long_command == f ]]; then
+    log_debug_debug "Starting debug output expansion"
+    debug_recording_trace=t
+    if [[ ! "${fd_bash_trace:-}" ]]; then
+      exec {fd_bash_trace}>"$debug_out_path"
+    else
+      eval "exec ${fd_bash_trace}>\"$debug_out_path\""
+    fi
+    (( tracing_depth++ ))
+    debug_original_tracefd=${BASH_XTRACEFD:-}
+    BASH_XTRACEFD=$fd_bash_trace
+  fi
+}
+
 debug_output_stop() {
-  if [[ $debug_recording_trace == t && -e $debug_out_path ]]; then
-    log_debug_debug "debug_debug: Stopping debug output expansion"
+  if [[ $debug_recording_trace == t ]]; then
+    log_debug_debug "Stopping debug output expansion"
     debug_recording_trace=f
     BASH_XTRACEFD=$debug_original_tracefd
     eval "exec $fd_bash_trace>&-"
@@ -4077,21 +4098,6 @@ debug_output_expansion() {
   fi
 }
 
-debug_update_expansion() {
-  if [[ $debug_recording_trace == f && debug_expansion -gt 0 && $debug_long_command == f ]]; then
-    debug_recording_trace=t
-    log_debug_debug "debug_debug: Starting debug output expansion"
-    if [[ ! "${fd_bash_trace:-}" ]]; then
-      exec {fd_bash_trace}>"$debug_out_path"
-    else
-      eval "exec ${fd_bash_trace}>\"$debug_out_path\""
-    fi
-    (( tracing_depth++ ))
-    debug_original_tracefd=${BASH_XTRACEFD:-}
-    BASH_XTRACEFD=$fd_bash_trace
-  fi
-}
-
 maybe_enable_debug_tracing() {
   if (( debug_expansion > 0 
         && ${no_trace_depth:-0} <= 0 \
@@ -4101,9 +4107,9 @@ maybe_enable_debug_tracing() {
           && $debug_current_depth -le $debug_max_depth \
           || $debug_expansion -ge 2 ]]; then
       debug_tracing=t
-      log_debug_debug "debug_tracing=$debug_tracing"
     fi
   fi
+  log_debug_debug "debug_tracing=$debug_tracing"
 }
 
 debug_show_extra_backlog() {
@@ -5552,6 +5558,7 @@ debug_inner() {
   debug_command_loop
 
   if [[ $debug_untrap == t ]]; then
+    log_debug_debug "Untrapping..."
     debug_tracing=f
     debug_expansion_prev=$debug_expansion
     debug_expansion=0
@@ -5611,13 +5618,13 @@ debug_trap() {
     debug_full_path=${debug_full_path:-f} \
     debug_source_file \
 
-  debug_tracing=f
+  #debug_tracing=f
   local prev_debug_out_path=$debug_out_path
   debug_out_path=$tmp_folder/debug-out.$BASHPID
   if [[ "$prev_debug_out_path" != $debug_out_path && -v cleanup_on_exit ]]; then
     defer "rm $debug_out_path"
   fi
-  debug_recording_trace=f
+  #debug_recording_trace=f
 
   if [[ "$debug_exit" ]]; then
     log_debug_debug "Exiting because debug_exit=$debug_exit"
@@ -5664,6 +5671,7 @@ debug_trap() {
     debug_get_ok_to_debug
 
     if [[ $ok_to_debug == t ]]; then
+      log_debug_debug "Stopping. debug_recording_trace=$debug_recording_trace, debug_tracing=$debug_tracing"
       no_trace_depth=0
       tracing_depth=0
       debug_output_expansion
@@ -5671,7 +5679,7 @@ debug_trap() {
       debug_update_expansion
       maybe_enable_debug_tracing
     else
-      log_debug_debug "Not stopping."
+      log_debug_debug "Not stopping. debug_recording_trace=$debug_recording_trace, debug_tracing=$debug_tracing"
     fi
 
   fi
@@ -5707,12 +5715,6 @@ reserve_tmp_file() {
   local internal_tmp_file=$(mktemp $tmp_folder/$base.$$.XXXXXX)
   eval "$var=$internal_tmp_file"
   eval "cleanup_on_exit+='rm ${internal_tmp_file} &>/dev/null || true;'"
-}
-
-log_debug_debug() {
-  if [[ "${debug_debug:-f}" == t ]]; then
-    echo "${CYAN}debug_debug: $*$RESET" >&$fd_original_err
-  fi
 }
 
 debug_always() {
@@ -5790,6 +5792,7 @@ debug_start() {
     debug_quick_function=${debug_quick_function:-} \
     debug_quick_stop_less_than_depth=${debug_quick_stop_out_less_than_depth:-} \
     debug_quick_stop_out_less_than_depth=${debug_quick_stop_out_less_than_depth:-} \
+    debug_recording_trace=f \
     debug_restart_command=${debug_restart_command:-} \
     debug_rewind=${debug_rewind:-f} \
     debug_saved_params=${debug_saved_params:-} \
@@ -5810,6 +5813,7 @@ debug_start() {
     debug_stop_at=${debug_stop_at:-} \
     debug_subshell=${debug_subshell:-f} \
     debug_trace_time=${debug_trace_time:-f} \
+    debug_tracing=f \
     debug_untrap=f \
     debug_var=${debug_var:-} \
     debug_var_regex=${debug_var_regex:-} \
