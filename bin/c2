@@ -6049,6 +6049,73 @@ handle_flag_custom() {
   return 1;
 }
 
+# Used by the help system to describe a command and it's parameters to the user
+new_command() {
+  local name=$name description=$description
+  command=$name
+  command_var=${name//-/_}
+  cell_commands+=( $command )
+  local -n command_description=command_${command_var}_description
+  command_description=$description
+  unset \
+    parameter_aliases \
+    parameter_choices \
+    parameter_defaults \
+    parameter_delay_questions \
+    parameter_descriptions \
+    parameter_names \
+    parameter_required \
+
+}
+
+add_parameter() {
+
+  local type=${type:-command} \
+    name=$name \
+    description=$description \
+    default=${default:-} \
+    choices=${choices:-} \
+    aliases=${aliases:-${alias:-}} \
+    required=${required:-f} \
+    delay_questions=${delay_questions:-f} \
+
+  local -n parameter_names=parameter_${command_var}_names_$type \
+    parameter_descriptions=parameter_${command_var}_descriptions_$type \
+    parameter_choices=parameter_${command_var}_choices_$type \
+    parameter_defaults=parameter_${command_var}_defaults_$type \
+    parameter_aliases=parameter_${command_var}_aliases_$type \
+    parameter_delay_questions=parameter_${command_var}_delay_questions_$type \
+    parameter_required=parameter_${command_var}_required_$type \
+
+  parameter_names+=( "$name" ) 
+  parameter_descriptions+=( "$description" ) 
+  parameter_defaults+=( "$default" ) 
+  parameter_choices+=( "$choices" )
+  parameter_aliases+=( "$aliases" )
+  parameter_delay_questions+=( $delay_questions )
+  parameter_required+=( $required )
+
+  local a
+  for a in ${parameter_aliases[*]:-}; do
+    if [[ -v ${a}_append ]]; then
+      eval "${name}_append=\$${a}_append"
+    fi
+    if [[ -v ${a}_prepend ]]; then
+      eval "${name}_prepend=\$${a}_prepend"
+    fi
+    if [[ -v ${a}_remove ]]; then
+      eval "${name}_remove=\$${a}_remove"
+    fi
+  done
+
+}
+
+add_command_alias() {
+  local name=$name command=$command
+  command_aliases+=( "$name" )
+  command_alias_command+=( "$command" )
+}
+
 create_update_command() {
   name=update description="Updates product of this cell" new_command 
 
@@ -6106,10 +6173,16 @@ create_plant_command() {
   name=plant description="Plants the seeds of the current folder in the workspace" new_command 
 }
 
+create_request_new_command() {
+  name=request-new description="Creates a new request for the given cells" new_command 
+}
+
 setup_commands() {
   cell_commands=()
+  local command command_var
   create_update_command || fail
   create_plant_command || fail
+  create_request_new_command || fail
 }
 
 show_usage() {
@@ -6351,10 +6424,11 @@ handle_questions() {
 execute_command() {
   local command=$1
   begin_function
-    if function_exists ${command}_command; then
-      ${command}_command || fail
+    local command_var=${command//-/_}
+    if function_exists ${command_var}_command; then
+      ${command_var}_command || fail
     else
-      log_fatal "Internal error: function doesn't exist: ${command}_command"
+      log_fatal "Internal error: function doesn't exist: ${command_var}_command"
       fail1
     fi
   end_function
@@ -6517,72 +6591,6 @@ top_level() {
   fi
 
   handle_return
-}
-
-# Used by the help system to describe a command and it's parameters to the user
-new_command() {
-  local name=$name description=$description
-  cell_commands+=( $name )
-  command=$name
-  local -n command_description=command_${name}_description
-  command_description=$description
-  unset \
-    parameter_aliases \
-    parameter_choices \
-    parameter_defaults \
-    parameter_delay_questions \
-    parameter_descriptions \
-    parameter_names \
-    parameter_required \
-
-}
-
-add_parameter() {
-
-  local type=${type:-command} \
-    name=$name \
-    description=$description \
-    default=${default:-} \
-    choices=${choices:-} \
-    aliases=${aliases:-${alias:-}} \
-    required=${required:-f} \
-    delay_questions=${delay_questions:-f} \
-
-  local -n parameter_names=parameter_${command}_names_$type \
-    parameter_descriptions=parameter_${command}_descriptions_$type \
-    parameter_choices=parameter_${command}_choices_$type \
-    parameter_defaults=parameter_${command}_defaults_$type \
-    parameter_aliases=parameter_${command}_aliases_$type \
-    parameter_delay_questions=parameter_${command}_delay_questions_$type \
-    parameter_required=parameter_${command}_required_$type \
-
-  parameter_names+=( "$name" ) 
-  parameter_descriptions+=( "$description" ) 
-  parameter_defaults+=( "$default" ) 
-  parameter_choices+=( "$choices" )
-  parameter_aliases+=( "$aliases" )
-  parameter_delay_questions+=( $delay_questions )
-  parameter_required+=( $required )
-
-  local a
-  for a in ${parameter_aliases[*]:-}; do
-    if [[ -v ${a}_append ]]; then
-      eval "${name}_append=\$${a}_append"
-    fi
-    if [[ -v ${a}_prepend ]]; then
-      eval "${name}_prepend=\$${a}_prepend"
-    fi
-    if [[ -v ${a}_remove ]]; then
-      eval "${name}_remove=\$${a}_remove"
-    fi
-  done
-
-}
-
-add_command_alias() {
-  local name=$name command=$command
-  command_aliases+=( "$name" )
-  command_alias_command+=( "$command" )
 }
 
 ### file: ./03-pack-command-lib.bash
@@ -7722,17 +7730,11 @@ create_request() (  # forked
 
 request_new_command() {
   begin_function
-    # plant seed if needed
+    find_paths || fail
     if [[ ! -d $cell_path ]]; then
       plant_seed $seed_path $cell_path || fail
     fi
-
-    # do nothing if request already exists
-    # make in.new
-    # place input dims here
-    #   source the context
-    #   loop over branch_dims and control_props
-    #   store parameters in in.new/request.bash
+    create_request || fail
   end_function
   handle_return
 }
