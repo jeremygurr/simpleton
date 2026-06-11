@@ -115,8 +115,8 @@ DIM_DEBUG_COLOR=$DIM_CYAN
 export tmp_folder="${tmp_folder:-/tmp}"
 export EDITOR=${EDITOR:-vim}
 
-tracing_depth=${tracing_depth:-0}
-no_trace_depth=${no_trace_depth:-0}
+tracing_depth=0
+no_trace_depth=0
 
 eval "printf -v hbar_tilde '%.s~' {1..${COLUMNS:-80}}"
 eval "printf -v hbar_equals '%.s=' {1..${COLUMNS:-80}}"
@@ -217,7 +217,7 @@ debugger_init() {
   debugging=${debugging:-f} \
   debug_output=${debug_output:-f} \
   debug_ignore=${debug_ignore:-} \
-  tracing_depth=${tracing_depth:-0} \
+  tracing_depth=0 \
   tmp_folder=${tmp_folder:-/tmp} \
   debug_state_file=$tmp_folder/debug-state-$$ \
   debug_persistent_state_file=$tmp_folder/debug-persistent-state \
@@ -1118,13 +1118,13 @@ alias handle_return='
       trace_time_close
     ;;
     0)
-      if (( no_trace_depth-- <= 1 )); then 
+      if (( no_trace_depth-- < 1 )); then 
         no_trace_depth=1
       fi
     ;;
   esac
   debug_return_vars=${log_return_vars:-}
-  no_trace_depth=$((no_trace_depth-1)) || true
+  (( no_trace_depth-- )) || true
   return $return_value
 '
 
@@ -4067,7 +4067,7 @@ debug_update_expansion() {
     else
       eval "exec ${fd_bash_trace}>\"$debug_out_path\""
     fi
-    (( tracing_depth++ ))
+#    (( tracing_depth++ ))
     debug_original_tracefd=${BASH_XTRACEFD:-}
     BASH_XTRACEFD=$fd_bash_trace
   fi
@@ -4077,11 +4077,13 @@ debug_output_stop() {
   if [[ $debug_recording_trace == t ]]; then
     log_debug_debug "Stopping debug output expansion"
     debug_recording_trace=f
+    debug_tracing=f
     BASH_XTRACEFD=$debug_original_tracefd
     eval "exec $fd_bash_trace>&-"
     if [[ -e $debug_out_path  ]]; then
       rm $debug_out_path
     fi
+#    (( tracing_depth-- ))
   fi
 }
 
@@ -4099,6 +4101,7 @@ debug_output_expansion() {
 }
 
 maybe_enable_debug_tracing() {
+  debug_tracing=f
   if (( debug_expansion > 0 
         && ${no_trace_depth:-0} <= 0 \
      )); then
@@ -4131,7 +4134,7 @@ debug_show_extra_backlog() {
     eval "$condition && echo \"# true <- $debug_prev_command\" || echo \"# false <- $debug_prev_command \"" >&$fd_original_err
   elif [[ "$debug_prev_command" =~ ^\ *([a-zA-Z_0-9]+)\ +.*\$ ]]; then
     local c=${BASH_REMATCH[1]}
-    if [[ ! $c =~ ^(local|declare)$ ]]; then
+    if [[ ! $c =~ ^(local|declare|echo|source|rm|mv|ln)$ ]]; then
       local c=$debug_prev_command
       c=${c//\\/\\\\}
       c=${c//\"/\\\"}
@@ -5495,8 +5498,8 @@ debug_get_ok_to_debug() {
     debug_step_to_next_file=f
     ok_to_debug=t
 
-  else
-    log_debug_debug "Not stopping"
+#  else
+#    log_debug_debug "Not stopping"
   fi
 }
 
@@ -5602,11 +5605,12 @@ debug_trap() {
   local debug_r=0
 
   if [[ ${trace_debugger:-f} == t ]]; then 
+    log_debug_debug "trace_debugger=$trace_debugger, set -x"
     set -x
     BASH_XTRACEFD=2
   fi
 
-    log_debug_debug "debug_id=$fork_debug_id ${BASH_SOURCE[1]:-no_source}:${saved_lineno:-${BASH_LINENO[0]:-no_line}} ${FUNCNAME[1]:-no_func} ${BASH_COMMAND}" 
+  log_debug_debug "debug_id=$fork_debug_id ${BASH_SOURCE[1]:-no_source}:${saved_lineno:-${BASH_LINENO[0]:-no_line}} ${FUNCNAME[1]:-no_func} ${BASH_COMMAND}" 
 
   local debug_path_to_source_file \
     raw_debug_path_to_source_file="${BASH_SOURCE[1]:-none}" \
@@ -5694,16 +5698,18 @@ debug_trap() {
     trace_debugger=f
   fi
 
-  #debug_debug=f
-
   BASH_REMATCH=( "${debug_rematch[@]}" )
   : <&10 >&11 2>&12
   return $debug_r
 }
 
 set_return_code() {
+  log_debug_debug "set_return_code: debug_tracing=$debug_tracing"
   if [[ $debug_tracing == t ]]; then
+    log_debug_debug "set_return_code: set -x"
     set -x
+  else
+    log_debug_debug "set_return_code: set +x"
   fi
   return $1
 }
@@ -7698,11 +7704,12 @@ create_request() (  # forked
 
     echo "$dim_string" >$tmp_req_file || fail
     hash=( $(sha1sum $tmp_req_file) )
-    hash=${hash%% *}
+    hash=${hash[0]}
+    hash=${hash:0:6}
 
     req_file+=.$hash
     if [[ -e $req_file ]]; then
-      rm $tmp_req_file $req_path/*/req.$hash
+      rm $req_file $req_path/*/req.$hash &>/dev/null
     fi
 
     mv $tmp_req_file $req_file || fail
@@ -7710,6 +7717,7 @@ create_request() (  # forked
 
     local branch=${cell_path##*/}
     local parent_cell=${cell_path%/*}
+
     begin_while [[ $parent_cell == /*/*/*/* ]]; doo
       if [[ -d $parent_cell/.dna ]]; then
         local waiting_file=.waiting-$branch
