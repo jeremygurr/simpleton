@@ -32,7 +32,6 @@ NL=$'\n'
 alias get='cell get'
 alias update='cell update'
 alias upd='cell update'
-alias clean='cell clean'
 alias clean0='cell clean0'
 alias clean1='cell clean1'
 alias clean2='cell clean2'
@@ -66,6 +65,16 @@ alias uuu='builtin cd ../../..'
 alias vi=vim
 alias vis='vim /etc/profile.d/shell-start-0.sh'
 alias dockerv='docker ps --format "{{.Names}} [{{.Label \"artifact_version\" }}] <{{.Label \"ois_version\" }}> ({{.Image}})"'
+
+unalias clean
+unset clean
+clean() {
+  if [[ $PWD == /cell/*/* ]]; then
+    rm -rf ./* ./.* 2>/dev/null
+  else
+    cell clean || return 1
+  fi
+}
 
 # used by /etc/profile, this avoids a warning
 BB_ASH_VERSION=
