@@ -8048,12 +8048,92 @@ request_promote_command() {
   handle_return
 }
 
+# inputs:
+#   $1               step path
+#   parent_in_path
+#   parent_out_path
+execute_update_step() {
+  local step_path=$1 interesting_vars=step_path
+  begin_function
+
+    log_debug "Processing step ${step_path##*/}"
+    local in_path out_path
+    if [[ -d $step_path ]]; then
+      in_path=$step_path/in
+      out_path=$step_path/out.new
+      ...
+    else # step_path is a file
+      in_path=$parent_in_path
+      out_path=$parent_out_path
+      ...
+    fi
+    
+  end_function
+  handle_return
+}
+
+# output:
+#   step_needs_update
+get_step_needs_update() {
+  step_needs_update=t
+  begin_function
+    if [[ ! -d $cell_path/in ]]; then
+      reason="Needs update because 'in' folder doesn't exist"
+      abort
+    fi
+    if [[ ! -d $cell_path/out ]]; then
+      reason="Needs update because 'out' folder doesn't exist"
+      abort
+    fi
+    if [[ $cell_path/in -nt $cell_path/out ]]; then
+      reason="Needs update because 'in' folder is newer than 'out' folder"
+      abort
+    fi
+    step_needs_update=f
+  end_function
+  handle_return
+}
+
 # assumes the cell is already planted and a request already prepared before it is run
 # cell should already be locked before running this
 execute_update() {
   begin_function
-    # fail if in/ is missing
-    # gather steps
+    source $cell_path/in/* || fail
+    local step_paths step_group_paths step_group_index step step_path \
+      step_index=0 ord base try_index step_count \
+
+    step_paths=( $(find1 $cell_path -regex '.*/[0-9][0-9]-.*' | sort -g) ) || fail
+    step_count=${#step_paths[*]}
+    begin_while (( step_index < step_count )); doo
+      step_group_paths=()
+      for (( try_index = step_index; try_index < step_count; try_index++ )); do
+        step_path=${step_paths[$try_index]}
+        step=${step_path##*/}
+        split_ordinal step ord base
+
+        if [[ ! "$step_group_index" ]]; then
+          step_group_index=$ord
+        elif [[ $step_group_index != $ord ]]; then
+          break
+        fi
+
+        step_index=$try_index
+        step_group_paths+=( $step_path )
+      done
+
+      local step_group_path \
+        parent_in_path=$cell_path/in \
+        parent_out_path=$cell_path/out.new \
+        step_needs_update=
+
+      begin_for step_group_path in ${step_group_paths[*]}; doo
+        get_step_needs_update $step_group_path || fail
+        if [[ $step_needs_update == t ]]; then
+          fork execute_update_step $step_group_path || fail
+        fi
+      end_for
+
+    end_while
     # put together step groups
     # load in/ files
     # for each step group
@@ -8063,7 +8143,7 @@ execute_update() {
     #     link previous sibling out/ files to child in/
     #     execute body of step
     #     after fork: record out/ path as sibling out
-    # gather up out/ for each step in group, store as sibling out
+    #   gather up out/ for each step in group, store as sibling out
     # if all steps are done, link last sibling out/ to cell/out/
   end_function
   handle_return
@@ -8158,8 +8238,8 @@ get_is_stale() {
 # output:
 #   needs_update
 #   reason
-get_needs_update() {
-  needs_update=t
+get_cell_needs_update() {
+  cell_needs_update=t
   begin_function
     if [[ ! -d $cell_path/.dna ]]; then
       reason="Needs update because cell hasn't been planted ('.dna' folder doesn't exist)"
@@ -8196,7 +8276,7 @@ get_needs_update() {
         abort
       fi
     fi
-    needs_update=f
+    cell_needs_update=f
   end_function
   handle_return
 }
@@ -8205,11 +8285,11 @@ update_command() {
   begin_function
     local step_path seed_path work_path extend_path \
       cell_path=$cell_path \
-      needs_update \
+      cell_needs_update \
 
     find_paths || fail
-    get_needs_update || fail
-    if [[ $needs_update == t ]]; then
+    get_cell_needs_update || fail
+    if [[ $cell_needs_update == t ]]; then
       plant_seed $seed_path $cell_path || fail
       fork create_request || fail
       fork execute_request || fail
