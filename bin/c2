@@ -5675,7 +5675,7 @@ debug_trap() {
     debug_get_ok_to_debug
 
     if [[ $ok_to_debug == t ]]; then
-      log_debug_debug "Stopping. debug_recording_trace=$debug_recording_trace, debug_tracing=$debug_tracing"
+      log_debug_debug "ok_to_debug == t, before: debug_recording_trace=$debug_recording_trace, debug_tracing=$debug_tracing"
       no_trace_depth=0
       tracing_depth=0
       debug_output_expansion
@@ -5683,11 +5683,13 @@ debug_trap() {
       debug_update_expansion
       maybe_enable_debug_tracing
       debug_previous_function=$debug_current_function
+      log_debug_debug "ok_to_debug == t, after: debug_recording_trace=$debug_recording_trace, debug_tracing=$debug_tracing"
     else
-      log_debug_debug "Not stopping. debug_recording_trace=$debug_recording_trace, debug_tracing=$debug_tracing"
-      if [[ $debug_current_function != ${debug_previous_function:-} ]]; then
+      if [[ $debug_current_function != ${debug_previous_function:-} && $debug_expansion -lt 2 ]]; then
+        log_debug_debug "debug_current_function ($debug_current_function) != debug_previous_function ($debug_previous_function)"
         debug_tracing=f
       fi
+      log_debug_debug "Not stopping. debug_recording_trace=$debug_recording_trace, debug_tracing=$debug_tracing"
     fi
 
   fi
@@ -7901,7 +7903,7 @@ create_request() {  # should be forked when called since it loads new contexts
       dim_string= \
       hash \
 
-    local req_file=$tmp_req_folder/inputs.bash
+    local req_file=$tmp_req_folder/parameters.bash
 
     find $cell_req_path/all -name 'new.*' -cmin +10 -exec rm -rf {} \; &>/dev/null
 
@@ -7936,21 +7938,21 @@ create_request() {  # should be forked when called since it loads new contexts
       rm $cell_req_path/{waiting,good,bad}/req.$hash &>/dev/null
     fi
 
-    req_file=$req_path/inputs.bash
+    req_file=$req_path/parameters.bash
 
     if [[ "$downstream_request" ]]; then
       mkdir -p $req_path/down || fail
     fi
 
-    if [[ ! -d $cell_req_path/waiting ]]; then
-      $cell_req_path/{waiting,good,bad,running} || fail
-    fi
+    #if [[ ! -d $cell_req_path/waiting ]]; then
+    #  mkdir -p $cell_req_path/{waiting,good,bad,running} || fail
+    #fi
 
     if [[ "$downstream_request" ]]; then
       safe_link $downstream_request $req_path/down/$short_path || fail
     fi
 
-    force=t safe_link $req_file $cell_req_path/waiting/ || fail
+    force=t safe_link $req_path $cell_req_path/waiting/ || fail
 
     local branch=${cell_path##*/}
     local parent_cell=${cell_path%/*}
