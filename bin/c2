@@ -4134,7 +4134,7 @@ debug_show_extra_backlog() {
     eval "$condition && echo \"# true <- $debug_prev_command\" || echo \"# false <- $debug_prev_command \"" >&$fd_original_err
   elif [[ "$debug_prev_command" =~ ^\ *([a-zA-Z_0-9]+)\ +.*\$ ]]; then
     local c=${BASH_REMATCH[1]}
-    if [[ ! $c =~ ^(local|declare|echo|source|rm|mv|ln)$ ]]; then
+    if [[ ! $c =~ ^(declare|echo|find|ln|local|mkdir|mv|rm|source)$ ]]; then
       local c=$debug_prev_command
       c=${c//\\/\\\\}
       c=${c//\"/\\\"}
@@ -7666,9 +7666,19 @@ plant_command() {
   handle_return
 }
 
+get_short_path() {
+  short_path=${1#/*/*/}
+  while [[ $short_path == */*/*/*/* ]]; do
+    short_path=${short_path%/*}
+  done
+}
+
 # assumes cell is planted
+# inputs:
+#   cell_path
+#   downstream_request
 create_request() (  # forked
-  local cell_path=$cell_path
+  local cell_path=$cell_path downstream_request=${downstream_request:-}
   begin_function
     local req_path=$cell_path/req
     if [[ ! -d $req_path ]]; then
@@ -7686,12 +7696,16 @@ create_request() (  # forked
       source $cell_path/in/context.bash || fail
     fi
 
-    local tmp_req_file=$req_path/all/new.$$ \
-      req_file=$req_path/all/req \
+    local tmp_req_folder=$req_path/all/new.$$ \
+      req_folder=$req_path/all/req \
       dim_string= \
       hash \
 
-    find $req_path/all -name 'new.*' -cmin +10 -delete &>/dev/null
+    local req_file=$tmp_req_folder/inputs.bash
+
+    find $req_path/all -name 'new.*' -cmin +10 -exec rm -rf {} \; &>/dev/null
+
+    mkdir $tmp_req_folder || fail
 
     # loop over related_dims
     for dim in ${related_dims[*]}; do
@@ -7704,18 +7718,39 @@ create_request() (  # forked
       fi
     done
 
-    echo "$dim_string" >$tmp_req_file || fail
-    hash=( $(sha1sum $tmp_req_file) )
+    local short_path=
+    if [[ "$downstream_request" ]]; then
+      get_short_path $downstream_request
+    fi
+
+    echo "$dim_string" >$req_file || fail
+    hash=( $(sha1sum $req_file) ) || fail
     hash=${hash[0]}
     hash=${hash:0:6}
 
-    req_file+=.$hash
-    if [[ -e $req_file ]]; then
-      rm $req_file $req_path/*/req.$hash &>/dev/null
+    req_folder+=.$hash
+    if [[ ! -e $req_folder ]]; then
+      mv $tmp_req_folder $req_folder || fail
+    else # $req_folder already exists
+      rm -rf $tmp_req_folder || fail
+      rm $req_path/{waiting,good,bad}/req.$hash &>/dev/null
     fi
 
-    mv $tmp_req_file $req_file || fail
-    ln $req_file $req_path/waiting/ || fail
+    req_file=$req_folder/inputs.bash
+
+    if [[ "$downstream_request" ]]; then
+      mkdir -p $req_folder/down || fail
+    fi
+
+    if [[ ! -d $req_path/waiting ]]; then
+      $req_path/{waiting,good,bad,running} || fail
+    fi
+
+    if [[ "$downstream_request" ]]; then
+      safe_link $downstream_request $req_folder/down/$short_path || fail
+    fi
+
+    force=t safe_link $req_file $req_path/waiting/ || fail
 
     local branch=${cell_path##*/}
     local parent_cell=${cell_path%/*}
