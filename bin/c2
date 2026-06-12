@@ -6793,6 +6793,11 @@ write_to_context() {
   handle_return
 }
 
+# inputs:
+#   item
+#   item_name
+#   current_var
+#   real_path
 load_dna_handle_dir() {
   begin_function
     if [[ "$current_var" && $item_var != _* ]]; then
@@ -8059,48 +8064,47 @@ execute_update_step() {
     log_debug "Processing step ${step_path##*/}"
     local in_path out_path
     if [[ -d $step_path ]]; then
-      in_path=$step_path/in
-      out_path=$step_path/out.new
-      ...
+      execute_update_stepish_folder $step_path || fail
     else # step_path is a file
       in_path=$parent_in_path
       out_path=$parent_out_path
-      ...
+      case $step_path in
+        *.bash)
+          source $step_path || fail
+        ;;
+        *.var)
+          load_dna_handle_item $step_path || fail
+        ;;
+        *.fun)
+          load_dna_handle_item $step_path || fail
+          local function_name=${step_path##*/}
+          function_name=${function_name%.fun}
+          function_name || fail
+        ;;
+        *)
+          log_fatal "Don't know how to handle this file type: $step_path"
+          fail1
+        ;;
+      esac
     fi
     
   end_function
   handle_return
 }
 
-# output:
-#   step_needs_update
-get_step_needs_update() {
-  step_needs_update=t
+# inputs:
+#   $1          step folder/cell folder to execute
+execute_update_stepish_folder() {
+  local step_container_path=$1
   begin_function
-    if [[ ! -d $cell_path/in ]]; then
-      reason="Needs update because 'in' folder doesn't exist"
-      abort
-    fi
-    if [[ ! -d $cell_path/out ]]; then
-      reason="Needs update because 'out' folder doesn't exist"
-      abort
-    fi
-    if [[ $cell_path/in -nt $cell_path/out ]]; then
-      reason="Needs update because 'in' folder is newer than 'out' folder"
-      abort
-    fi
-    step_needs_update=f
-  end_function
-  handle_return
-}
-
-# assumes the cell is already planted and a request already prepared before it is run
-# cell should already be locked before running this
-execute_update() {
-  begin_function
-    source $cell_path/in/* || fail
     local step_paths step_group_paths step_group_index step step_path \
       step_index=0 ord base try_index step_count \
+      in_path=$step_path/in \
+      out_path=$step_path/out.new \
+
+    if [[ -d $step_container_path/in ]]; then
+      load_dna $step_container_path/in || fail
+    fi
 
     step_paths=( $(find1 $cell_path -regex '.*/[0-9][0-9]-.*' | sort -g) ) || fail
     step_count=${#step_paths[*]}
@@ -8129,7 +8133,7 @@ execute_update() {
       begin_for step_group_path in ${step_group_paths[*]}; doo
         get_step_needs_update $step_group_path || fail
         if [[ $step_needs_update == t ]]; then
-          fork execute_update_step $step_group_path || fail
+          execute_update_step $step_group_path || fail
         fi
       end_for
 
@@ -8145,6 +8149,39 @@ execute_update() {
     #     after fork: record out/ path as sibling out
     #   gather up out/ for each step in group, store as sibling out
     # if all steps are done, link last sibling out/ to cell/out/
+  end_function
+  handle_return
+}
+
+# output:
+#   step_needs_update
+get_step_needs_update() {
+  local step_path=$1
+  step_needs_update=t
+  begin_function
+    if [[ ! -d $step_path/in ]]; then
+      reason="Needs update because 'in' folder doesn't exist"
+      abort
+    fi
+    if [[ ! -d $step_path/out ]]; then
+      reason="Needs update because 'out' folder doesn't exist"
+      abort
+    fi
+    if [[ $step_path/in -nt $step_path/out ]]; then
+      reason="Needs update because 'in' folder is newer than 'out' folder"
+      abort
+    fi
+    step_needs_update=f
+  end_function
+  handle_return
+}
+
+# assumes the cell is already planted and a request already prepared before it is run
+# cell should already be locked before running this
+execute_update() {
+  begin_function
+    local parent_in_path parent_out_path
+    execute_update_stepish_folder $cell_path || fail
   end_function
   handle_return
 }
