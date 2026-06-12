@@ -4132,15 +4132,15 @@ debug_show_extra_backlog() {
   elif [[ "$debug_prev_command" =~ if\ (\(\(.*\)\))\;\ then && ! "$debug_buffered_commands" ]]; then
     local condition=${BASH_REMATCH[1]}
     eval "$condition && echo \"# true <- $debug_prev_command\" || echo \"# false <- $debug_prev_command \"" >&$fd_original_err
-  elif [[ "$debug_prev_command" =~ ^\ *([a-zA-Z_0-9]+)\ +.*\$ ]]; then
-    local c=${BASH_REMATCH[1]}
-    if [[ ! $c =~ ^(declare|echo|find|ln|local|mkdir|mv|rm|source)$ ]]; then
-      local c=$debug_prev_command
-      c=${c//\\/\\\\}
-      c=${c//\"/\\\"}
-      eval "local s=\"$c\""
-      echo "# $s" >&$fd_original_err
-    fi
+#  elif [[ "$debug_prev_command" =~ ^\ *([a-zA-Z_0-9]+)\ +.*\$ ]]; then
+#    local c=${BASH_REMATCH[1]}
+#    if [[ ! $c =~ ^(declare|echo|find|ln|local|mkdir|mv|rm|source)$ ]]; then
+#      local c=$debug_prev_command
+#      c=${c//\\/\\\\}
+#      c=${c//\"/\\\"}
+#      eval "local s=\"$c\""
+#      echo "# $s" >&$fd_original_err
+#    fi
   elif [[ "$debug_prev_command" =~ ^\ *(\$?[a-zA-Z_0-9]+)\+?=\((.*)\) ]]; then
     local w=${BASH_REMATCH[1]}
     if [[ "$w" == \$* ]]; then
@@ -6183,12 +6183,20 @@ create_request_new_command() {
   name=request-new description="Creates a new request for the given cells" new_command 
 }
 
+create_request_promote_command() {
+  name=request-promote description="Prepares the given request to be executed" new_command 
+}
+
 setup_commands() {
-  cell_commands=()
-  local command command_var
-  create_update_command || fail
-  create_plant_command || fail
-  create_request_new_command || fail
+  begin_function
+    cell_commands=()
+    local command command_var
+    create_update_command || fail
+    create_plant_command || fail
+    create_request_new_command || fail
+    create_request_promote_command || fail
+  end_function
+  handle_return
 }
 
 show_usage() {
@@ -7458,6 +7466,120 @@ load_dna() {
   handle_return
 }
 
+# input: cell_path
+# output:
+#   cell_path
+#   seed_path
+#   extend_path
+#   work_path
+#   step_path       (if enough info given)
+#   cell_req_path
+#   req_path        (if enough info given)
+find_paths() {
+  begin_function
+    # figure out where we are
+    local base_path base_seed_path \
+      SIMPLETON_SEED=${SIMPLETON_SEED:-undefined} \
+      SIMPLETON_CELL=${SIMPLETON_CELL:-undefined} \
+
+    if [[ $cell_path == $SIMPLETON_SEED/* || $cell_path == */.seed/* ]]; then
+      unset work_path
+      if [[ $cell_path == $SIMPLETON_SEED/* ]]; then
+        base_path=
+        extend_path=${cell_path#$SIMPLETON_SEED/}
+        seed_path=$SIMPLETON_SEED
+      elif [[ $cell_path == */.seed/* ]]; then
+        base_path=${cell_path%%/.seed/*}
+        extend_path=${cell_path#$base_path/.seed/}
+        seed_path=$base_path
+      fi
+
+      if [[ -d $SIMPLETON_CELL ]]; then
+        cell_path=$SIMPLETON_CELL
+      elif [[ -d $base_path/.cell ]]; then
+        cell_path=$base_path/.cell
+      else
+        log_fatal "Could not determine cell path, since SIMPLETON_CELL isn't set or doesn't exist, nor does /cell or ~/.cell ."
+        fail1
+      fi
+
+      local extend_folder
+      for extend_folder in ${extend_path//\// }; do
+        case $extend_folder in
+          _leaf|_trunk|_branch|*:*)
+            # can't figure out cell past these pattern matching seeds
+            break
+          ;;
+        esac
+        cell_path+="/$extend_folder"
+        seed_path+="/$extend_folder"
+      done
+
+    elif [[ $cell_path == $SIMPLETON_CELL/* || $cell_path == */.cell/* ]]; then
+      unset work_path
+
+      if [[ $cell_path == $SIMPLETON_CELL/* ]]; then
+        base_path=
+        extend_path=${cell_path#$SIMPLETON_CELL/}
+      elif [[ $cell_path == */.cell/* ]]; then
+        base_path=${cell_path%%/.cell/*}
+        extend_path=${cell_path#$base_path/.cell/}
+      fi
+
+      find_base_seed $cell_path || fail
+      find_seed || {
+        log_fatal "Could not find seed for $cell_path. Either set SIMPLETON_SEED or make a ~/.seed or /seed folder."
+        fail1
+      }
+
+      req_path=
+      if [[ $cell_path == */req/* ]]; then
+        req_path=$cell_path
+        cell_path=${cell_path%%/req/*}
+      else
+        local found_base_cell=f orig_cell_path=$cell_path orig_seed_path=$seed_path
+        step_path=$cell_path
+        begin_loop; doo
+          if [[ -d $seed_path/.dna ]]; then
+            found_base_cell=t
+            break
+          fi
+          seed_path=${seed_path%/*}
+          cell_path=${cell_path%/*}
+          if [[ $cell_path != /*/*/* ]]; then
+            cell_path=$orig_cell_path
+            seed_path=$orig_seed_path
+            break
+          fi
+        end_loop
+
+        if [[ $step_path == $cell_path ]]; then
+          unset step_path
+        fi
+      fi
+
+    else # not a cell path or a seed path, so it must be a work path
+
+      work_path=$cell_path
+      base_path=
+      extend_path=$cell_path
+
+      find_base_seed $cell_path || fail
+      find_seed || {
+        log_fatal "Could not find seed for $cell_path. Either set SIMPLETON_SEED or make a ~/.seed or /seed folder."
+        fail1
+      }
+
+      cell_path="$SIMPLETON_CELL/$extend_path"
+
+    fi
+
+    cell_req_path=$cell_path/req
+
+  end_function
+  handle_return
+}
+
 plant_seed_dir_simple() {
   begin_function
 
@@ -7677,16 +7799,16 @@ get_short_path() {
 # inputs:
 #   cell_path
 #   downstream_request
-create_request() (  # forked
+create_request() {  # should be forked when called since it loads new contexts
   local cell_path=$cell_path downstream_request=${downstream_request:-}
   begin_function
-    local req_path=$cell_path/req
-    if [[ ! -d $req_path ]]; then
-      mkdir -p $req_path/all \
-        $req_path/waiting \
-        $req_path/running \
-        $req_path/good \
-        $req_path/bad || fail
+    local cell_req_path=$cell_path/req
+    if [[ ! -d $cell_req_path ]]; then
+      mkdir -p $cell_req_path/all \
+        $cell_req_path/waiting \
+        $cell_req_path/running \
+        $cell_req_path/good \
+        $cell_req_path/bad || fail
     fi
 
     if [[ ! -e $cell_path/in/context.bash ]]; then
@@ -7696,14 +7818,14 @@ create_request() (  # forked
       source $cell_path/in/context.bash || fail
     fi
 
-    local tmp_req_folder=$req_path/all/new.$$ \
-      req_folder=$req_path/all/req \
+    local tmp_req_folder=$cell_req_path/all/new.$$ \
+      req_path=$cell_req_path/all/req \
       dim_string= \
       hash \
 
     local req_file=$tmp_req_folder/inputs.bash
 
-    find $req_path/all -name 'new.*' -cmin +10 -exec rm -rf {} \; &>/dev/null
+    find $cell_req_path/all -name 'new.*' -cmin +10 -exec rm -rf {} \; &>/dev/null
 
     mkdir $tmp_req_folder || fail
 
@@ -7728,29 +7850,29 @@ create_request() (  # forked
     hash=${hash[0]}
     hash=${hash:0:6}
 
-    req_folder+=.$hash
-    if [[ ! -e $req_folder ]]; then
-      mv $tmp_req_folder $req_folder || fail
-    else # $req_folder already exists
+    req_path+=.$hash
+    if [[ ! -e $req_path ]]; then
+      mv $tmp_req_folder $req_path || fail
+    else # $req_path already exists
       rm -rf $tmp_req_folder || fail
-      rm $req_path/{waiting,good,bad}/req.$hash &>/dev/null
+      rm $cell_req_path/{waiting,good,bad}/req.$hash &>/dev/null
     fi
 
-    req_file=$req_folder/inputs.bash
+    req_file=$req_path/inputs.bash
 
     if [[ "$downstream_request" ]]; then
-      mkdir -p $req_folder/down || fail
+      mkdir -p $req_path/down || fail
     fi
 
-    if [[ ! -d $req_path/waiting ]]; then
-      $req_path/{waiting,good,bad,running} || fail
+    if [[ ! -d $cell_req_path/waiting ]]; then
+      $cell_req_path/{waiting,good,bad,running} || fail
     fi
 
     if [[ "$downstream_request" ]]; then
-      safe_link $downstream_request $req_folder/down/$short_path || fail
+      safe_link $downstream_request $req_path/down/$short_path || fail
     fi
 
-    force=t safe_link $req_file $req_path/waiting/ || fail
+    force=t safe_link $req_file $cell_req_path/waiting/ || fail
 
     local branch=${cell_path##*/}
     local parent_cell=${cell_path%/*}
@@ -7771,7 +7893,7 @@ create_request() (  # forked
 
   end_function
   handle_return
-)
+}
 
 request_new_command() {
   begin_function
@@ -7779,7 +7901,7 @@ request_new_command() {
     if [[ ! -d $cell_path ]]; then
       plant_seed $seed_path $cell_path || fail
     fi
-    create_request || fail
+    fork create_request || fail
   end_function
   handle_return
 }
@@ -7791,18 +7913,63 @@ request_rm_command() {
   handle_return
 }
 
+# cell should already be locked before running this
+# inputs:
+#   cell_path
+#   req_path
+promote_request() {
+  local req_path=${req_path:-}
+  begin_function
+
+    if [[ ! -d $cell_path/in ]]; then
+      log_fatal "$cell_path/in doesn't exist. Either this is not a cell, or it needs to be planted."
+      fail1
+    fi
+
+    if [[ ! "$req_path" ]]; then
+
+      local waiting_requests request oldest_request= 
+
+      waiting_requests=$(find1 $cell_req_path/waiting) || fail
+      if [[ ! "$waiting_requests" ]]; then
+        log_verbose "No requests are waiting."
+        abort
+      fi
+
+      for request in $waiting_requests; do
+        if [[ ! "$oldest_request" || $request -ot $oldest_request ]]; then
+          oldest_request=$request
+        fi
+      done
+
+      req_path=$(realpath $oldest_request) || fail
+
+    fi
+
+    if [[ ! -d $req_path ]]; then
+      log_fatal "Internal error: $req_path doesn't exist"
+      fail1
+    fi
+
+    force=t safe_link $req_path/* $cell_path/in/ || fail
+
+    local req_file=${req_path##*/}
+    mv $cell_req_path/waiting/$req_file $cell_req_path/running/ || fail
+
+  end_function
+  handle_return
+}
+
 request_promote_command() {
   begin_function
-    # if in.new exists:
-    # remove in.old
-    # move in to in.old
-    # move in.new to in
-    # plant files from .seed/in/ to in/
+    find_paths || fail
+    promote_request || fail
   end_function
   handle_return
 }
 
 # assumes the cell is already planted and a request already prepared before it is run
+# cell should already be locked before running this
 execute_update() {
   begin_function
     # fail if in/ is missing
@@ -7818,6 +7985,23 @@ execute_update() {
     #     after fork: record out/ path as sibling out
     # gather up out/ for each step in group, store as sibling out
     # if all steps are done, link last sibling out/ to cell/out/
+  end_function
+  handle_return
+}
+
+execute_request() {  # should be forked
+  begin_function
+    lock_out || fail
+    promote_request || fail
+    execute_update || fail
+  end_function
+  handle_return
+}
+
+request_execute_command() {
+  begin_function
+    find_paths || fail
+    fork execute_request || fail
   end_function
   handle_return
 }
@@ -7911,109 +8095,6 @@ find_seed() {
     fi
 
   done
-}
-
-# input: cell_path
-# output:
-#   cell_path
-#   seed_path
-#   extend_path
-#   work_path
-#   step_path
-find_paths() {
-  begin_function
-    # figure out where we are
-    local base_path base_seed_path \
-      SIMPLETON_SEED=${SIMPLETON_SEED:-undefined} \
-      SIMPLETON_CELL=${SIMPLETON_CELL:-undefined} \
-
-    if [[ $cell_path == $SIMPLETON_SEED/* || $cell_path == */.seed/* ]]; then
-      unset work_path
-      if [[ $cell_path == $SIMPLETON_SEED/* ]]; then
-        base_path=
-        extend_path=${cell_path#$SIMPLETON_SEED/}
-        seed_path=$SIMPLETON_SEED
-      elif [[ $cell_path == */.seed/* ]]; then
-        base_path=${cell_path%%/.seed/*}
-        extend_path=${cell_path#$base_path/.seed/}
-        seed_path=$base_path
-      fi
-
-      if [[ -d $SIMPLETON_CELL ]]; then
-        cell_path=$SIMPLETON_CELL
-      elif [[ -d $base_path/.cell ]]; then
-        cell_path=$base_path/.cell
-      else
-        log_fatal "Could not determine cell path, since SIMPLETON_CELL isn't set or doesn't exist, nor does /cell or ~/.cell ."
-        fail1
-      fi
-
-      local extend_folder
-      for extend_folder in ${extend_path//\// }; do
-        case $extend_folder in
-          _leaf|_trunk|_branch|*:*)
-            # can't figure out cell past these pattern matching seeds
-            break
-          ;;
-        esac
-        cell_path+="/$extend_folder"
-        seed_path+="/$extend_folder"
-      done
-
-    elif [[ $cell_path == $SIMPLETON_CELL/* || $cell_path == */.cell/* ]]; then
-      unset work_path
-
-      if [[ $cell_path == $SIMPLETON_CELL/* ]]; then
-        base_path=
-        extend_path=${cell_path#$SIMPLETON_CELL/}
-      elif [[ $cell_path == */.cell/* ]]; then
-        base_path=${cell_path%%/.cell/*}
-        extend_path=${cell_path#$base_path/.cell/}
-      fi
-
-      find_base_seed $cell_path || fail
-      find_seed || {
-        log_fatal "Could not find seed for $cell_path. Either set SIMPLETON_SEED or make a ~/.seed or /seed folder."
-        fail1
-      }
-
-      local found_base_cell=f orig_cell_path=$cell_path orig_seed_path=$seed_path
-      step_path=$cell_path
-      begin_loop; doo
-        if [[ -d $seed_path/.dna ]]; then
-          found_base_cell=t
-          break
-        fi
-        seed_path=${seed_path%/*}
-        cell_path=${cell_path%/*}
-        if [[ $cell_path != /*/*/* ]]; then
-          cell_path=$orig_cell_path
-          seed_path=$orig_seed_path
-          break
-        fi
-      end_loop
-
-      if [[ $step_path == $cell_path ]]; then
-        unset step_path
-      fi
-
-    else # not a cell path or a seed path, so it must be a work path
-
-      work_path=$cell_path
-      base_path=
-      extend_path=$cell_path
-
-      find_base_seed $cell_path || fail
-      find_seed || {
-        log_fatal "Could not find seed for $cell_path. Either set SIMPLETON_SEED or make a ~/.seed or /seed folder."
-        fail1
-      }
-
-      cell_path="$SIMPLETON_CELL/$extend_path"
-
-    fi
-  end_function
-  handle_return
 }
 
 lock_cell() {
@@ -8123,9 +8204,8 @@ update_command() {
     get_needs_update || fail
     if [[ $needs_update == t ]]; then
       plant_seed $seed_path $cell_path || fail
-      #lock_out || fail
-      create_request || fail
-      cell_path=$cell_path.new execute_update || fail
+      fork create_request || fail
+      fork execute_request || fail
       
       if [[ -e $cell_path/out.old ]]; then
         rm -rf $cell_path/out.old
