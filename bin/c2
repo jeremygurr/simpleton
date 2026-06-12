@@ -793,7 +793,7 @@ debug_id_inc() {
         debug_immediate=t
         unignore_this_function=2 \
         debug_skip_breakpoints=f \
-        debug_start n
+        debug_start
       fi
     fi
   elif [[ "${debug_quick_function:-}" && $debug_quick_function == ${FUNCNAME[1]} ]]; then
@@ -6685,6 +6685,23 @@ cell_lib_init() {
   trace_dims=${trace_dims:-${trace_dim:-}}
 }
 
+get_cell_type() {
+  case "$1" in
+    *:*...)
+      cell_type=branch
+    ;;
+    *:*)
+      cell_type=leaf
+    ;;
+    *...)
+      cell_type='trunk branch'
+    ;;
+    *)
+      cell_type='trunk branch leaf'
+    ;;
+  esac
+}
+
 plant_seed_dir_pattern() {
   begin_function
     if [[ ! "$part" ]]; then
@@ -7466,6 +7483,62 @@ load_dna() {
   handle_return
 }
 
+# inputs:
+#   base_seed_path
+#   extend_path
+# outputs:
+#   seed_path       includes all folders to current cell's seed
+find_seed() {
+  local f d cell_type
+  seed_path=$base_seed_path
+  for f in ${extend_path//\// }; do
+
+    d=
+    if [[ $f == *:* ]]; then
+      d=${f%%:*}
+    fi
+
+    get_cell_type $f || fail
+
+    if [[ -d $seed_path/$f ]]; then
+      seed_path+=/$f
+    elif [[ -d $seed_path/$d:_ ]]; then
+      seed_path+=/$d:_
+    elif [[ -d $seed_path/_trunk && " $cell_type " == *" trunk "* ]]; then
+      seed_path+=/_trunk
+    elif [[ -d $seed_path/_branch && " $cell_type " == *" branch "* ]]; then
+      seed_path+=/_branch
+    elif [[ -d $seed_path/_leaf && " $cell_type " == *" leaf "* ]]; then
+      seed_path+=/_leaf
+    elif [[ -d $seed_path/_ ]]; then
+      seed_path+=/_
+    else
+      # could not find seed
+      log_fatal "Could not find seed matching $f in $seed_path"
+      return 1
+    fi
+
+  done
+}
+
+# inputs:
+#   $1      current path 
+# outputs:
+#   base_seed_path  the base seed path which contains all seeds of the enclosing folders
+find_base_seed() {
+  local current_path=$1
+  if [[ -d $current_path/.seed ]]; then
+    base_seed_path=$current_path/.seed
+  elif [[ $current_path == /*/*/* ]]; then
+    find_base_seed ${current_path%/*} || fail
+  elif [[ -d $SIMPLETON_SEED ]]; then
+    base_seed_path=$SIMPLETON_SEED
+  else
+    # could not find seed
+    return 1
+  fi
+}
+
 # input: cell_path
 # output:
 #   cell_path
@@ -7518,6 +7591,14 @@ find_paths() {
     elif [[ $cell_path == $SIMPLETON_CELL/* || $cell_path == */.cell/* ]]; then
       unset work_path
 
+      find_base_seed $cell_path || fail
+
+      req_path=
+      if [[ $cell_path == */req/* ]]; then
+        req_path=$cell_path
+        cell_path=${cell_path%%/req/*}
+      fi
+
       if [[ $cell_path == $SIMPLETON_CELL/* ]]; then
         base_path=
         extend_path=${cell_path#$SIMPLETON_CELL/}
@@ -7526,36 +7607,30 @@ find_paths() {
         extend_path=${cell_path#$base_path/.cell/}
       fi
 
-      find_base_seed $cell_path || fail
+      zombie_fence
       find_seed || {
         log_fatal "Could not find seed for $cell_path. Either set SIMPLETON_SEED or make a ~/.seed or /seed folder."
         fail1
       }
 
-      req_path=
-      if [[ $cell_path == */req/* ]]; then
-        req_path=$cell_path
-        cell_path=${cell_path%%/req/*}
-      else
-        local found_base_cell=f orig_cell_path=$cell_path orig_seed_path=$seed_path
-        step_path=$cell_path
-        begin_loop; doo
-          if [[ -d $seed_path/.dna ]]; then
-            found_base_cell=t
-            break
-          fi
-          seed_path=${seed_path%/*}
-          cell_path=${cell_path%/*}
-          if [[ $cell_path != /*/*/* ]]; then
-            cell_path=$orig_cell_path
-            seed_path=$orig_seed_path
-            break
-          fi
-        end_loop
-
-        if [[ $step_path == $cell_path ]]; then
-          unset step_path
+      local found_base_cell=f orig_cell_path=$cell_path orig_seed_path=$seed_path
+      step_path=$cell_path
+      begin_loop; doo
+        if [[ -d $seed_path/.dna ]]; then
+          found_base_cell=t
+          break
         fi
+        seed_path=${seed_path%/*}
+        cell_path=${cell_path%/*}
+        if [[ $cell_path != /*/*/* ]]; then
+          cell_path=$orig_cell_path
+          seed_path=$orig_seed_path
+          break
+        fi
+      end_loop
+
+      if [[ $step_path == $cell_path ]]; then
+        unset step_path
       fi
 
     else # not a cell path or a seed path, so it must be a work path
@@ -8022,79 +8097,6 @@ pool_status_command() {
   begin_function
   end_function
   handle_return
-}
-
-# inputs:
-#   $1      current path 
-# outputs:
-#   base_seed_path  the base seed path which contains all seeds of the enclosing folders
-find_base_seed() {
-  local current_path=$1
-  if [[ -d $current_path/.seed ]]; then
-    base_seed_path=$current_path/.seed
-  elif [[ $current_path == /*/*/* ]]; then
-    find_base_seed ${current_path%/*} || fail
-  elif [[ -d $SIMPLETON_SEED ]]; then
-    base_seed_path=$SIMPLETON_SEED
-  else
-    # could not find seed
-    return 1
-  fi
-}
-
-get_cell_type() {
-  case "$1" in
-    *:*...)
-      cell_type=branch
-    ;;
-    *:*)
-      cell_type=leaf
-    ;;
-    *...)
-      cell_type='trunk branch'
-    ;;
-    *)
-      cell_type='trunk branch leaf'
-    ;;
-  esac
-}
-
-# inputs:
-#   base_seed_path
-#   extend_path
-# outputs:
-#   seed_path       includes all folders to current cell's seed
-find_seed() {
-  local f d cell_type
-  seed_path=$base_seed_path
-  for f in ${extend_path//\// }; do
-
-    d=
-    if [[ $f == *:* ]]; then
-      d=${f%%:*}
-    fi
-
-    get_cell_type $f || fail
-
-    if [[ -d $seed_path/$f ]]; then
-      seed_path+=/$f
-    elif [[ -d $seed_path/$d:_ ]]; then
-      seed_path+=/$d:_
-    elif [[ -d $seed_path/_trunk && " $cell_type " == *" trunk "* ]]; then
-      seed_path+=/_trunk
-    elif [[ -d $seed_path/_branch && " $cell_type " == *" branch "* ]]; then
-      seed_path+=/_branch
-    elif [[ -d $seed_path/_leaf && " $cell_type " == *" leaf "* ]]; then
-      seed_path+=/_leaf
-    elif [[ -d $seed_path/_ ]]; then
-      seed_path+=/_
-    else
-      # could not find seed
-      log_fatal "Could not find seed matching $f in $seed_path"
-      return 1
-    fi
-
-  done
 }
 
 lock_cell() {
