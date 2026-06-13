@@ -8054,6 +8054,76 @@ request_promote_command() {
 }
 
 # inputs:
+#   $1          step folder/cell folder to execute
+execute_update_stepish_folder() {
+  local step_container_path=$1
+  begin_function
+    local step_paths step_group_paths step_group_index step step_path \
+      step_index=0 ord base try_index step_count \
+      in_path=$parent_in_path \
+      out_path=$parent_out_path \
+      old_sibling_outs= \
+      new_sibling_outs= \
+      sibling_out \
+
+    if [[ -d $step_container_path/in ]]; then
+      load_dna $step_container_path/in || fail
+    fi
+
+    step_paths=( $(find1 $cell_path -regex '.*/[0-9][0-9]-.*' | sort -g) ) || fail
+    step_count=${#step_paths[*]}
+    begin_while (( step_index < step_count )); doo
+      step_group_paths=()
+      for (( try_index = step_index; try_index < step_count; try_index++ )); do
+        step_path=${step_paths[$try_index]}
+        step=${step_path##*/}
+        split_ordinal step ord base
+
+        if [[ ! "$step_group_index" ]]; then
+          step_group_index=$ord
+        elif [[ $step_group_index != $ord ]]; then
+          break
+        fi
+
+        step_index=$try_index
+        step_group_paths+=( $step_path )
+      done
+
+      local step_group_path \
+        step_needs_update= \
+
+      new_sibling_outs=
+      begin_for step_group_path in ${step_group_paths[*]}; doo
+        get_step_needs_update $step_group_path || fail
+        if [[ $step_needs_update == t ]]; then
+          local step_in=$step_group_path/in \
+            step_out=$step_group_path/out \
+
+          mkdir -p $step_in $step_out || fail
+          begin_for sibling_out in $old_sibling_outs; doo
+            force=t safe_link $sibling_out/* $step_in/ || fail
+          end_for
+
+          # recursive
+          parent_in_path=$step_in \
+          parent_out_path=$step_out \
+          fork execute_update_step $step_group_path || fail
+          new_sibling_outs+="$step_group_path/out "
+        fi
+      end_for
+      old_sibling_outs=$new_sibling_outs
+
+    end_while
+
+    begin_for sibling_out in $old_sibling_outs; doo
+      force=t safe_link $sibling_out/* $parent_out_path/ || fail
+    end_for
+
+  end_function
+  handle_return
+}
+
+# inputs:
 #   $1               step path
 #   parent_in_path
 #   parent_out_path
@@ -8092,67 +8162,6 @@ execute_update_step() {
   handle_return
 }
 
-# inputs:
-#   $1          step folder/cell folder to execute
-execute_update_stepish_folder() {
-  local step_container_path=$1
-  begin_function
-    local step_paths step_group_paths step_group_index step step_path \
-      step_index=0 ord base try_index step_count \
-      in_path=$step_path/in \
-      out_path=$step_path/out.new \
-
-    if [[ -d $step_container_path/in ]]; then
-      load_dna $step_container_path/in || fail
-    fi
-
-    step_paths=( $(find1 $cell_path -regex '.*/[0-9][0-9]-.*' | sort -g) ) || fail
-    step_count=${#step_paths[*]}
-    begin_while (( step_index < step_count )); doo
-      step_group_paths=()
-      for (( try_index = step_index; try_index < step_count; try_index++ )); do
-        step_path=${step_paths[$try_index]}
-        step=${step_path##*/}
-        split_ordinal step ord base
-
-        if [[ ! "$step_group_index" ]]; then
-          step_group_index=$ord
-        elif [[ $step_group_index != $ord ]]; then
-          break
-        fi
-
-        step_index=$try_index
-        step_group_paths+=( $step_path )
-      done
-
-      local step_group_path \
-        parent_in_path=$cell_path/in \
-        parent_out_path=$cell_path/out.new \
-        step_needs_update=
-
-      begin_for step_group_path in ${step_group_paths[*]}; doo
-        get_step_needs_update $step_group_path || fail
-        if [[ $step_needs_update == t ]]; then
-          execute_update_step $step_group_path || fail
-        fi
-      end_for
-
-    end_while
-    # put together step groups
-    # load in/ files
-    # for each step group
-    #   for each step
-    #     fork
-    #     link in/ files from parent to child in/
-    #     link previous sibling out/ files to child in/
-    #     execute body of step
-    #     after fork: record out/ path as sibling out
-    #   gather up out/ for each step in group, store as sibling out
-    # if all steps are done, link last sibling out/ to cell/out/
-  end_function
-  handle_return
-}
-
 # output:
 #   step_needs_update
 get_step_needs_update() {
@@ -8180,7 +8189,8 @@ get_step_needs_update() {
 # cell should already be locked before running this
 execute_update() {
   begin_function
-    local parent_in_path parent_out_path
+    parent_in_path=$cell_path/in \
+    parent_out_path=$cell_path/out.new \
     execute_update_stepish_folder $cell_path || fail
   end_function
   handle_return
