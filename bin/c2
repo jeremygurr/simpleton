@@ -6459,14 +6459,11 @@ execute_commands() {
   local commands=$*
 
   begin_function
-# Not all commands require a lock, so lock within the command itself
-#    lock_cell || fail
     local command
     begin_for command in $commands; doo
       execute_command $command || fail
     end_for
   end_function
-#  unlock_cell
   handle_return
 }
 
@@ -7671,13 +7668,29 @@ find_paths() {
   handle_return
 }
 
+lock_cell() {
+  folder_lock
+}
+
+unlock_cell() {
+  folder_unlock
+}
+
+lock_out() {
+  folder_lock
+}
+
+unlock_out() {
+  folder_unlock
+}
+
 plant_seed_dir_simple() {
   begin_function
 
     if [[ ! -e $target ]]; then
 
       if [[ $top_level_plant == t && $is_cell == t ]]; then
-        cell_path=$original_cell lock_cell || fail
+        folder_to_lock=$original_cell.new lock_cell || fail
         target=$to/$x_part.new
       fi
 
@@ -7731,12 +7744,15 @@ plant_seed_dir_simple() {
     fi
 
     if [[ $target == *.new ]]; then
+      if [[ $is_cell == t ]]; then
+        folder_to_unlock=$original_cell.new unlock_cell
+      fi
       mv $target ${target%.new} || fail
     fi
   end_function
 
   if [[ $is_cell == t ]]; then
-    cell_path=$original_cell unlock_cell
+    folder_to_unlock=$original_cell.new unlock_cell
   fi
 
   handle_return
@@ -8229,7 +8245,7 @@ change_request_state() {
 execute_request() {  # should be forked
   begin_function
     local req_path=${req_path:-}
-    lock_out || fail
+    folder_to_lock=$cell_path/out.new lock_out || fail
     promote_request || fail
     local update_successful=f
     execute_update || fail
@@ -8240,9 +8256,9 @@ execute_request() {  # should be forked
       if [[ -d $out_path ]]; then
         mv $out_path $out_path.old || fail
       fi
+      folder_to_unlock=$cell_path/out.new unlock_out
       mv $out_path.new $out_path || fail
       change_request_state running good || fail
-      unlock_out
     else
       log_error "Request failed: $cell_path"
       change_request_state running bad || fail
@@ -8255,6 +8271,7 @@ execute_request() {  # should be forked
       end_for
     fi
   end_function
+  folder_to_unlock=$cell_path/out.new unlock_out
   handle_return
 }
 
@@ -8282,22 +8299,6 @@ pool_status_command() {
   begin_function
   end_function
   handle_return
-}
-
-lock_cell() {
-  folder_to_lock=$cell_path.new folder_lock
-}
-
-unlock_cell() {
-  folder_to_unlock=$cell_path folder_unlock
-}
-
-lock_out() {
-  folder_to_lock=$cell_path/out.new folder_lock
-}
-
-unlock_out() {
-  folder_to_unlock=$cell_path/out folder_unlock
 }
 
 # output:
