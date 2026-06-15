@@ -3651,7 +3651,6 @@ prep_fork() {
 fork_inside() {
   begin_function_lo
 
-    local change_log2
     prep_fork || fail
 
     if [[ "$to_var" ]]; then
@@ -7887,6 +7886,36 @@ get_short_path() {
   done
 }
 
+# inputs:
+#   $1          cell path
+mark_cell_ready() {
+  local cell_path=$1
+  begin_function
+    local branch=${cell_path##*/} \
+      parent_cell=${cell_path%/*} \
+      above_cell=f \
+
+    begin_while [[ $parent_cell == /*/*/*/* ]]; doo
+      if [[ -d $parent_cell/.dna ]]; then
+        above_cell=t
+      fi
+
+      if [[ $above_cell == t ]]; then
+        local ready_file=.ready-$branch
+        if [[ -e $parent_cell/$ready_file ]]; then
+          # we don't need to go further, since this entire branch has already been marked previously
+          break
+        else
+          ln -s $parent_cell/$branch $parent_cell/$ready_file || fail
+        fi
+      fi
+      branch=${parent_cell##*/}
+      parent_cell=${parent_cell%/*}
+    end_while
+  end_function
+  handle_return
+}
+
 # assumes cell is planted
 # inputs:
 #   cell_path
@@ -7897,7 +7926,7 @@ create_request() {  # should be forked when called since it loads new contexts
     local cell_req_path=$cell_path/req
     if [[ ! -d $cell_req_path ]]; then
       mkdir -p $cell_req_path/all \
-        $cell_req_path/waiting \
+        $cell_req_path/ready \
         $cell_req_path/running \
         $cell_req_path/good \
         $cell_req_path/bad || fail
@@ -7947,41 +7976,23 @@ create_request() {  # should be forked when called since it loads new contexts
       mv $tmp_req_folder $req_path || fail
     else # $req_path already exists
       rm -rf $tmp_req_folder || fail
-      rm $cell_req_path/{waiting,good,bad}/req.$hash &>/dev/null
+      rm $cell_req_path/{ready,good,bad}/req.$hash &>/dev/null
     fi
 
     req_file=$req_path/parameters.bash
 
     if [[ "$downstream_request" ]]; then
       mkdir -p $req_path/down || fail
-    fi
-
-    #if [[ ! -d $cell_req_path/waiting ]]; then
-    #  mkdir -p $cell_req_path/{waiting,good,bad,running} || fail
-    #fi
-
-    if [[ "$downstream_request" ]]; then
       safe_link $downstream_request $req_path/down/$short_path || fail
     fi
 
-    force=t safe_link $req_path $cell_req_path/waiting/ || fail
+    #if [[ ! -d $cell_req_path/ready ]]; then
+    #  mkdir -p $cell_req_path/{ready,good,bad,running} || fail
+    #fi
 
-    local branch=${cell_path##*/}
-    local parent_cell=${cell_path%/*}
+    force=t safe_link $req_path $cell_req_path/ready/ || fail
 
-    begin_while [[ $parent_cell == /*/*/*/* ]]; doo
-      if [[ -d $parent_cell/.dna ]]; then
-        local waiting_file=.waiting-$branch
-        if [[ -e $parent_cell/$waiting_file ]]; then
-          # we don't need to go further, since this entire branch has already been marked previously
-          break
-        else
-          ln -s $parent_cell/$branch $parent_cell/$waiting_file || fail
-        fi
-      fi
-      branch=${parent_cell##*/}
-      parent_cell=${parent_cell%/*}
-    end_while
+    mark_cell_ready ${cell_path%/*} || fail
 
   end_function
   handle_return
@@ -8020,15 +8031,15 @@ promote_request() {
 
     if [[ ! "$req_path" ]]; then
 
-      local waiting_requests request oldest_request= 
+      local ready_requests request oldest_request= 
 
-      waiting_requests=$(find1 $cell_req_path/waiting) || fail
-      if [[ ! "$waiting_requests" ]]; then
-        log_verbose "No requests are waiting."
+      ready_requests=$(find1 $cell_req_path/ready) || fail
+      if [[ ! "$ready_requests" ]]; then
+        log_verbose "No requests are ready."
         abort
       fi
 
-      for request in $waiting_requests; do
+      for request in $ready_requests; do
         if [[ ! "$oldest_request" || $request -ot $oldest_request ]]; then
           oldest_request=$request
         fi
@@ -8046,7 +8057,7 @@ promote_request() {
     force=t safe_link $req_path/* $cell_path/in/ || fail
 
     local req_file=${req_path##*/}
-    mv $cell_req_path/waiting/$req_file $cell_req_path/running/ || fail
+    mv $cell_req_path/ready/$req_file $cell_req_path/running/ || fail
 
   end_function
   handle_return
@@ -8060,11 +8071,84 @@ request_promote_command() {
   handle_return
 }
 
+# output:
+#   step_needs_update
+get_step_needs_update() {
+  local step_path=$1
+  step_needs_update=t
+  begin_function
+    if [[ -f $step_path ]]; then
+      reason="Needs update because '${step_path##*/}' is a file"
+      abort
+    fi
+    if [[ ! -d $step_path/in ]]; then
+      reason="Needs update because 'in' folder doesn't exist"
+      abort
+    fi
+    if [[ ! -d $step_path/out ]]; then
+      reason="Needs update because 'out' folder doesn't exist"
+      abort
+    fi
+    if [[ $step_path/in -nt $step_path/out ]]; then
+      reason="Needs update because 'in' folder is newer than 'out' folder"
+      abort
+    fi
+    step_needs_update=f
+  end_function
+  handle_return
+}
+
+# outputs:
+#   update_successful
+execute_update_stepish_folder_group() {
+  begin_function
+    local step_group_path \
+      step_needs_update= \
+      update_successful \
+
+    new_sibling_outs=
+    begin_for step_group_path in ${step_group_paths[*]}; doo
+      update_successful=f
+      if [[ -f $step_group_path ]]; then
+        log_debug "Processing step file ${step_path##*/}"
+        load_dna_handle_item $step_path || fail
+      else # step is dir
+        get_step_needs_update $step_group_path || fail
+        if [[ $step_needs_update == t ]]; then
+          local step_in=$step_group_path/in \
+            step_out=$step_group_path/out \
+
+          mkdir -p $step_in $step_out || fail
+          begin_for sibling_out in $old_sibling_outs; doo
+            force=t safe_link $sibling_out/* $step_in/ || fail
+          end_for
+
+          # recursive
+          parent_in_path=$step_in \
+          parent_out_path=$step_out \
+          fork execute_update_stepish_folder $step_group_path || fail
+
+          new_sibling_outs+="$step_group_path/out "
+        fi
+      fi
+      if [[ $update_successful == f ]]; then
+        abort
+      fi
+    end_for
+    old_sibling_outs=$new_sibling_outs
+  end_function
+  handle_return
+}
+
 # inputs:
 #   $1          step folder/cell folder to execute
+# outputs:
+#   update_successful
 execute_update_stepish_folder() {
   local step_container_path=$1
   begin_function
+    log_debug "Processing step folder ${step_container_path##*/}"
+
     local step_paths step_group_paths step_group_index step step_path \
       step_index=0 ord base try_index step_count \
       in_path=$parent_in_path \
@@ -8096,98 +8180,17 @@ execute_update_stepish_folder() {
         step_group_paths+=( $step_path )
       done
 
-      local step_group_path \
-        step_needs_update= \
-
-      new_sibling_outs=
-      begin_for step_group_path in ${step_group_paths[*]}; doo
-        get_step_needs_update $step_group_path || fail
-        if [[ $step_needs_update == t ]]; then
-          local step_in=$step_group_path/in \
-            step_out=$step_group_path/out \
-
-          mkdir -p $step_in $step_out || fail
-          begin_for sibling_out in $old_sibling_outs; doo
-            force=t safe_link $sibling_out/* $step_in/ || fail
-          end_for
-
-          # recursive
-          parent_in_path=$step_in \
-          parent_out_path=$step_out \
-          fork execute_update_step $step_group_path || fail
-          new_sibling_outs+="$step_group_path/out "
-        fi
-      end_for
-      old_sibling_outs=$new_sibling_outs
-
+      execute_update_stepish_folder_group || fail
+      if [[ $update_successful == f ]]; then
+        abort
+      fi
+      (( step_index++ ))
     end_while
 
     begin_for sibling_out in $old_sibling_outs; doo
       force=t safe_link $sibling_out/* $parent_out_path/ || fail
     end_for
 
-  end_function
-  handle_return
-}
-
-# inputs:
-#   $1               step path
-#   parent_in_path
-#   parent_out_path
-execute_update_step() {
-  local step_path=$1 interesting_vars=step_path
-  begin_function
-
-    log_debug "Processing step ${step_path##*/}"
-    local in_path out_path
-    if [[ -d $step_path ]]; then
-      execute_update_stepish_folder $step_path || fail
-    else # step_path is a file
-      in_path=$parent_in_path
-      out_path=$parent_out_path
-      case $step_path in
-        *.bash)
-          source $step_path || fail
-        ;;
-        *.var)
-          load_dna_handle_item $step_path || fail
-        ;;
-        *.fun)
-          load_dna_handle_item $step_path || fail
-          local function_name=${step_path##*/}
-          function_name=${function_name%.fun}
-          function_name || fail
-        ;;
-        *)
-          log_fatal "Don't know how to handle this file type: $step_path"
-          fail1
-        ;;
-      esac
-    fi
-    
-  end_function
-  handle_return
-}
-
-# output:
-#   step_needs_update
-get_step_needs_update() {
-  local step_path=$1
-  step_needs_update=t
-  begin_function
-    if [[ ! -d $step_path/in ]]; then
-      reason="Needs update because 'in' folder doesn't exist"
-      abort
-    fi
-    if [[ ! -d $step_path/out ]]; then
-      reason="Needs update because 'out' folder doesn't exist"
-      abort
-    fi
-    if [[ $step_path/in -nt $step_path/out ]]; then
-      reason="Needs update because 'in' folder is newer than 'out' folder"
-      abort
-    fi
-    step_needs_update=f
   end_function
   handle_return
 }
@@ -8203,11 +8206,53 @@ execute_update() {
   handle_return
 }
 
+# inputs:
+#   req_path
+#   $1        from state
+#   $2        to state
+change_request_state() {
+  local from_state=$1 to_state=$2 req_path=$req_path
+  begin_function
+    local req_file=${req_file##*/}
+    if [[ -f $cell_req_path/$from_state/$req_file ]]; then
+      rm $cell_req_path/$from_state/$req_file || fail
+    fi
+    force=t safe_link $req_path $cell_req_path/$to_state/$req_file || fail
+  end_function
+  handle_return
+}
+
+# inputs:
+#   cell_path
+# outputs:
+#
 execute_request() {  # should be forked
   begin_function
     lock_out || fail
     promote_request || fail
+    local update_successful=f
     execute_update || fail
+    reply_to_caller "update_successful=$update_successful" || fail
+    if [[ $update_successful == t ]]; then
+      log_info "Request succeeded: $cell_path"
+      local out_path=$cell_path/out
+      if [[ -d $out_path ]]; then
+        mv $out_path $out_path.old || fail
+      fi
+      mv $out_path.new $out_path || fail
+      change_request_state running good || fail
+      unlock_out
+    else
+      log_error "Request failed: $cell_path"
+      change_request_state running bad || fail
+    fi
+    local down_req downstreams
+    if [[ -d $req_path/down ]]; then
+      downstreams=$(find1 $req_path/down) || fail
+      begin_for down_req in $downstreams; doo
+        mark_cell_ready $down_req || fail
+      end_for
+    fi
   end_function
   handle_return
 }
@@ -8301,7 +8346,7 @@ get_cell_needs_update() {
     fi
     #  This isn't needed because before new requests are created, this function is checked
     #if [[ -d $cell_path/in.new ]]; then
-    #  reason="Needs update because a new request is waiting ('in.new' exists)"
+    #  reason="Needs update because a new request is ready ('in.new' exists)"
     #  abort
     #fi
     if [[ ! -f $cell_path/in/context.bash ]]; then
@@ -8340,14 +8385,21 @@ update_command() {
     local step_path seed_path work_path extend_path \
       cell_path=$cell_path \
       cell_needs_update \
+      update_successful \
 
     find_paths || fail
     get_cell_needs_update || fail
     if [[ $cell_needs_update == t ]]; then
       plant_seed $seed_path $cell_path || fail
       fork create_request || fail
+      update_successful=f
       fork execute_request || fail
-      
+
+      if [[ $update_successful == f ]]; then
+        log_error "Update not successful. Make sure to set update_successful=t in cell step code when it is successful."
+        fail1
+      fi
+        
       if [[ -e $cell_path/out.old ]]; then
         rm -rf $cell_path/out.old
       fi
