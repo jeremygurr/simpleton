@@ -66,7 +66,7 @@ alias vi=vim
 alias vis='vim /etc/profile.d/shell-start-0.sh'
 alias dockerv='docker ps --format "{{.Names}} [{{.Label \"artifact_version\" }}] <{{.Label \"ois_version\" }}> ({{.Image}})"'
 
-unalias clean
+unalias clean 2>/dev/null
 unset clean
 clean() {
   if [[ $PWD == /cell/*/* ]]; then
