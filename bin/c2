@@ -3,10 +3,10 @@
 ### file: ./01-lifted-bash.bash
 #!/usr/bin/env bash
 
-##########################################################
-# LIFTED-BASH
-# A bash library of functions to increase debugability of bash scripts.
-##########################################################
+ ##########################################################
+ # LIFTED-BASH
+ # A bash library of functions to increase debugability of bash scripts.
+ ##########################################################
 
 # avoid executing this multiple times
 #type -t lifted_bash_init >/dev/null && return 0
@@ -1316,21 +1316,18 @@ show_flag_usage() {
     show_flag_usage_custom
     out "  -d     debug flags: same as -vvi (debug logs + show debug ids)"
     out "  -g     grip++ (increase debug checkpoints, slowing down execution but making it easier to debug)"
+    out "  -h     help_depth++ (increases help information given, can be used twice)"
     out "  -i     show_debug_id=t (if used twice, show_debug_id=a)"
     out "  -l     less detail: command_detail-- (command_detail defaults to 0), can use twice for least detail"
     out "  -m     more detail: command_detail++ (can use this twice to get the most detail)"
     out "  -q     less logs. Can be used repeatedly. Without this, log=info, -q = warn, -qq = error, -qqq = fatal"
     out "  -p     more paranoid: paranoia++ (up to 3 times). Makes the command execute more slowly and carefully."
-    out "         paranoia=0 fastest, assuming all cache invalidation mechanisms are working correctly."
-    out "         paranoia=1 does extra checks that are cheap, so it still should be reasonably fast, but will be more resilient to caching bugs."
-    out "         paranoia=2 does extra checks that are not cheap, further increasing robustness."
-    out "         paranoia=3 rebuilds every cell it touches completely. Similar to clean-all, except more efficient since it only cleans cells that are relevant to this command."
     out "  -P     paranoia=3 (shortcut)"
     out "  -s     trace_structure=t"
     out "  -T     show_time=t"
     out "  -v     more logs. Can be used repeatedly. Without this, log=info, -v = verbose, -vv = debug, -vvv = trace"
 #    out "  -x     debug_on_exit=t"
-  } | sort
+  } | sort -f
 }
 
 handle_flag() {
@@ -1351,7 +1348,10 @@ handle_flag() {
           resolve_log_var
           ;;
         g)
-          (( grip /= 10 )) || true
+          (( grip /= 10 ))
+          ;;
+        h)
+          (( help_depth++ ))
           ;;
         i)
           if [[ "${show_debug_id:-f}" != f ]]; then
@@ -1361,13 +1361,13 @@ handle_flag() {
           fi
           ;;
         l)
-          (( command_detail-- )) || true
+          (( command_detail-- ))
           ;;
         m)
-          (( command_detail++ )) || true
+          (( command_detail++ ))
           ;;
         p)
-          (( paranoia++ )) || true
+          (( paranoia++ ))
           ;;
         P)
           paranoia=3
@@ -3793,15 +3793,15 @@ fork_bg() {
   background=t fork "$@"
 }
 
-######################################################
-# BASH Debugger
-# At beginning of script you wish to debug: 
-#   source this file. example: source /home/my_user/repos/bash-debugger
-#   execute debug in the code where you wish to begin debugging.
-# press '?' for list of commands while debugging
-# If you want to get syntax highlighting working, install source-highlight
-#   example for mac: brew install source-highlight
-######################################################
+ ######################################################
+ # BASH Debugger
+ # At beginning of script you wish to debug: 
+ #   source this file. example: source /home/my_user/repos/bash-debugger
+ #   execute debug in the code where you wish to begin debugging.
+ # press '?' for list of commands while debugging
+ # If you want to get syntax highlighting working, install source-highlight
+ #   example for mac: brew install source-highlight
+ ######################################################
 
 alias debug_once='[[ ! "${debug_once_triggered:-}" ]] && { debug_once_triggered=t; debug_start; }'
 
@@ -5981,7 +5981,648 @@ debug_setup() {
   fi
 }
 
-### file: ./02-command-lib.bash
+### file: ./02-help-lib.bash
+
+# inputs:
+#   i     index of parameter to show
+show_parameter_help_inner() {
+  begin_function
+
+    local indent=${indent:-0} \
+      name="${parameter_names[$i]}" \
+      description="${parameter_descriptions[$i]}" \
+      aliases="${parameter_aliases[$i]}" \
+      show_use_eq=${show_use_eq:-f} \
+
+    if [[ $show_use_eq == t ]]; then
+      local best_alias=$name
+      if [[ "$aliases" ]]; then
+        best_alias=${aliases%% *}
+      fi
+      description+="${NL}Use $best_alias=? to see a list of valid values. "
+    fi
+    trim_ws description
+
+    choices=
+    if function_exists ${name}_get_choices; then
+      ${name}_get_choices || fail
+      choices="${choices[*]}"
+    elif [[ -v parameter_choices[$i] && "${parameter_choices[$i]:-}" ]]; then
+      choices=${parameter_choices[$i]}
+    fi
+
+    local -n n_default=default_${name}
+    if [[ "${n_default:-}" ]]; then
+      default=$n_default
+    else
+      default="${parameter_defaults[$i]}"
+    fi
+
+    out "$CYAN$name$RESET"
+    indent
+    out "$description"
+    [[ "$choices" ]] && out "choices: $choices"
+    [[ "$default" ]] && out "default: $default"
+    [[ "$aliases" ]] && out "aliases: $aliases"
+  end_function
+  handle_return
+}
+
+show_help_for_command() {
+  local command=$1 indent=${indent:-0}
+  begin_function
+
+    [[ $first_command == f ]] && out ''
+    if (( command_count > 1 )); then
+      out "$hbar_equals"
+    fi
+
+    out "${WHITE}Command: $CYAN${command//-/ }$RESET"
+    if [[ $cell_version == 1 ]]; then
+      if [[ -f $path_to_commands/$command.info ]]; then
+        source $path_to_commands/$command.info || fail
+      fi
+    elif [[ $cell_version == 2 ]]; then
+      # nothing to do in this case
+      :
+    else
+      log_fatal "Internal error: unknown cell version: $cell_version"
+      fail1
+    fi
+
+    local command_var=${command//-/_}
+    local -n command_description=command_${command_var}_description
+
+    trim_ws command_description
+    indent=2 out "$command_description"
+    local name description default i choices aliases c
+    local commands=$command_var
+    if (( command_detail > 0 )); then
+      commands+=' global'
+    fi
+    begin_for c in $commands; doo
+
+      local -n parameter_names=parameter_${c}_names \
+        parameter_descriptions=parameter_${c}_descriptions \
+        parameter_choices=parameter_${c}_choices \
+        parameter_defaults=parameter_${c}_defaults \
+        parameter_aliases=parameter_${c}_aliases \
+
+      if [[ "${parameter_names:-}" ]]; then
+        out "$NL$WHITE${c^} Parameters:$RESET"
+        begin_for ((i=0; i<${#parameter_names[*]}; i++)); doo
+          show_use_eq=f indent=$((indent+2)) show_parameter_help_inner || fail
+        end_for
+      fi
+    end_for
+
+    out ''
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1    dim
+show_dimension_details() {
+  local dim=$1
+  begin_function
+    if function_exists dim_${dim}_expand; then
+      values=
+
+      local problem= 
+
+      eval "value=all dim_${dim}_expand" &>/dev/null
+      if [[ ! "$problem" && $values != all ]]; then
+        out "choices: ${values[*]}"
+      fi
+
+      eval "value= dim_${dim}_expand" &>/dev/null || is_required=t
+      if [[ "$problem" ]]; then
+        required+=( $dim )
+      else
+        if [[ "${values:-}" ]]; then
+          if [[ "$values" == $empty_member ]]; then
+            out "default: (empty)"
+          else
+            out "default: ${values[*]}"
+          fi
+        else
+          out "optional (not required to be set)"
+        fi
+      fi
+    fi
+
+    if [[ -v dim_${dim}_examples ]]; then
+      eval "local examples=( \"\${dim_${dim}_examples[@]}\" )"
+      local example_count=${#examples[*]} i index_string=
+      begin_for ((i=0; i<example_count; i++)); doo
+        if (( example_count > 1 )); then
+          index_string=" #$((i+1))"
+        fi
+        out "example$index_string: ${examples[$i]}"
+      end_for
+    fi
+
+    if [[ -v dim_${dim}_aliases ]]; then
+      eval "local aliases=( \"\${dim_${dim}_aliases[@]}\" )"
+      local full_alias
+      begin_for full_alias in "${aliases[@]}"; doo
+        out "alias: ${full_alias/ / -> }"
+      end_for
+    fi
+
+    if [[ -v dim_${dim}_derived_from ]]; then
+      local -n df_var=dim_${dim}_derived_from
+      local derived_string
+      for derived_string in "${df_var[@]}"; do
+        local derived_array=( $derived_string )
+        out "derived from: ${derived_array[*]}"
+      done
+    elif [[ -v dim_${dim}_derive_fields ]]; then
+      local -n df_var=dim_${dim}_derive_fields
+      local f derived_from=
+      for f in ${df_var[*]}; do
+        if [[ "$f" != "$dim" ]]; then
+          derived_from+="$f "
+        fi
+      done
+      derived_from=${derived_from% }
+      out "derived from: $derived_from"
+    fi
+
+    local -n dim_type=dim_${dim}_type
+    if [[ "${dim_type:-}" ]]; then
+      out "dim type: $dim_type"
+    fi
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1       dim
+show_dimension() {
+  local dim=$1 indent=${indent:-0}
+  begin_function
+
+    if [[ -v dim_${dim}_description ]]; then
+      eval "description=\$dim_${dim}_description" || fail
+    else
+      description='No description'
+    fi
+    local message="$dim"
+    if (( command_detail > -1 )); then
+      message+=": $description"
+    fi
+    out "$message"
+    if (( command_detail > 0 )); then
+      indent=$((indent+2)) show_dimension_details $dim || fail
+    fi
+  end_function
+  handle_return
+}
+
+show_dimensions_inner() {
+  begin_function
+    begin_for dim in $(echo "${dims[*]}" | sed 's/ /\n/g' | sort); doo
+      if [[ " ${branch_dims[*]:-} " == *" $dim "* ]]; then
+        continue
+      fi
+      show_dimension $dim || fail
+    end_for
+  end_function
+  handle_return
+}
+
+show_dimensions() {
+  local dims=( $* )
+  begin_function
+    local result dim description values 
+    to_var=result fork show_dimensions_inner || fail
+    if (( command_detail == 0 )); then
+      echo "$result" | sed -E 's/^ +//' | column -tl 2 | indent_stream
+    else
+      echo "$result"
+    fi
+  end_function
+  handle_return
+}
+
+show_upstream_single() {
+  local up_name=$1 choice_path=$2
+  begin_function
+    local message="$up_name"
+    if (( command_detail > -1 )); then
+      message+=": $choice_path"
+    fi
+    out "$message"
+    if (( command_detail > 0 )); then
+      # recursive
+      fork show_upstream_recursive $choice_path || fail
+    fi
+  end_function
+  handle_return
+}
+
+show_upstream_multi() {
+  begin_function
+    out "$up_name: "
+    indent
+    for choice_name in ${choices[*]}; do
+      extract_simple_name choice_name o choice_name
+      local choice_var=${choice_name//-/_}
+      local -n choice_path=up_${up_var}_choices_${choice_var}_path
+      out "Choice $choice_name: $choice_path"
+      if (( command_detail > 0 )); then
+        # recursive
+        fork show_upstream_recursive $choice_path || fail
+      fi
+    done
+    outdent
+  end_function
+  handle_return
+}
+
+show_upstreams() {
+  begin_function
+    local up_name
+    begin_for up_name in ${up[*]}; doo
+      local up_var=${up_name//-/_}
+      local -n choices=up_${up_var}_choices
+      if [[ -v choices ]]; then
+        local choice_name
+        if (( ${#choices[*]} == 1 )); then
+          choice_name=${choices[0]}
+          local choice_var=${choice_name//-/_}
+          local -n choice_path=up_${up_var}_choices_${choice_var}_path
+          show_upstream_single $up_name $choice_path || fail
+        else
+          show_upstream_multi || fail
+        fi
+      else
+        local choice_name=$up_name
+        local -n choice_path=up_${up_var}_path
+        show_upstream_single $up_name $choice_path || fail
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+show_upstream_recursive() {
+  local cell_path=$1 indent=${indent:-0}
+  begin_function
+    load_branch_info || fail
+
+    command_requires_cell=t \
+    trunk_changed=f \
+    command_allows_logs=f \
+    anchor_dims= \
+    switch_context $cell_path || fail
+
+    indent
+    show_upstreams || fail
+    outdent
+  end_function
+  handle_return
+}
+
+show_validator_single() {
+  local validator_name=$1 validator_path=$2 validator_conditions=$3
+  begin_function
+    local message="$validator_name"
+    if (( command_detail > -1 )); then
+      message+=": $validator_path"
+      if [[ "$validator_conditions" ]]; then
+        message+=" (considered valid if: $validator_conditions)"
+      fi
+    fi
+    out "$message"
+  end_function
+  handle_return
+}
+
+show_validators() {
+  begin_function
+    local validator_name_plus validator_name validator_var validator_conditions
+    begin_for validator_name_plus in ${validator[*]}; doo
+      validator_name=${validator_name_plus%%,*}
+      validator_conditions=${validator_name_plus#$validator_name,}
+      if [[ $validator_conditions == $validator_name_plus ]]; then
+        validator_conditions=
+      fi
+      validator_var=${validator_name//-/_}
+      local -n validator_path=validator_${validator_var}_path
+      show_validator_single $validator_name $validator_path "$validator_conditions" || fail
+    end_for
+  end_function
+  handle_return
+}
+
+show_reactor_single() {
+  local reactor_name=$1 reactor_path=$2 reactor_conditions=$3
+  begin_function
+    local message="$reactor_name"
+    if (( command_detail > -1 )); then
+      message+=": $reactor_path"
+      if [[ "$reactor_conditions" ]]; then
+        message+=" (will execute after update if: $reactor_conditions)"
+      fi
+    fi
+    out "$message"
+  end_function
+  handle_return
+}
+
+show_reactors() {
+  begin_function
+    local reactor_name_plus reactor_name reactor_var reactor_conditions
+    begin_for reactor_name_plus in ${reactor[*]}; doo
+      reactor_name=${reactor_name_plus%%,*}
+      reactor_conditions=${reactor_name_plus#$reactor_name,}
+      if [[ $reactor_conditions == $reactor_name_plus ]]; then
+        reactor_conditions=
+      fi
+      reactor_var=${reactor_name//-/_}
+      local -n reactor_path=reactor_${reactor_var}_path
+      show_reactor_single $reactor_name $reactor_path "$reactor_conditions" || fail
+    end_for
+  end_function
+  handle_return
+}
+
+# output:
+#   pretty_value
+get_pretty_value() {
+  local dim_var=$dim_var value=$value
+  pretty_value=
+  local pretty_function_name=dim_${dim_var}_pretty
+  if function_exists $pretty_function_name; then
+    $pretty_function_name "$value" || fail
+  fi
+}
+
+show_branch_coordinate_members() {
+  begin_function
+    if [[ "${trunk_dims_expanded:-}" ]]; then
+      local i
+      begin_for (( i = 0; i < ${#trunk_dims_expanded[*]}; i++ )); doo
+        dim_var=${trunk_dims_expanded[$i]}
+        dim_var=${dim_var//-/_}
+        local -n dim=d_$dim_var
+        local value=${dim:-}
+        local pretty_value
+        get_pretty_value
+        local pretty_form=
+        if [[ "${pretty_value:-}" ]]; then
+          pretty_form=" ($pretty_value)"
+        fi
+        if [[ "${value:-}" ]]; then
+          if [[ $show_header == t ]]; then
+            indent=$((indent-2)) out "${NL}Branch dimensions:"
+            show_header=f
+          fi
+          if [[ "$value" == $empty_member ]]; then
+            value='(empty)'
+          fi
+          out "$dim_var: $value$pretty_form"
+        fi
+      end_for
+    fi
+  end_function
+  handle_return
+}
+
+show_branch_members() {
+  begin_function
+    indent=$((indent-2)) out "${NL}Parent branches:"
+    local i dim_var value
+    for i in ${!branch_dims[*]}; do
+      dim_var=${branch_dims[$i]}
+      value=${branch_members[$i]}
+      local pretty_value
+      get_pretty_value
+
+      local pretty_form=
+      if [[ "${pretty_value:-}" ]]; then
+        pretty_form=" ($pretty_value)"
+      fi
+
+      out "$dim_var: $value$pretty_form"
+    done
+  end_function
+  handle_return
+}
+
+show_cell_help() {
+  local cell_path=$1
+  begin_function
+
+    cell_path=${cell_path%%/.cyto*}
+    cell_path=${cell_path%%/.dna*}
+    local top_level_command=t cell_command=help
+    execute_command_prep || fail
+    init_command_vars || fail
+    source $cell_command_path.info || fail
+
+    command_requires_cell=t \
+    trunk_changed=f \
+    command_allows_logs=f \
+    anchor_dims= \
+    handle_unknown=skip \
+    handle_no_coords=ignore \
+
+    load_branch_info || fail
+    switch_context $cell_path || fail
+
+    setup_dims || fail
+
+    local branch_coordinate_data=() \
+      branch_coordinate_fields=() \
+    
+    if [[ $cell_is_leaf == f ]] && (( command_detail > 0 )); then
+      coord_limit=2 \
+      calc_coords_branch || fail
+    fi
+    fence
+
+    local branch_coordinate_data_count=${#branch_coordinate_data[*]} \
+      branch_coordinate_field_count=${#branch_coordinate_fields[*]} \
+
+    local branch_coordinate_rows=0
+    if (( branch_coordinate_field_count > 0 )); then
+      branch_coordinate_rows=$(( branch_coordinate_data_count / branch_coordinate_field_count ))
+    fi
+
+    if (( branch_coordinate_rows == 1 )); then
+      target_dim_var_type=ddim \
+      table=branch_coordinate \
+      convert_table_to_dims || fail
+    fi
+
+    indent=0
+
+    if (( cell_count > 1 )); then
+      out "$hbar_equals"
+    fi
+
+    out "Cell: $short_cell"
+    indent
+    if [[ "${cell_description:-}" ]]; then
+      out "$cell_description"
+    else
+      out "No description for this cell. Set cell_description variable in context file."
+    fi
+
+    if [[ "${branch_members:-}" ]] && (( command_detail > -1 )); then
+      show_branch_members || fail
+    fi
+
+    local required=()
+
+    if [[ "${trunk_dims_expanded:-}" ]]; then
+      indent=$((indent-2)) out "${NL}Dimensions: (add {dim}=? to command to see details, or cell . ?? to show all details)"
+      dim_type=trunk_dims \
+      show_dimensions ${trunk_dims_expanded[*]} || fail
+    fi
+
+    if [[ "${sub_dims:-}" || "${data_props:-}" || "${control_props:-}" ]]; then
+      indent=$((indent-2)) out "${NL}Other parameters:"
+      if [[ "${sub_dims:-}" ]]; then
+        dim_type=sub_dims \
+        show_dimensions ${sub_dims_expanded[*]} || fail
+      fi
+      if [[ "${control_props:-}" ]]; then
+        dim_type=control_props \
+        show_dimensions ${control_props_expanded[*]} || fail
+      fi
+      if [[ "${data_props:-}" ]]; then
+        dim_type=data_props \
+        show_dimensions ${data_props_expanded[*]} || fail
+      fi
+    fi
+
+    if [[ "${required:-}" ]]; then
+      indent=$((indent-2)) out "${NL}Required parameters: ${required[*]}"
+    fi
+
+    if [[ "${up:-}" ]]; then
+      indent=$((indent-2)) out "${NL}Upstream cell dependencies: (use ?? to show recursive upstreams)"
+      show_upstreams || fail
+    fi
+
+    if [[ "${reactor:-}" ]]; then
+      indent=$((indent-2)) out "${NL}Reactors: (are run after update operator if conditions are met)"
+      show_reactors || fail
+    fi
+
+    if [[ "${validator:-}" ]]; then
+      indent=$((indent-2)) out "${NL}Validators: (are run before upstreams are run and after the update operator completes)"
+      show_validators || fail
+    fi
+
+    local dim member show_header=t
+    if (( ${branch_coordinate_rows:-0} == 1 )); then
+      show_branch_coordinate_members || fail
+    fi
+
+    local branch_folders branch_folder last_part full_member
+    show_header=t
+    branch_folders=$(find1 $cell_path -name "*:*" -type d) || fail
+    begin_for branch_folder in $branch_folders; doo
+      if [[ $show_header == t ]]; then
+        indent=$((indent-2)) out "${NL}Pre-existing sub branches:"
+        show_header=f
+      fi
+      last_part=${branch_folder##*/}
+      dim=${last_part%%:*}
+      member=${last_part#$dim:}
+      if [[ -e $branch_folder/.member ]]; then
+        full_member=$(<$branch_folder/.member)
+        if (( ${#full_member} > 80 )); then
+          full_member="${full_member:0:80}..."
+        fi
+        member="$member ($full_member)"
+      fi
+      out "$dim=$member"
+    end_for
+
+  end_function
+  handle_return
+}
+
+# inputs:
+#   command
+#   name          of parameter
+show_parameter_help_single() {
+  local name=$name indent=${indent:-0} command_var=${command//-/_}
+  begin_function
+
+    begin_for c in $command_var global; doo
+
+      local -n parameter_names=parameter_${c}_names \
+        parameter_descriptions=parameter_${c}_descriptions \
+        parameter_choices=parameter_${c}_choices \
+        parameter_defaults=parameter_${c}_defaults \
+        parameter_aliases=parameter_${c}_aliases \
+
+      begin_for i in ${!parameter_names[*]}; doo
+        local aliases=${parameter_aliases[$i]:-}
+        if [[ "$name" == "${parameter_names[$i]}"
+           || " $aliases " == *" $name "* ]]; then
+          found_help=t
+          show_parameter_help_inner || fail
+          abort
+        fi
+      end_for
+    end_for
+
+    local dim_type dim
+    begin_for dim_type in trunk_dims sub_dims control_props data_props; doo
+      local -n dims=${dim_type}_expanded
+      begin_for dim in ${dims[*]}; doo
+        if [[ "$name" == "$dim" || "$name" == "${dim%%-*}" || "$name" == "${dim//-/_}" ]]; then
+          show_dimension $dim || fail
+          found_help=t
+          abort
+        fi
+      end_for
+    end_for
+
+  end_function
+  handle_return
+}
+
+show_parameter_help() {
+  local names=$* indent=${indent:-0}
+  begin_function
+    local found_help
+    out "Parameters:"
+    indent
+    begin_for name in $names; doo
+      found_help=f
+      show_parameter_help_single || fail
+      if [[ $found_help == f ]]; then
+        log_warn "No description found for parameter $name" || fail
+      fi
+    end_for
+  end_function
+  handle_return
+}
+
+show_parameters_help() {
+  begin_function
+    local p
+    load_branch_info || fail
+    anchor_dims= \
+    switch_context $cell_path || fail
+    handle_questions || fail
+  end_function
+  handle_return
+}
+
+### file: ./03-command-lib.bash
 #!/usr/bin/env bash
 
 command_lib_init() {
@@ -6092,8 +6733,7 @@ new_command() {
 
 add_parameter() {
 
-  local type=${type:-command} \
-    name=$name \
+  local name=$name \
     description=$description \
     default=${default:-} \
     choices=${choices:-} \
@@ -6101,13 +6741,16 @@ add_parameter() {
     required=${required:-f} \
     delay_questions=${delay_questions:-f} \
 
-  local -n parameter_names=parameter_${command_var}_names_$type \
-    parameter_descriptions=parameter_${command_var}_descriptions_$type \
-    parameter_choices=parameter_${command_var}_choices_$type \
-    parameter_defaults=parameter_${command_var}_defaults_$type \
-    parameter_aliases=parameter_${command_var}_aliases_$type \
-    parameter_delay_questions=parameter_${command_var}_delay_questions_$type \
-    parameter_required=parameter_${command_var}_required_$type \
+  local command_var=${command:-global}
+  command_var=${command_var//-/_}
+
+  local -n parameter_names=parameter_${command_var}_names \
+    parameter_descriptions=parameter_${command_var}_descriptions \
+    parameter_choices=parameter_${command_var}_choices \
+    parameter_defaults=parameter_${command_var}_defaults \
+    parameter_aliases=parameter_${command_var}_aliases \
+    parameter_delay_questions=parameter_${command_var}_delay_questions \
+    parameter_required=parameter_${command_var}_required \
 
   parameter_names+=( "$name" ) 
   parameter_descriptions+=( "$description" ) 
@@ -6203,6 +6846,117 @@ create_request_promote_command() {
   name=request-promote description="Prepares the given request to be executed" new_command 
 }
 
+add_global_parameters() {
+  local command=global
+  name=log default= description="Log shortcuts
+  shortcuts for log_level_filter=... (can also use first letter of each as a shortcut)
+    off
+    fatal
+    error
+    warn
+    info
+    verbose
+    trace
+    all
+  shortcuts for log_to_file and log_to_out:
+    file   send logs to a file (default) (log_to_file=t)
+    out    send logs to console (log_to_out=t)
+  shortcuts for show_debug_id
+    id     show debug ids per log line output (show_debug_id=t)
+    id2    show all debug ids (show_debug_id=a)
+  " add_parameter 
+
+  name=paranoia aliases='para' default= description="Sets paranoia level, which is how much a command distrusts cached information. 
+  paranoia=0 (default) fastest, assuming all cache invalidation mechanisms are working correctly.
+  paranoia=1 does extra checks that are cheap, so it still should be reasonably fast, but will be more resilient to caching bugs.
+  paranoia=2 does extra checks that are not cheap, further increasing robustness.
+  paranoia=3 rebuilds every cell it touches completely. Similar to clean-all, except more efficient since it only cleans cells that are relevant to this command.
+  " add_parameter 
+
+  name=trace_vars aliases='trace_var trace' default= description="Trace a variables changes throughout the execution of a command.
+  May include one or more vars or arrays or sets.
+  If var is prepended with ^, then it will include all dimensional forms of that variable: d_var s_var d_vars s_vars, etc.
+  " add_parameter 
+
+  name=trace_condition default= description="Shows each time a condition changes throughout the execution of a command.
+  Can include anything that can be put after an 'if' command. Example: [[ -f /tmp/test-file ]]
+  " add_parameter 
+
+  name=trace_dims alias=trace_dim default= \
+    description="Trace a dimension(s). Will log details each time it is derived or calculated." add_parameter 
+
+  name=trace_structure alias=trace_struct default= \
+    description="Traces every function entrance and exit." add_parameter 
+
+  name=trace_stack default= \
+    description="Show a stack trace at each function call. trace_stack is a number which means the number of top stack frames to skip. Setting it to 't' is the same as 0 (meaning no frames are skipped)" add_parameter 
+
+  name=pause_at_debug_id aliases='pause pause_at_debug' default= description="Will pause when the given debug_id is reached. Automatically adds these vars to trace_vars." add_parameter 
+
+  name=pause_at_cells aliases='pause pause_at_cell' default= description="Will pause each time one of the given cells are executed." add_parameter 
+
+  name=pause_at_functions aliases='pause pause_at_function' default= description="Will pause each time one of the given functions are entered." add_parameter 
+
+  name=pause_at_vars aliases='pause pause_at_var' default= description="Will pause each time one of the given vars are changed. Automatically adds these vars to trace_vars." add_parameter 
+
+  name=clean_cells aliases='clean clean_cell' default= description="Will clean the cells it comes across as it's executing the given command." add_parameter 
+
+  name=autorepair_level alias=repair default= description="Autorepair level
+  0 = don't autorepair ever
+  1 = autorepair when it is guaranteed to fix something and will be reasonably fast to check
+  2 = autorepair when it could fix something, but still will execute fairly quickly
+  3 = autorepair if at all possible, even if it takes time
+  " add_parameter 
+
+  name=trace_fun default= description="Trace when a function is entered or exited.
+  May include one or more functions.
+  " add_parameter 
+
+  name=trace_time default= description="Set to 't' to see how much time is spent executing each function." add_parameter 
+  name=show_time default= description="Set to 't' to show a timestamp next to each log line / debug_id output" add_parameter 
+
+  name=grip default=0 description="Set to 1 to cause more debug increments to happen, making narrowing down problems and pausing easier, but slowing down execution. Use if you're having trouble pausing or getting a debug_id close enough to a problem." add_parameter 
+  name=slow_down alias=slow default=0 description="Number of seconds (can be fractional) to pause after each log line, greatly slowing down execution. Recommend starting with something like 0.02 and see if that's slow enough" add_parameter 
+
+  name=clean0 command='clean kind=context' add_command_alias
+  name=clean1 command='clean kind=invalidate' add_command_alias
+  name=clean2 command='clean kind=data' add_command_alias
+  name=clean3 command='clean kind=derive_cache' add_command_alias
+
+  name=debug_id alias=debug default= description="start debugger at a given id or function
+  debug_id is used to stop at a specific debugger id
+  debug_quick_function can stop at a specific function
+  but the debug alias can be used for both. It can tell automatically which type it is. 
+  Multiple space separated breakpoints can be specified, and they will be hit in order, and only stop when the last is hit.
+  " add_parameter 
+
+  name=debug_on_exit default=f description="start debugger when process exits for any reason.
+  -x is a shortcut flag for this.
+  " add_parameter 
+
+  name=yolo default=f description="disable all debug mechanisms, speeding up execution. This must be set in the environment or before the cell command to work." add_parameter 
+
+  name=log_light description="Highlights log lines that match this regex." add_parameter 
+
+  mock_get_choices() {
+    choices=
+    local mock_path=${mock_path:-}
+
+    if [[ ! "$mock_path" ]]; then
+      local seed_path=${seed_path:-}
+      if [[ ! "$seed_path" ]]; then
+        local cell_path=${cell_path:-$PWD}
+        find_paths || return 0
+        mock_path=$seed_path/.mock
+      fi
+    fi
+
+    if [[ "${mock_path:-}" && -d "${mock_path:-}" ]]; then
+      choices=( $(find1 $mock_path -not -name export -printf "%f\n" | sort) ) || return 0
+    fi
+  }
+}
+
 setup_commands() {
   begin_function
     cell_commands=()
@@ -6211,6 +6965,7 @@ setup_commands() {
     create_plant_command || fail
     create_request_new_command || fail
     create_request_promote_command || fail
+    add_global_parameters || fail
   end_function
   handle_return
 }
@@ -6229,9 +6984,9 @@ show_usage() {
     d+="key=value parameters may be put anywhere in the parameter list and will apply to all commands. "
     d+="This also applies to flag shortcuts. "
     d+="If no cell path is specified, the cell path is taken from the current folder. "
-    d+="If help or -h or --help or ? is given as any of the parameters, "
+    d+="If help or -h or --help is given as any of the parameters, "
     d+="documentation for the given cells or commands is printed instead of executing commands. "
-    d+="If ?? is given, more verbose help will be given if available. "
+    d+="If -hh is given, more verbose help will be given if available. "
     d+="key=? form can be used to get documentation about a specific variable/key/dimension. "
     d+="-? can be used to get documentation for flags which are shortcuts of normal key parameters. "
     d+="Soft interrupt feature: While a command is executing, you may press enter to pause execution. "
@@ -6582,9 +7337,9 @@ top_level() {
 
     fi
 
-    if [[ "${cell_commands:-}" && ! "${parameter_questions:-}" ]] && (( help_depth > 0 )); then
+    if [[ "${chosen_commands:-}" && ! "${parameter_questions:-}" ]] && (( help_depth > 0 )); then
       local cell_command
-      begin_for cell_command in ${cell_commands[*]}; doo
+      begin_for cell_command in ${chosen_commands[*]}; doo
         show_help_for_command $cell_command || fail
       end_for
       abort
@@ -6593,13 +7348,20 @@ top_level() {
     local cell_group_index cell_paths
     begin_for (( cell_group_index = 0; cell_group_index < ${#chosen_cells[*]}; cell_group_index++ )); doo
       cell_paths=${chosen_cells[$cell_group_index]}
-      begin_for cell_path in $cell_paths; doo
-        if [[ $cell_path != /* ]]; then
-          cell_path=$PWD/${cell_path#./} || fail
-        fi
-        handle_cell $cell_path ${chosen_commands[$cell_group_index]} || fail
-        (( handled++ ))
-      end_for
+      commands=${chosen_commands[$cell_group_index]:-}
+      if [[ "$commands" ]]; then
+        begin_for cell_path in $cell_paths; doo
+          if [[ $cell_path != /* ]]; then
+            cell_path=$PWD/${cell_path#./} || fail
+          fi
+          handle_cell $cell_path ${chosen_cells[$cell_group_index]} || fail
+          (( handled++ ))
+        end_for
+      else
+        out "No command given for cell(s): $cell_paths"
+        show_usage
+        abort
+      fi
     end_for
 
   end_function
@@ -6616,7 +7378,7 @@ top_level() {
   handle_return
 }
 
-### file: ./03-pack-command-lib.bash
+### file: ./04-pack-command-lib.bash
 #!/usr/bin/env bash
 
 # Usage: pack_scripts >/path/to/packed_file
@@ -6653,7 +7415,7 @@ unpack_scripts() {
   done
 }
 
-### file: ./04-cell-lib.bash
+### file: ./05-cell-lib.bash
 
 cell_lib_init() {
   # don't let other users read any files written by these scripts
@@ -8440,7 +9202,7 @@ update_command() {
   handle_return
 }
 
-### file: ./05-walk-lib.bash
+### file: ./06-walk-lib.bash
 walk_get_choice() {
   local i=$1
   key=${choices[$i]}
@@ -8664,7 +9426,7 @@ walk_execute() {
   handle_return
 }
 
-### file: ./06-forge.bash
+### file: ./07-forge.bash
 
 forge_add_subs() {
   local base=$1 from=${2:-$1}
@@ -9318,7 +10080,7 @@ forge() {
   handle_return
 }
 
-### file: ./07-forge-v2.bash
+### file: ./08-forge-v2.bash
 
 forge_add_subs_v2() {
   local base=$1 from=${2:-$1}
@@ -9949,7 +10711,7 @@ forge_v2() {
   handle_return
 }
 
-### file: ./08-walk.bash
+### file: ./09-walk.bash
 walk() {
 
   begin_function
@@ -10233,6 +10995,7 @@ if [[ ${auto_setup_lifted:-f} == t || $0 == */c2 ]]; then
 fi
 
 if [[ $0 == */c2 ]]; then
+  cell_version=2
   command_lib_init "$@" || exit 1
   setup_commands || exit 1
   top_level "${real_params[@]}" || exit 1
