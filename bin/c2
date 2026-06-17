@@ -8886,6 +8886,10 @@ get_step_needs_update() {
       reason="Needs update because '${step_path##*/}' is a file"
       abort
     fi
+    if [[ -e $step_path/.cyto/changed ]]; then
+      reason="Needs update because a dependency has changed"
+      abort
+    fi
     if [[ ! -d $step_path/in ]]; then
       reason="Needs update because 'in' folder doesn't exist"
       abort
@@ -9026,6 +9030,16 @@ execute_request() {  # should be forked since it loads context
     promote_request || fail
     local update_successful=f
 
+    local down_req downstreams
+    if [[ -d $req_path/down ]]; then
+      downstreams=$(find1 $req_path/down) || fail
+      mkdir -p $cell_path/.cyto/down || fail
+      begin_for down_req in $downstreams; doo
+        local down_target
+        down_target=$(realpath $down_req) || fail
+        safe_link $down_target $cell_path/.cyto/down/ || fail
+      end_for
+    fi
     parent_in_path=$cell_path/in \
     parent_out_path=$cell_path/out.new \
     execute_update_stepish_folder $cell_path || fail
@@ -9044,9 +9058,7 @@ execute_request() {  # should be forked since it loads context
       log_error "Request failed: $cell_path"
       change_request_state running bad || fail
     fi
-    local down_req downstreams
     if [[ -d $req_path/down ]]; then
-      downstreams=$(find1 $req_path/down) || fail
       begin_for down_req in $downstreams; doo
         mark_cell_ready $down_req || fail
       end_for
@@ -9127,6 +9139,10 @@ get_cell_needs_update() {
       reason="Needs update because cell hasn't been planted ('.dna' folder doesn't exist)"
       abort
     fi
+    if [[ -e $cell_path/.cyto/changed ]]; then
+      reason="Needs update because a dependency has changed"
+      abort
+    fi
     if [[ ! -f $cell_path/in/context.bash ]]; then
       reason="Needs update because in/context hasn't been created"
       abort
@@ -9165,6 +9181,27 @@ get_cell_needs_update() {
       fi
     fi
     cell_needs_update=f
+  end_function
+  handle_return
+}
+
+mark_downstream_changed() {
+  local folder=$1
+  begin_function
+    local down_path=$folder/.cyto/down
+    if [[ -d $down_path ]]; then
+      local down_item down_items
+      down_items=$(find1 $down_path -not -name '.*') || fail
+      begin_for d in $down_items; doo
+        d=$(realpath $d)
+        if [[ -d $d/.cyto ]]; then
+          if [[ ! -f $d/.cyto/changed ]]; then
+            touch $d/.cyto/changed || fail
+            mark_downstream_changed $d || fail
+          fi
+        fi
+      end_for
+    fi
   end_function
   handle_return
 }
@@ -9211,6 +9248,8 @@ execute_update() { # should be forked
         fi
         mv $cell_path ${cell_path%.new} || fail
       fi
+
+      mark_downstream_changed $cell_path || fail
     else
       log_verbose "No update needed."
     fi
