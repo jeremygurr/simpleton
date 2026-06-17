@@ -8385,7 +8385,7 @@ find_paths() {
       req_path=
       if [[ $cell_path == */req/* ]]; then
         req_path=$cell_path
-        cell_path=${cell_path%%/req/*}
+        cell_path=${cell_path%%/.cyto/req/*}
       fi
 
       if [[ $cell_path == $SIMPLETON_CELL/* ]]; then
@@ -8437,7 +8437,7 @@ find_paths() {
 
     fi
 
-    cell_req_path=$cell_path/req
+    cell_req_path=$cell_path/.cyto/req
 
   end_function
   handle_return
@@ -8510,6 +8510,9 @@ plant_seed_dir_simple() {
             fail1
           fi
         }
+        if [[ ! -d $to/.cyto ]]; then
+          mkdir $to/.cyto || fail
+        fi
       fi
     fi
 
@@ -8630,20 +8633,22 @@ plant_seed() {
 
       target=$to/$x_part
       if [[ -L $x ]]; then
-        if [[ ! -e $to/$x ]]; then
+        if [[ ! -e $to/$x_part ]] || (( paranoia > 0 )); then
           local real_seed real_cell
           real_seed=$(realpath $x) || fail
           convert_seed_path_to_cell $real_seed real_cell || fail
-          safe_link $real_cell $to/ || fail
+          force=t safe_link $real_cell $to/ || fail
         fi
       elif [[ -d $x ]]; then
         plant_seed_dir || fail
-      elif [[ ! -e $target && $x_part != .* ]]; then
+      elif [[ ! -e $target ]] \
+        || (( paranoia > 0 )) \
+        && [[ $x_part != .* ]]; then
         if [[ $x == *.safe ]]; then
           ignore_failure=t \
           cell_decrypt_file $x ${target%.safe} || fail
         else
-          safe_link $x $to/ || fail
+          force=t safe_link $x $to/ || fail
         fi
       fi
     end_for
@@ -8692,12 +8697,12 @@ mark_cell_ready() {
       fi
 
       if [[ $above_cell == t ]]; then
-        local ready_file=.ready-$branch
-        if [[ -e $parent_cell/$ready_file ]]; then
+        local ready_file=ready-$branch
+        if [[ -e $parent_cell/.cyto/$ready_file ]]; then
           # we don't need to go further, since this entire branch has already been marked previously
           break
         else
-          ln -s $parent_cell/$branch $parent_cell/$ready_file || fail
+          ln -s $parent_cell/$branch $parent_cell/.cyto/$ready_file || fail
         fi
       fi
       branch=${parent_cell##*/}
@@ -8711,10 +8716,10 @@ mark_cell_ready() {
 # inputs:
 #   cell_path
 #   downstream_request
-create_request() {  # should be forked when called since it loads new contexts
+create_request() {  # loads new contexts, so should be forked at some point
   local cell_path=$cell_path downstream_request=${downstream_request:-}
   begin_function
-    local cell_req_path=$cell_path/req
+    local cell_req_path=$cell_path/.cyto/req
     if [[ ! -d $cell_req_path ]]; then
       mkdir -p $cell_req_path/all \
         $cell_req_path/ready \
@@ -8752,9 +8757,8 @@ create_request() {  # should be forked when called since it loads new contexts
       fi
     done
 
-    local short_path=
-    if [[ "$downstream_request" ]]; then
-      get_short_path $downstream_request
+    if (( paranoia > 0 )); then
+      echo "paranoia=$paranoia" >>req_file || fail
     fi
 
     echo "$dim_string" >$req_file || fail
@@ -8773,13 +8777,11 @@ create_request() {  # should be forked when called since it loads new contexts
     req_file=$req_path/parameters.bash
 
     if [[ "$downstream_request" ]]; then
+      local short_path=
+      get_short_path $downstream_request
       mkdir -p $req_path/down || fail
       safe_link $downstream_request $req_path/down/$short_path || fail
     fi
-
-    #if [[ ! -d $cell_req_path/ready ]]; then
-    #  mkdir -p $cell_req_path/{ready,good,bad,running} || fail
-    #fi
 
     force=t safe_link $req_path $cell_req_path/ready/ || fail
     mark_cell_ready ${cell_path%/*} || fail
@@ -8814,8 +8816,8 @@ clear_ready_file() {
     local branch=${cell_path##*/} \
       parent_cell=${cell_path%/*} \
 
-    if [[ -e $parent_cell/.ready-$branch ]]; then
-      rm $parent_cell/.ready-$branch
+    if [[ -e $parent_cell/.cyto/ready-$branch ]]; then
+      rm $parent_cell/.cyto/ready-$branch
     fi
   end_function
   handle_return
@@ -8997,19 +8999,6 @@ execute_update_stepish_folder() {
   handle_return
 }
 
-# assumes the cell is already planted and a request already prepared before it is run
-# cell should already be locked before running this
-# inputs:
-#   cell_path
-execute_update() {
-  begin_function
-    parent_in_path=$cell_path/in \
-    parent_out_path=$cell_path/out.new \
-    execute_update_stepish_folder $cell_path || fail
-  end_function
-  handle_return
-}
-
 # inputs:
 #   req_path
 #   $1        from state
@@ -9030,13 +9019,17 @@ change_request_state() {
 #   cell_path
 # outputs:
 #
-execute_request() {  # should be forked
+execute_request() {  # should be forked since it loads context
   begin_function
     local req_path=${req_path:-}
     folder_to_lock=$cell_path/out.new lock_out || fail
     promote_request || fail
     local update_successful=f
-    execute_update || fail
+
+    parent_in_path=$cell_path/in \
+    parent_out_path=$cell_path/out.new \
+    execute_update_stepish_folder $cell_path || fail
+
     reply_to_caller "update_successful=$update_successful" || fail
     if [[ $update_successful == t ]]; then
       log_info "Request succeeded: $req_path"
@@ -9134,11 +9127,6 @@ get_cell_needs_update() {
       reason="Needs update because cell hasn't been planted ('.dna' folder doesn't exist)"
       abort
     fi
-    #  This isn't needed because before new requests are created, this function is checked
-    #if [[ -d $cell_path/in.new ]]; then
-    #  reason="Needs update because a new request is ready ('in.new' exists)"
-    #  abort
-    #fi
     if [[ ! -f $cell_path/in/context.bash ]]; then
       reason="Needs update because in/context hasn't been created"
       abort
@@ -9165,13 +9153,27 @@ get_cell_needs_update() {
         abort
       fi
     fi
+    if (( paranoia > 2 )); then
+      reason="Needs update because paranoia > 2 so all cells will be cleaned and updated"
+      abort
+    elif (( paranoia > 0 )); then
+      local files_changed
+      files_changed=$(find -H $cell_path/.dna -newer $cell_path/in/context.bash) || fail
+      if [[ "$files_changed" ]]; then
+        reason="Needs update because dna files were changed"
+        abort
+      fi
+    fi
     cell_needs_update=f
   end_function
   handle_return
 }
 
-update_command() {
+# inputs:
+#   cell_path
+execute_update() { # should be forked
   begin_function
+
     local step_path seed_path work_path extend_path \
       cell_path=$cell_path \
       cell_needs_update \
@@ -9179,11 +9181,15 @@ update_command() {
 
     find_paths || fail
     get_cell_needs_update || fail
+    if (( paranoia > 2 )); then
+      cell_path+=.new
+      folder_to_lock=$cell_path lock_cell || fail
+    fi
     if [[ $cell_needs_update == t ]]; then
       plant_seed $seed_path $cell_path || fail
-      fork create_request || fail
+      create_request || fail
       update_successful=f
-      fork execute_request || fail
+      execute_request || fail
 
       if [[ $update_successful == f ]]; then
         log_error "Update not successful. Make sure to set update_successful=t in cell step code when it is successful."
@@ -9198,12 +9204,26 @@ update_command() {
       fi
 
       mv $cell_path/out.new $cell_path/out || fail
-      # watch status
-      # display results?
+
+      if [[ $cell_path == *.new ]]; then
+        if [[ -e ${cell_path%.new} ]]; then
+          rm -rf ${cell_path%.new} || fail
+        fi
+        mv $cell_path ${cell_path%.new} || fail
+      fi
     else
       log_verbose "No update needed."
     fi
 
+  end_function
+  handle_return
+}
+
+update_command() {
+  begin_function
+    fork execute_update || fail
+    # TODO watch status
+    # TODO display results?
   end_function
   handle_return
 }
