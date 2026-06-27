@@ -6172,24 +6172,14 @@ attempt_default() {
 
 calc_coordinates_row_end() {
   begin_function
-
-    local unknown_dim new_unknown_dims=
-    for unknown_dim in $unknown_dims; do
-      if [[ -v cell_required_dims[$unknown_dim] ]]; then
-        new_unknown_dims+="$unknown_dim "
-      fi
-    done
-    unknown_dims=${new_unknown_dims% }
-
-    if [[ "${unknown_dims:-}" ]]; then
-      log_debug "Skipped row because of unresolvable dims: $unknown_dims"
-      problem_message="Could not resolve dims: $unknown_dims"
+    if [[ "${primary_unknowns:-}" ]]; then
+      log_debug "Skipped row because of unresolvable dims: $primary_unknowns"
+      problem_message="Could not resolve dims: $primary_unknowns"
     else
       ignore_missing=t \
       calc_coordinates_add_row || fail
       problem_message=
     fi
-
   end_function
   handle_return
 }
@@ -6268,11 +6258,19 @@ calc_coordinates_next_unknown_dim_found() {
       ddims=( "${values[@]}" )
     fi
 
-    local unknown_dims=${unknown_dims% }
-    if [[ "$unknown_dims" == *' '* && $phase != default ]]; then
-      unknown_dims="${unknown_dims#* } ${unknown_dims%% *}"
+    if [[ -v cell_required_dims[$dim] ]]; then
+      local primary_unknowns=${primary_unknowns% }
+      if [[ "$primary_unknowns" == *' '* && $phase != default ]]; then
+        primary_unknowns="${primary_unknowns#* } ${primary_unknowns%% *}"
+      fi
+      remove_word_from_string primary_dims $dim
+    else
+      local secondary_unknowns=${secondary_unknowns% }
+      if [[ "$secondary_unknowns" == *' '* && $phase != default ]]; then
+        secondary_unknowns="${secondary_unknowns#* } ${secondary_unknowns%% *}"
+      fi
+      remove_word_from_string secondary_dims $dim
     fi
-    remove_word_from_string unknown_dims $dim
 
     local member ms
     if [[ "${ddims:-}" ]]; then
@@ -6366,6 +6364,7 @@ calc_coordinates_next_unknown_dim_in_phase_con_row() {
       fi
     end_for
 
+    # recursive
     calc_coordinates_next_unknown_dim || fail
 
   end_function
@@ -6459,7 +6458,8 @@ calc_coordinates_next_unknown_dim_in_phase() {
 
     if [[ $phase == con ]]; then
       local -n con_of_dim=dim_${dim}_con
-      if [[ -v con_of_dim && "$con_of_dim" != *' '* ]]; then
+      if [[ -v con_of_dim && "$con_of_dim" != *' '* && ! -v cons_tried[$con_of_dim] ]]; then
+        cons_tried[$con_of_dim]=1
         calc_coordinates_next_unknown_dim_in_phase_con || fail
         found_values=t
       fi
@@ -6476,13 +6476,13 @@ calc_coordinates_next_unknown_dim_in_phase() {
             fail1
           fi
         fi
-      elif [[ $phase == derive \
-         || $phase == derive_optional_functions ]]; then
+      elif [[ $phase == derive-* \
+         || $phase == derive_optional_functions-* ]]; then
         deriving= \
         allow_partials=t \
         attempt_derive || fail
         needs_narrowing=f
-      elif [[ $phase == narrow ]]; then
+      elif [[ $phase == narrow-* ]]; then
         derive_exactly_one=f \
         deriving= \
         use_narrow_from=t \
@@ -6506,10 +6506,11 @@ calc_coordinates_next_unknown_dim_in_phase() {
 
 # will end the coordinate row one way or another
 # inputs:
-#   unknown_dims
+#   secondary_unknowns
+#   secondary_unknowns
 #   all other ddims which may be used to derive the unknown dims
 calc_coordinates_next_unknown_dim() {
-  local interesting_vars=unknown_dims
+  local interesting_vars='primary_unknowns secondary_unknowns'
   begin_function
     local dim dims \
       phase unknown_dims=${unknown_dims:-} \
@@ -6527,7 +6528,9 @@ calc_coordinates_next_unknown_dim() {
     if [[ "${unknown_dims:-}" ]]; then
       log_debug "Attempting to resolve unknowns: $unknown_dims"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
-      begin_for phase in default con derive derive_optional_functions narrow all_if_blank; doo
+      local dims_to_try
+      begin_for phase in default con derive-primary derive_optional_functions-primary narrow-primary \
+        derive-secondary derive_optional_functions-secondary narrow-secondary all_if_blank; doo
 
         if [[ $default_completed == t && $phase == default ]]; then
           continue
@@ -6538,8 +6541,20 @@ calc_coordinates_next_unknown_dim() {
           continue
         fi
 
+        case $phase in
+          *-primary)
+            dims_to_try=$primary_unknowns
+          ;;
+          *-secondary)
+            dims_to_try=$secondary_unknowns
+          ;;
+          *)
+            dims_to_try="$primary_unknowns $secondary_unknowns"
+          ;;
+        esac
+
         local found_values=f
-        begin_for dim in $unknown_dims; doo
+        begin_for dim in $dims_to_try; doo
           if [[ " ${all_if_blank:-} " == *" $dim "* ]]; then
             if [[ $phase == default ]]; then
               log_debug "Skipping $dim default phase because it's in all_if_blank"
@@ -6674,89 +6689,73 @@ calc_coordinates_next_dim() {
       check_dims=${check_dims:-} \
       resolved_dims=${resolved_dims:-} \
 
-    dim=${check_dims%% *}
-    check_dims=${check_dims##$dim*( )}
-
-    if [[ "$dim" ]]; then
-
-      log_debug "Checking dim $dim"
-      get_plural $dim dims
-
-      eval "local -I d_$dim d_$dims"
-      local -n member=d_$dim \
-        members=d_$dims
-
-      # This should not be needed now that all derive tables are loaded always
-      #local -n derive_tables_loaded=dim_${dim}_derive_tables_loaded
-
-      #if [[ "${derive_tables_loaded:-}" != t ]]; then
-      #  load_related_derive_tables $dim || fail
-      #fi
-
-      if [[ "${member:-}" || "${members:-}" ]]; then
-        
-        local m ms conflict
-        resolved_dims+=" $dim"
-
-        if [[ "${member:-}" ]]; then
-          ms=( "$member" )
-        else
-          ms=( "${members[@]}" )
-        fi
-
-        if [[ $dim_resolver != brute ]]; then
-          local -A ms_set
-          array_to_set ms ms_set
-          value_set_var=ms_set \
-          narrow_dim || fail
-          set_to_array ms_set ms
-        fi
-        needs_validation=f
-
-        if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
-          log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
-          fail1
-        fi
-
-        if [[ ! "$ms" ]]; then
-          log_fatal "$dim has no matching values that align with $conflict"
-          fail1
-        fi
-
-        if [[ "${#ms[*]}" == 1 ]]; then
-          m=$ms
-        fi
-
-        local -n key_tables=dim_${dim}_key_tables
-
-        members=
-        unset -n members member
-
-        local phase=known
-        if [[ "${m:-}" ]]; then
-          calc_coordinates_next_dim_member || fail
-        else
-          begin_for m in "${ms[@]}"; doo
-            calc_coordinates_next_dim_member || fail
-          end_for
-        fi
-
-        interesting_vars='dim member'
-
-        # if none of the members are valid, we just skip the row
-        # if any are valid, they will have added their own rows already
-        abort
-
-      else # no members
-        log_debug "Dim unknown: $dim"
-        if [[ " $unknown_dims " != *" $dim "* ]]; then
-          unknown_dims+="$dim "
-        fi
-        calc_coordinates_next_dim || fail
-      fi
-
-    else # check_dims is empty, need to proceed to unknowns
+    if [[ ! "$check_dims" ]]; then
+      local -A cons_tried=()     
       calc_coordinates_next_unknown_dim || fail
+    else
+      begin_while [[ "$check_dims" ]]; doo
+
+        dim=${check_dims%% *}
+        check_dims=${check_dims##$dim*( )}
+     
+        get_plural $dim dims
+
+        eval "local -I d_$dim d_$dims"
+        local -n member=d_$dim \
+          members=d_$dims
+
+        if [[ "${member:-}" || "${members:-}" ]]; then
+          
+          log_debug "Dim known: $dim"
+
+          local m ms conflict
+          resolved_dims+=" $dim"
+
+          if [[ "${member:-}" ]]; then
+            ms=( "$member" )
+          else
+            ms=( "${members[@]}" )
+          fi
+
+          needs_validation=f
+
+          if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
+            log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
+            fail1
+          fi
+
+          if [[ "${#ms[*]}" == 1 ]]; then
+            m=$ms
+          fi
+
+          #local -n key_tables=dim_${dim}_key_tables
+
+          members=
+          unset -n members member
+
+          local phase=known
+          if [[ "${m:-}" ]]; then
+            calc_coordinates_next_dim_member || fail
+          else
+            begin_for m in "${ms[@]}"; doo
+              calc_coordinates_next_dim_member || fail
+            end_for
+          fi
+
+          interesting_vars='dim member'
+
+          # if none of the members are valid, we just skip the row
+          # if any are valid, they will have added their own rows already
+          abort
+
+        else # no members
+          log_debug "Dim unknown: $dim"
+          if [[ " $unknown_dims " != *" $dim "* ]]; then
+            unknown_dims+="$dim "
+          fi
+        fi
+
+      end_while
     fi
 
   end_function
@@ -7027,17 +7026,17 @@ calc_coordinates_slow() {
         ddim=$idim
       fi
 
-      if [[ "${ddim:-}" && $ddim != $empty_member ]]; then
-        local conflict=
-        member=$ddim \
-        allow_dims=${coordinate_fields[*]} \
-        set_cross_dims || fail
-#       we deliberately ignore conflicts here since we haven't had a chance to set defaults yet. That will happen later and then we can handle conflicts if they arise.
-#        if [[ "$conflict" ]]; then
-#          log_fatal "Conflict between dims found: $conflict. Make sure you don't specify contradictory dims."
-#          fail1
-#        fi
-      fi
+#      if [[ "${ddim:-}" && $ddim != $empty_member ]]; then
+#        local conflict=
+#        member=$ddim \
+#        allow_dims=${coordinate_fields[*]} \
+#        set_cross_dims || fail
+##       we deliberately ignore conflicts here since we haven't had a chance to set defaults yet. That will happen later and then we can handle conflicts if they arise.
+##        if [[ "$conflict" ]]; then
+##          log_fatal "Conflict between dims found: $conflict. Make sure you don't specify contradictory dims."
+##          fail1
+##        fi
+#      fi
 
     end_for
     unset conflict
