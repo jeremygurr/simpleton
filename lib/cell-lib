@@ -6359,7 +6359,8 @@ calc_coordinates_next_unknown_dim_in_phase_con_row() {
           log_debug "Con dim set: $dim=$new_value (via con ${con_of_dim})"
           ddim=$new_value
           validated_dims+=" $dim"
-          remove_word_from_string unknown_dims $dim
+          remove_word_from_string primary_unknowns $dim
+          remove_word_from_string secondary_unknowns $dim
         fi
       fi
     end_for
@@ -6381,7 +6382,7 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
     local -n con_fields=con_${con_of_dim}_table_fields \
       con_data=con_${con_of_dim}_table_data \
 
-    local dim dims result=() unknown_dims=$unknown_dims validated_dims=$validated_dims
+    local dim dims result=() validated_dims=$validated_dims
     local -A new_matching_rows matching_rows=( all ) original=all row_indexes_set
     begin_for dim in ${con_fields[*]}; doo
 
@@ -6506,14 +6507,18 @@ calc_coordinates_next_unknown_dim_in_phase() {
 
 # will end the coordinate row one way or another
 # inputs:
+#   primary_unknowns
 #   secondary_unknowns
-#   secondary_unknowns
+#   unknown_type
 #   all other ddims which may be used to derive the unknown dims
 calc_coordinates_next_unknown_dim() {
   local interesting_vars='primary_unknowns secondary_unknowns'
   begin_function
     local dim dims \
-      phase unknown_dims=${unknown_dims:-} \
+      phase \
+      unknown_type=$unknown_type \
+      primary_unknowns=${primary_unknowns:-} \
+      secondary_unknowns=${secondary_unknowns:-} \
       resolved_dims=${resolved_dims:-} \
       row_ended=f \
       default_completed=${default_completed:-f} \
@@ -6525,8 +6530,8 @@ calc_coordinates_next_unknown_dim() {
     fi
 
     local dim_index
-    if [[ "${unknown_dims:-}" ]]; then
-      log_debug "Attempting to resolve unknowns: $unknown_dims"
+    if [[ "${primary_unknowns:-}" ]]; then
+      log_debug "Attempting to resolve unknowns: $primary_unknowns"
       local -A derive_tried=() derive_optional_tried=() narrow_tried=()
       local dims_to_try
       begin_for phase in default con derive-primary derive_optional_functions-primary narrow-primary \
@@ -6544,9 +6549,11 @@ calc_coordinates_next_unknown_dim() {
         case $phase in
           *-primary)
             dims_to_try=$primary_unknowns
+            unknown_type=primary
           ;;
           *-secondary)
             dims_to_try=$secondary_unknowns
+            unknown_type=secondary
           ;;
           *)
             dims_to_try="$primary_unknowns $secondary_unknowns"
@@ -6634,7 +6641,8 @@ calc_coordinates_next_dim_member() {
         local d
         for d in $validated_dims; do
           if [[ $phase == unknown ]]; then
-            remove_word_from_string unknown_dims $d
+            remove_word_from_string primary_unknowns $d
+            remove_word_from_string secondary_unknowns $d
           else
             remove_word_from_string check_dims $d
           fi
@@ -6645,11 +6653,12 @@ calc_coordinates_next_dim_member() {
       validated_dims=
 
       if [[ ! "$conflict" ]]; then
-        if [[ $phase == known && "$check_dims" ]]; then
+        if [[ $phase == known ]]; then
           # recursive
           calc_coordinates_next_dim || fail
-        elif [[ "${unknown_dims:-}" ]]; then
+        elif [[ "${primary_unknowns:-}" ]]; then
           # recursive
+          unknown_type=primary
           calc_coordinates_next_unknown_dim || fail
         else
           calc_coordinates_row_end || fail
@@ -6685,77 +6694,85 @@ calc_coordinates_next_dim() {
 
     local dims \
       row_index=${row_index:-} \
-      unknown_dims=${unknown_dims:-} \
+      primary_unknowns=${primary_unknowns:-} \
+      secondary_unknowns=${secondary_unknowns:-} \
       check_dims=${check_dims:-} \
       resolved_dims=${resolved_dims:-} \
 
-    if [[ ! "$check_dims" ]]; then
-      local -A cons_tried=()     
-      calc_coordinates_next_unknown_dim || fail
-    else
-      begin_while [[ "$check_dims" ]]; doo
+    begin_while [[ "$check_dims" ]]; doo
 
-        dim=${check_dims%% *}
-        check_dims=${check_dims##$dim*( )}
-     
-        get_plural $dim dims
+      grip_fence
 
-        eval "local -I d_$dim d_$dims"
-        local -n member=d_$dim \
-          members=d_$dims
+      dim=${check_dims%% *}
+      check_dims=${check_dims##$dim*( )}
+   
+      get_plural $dim dims
 
-        if [[ "${member:-}" || "${members:-}" ]]; then
-          
-          log_debug "Dim known: $dim"
+      eval "local -I d_$dim d_$dims"
+      local -n member=d_$dim \
+        members=d_$dims
 
-          local m ms conflict
-          resolved_dims+=" $dim"
+      if [[ "${member:-}" || "${members:-}" ]]; then
+        
+        log_debug "Dim known: $dim"
 
-          if [[ "${member:-}" ]]; then
-            ms=( "$member" )
-          else
-            ms=( "${members[@]}" )
-          fi
+        local m ms conflict
+        resolved_dims+=" $dim"
 
-          needs_validation=f
-
-          if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
-            log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
-            fail1
-          fi
-
-          if [[ "${#ms[*]}" == 1 ]]; then
-            m=$ms
-          fi
-
-          #local -n key_tables=dim_${dim}_key_tables
-
-          members=
-          unset -n members member
-
-          local phase=known
-          if [[ "${m:-}" ]]; then
-            calc_coordinates_next_dim_member || fail
-          else
-            begin_for m in "${ms[@]}"; doo
-              calc_coordinates_next_dim_member || fail
-            end_for
-          fi
-
-          interesting_vars='dim member'
-
-          # if none of the members are valid, we just skip the row
-          # if any are valid, they will have added their own rows already
-          abort
-
-        else # no members
-          log_debug "Dim unknown: $dim"
-          if [[ " $unknown_dims " != *" $dim "* ]]; then
-            unknown_dims+="$dim "
-          fi
+        if [[ "${member:-}" ]]; then
+          ms=( "$member" )
+        else
+          ms=( "${members[@]}" )
         fi
 
-      end_while
+        needs_validation=f
+
+        if [[ "$row_index" ]] && (( ${#ms[*]} > 1 )); then
+          log_fatal "Too many possibilities found for a single coordinate row: ${ms[*]}"
+          fail1
+        fi
+
+        if [[ "${#ms[*]}" == 1 ]]; then
+          m=$ms
+        fi
+
+        #local -n key_tables=dim_${dim}_key_tables
+
+        members=
+        unset -n members member
+
+        local phase=known
+        if [[ "${m:-}" ]]; then
+          calc_coordinates_next_dim_member || fail
+        else
+          begin_for m in "${ms[@]}"; doo
+            calc_coordinates_next_dim_member || fail
+          end_for
+        fi
+
+        interesting_vars='dim member'
+
+        # if none of the members are valid, we just skip the row
+        # if any are valid, they will have added their own rows already
+        abort
+
+      else # no members
+        log_debug "Dim unknown: $dim"
+        if [[ -v cell_required_dims[$dim] ]]; then
+          add_word_to_string primary_unknowns $dim
+        else
+          add_word_to_string secondary_unknowns $dim
+        fi
+      fi
+
+    end_while
+
+    if [[ "$primary_unknowns" ]]; then
+      local -A cons_tried=()     
+      unknown_type=primary
+      calc_coordinates_next_unknown_dim || fail
+    else
+      calc_coordinates_row_end || fail
     fi
 
   end_function
