@@ -328,6 +328,7 @@ init_context() {
       dim_shorts=() \
       cell_required_dims=() \
       cell_optional_dims=() \
+      dim_must_resolve=() \
 
     all_if_blank= \
     auto_loads=() \
@@ -3075,6 +3076,7 @@ get_support_dims() {
 add_required_dims() {
   local dims=$* dim
   for dim in $dims; do
+    dim_must_resolve[$dim]=1
     local -n default_value=dim_${dim}_default
     if [[ $dim != _ && " $all_optional_dims " != *" $dim "* && ! "${default_value:-}" ]]; then
       if [[ ! -v cell_required_dims[$dim] ]]; then
@@ -3297,6 +3299,7 @@ setup_dims() {
     cell_required_dims=()
     cell_optional_dims=()
     cell_required_dims_array=()
+    dim_must_resolve=()
     calc_anchor_dims || fail
 
     grip_fence
@@ -6258,18 +6261,18 @@ calc_coordinates_next_unknown_dim_found() {
       ddims=( "${values[@]}" )
     fi
 
-    if [[ -v cell_required_dims[$dim] ]]; then
+    if [[ -v dim_must_resolve[$dim] ]]; then
       local primary_unknowns=${primary_unknowns% }
       if [[ "$primary_unknowns" == *' '* && $phase != default ]]; then
         primary_unknowns="${primary_unknowns#* } ${primary_unknowns%% *}"
       fi
-      remove_word_from_string primary_dims $dim
+      remove_word_from_string primary_unknowns $dim
     else
       local secondary_unknowns=${secondary_unknowns% }
       if [[ "$secondary_unknowns" == *' '* && $phase != default ]]; then
         secondary_unknowns="${secondary_unknowns#* } ${secondary_unknowns%% *}"
       fi
-      remove_word_from_string secondary_dims $dim
+      remove_word_from_string secondary_unknowns $dim
     fi
 
     local member ms
@@ -6479,11 +6482,13 @@ calc_coordinates_next_unknown_dim_in_phase() {
         fi
       elif [[ $phase == derive-* \
          || $phase == derive_optional_functions-* ]]; then
+        phase=${phase%-*} \
         deriving= \
         allow_partials=t \
         attempt_derive || fail
         needs_narrowing=f
       elif [[ $phase == narrow-* ]]; then
+        phase=${phase%-*} \
         derive_exactly_one=f \
         deriving= \
         use_narrow_from=t \
@@ -6549,11 +6554,9 @@ calc_coordinates_next_unknown_dim() {
         case $phase in
           *-primary)
             dims_to_try=$primary_unknowns
-            unknown_type=primary
           ;;
           *-secondary)
             dims_to_try=$secondary_unknowns
-            unknown_type=secondary
           ;;
           *)
             dims_to_try="$primary_unknowns $secondary_unknowns"
@@ -6569,6 +6572,13 @@ calc_coordinates_next_unknown_dim() {
             fi
             derive_exactly_one=f
           fi
+
+          if [[ -v dim_must_resolve[$dim] ]]; then
+            unknown_type=primary
+          else
+            unknown_type=secondary
+          fi
+
           calc_coordinates_next_unknown_dim_in_phase || fail
           if [[ $found_values == t ]]; then
             abort
@@ -6758,7 +6768,7 @@ calc_coordinates_next_dim() {
 
       else # no members
         log_debug "Dim unknown: $dim"
-        if [[ -v cell_required_dims[$dim] ]]; then
+        if [[ -v dim_must_resolve[$dim] ]]; then
           add_word_to_string primary_unknowns $dim
         else
           add_word_to_string secondary_unknowns $dim
