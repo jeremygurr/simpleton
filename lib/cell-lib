@@ -6358,7 +6358,10 @@ calc_coordinates_next_unknown_dim_in_phase_con_row() {
         log_debug "Dim $dim (of constellation $con_of_dim) has value of $new_value which conflicts with existing dim $ddim"
         abort # go to the next row, since this one conflicts
       else
-        if [[ "$new_value" != all ]]; then
+        if [[ "$new_value" == none && -v dim_must_resolve[$dim] ]]; then
+          log_debug "Dim $dim (of constellation $con_of_dim) has no value, but this cell requires it to resolve, skipping this row"
+          abort # go to the next row
+        elif [[ "$new_value" != all && "$new_value" != none ]]; then
           log_debug "Con dim set: $dim=$new_value (via con ${con_of_dim})"
           ddim=$new_value
           validated_dims+=" $dim"
@@ -6436,11 +6439,13 @@ calc_coordinates_next_unknown_dim_in_phase_con() {
       log_debug "Analyzing $matching_row_count rows (out of $row_count) from constellation $con_of_dim"
     fi
 
+    local c=0
     begin_for (( row = 0; row < row_count; row++ )); doo
       if [[ ! -v matching_rows[all] && ! -v matching_rows[$row] ]]; then
         continue
       fi
-      log_debug "Processing con $con_of_dim row $row"
+      (( c++ ))
+      log_debug "Processing con $con_of_dim row $row ($c/$matching_row_count)"
       progress_bar_nudge .
       calc_coordinates_next_unknown_dim_in_phase_con_row || fail
     end_for
