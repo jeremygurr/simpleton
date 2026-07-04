@@ -4,13 +4,13 @@ type -t background_process_lib_loaded >/dev/null && return 0
 background_process_lib_loaded=t
 
 update_replay_hash() {
-  pipe_replay_hash_command=$command
-  pipe_replay_hash=$(echo -n "$command" | sha1sum | awk '{print $1}')
+  pipe_replay_hash_command=$1
+  pipe_replay_hash=$(echo -n "$1" | sha1sum | awk '{print $1}')
   debug_return_vars=pipe_replay_hash
 }
 
 pipe_replay=${pipe_replay:-${replay:-f}}
-# pipe_replay may be: replaying recording disabled
+# pipe_replay_state may be: t m f
 
 if [[ $pipe_replay == t ]]; then
   pipe_replay_state=replaying
@@ -95,12 +95,12 @@ get_replay_file() {
 
       current_replay_file=$replay_path/pipe_replay.$pipe_replay_hash
 
-      echo "$pipe_replay_hash_command" >$current_replay_file-in || fail
       if [[ $pipe_replay_state == recording 
          || $pipe_replay_state == replay_unless_missing
          && ! -f "$current_replay_file-out"
          ]]; then
 
+        echo "$pipe_replay_hash_command" >$current_replay_file-in || fail
         if [[ $pipe_replay_state == replay_unless_missing ]]; then
           log_warn "Replay file doesn't yet exist, so recording new file: $current_replay_file"
           effective_replay_state=recording
@@ -112,7 +112,7 @@ get_replay_file() {
           fi
         fi
 
-      elif [[ $pipe_replay_state == replaying ]]; then
+      elif [[ $pipe_replay_state == replaying || $pipe_replay_state == replay_unless_missing ]]; then
         if [[ $side == from && ! -f $current_replay_file-out ]]; then
           log_warn "Replay file doesn't exist: $current_replay_file-out ."
           local response
