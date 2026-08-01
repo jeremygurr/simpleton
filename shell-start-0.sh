@@ -1016,14 +1016,3 @@ gacp() {
 
 big_prompt
 
-fnode() { 
-  if [[ -z ${ez:-} || -z ${ct:-} && -n ${2:-} ]]; then 
-    local ez=$1 
-    shift; 
-    local ct=$1 
-  else 
-    echo 'Usage: fnode <ez> <component_type>'
-    return 1
-  fi 
-  cell /work/one-data/host/info get ez=$ez component_type=$ct fields='ez host component_type long_host host_ip' 
-}
