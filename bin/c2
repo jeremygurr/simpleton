@@ -4499,11 +4499,18 @@ show_table() {
   local table_with_row=$1
 
   local table_var=${table_with_row%%\[*} \
-    row_index=${table_with_row##*\[} \
+    row_index_start=${table_with_row##*\[} \
+    row_index_end= \
 
-  row_index=${row_index%\]}
-  if [[ $row_index == $table_var ]]; then
-    row_index=
+  row_index_start=${row_index_start%\]}
+  if [[ $row_index_start == $table_var ]]; then
+    row_index_start=0
+    row_index_end=1000
+  elif [[ $row_index_start == *..* ]]; then
+    row_index_end=${row_index_start#*..}
+    row_index_start=${row_index_start%..*}
+  else
+    row_index_end=$row_index_start
   fi
 
   local -n fields=${table_var}_fields data=${table_var}_data
@@ -4516,6 +4523,9 @@ show_table() {
       for (( i = 0; i <= ${#data[*]}; i++ )); do
         (( f = i % field_count ))
         (( row = i / field_count ))
+        if (( row < row_index_start || row > row_index_end )); then
+          continue
+        fi
         if (( f == 0 )); then
           echo "******************* ROW $row **********************"
         fi
@@ -4530,11 +4540,12 @@ show_table() {
 
       for (( i = 0; i <= ${#data[*]}; i++ )); do
         (( f = i % field_count ))
-        (( row = i / field_count - 1 ))
+        (( row = i / field_count ))
+        if (( row < row_index_start || row > row_index_end )); then
+          continue
+        fi
         if (( f == 0 )) && [[ "$line" ]]; then
-          if [[ ! "$row_index" ]] || (( row_index == row )); then
           echo "$line"
-          fi
           line=
         fi
         if (( i < ${#data[*]} )); then
