@@ -15,13 +15,13 @@ and debugging are provided by the framework, allowing code that implements the u
 it depends on until they track down the root cause, fix that, and then resume the workflow where it left off. Cells that have already completed won't need to run again, as long as the data still meets the freshness requirements
 of the operation taking place. Also since all logging data relevant to that cell is stored in the cell itself, it's much easier to get to the relevant information about why it failed. The failing cell can also be run by itself,
 as many times as needed, until the problem is solved, as opposed to needing to run the whole workflow over and over which most other strategies would require. On top of these advantages, simpleton includes a built in state-of-the-art
-bash debugger, which is so powerful and quick to use as to not only rival most expensive IDE debuggers other languages use, but to even be faster and more effective and getting to a root problem than most others. Using the debugger
+bash debugger, which is so powerful and quick to use as to not only rival most expensive IDE debuggers other languages use, but to even be faster and more effective at getting to a root problem than most others. Using the debugger
 is just a single parameter added to the commands that are already being run. The debugger provides many novel mechanisms enabling rapid narrowing down of problems that approach even omniscient debuggers in efficiency, 
 
 Simpleton is especially valuable for dealing with management of complex computer systems, where new problems appear frequently and clever solutions must be figured out and implemented in very short periods of time. Scripting is better
 for quick and short lived solutions. For longer lasting code, or code that has much higher risk and must be more carefully checked and tested, an application language is often a better solution. 
 
-## WHat is it NOT?
+## What is it NOT?
 
 Simpleton is not a replacement for a Jenkins or Github actions type devops tools. It's meant to be the orchestrator that calls tools like those. Unlike Jenkins or Github actions, simpleton scripts run locally on the users computer, so they
 don't have to wait for worker nodes to become available or fight for system resources to execute a workflow. 
@@ -45,7 +45,7 @@ temporarily broken, or you want to double check that the metrics actually match 
 ## Why BASH?
 
 1. BASH is pretty much the king of meta-scripting. It's not at the same level nor is it meant to solve the same problems as more advanced and complete scripting languages like javascript or python. Nor can it even come close to the
-performance of lower level application languages like Java, C, or Go. But it's by far the best at calling and chaining together tools writting in all of these languages, which is what most simpleton cell scripts are composed of. 
+performance of lower level application languages like Java, C, or Go. But it's by far the best at calling and chaining together tools written in all of these languages, which is what most simpleton cell scripts are composed of. 
 A single command line can unite input and outputs from tools written in possibly completely different languages into a seamless unit. For example:
 ```
 cat some-file | grep -v '^#' | awk '{ print $1, $2 }' >new-file
@@ -70,6 +70,16 @@ the second dimension and it's values, etc. For example, you could have a cell wi
 the dimension from the member. Dimensions are a very powerful concept and in most cases just one or two dimensions can be specified, and simpleton will derive other related dimensions automatically. For example, if you know 
 the exact host name you want to deploy an app to, you can specify that host name, and if the dimensions are defined well enough, the datacenter, region, zone, etc. can be derived from that host name. Or if you specified the
 datacenter, region, and zone, it can derive the matching hostnames that could fit. Multiple values can be specified for dimensions to make operations that span hundreds of cells easy to execute. 
+
+## Parameters and Environment Variables
+
+All parameters used in the cell command can either be set as exported environment variables, or set directly on the command line in the form of key=value. This allows a user to have a shell context which lets them skip having to
+repeat parameters for each command. For example, if they are working with in a particular zone and with a particular pod, they can set them both in the environment like this: 
+```bash
+export ez=e31a pod=mypod-1234
+``` 
+and every cell command
+they run will automatically have those values set, unless they are overridden in the individual commands. 
 
 ## Cell Freshness
 
@@ -113,6 +123,7 @@ cell ???          # Most verbose cell help
 cell update ?     # See update options for current cell
 cell update -?    # See update flag options
 cell update dim=? # See documentation for a dimension of a cell
+walk              # use walker tool to navigate directories between cell branches and dependencies
 forge             # modify cell definitions using the forge tool
 ```
 
@@ -125,9 +136,9 @@ clean             # same as `cell clean`
 
 # Navigation
 ```
-u                 # go up to parent dir folder
-uu                # go up two folders
-b                 # go back to previous folder you were in
+u                     # go up to parent dir folder
+uu                    # go up two folders
+b                     # go back to previous folder you were in
 trunk                 # will change the directory to the trunk cell of the current path
 leaf {dim member}...  # will go to the specified leaf cell
 leaf                  # will go to the first leaf cell
@@ -142,11 +153,14 @@ small_prompt          # smallest prompt
 ```
 
 ## Viewing Logs
+These are documented more thoroughly in the cell command itself. See `cell update ??` to get full details.
+```
 update                                     # Minimal logs
-update -v                                  # Shows verbose logs created with log_info
-update -d                                  # Shows more logs created with log_debug
+update log=verbose                         # Shows verbose logs
+update -v                                  # Shortcut for verbose logs (see update -? to see a list of all flag shortcuts)
+update log=debug                           # Shows debug logs
 update trace_var=some_var                  # Shows you how a variable or dimension is altered during the execution of a cell update
-update debug_watch='some_var some_var2'    # 
+```
 
 ### While executing a cell command
 hit <enter> to pause any cell. From here you can change log_level, go into debug mode and hit <enter> again to resume when ready
@@ -165,21 +179,6 @@ fail
 fail1
 fail2
 zombie_*            # see `Zombie commands` section below
-```
-
-### Clean commands & Fresh variables
-```
-Commands you can run within any cell:
-clean ?      # See documentation for clean commands
-clean0       # Only clean the runtime files in .cyto folder but keep the status of the cell and upstream freshness intact
-clean        # Wipe out the entire cell cached files and folders
-clean-all    # Wipes out the cached files and folders of all cells in the current module (except for clean-resistant cells)
-
-Variables / files to define in a cell or use in the code logic:
-fresh                      # How long this cell should stay fresh after update (i.e 1d 3h 5m etc.)
-default_freshness.var      # .dna file which specifies how long this cell should stay fresh by default 
-clean_resistant.var        # .dna file which says 't' if this cell should be skipped during `clean-all`
-top_fresh                  # Freshness from the top-level cell which caused this cell to eventually be run
 ```
 
 ### Risk variables / files
@@ -235,11 +234,8 @@ Create is_secret.var file inside the dimension and make it contain `t`. (example
    log_info "$filtered_docker_command" >/tmp/logs.out
    ```
 
-## How Parallel Processing Works
-
 ## Using the Debugger
 
-## Multiple Choice
 
 ## Common pitfalls and Gotchas
 A feature exists to start a cell with more control over low-level library functions. To do this, place a function at the top of your update_op.fun file. However, this is often something engineers accidentally do without realizing it, and it causes crashes. To avoid this, put a # Blank Comment line at the top so we know you are not trying to use this feature.
