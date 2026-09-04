@@ -156,17 +156,19 @@ execute_up_inner() {
 
       if [[ $needs_update == t ]]; then
         execute_commands "$up_cell_path" update || fail
+        update_successful=$command_successful
       else
+        update_successful=t
         reply_to_caller "update_skipped=t"
       fi
 
     else
       log_verbose "Skipping update of upstream $up_name because prep function set needs_update=f"
+      update_successful=t
       reply_to_caller "update_skipped=t"
     fi
 
-    #    not sure why this is here
-    # reply_to_caller "needs_update=$needs_update"
+    reply_to_caller "update_successful=$update_successful"
 
   end_function
   handle_return
@@ -197,9 +199,9 @@ execute_up() {
       up_var=${up_name//-/_} \
 
     update_skipped=f
-    local update_successful=f
+    update_successful=f
     fork execute_up_inner || fail
-    if [[ $update_successful == f && $update_skipped == f ]]; then
+    if [[ $update_successful == f ]]; then
       log_verbose "Update of upstream failed. ($up_cell)"
       fail1
     fi
@@ -1074,7 +1076,7 @@ update_member() {
 
       fork execute_commands $member_path update || fail
 
-      if [[ $update_successful == f ]]; then
+      if [[ $command_successful == f ]]; then
         #log_error "Failed to update member cell $member_path"
         reply_to_caller "update_successful=f" || fail
       else 
@@ -1096,10 +1098,10 @@ update_members() {
     update_successful=t
     par=t fork=f function=update_member for_each_member $dim || fail
 
-    #if [[ ${update_successful:=t} == f ]]; then
-    #  log_warn "Failed to update some member(s)"
-    #  #fail1
-    #fi
+    if [[ ${update_successful:=t} == f ]]; then
+      log_warn "Failed to update some member(s)"
+      fail1
+    fi
 
   end_function
   handle_return
