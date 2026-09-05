@@ -3818,16 +3818,6 @@ side_log() {
   echo "$*" >>$side_log_file
 }
 
-debug_output_reversed_line() {
-  echo -n "$REVERSE" >&$fd_original_err
-  local line=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file")
-  local pad_size line_length=${#line}
-  (( pad_size = COLUMNS - line_length ))
-  echo -n "$line" >&$fd_original_err
-  printf %${pad_size}s >&$fd_original_err
-  echo "$RESET" >&$fd_original_err
-}
-
 debug_source_update() {
   debug_path_to_source_file=$raw_debug_path_to_source_file
   if [[ $debug_path_to_source_file == /dev/fd/* ]]; then
@@ -3892,7 +3882,7 @@ debug_source_line_update() {
 
 }
 
-debug_display_source() {
+debug_display_source_inner() {
   local skip_source_update=${skip_source_update:-f}
 
   if [[ $skip_source_update == f ]]; then
@@ -3913,15 +3903,27 @@ debug_display_source() {
 
   if (( debug_start_line <= debug_line_num && debug_line_num <= debug_end_line )); then
     if (( debug_start_line < debug_line_num )); then
-      sed -n "$debug_start_line,$((debug_line_num-1))p;$((debug_line_num-1))q" "$debug_path_to_source_file" >&$fd_original_err
+      sed -n "$debug_start_line,$((debug_line_num-1))p;$((debug_line_num-1))q" "$debug_path_to_source_file" 
     fi
-    debug_output_reversed_line
+
+    echo -n "$REVERSE" 
+    local line=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file")
+    local pad_size line_length=${#line}
+    (( pad_size = COLUMNS - line_length - 2 ))
+    echo -n "$line" 
+    printf %${pad_size}s 
+    echo "$RESET" 
+
     if (( debug_line_num < debug_end_line )); then
-      sed -n "$((debug_line_num+1)),${debug_end_line}p;${debug_end_line}q" "$debug_path_to_source_file" >&$fd_original_err
+      sed -n "$((debug_line_num+1)),${debug_end_line}p;${debug_end_line}q" "$debug_path_to_source_file" 
     fi
   else
-    sed -n "$debug_start_line,${debug_end_line}p;$((debug_end_line))q" "$debug_path_to_source_file" >&$fd_original_err
+    sed -n "$debug_start_line,${debug_end_line}p;$((debug_end_line))q" "$debug_path_to_source_file" 
   fi
+}
+
+debug_display_source() {
+  debug_display_source_inner | awk '{print "| " $0 }' >&$fd_original_err
 }
 
 debug_load_persistent_state() {
@@ -4614,6 +4616,10 @@ debug_show_var() {
   fi
 }
 
+debug_display_source_file() {
+  echo "$RED$debug_source_file:$debug_line_num$RESET" >&$fd_original_err
+}
+
 debug_command_loop() {
   local debug_c no_follow_once=f
 
@@ -4627,6 +4633,7 @@ debug_command_loop() {
 
   while [[ $debug_r == -1 ]]; do
 
+    echo >&$fd_original_err
     local current_source_line_without_comment=none
     if [[ $debug_path_to_source_file != none ]]; then
       current_source_line_without_comment=$(sed -E -n "${debug_line_num}p;${debug_line_num}q" "$raw_debug_path_to_source_file" \
@@ -4638,16 +4645,17 @@ debug_command_loop() {
       if [[ $no_follow_once == t ]]; then
         no_follow_once=f
       else
-        echo "$hbar_tilde" >&$fd_original_err
+        debug_display_source_file
         (( debug_list_offset = -debug_list_window / 2 + 1 )) 
         debug_display_source
         debug_list_dir=forwards
         (( debug_list_offset += debug_list_window - 1 ))
+        echo >&$fd_original_err
       fi
     fi
 
     if [[ "$debug_watch" && ! "$debug_buffered_commands" ]]; then
-      local watch_var watch_output='+ ' __value
+      local watch_var watch_output= __value
       for watch_var in $debug_watch; do
         if [[ "$watch_var" == *\$* ]]; then
           set +u
@@ -4658,11 +4666,11 @@ debug_command_loop() {
         fi
         watch_output+="$watch_var=$__value "
       done
-      echo "$watch_output" >&$fd_original_err
+      echo "$CYAN>>$RESET $watch_output" >&$fd_original_err
     fi
 
     if [[ "${return_value:-0}" != 0 ]]; then
-      echo "+ ${YELLOW}return_value == $return_value$RESET"
+      echo "$CYAN>> ${YELLOW}return_value == $return_value$RESET"
     fi
 
     if [[ ! "$debug_buffered_commands" ]]; then
@@ -4679,7 +4687,7 @@ debug_command_loop() {
         debug_prefix+="${CYAN}debug_id=$effective_debug_id "
       fi
       if [[ $debug_source_file != none ]]; then
-        echo -n "$debug_prefix$RED$debug_source_file:$debug_line_num" >&$fd_original_err
+        echo -n "$CYAN>> $RESET$debug_prefix" >&$fd_original_err
       fi
       echo -n " $GREEN$debug_current_function $RESET:" >&$fd_original_err
       echo -n " $debug_command " >&$fd_original_err
@@ -4931,9 +4939,10 @@ debug_command_loop() {
           debugger_out "# Source not available"
         else
           if [[ $debug_list_dir != none ]]; then
-            echo -n "$CLEAR_LINE" >&$fd_original_err
+            #echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
+            echo -n "$CLEAR_LINE$CURSOR_UP" >&$fd_original_err
             if [[ "$debug_watch" ]]; then
-              echo -n "$CURSOR_UP$CLEAR_LINE" >&$fd_original_err
+              echo -n "$CLEAR_LINE$CURSOR_UP" >&$fd_original_err
             fi
           fi
 
@@ -4952,6 +4961,7 @@ debug_command_loop() {
           echo -n "$CLEAR_SCREEN" >&$fd_original_err
           [[ $debug_list_dir == forwards ]] && (( debug_list_offset -= debug_list_window ))
           (( debug_list_offset -= debug_list_window * 15 / 10 ))
+          debug_display_source_file
           debug_display_source
           debug_list_dir=backwards
           no_follow_once=t
@@ -5714,6 +5724,7 @@ debug_trap() {
       log_debug_debug "ok_to_debug == t, before: debug_recording_trace=$debug_recording_trace, debug_tracing=$debug_tracing"
       no_trace_depth=0
       tracing_depth=0
+      echo >&$fd_original_err
       debug_output_expansion
       debug_inner
       debug_update_expansion
