@@ -513,3 +513,10 @@ into v2 commands as they become available. Eventually the bin/c2 file will merge
 the old v1 cell will be gone, as well as all the old libraries in lib/ and command definitions in
 cmomands/ . 
 
+The key improvements in v2 will be much stronger parallelization support and more exposed simpleton
+framework mechanics (less of a black box). Simpleton framework itself will become simpler, while the
+features it used to have (like validators and reactors) will be moved into individual cell
+implementations instead of a complex global framework. The end result will be easier to debug
+cells with less knowledge required of framework internals.
+
+
