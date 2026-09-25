@@ -1112,6 +1112,69 @@ update_members() {
   handle_return
 }
 
+# Aggregate projected, unique rows from one cell or all leaf cells below it.
+# Inputs: fields (space-separated), from_cell, optional to_file.
+agg_output() {
+  begin_function
+    local from_cell=${from_cell:-} target=${to_file:-${out_path}/output.tab}
+    if [[ ! "$fields" || ! "$from_cell" ]]; then
+      log_fatal "agg_output requires fields and from_cell"
+      fail1
+    fi
+    if [[ ! -d $from_cell ]]; then
+      log_fatal "agg_output from_cell cell does not exist: $from_cell"
+      fail1
+    fi
+
+    local files header file line field value key first=t
+    local -a wanted=() headers=() values=() indexes=()
+    local -A seen=()
+    wanted=( $fields )
+    files=$(find1 "$from_cell" -type f -name output.tab | sort) || fail
+    : > "$target" || fail
+
+    begin_for file in $files; doo
+      [[ -s $file ]] || continue
+      if [[ $first == t ]]; then
+        IFS= read -r header < "$file" || fail
+        # Headers are deliberately copied in from_cell format (rather than reformatted).
+        printf '%s\n' "${wanted[*]}" > "$target" || fail
+        read -ra headers <<< "$header"
+        begin_for field in "${wanted[@]}"; doo
+          local i found=
+          begin_for i in "${!headers[@]}"; doo
+            if [[ ${headers[$i]} == "$field" ]]; then found=$i; break; fi
+          end_for
+          if [[ -z ${found:-} ]]; then
+            log_fatal "agg_output field is missing from $file: $field"
+            fail1
+          fi
+          indexes+=( "$found" )
+        end_for
+        first=f
+      fi
+      begin_loop IFS= read -r line; doo
+        [[ "$line" ]] || continue
+        values=()
+        eval "values=( $line )"
+        local projected=() i
+        for i in "${indexes[@]}"; do projected+=( "${values[$i]}" ); done
+        key=$(printf '%s\t' "${projected[@]}")
+        [[ ${seen[$key]} ]] && continue
+        seen[$key]=1
+        line=
+        for value in "${projected[@]}"; do
+          shell_quote_var value
+          line+=" $value"
+        done
+        echo "${line# }" >>$target || fail
+      end_loop < <(tail -n +2 "$file")
+    end_for
+  end_function
+  handle_return
+}
+
+
 update_aggregation() {
   begin_function
     if [[ "$out_file" == output.tab ]]; then
