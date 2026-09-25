@@ -417,12 +417,12 @@ handle_sorting() {
     fi
 
     local i sort_field_index=
-    begin_for (( i = 0; i < field_count; i++ )); doo
+    for (( i = 0; i < field_count; i++ )); do
       if [[ "${output_table_fields[$i]}" == "$out_sort" ]]; then
         sort_field_index=$i
         break
       fi
-    end_for
+    done
 
     if [[ ! "$sort_field_index" ]]; then
       log_fatal "invalid sort field: $out_sort"
@@ -431,31 +431,64 @@ handle_sorting() {
 
     local single_column result
     get_single_column $sort_field_index || fail
-    result=$(echo -n "$single_column" | sort -gu $sort_flags) || fail
+    result=$(echo -n "$single_column" | sort -g $sort_flags | uniq) || fail
     local from_data=( "${output_table_data[@]}" ) 
 
     output_table_data=( )
     local OIFS=$IFS
     IFS="$NL"
     local v sort_field_value row t beginning_of_row
-    begin_for v in ${result}; doo
+    for v in ${result}; do
       IFS=$OIFS
       local from_data_size=${#from_data[*]}
-      begin_for (( row = 0; row < row_count; row++ )); doo
+      for (( row = 0; row < row_count; row++ )); do
         (( beginning_of_row = row * field_count ))
         (( t = beginning_of_row + sort_field_index ))
         sort_field_value=${from_data[$t]}
         if [[ "$sort_field_value" == "$v" ]]; then
           output_table_data+=( "${from_data[@]:beginning_of_row:field_count}" )
         fi
-      end_for
-    end_for
+      done
+    done
     IFS=$OIFS
 
     if (( ${#from_data[*]} != ${#output_table_data[*]} )); then
       log_fatal "Internal error: sorting changed table size ${#from_data[*]} -> ${#output_table_data[*]}"
       fail1
     fi
+  end_function
+  handle_return
+}
+
+handle_dedup() {
+  begin_function
+    local from_data=( "${output_table_data[@]}" ) \
+      from_row_count=$row_count
+
+    local row t beginning_of_row seen_row
+    local from_data_size=${#from_data[*]}
+    local -A seen_rows=()
+
+    output_table_data=()
+    row_count=0
+
+    for (( row = 0; row < from_row_count; row++ )); do
+      (( beginning_of_row = row * field_count ))
+
+      seen_row=
+      for (( i = 0; i < selected_count; i++ )); do
+        field_index=${selected_field_indices[$i]}
+        (( t = beginning_of_row + field_index ))
+        seen_row+="${from_data[$t]} // "
+      done
+
+      if [[ ! -v seen_rows[$seen_row] ]]; then
+        output_table_data+=( "${from_data[@]:beginning_of_row:field_count}" )
+        (( row_count++ ))
+        seen_rows[$seen_row]=1
+      fi
+    done
+
   end_function
   handle_return
 }
@@ -492,6 +525,8 @@ get_command_output() {
         if [[ "$out_sort" ]]; then
           handle_sorting || fail
         fi
+
+        handle_dedup || fail
 
         unset each_field
 
@@ -676,7 +711,7 @@ get_command() {
 
     out_fields=${out_fields,,}
     if [[ ! "$out_fields" || $out_fields == \? ]]; then
-      out_fields=${default_out_fields:-all} \
+      out_fields=${default_out_fields[*]:-all} \
       used_default_fields=t
     fi
 
