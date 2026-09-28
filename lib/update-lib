@@ -1754,6 +1754,31 @@ show_coordinates() {
   handle_return
 }
 
+show_upstreams() {
+  local cell_path=$1
+  begin_function
+    local dna_path=$cell_path/.dna upstreams
+    if [[ -d $dna_path/up ]]; then
+      upstreams=$(find1 $dna_path/up -type d -not -name ".*" | sort) || fail
+      indent
+
+      local pad
+      printf -v pad %${indent}s
+
+      local upstream_dna_path upstream_name upstream_path
+      begin_for upstream_dna_path in $upstreams; doo
+        upstream_name=${upstream_dna_path##*/}
+        upstream_path=$(realpath $upstream_dna_path)
+        echo "${pad}${upstream_name} [$upstream_path]" >&$fd_original_err
+        show_upstreams $upstream_path || fail
+      end_for
+
+      outdent
+    fi
+  end_function
+  handle_return
+}
+
 update_command() {
   begin_function
 
@@ -1761,12 +1786,19 @@ update_command() {
       something_changed=f \
       needs_update=${needs_update:-} \
       needs_inner=f \
+      show_upstreams=${show_upstreams:-} \
 
     local update_successful=t
 
     if [[ "${refresh:-f}" == t ]]; then
       refresh=f
       find $cell_path -path '*/.cyto/status/up-to-date' -delete || fail
+    fi
+
+    if [[ ! "${show_upstreams:-}" ]] && log_level_at_least verbose; then
+      show_upstreams=t
+    else
+      show_upstreams=f
     fi
 
     switch_context $cell_path || fail
@@ -1862,6 +1894,12 @@ update_command() {
       if [[ -v branch_coordinate_data ]]; then
         skip_dims="${support_dims_expanded[*]}" \
         show_coordinates || fail
+      fi
+
+      if [[ -v up && $show_upstreams == t ]]; then
+        echo "Upstreams used:" >&$fd_original_err
+        local indent=0
+        show_upstreams $cell_path || fail
       fi
 
       local can_agg=f
