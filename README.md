@@ -481,8 +481,75 @@ The bash-lifted framework contains the following component / features:
 | Tracer               | To determine where and when a variable is being set.                 |
 | Reactive Autorepair  | Allows easy analysis and optional recovery of failures               |
 
-### Loggins
 ### Exception Management
+
+Bash doesn't have any built-in way to capture or handle exceptions. So each time a function is
+called inside another function, the outer function must be specifically programmed to decide what to
+do with failures, whether to pass them on to the calling function, or handle them there. At a
+minimum, every layer of for / while loops or function calls needs to have error forwarding code
+added at the end, with raw bash.
+
+But with lifted bash, there are a series of aliases defined that provide a simple solution. Every
+function should start with a `begin_function` alias, and end with `end_function` and `handle_return`
+on two separate lines. Code may be inserted between `end_function` and `handle_return` to actually
+handle the exception here as needed. 
+
+#### Implementing An Exception Handler
+
+If you put no code between `end_function` and `handle_return`, then the exception is propagated up
+to the caller. But if you want to handle the exception within that method, you'll want to put the
+code between these two. 
+
+Two variables are important here: return_value and break_out. If break_out == t, then any loops the
+current process may be in will be exited at the end of the iteration (as long as they are properly
+wrapped with the lifted aliases of `begin_for`, `begin_while`, `begin_loop`, etc). `return_value`
+determines what the current function will return to the caller. 
+
+It would be wise to look over the definitions of these aliases, since they are fairly simple, and
+will show you precisely how they work. I will avoid going into too much detail here, since just
+looking at the source will be more precise and always up-to-date. The lifted library is currently
+found in the bin/c2 file. 
+
+#### Throwing an Exception
+
+Each begin_function actually sets up a while loop, which is exited at the end. This enables us to do
+a `break` at any time during the function to leave the begin_function/end_function block, and go to
+the exception handler. So if you want to just skip the rest of the function, you can do a simple
+`break`, IF you aren't also in an inner control structure, like a for or while. That's where it gets
+tricky. So to simplify this, we have more aliases.
+
+The `abort` alias will break out of any loops and end the current function. It will continue the
+code after the `end_function` which means it will still run the exception handling code that may be
+there before fully exiting the function. This makes it easy to have a single exit point for
+functions (which is generally a best practice for clean code). Again, look at the source to see
+precisely how this is done.
+
+The `succeed` alias will not only break out of the current function like `abort`, but it will also
+continue to exit all other functions until the app has closed completely with a success response.
+
+The `fail1` is like `succeed` where it breaks out of all functions until the app exits. The
+difference is that it exits with an error code of 1 instead of 0. 
+
+The `fail` alias is used to forward an inner function calls response code to the outer caller. It's
+typically used like this:
+```
+  do_something_useful || fail
+```
+Where if `do_something_useful` returned with a non-zero error code, it would call `fail` which sets
+the break_out=t and return_value to the same return code as do_something_useful. 
+
+In contrast, the `fail1` alias stands alone:
+```
+  some_code
+  if [[ {something bad happens} ]]; then
+    fail1
+  fi
+```
+
+Those are the aliases that would be used the most by far. There are some other special case aliases
+but you can look at the source for that. 
+
+### Logging
 ### Debugger
 
 This is described in more detail later in this document.
@@ -493,7 +560,7 @@ This is described in more detail later in this document.
 
 # Making new cells (or modifying existing ones)
 
-forge                # modify cell definitions using the forge tool
+forge             # modify cell definitions using the forge tool
 f                 # open `forge` program allowing you to see all relevant files in .dna along with upstream cells, dims and navigate to dim / derive folders to update those if needed. If you spend any time making cells, you'll be spending most your time in `forge`
 
 ### Zombie commands: (All these should be caught during PR's and removed. None are meant to be permanent)
