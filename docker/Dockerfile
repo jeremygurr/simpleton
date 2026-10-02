@@ -1,4 +1,4 @@
-ARG ALPINE_IMAGE=alpine:3.23
+ARG ALPINE_IMAGE=alpine:3.24.2
 
 FROM $ALPINE_IMAGE
 
@@ -93,6 +93,10 @@ RUN --mount=type=cache,target=/var/cache/apk \
     net-tools \
     net-tools-doc \
     openjdk21 \
+    $end_of_packages
+
+RUN --mount=type=cache,target=/var/cache/apk \
+  apk --allow-untrusted add \
     openrc \
     openrc-bash-completion \
     openrc-doc \
@@ -100,6 +104,10 @@ RUN --mount=type=cache,target=/var/cache/apk \
     openssh-doc \
     openssl \
     pciutils \
+    $end_of_packages
+
+RUN --mount=type=cache,target=/var/cache/apk \
+  apk --allow-untrusted add \
     pcre-doc \
     pcre2-doc \
     pkgconf-doc \
