@@ -105,6 +105,8 @@ execute_up_inner() {
     # set the desired freshness in the prep function
     fresh=${top_fresh:-}
 
+    local anchor_dims= force_update=f
+
     local all_prep_function=${up_cell_type}_all_prep
     if function_exists $all_prep_function; then
       log_debug "Executing all prep function: $all_prep_function"
@@ -153,11 +155,12 @@ execute_up_inner() {
         fail1
       fi
 
-      needs_update=
-
-      #  Don't clear anchor_dims because it might be set by prep
-      #local anchor_dims=
-      get_needs_update $up_cell_path || fail
+      if [[ $force_update == t ]]; then
+        needs_update=t
+      else
+        needs_update=
+        get_needs_update $up_cell_path || fail
+      fi
 
       if [[ $needs_update == t ]]; then
         execute_commands "$up_cell_path" update || fail
@@ -1754,7 +1757,7 @@ show_coordinates() {
   handle_return
 }
 
-show_upstreams() {
+show_simple_upstreams() {
   local cell_path=$1
   begin_function
     local dna_path=$cell_path/.dna upstreams
@@ -1770,7 +1773,7 @@ show_upstreams() {
         upstream_name=${upstream_dna_path##*/}
         upstream_path=$(realpath $upstream_dna_path)
         echo "${pad}${upstream_name} [$upstream_path]" >&$fd_original_err
-        show_upstreams $upstream_path || fail
+        show_simple_upstreams $upstream_path || fail
       end_for
 
       outdent
@@ -1899,7 +1902,7 @@ update_command() {
       if [[ -v up && $show_upstreams == t ]]; then
         echo "Upstreams used:" >&$fd_original_err
         local indent=0
-        show_upstreams $cell_path || fail
+        show_simple_upstreams $cell_path || fail
       fi
 
       local can_agg=f
