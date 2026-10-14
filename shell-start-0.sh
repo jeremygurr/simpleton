@@ -644,7 +644,7 @@ fq() {
   return $return_code
 }
 
-fd() {
+findd() {
   find . -name '.?*' -prune -o -type d "$@" -print
 }
 

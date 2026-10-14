@@ -55,6 +55,8 @@ RUN --mount=type=cache,target=/var/cache/apk \
     docker \
     docs \
     expat-doc \
+    fd \
+    fd-doc \ 
     file \
     file-doc \
     findutils \
@@ -113,6 +115,8 @@ RUN --mount=type=cache,target=/var/cache/apk \
     pkgconf-doc \
     procps \
     readline-doc \
+    ripgrep \
+    ripgrep-doc \
     rsync \
     $end_of_packages
 
