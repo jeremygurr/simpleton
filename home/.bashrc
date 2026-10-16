@@ -6,4 +6,4 @@ fi
 
 echo "Executing ~/.bashrc"
 bashrc_already_run=t
-source /etc/profile.d/shell-start.sh
+source /etc/profile.d/shell-start*
