@@ -191,13 +191,16 @@ of that risk level to proceed.
 
 # First-time Setup and Launching
 
-First have a folder which will contain this simpleton repo and all simpleton modules.  Do not have
+First have a folder which will contain this simpleton repo and all simpleton modules. Do not have
 any other repos or files in this folder (example `mkdir ~/simp-repo; cd ~/simp-repo; git clone
 https://github.com/jeremygurr/simpleton.git`)
 
 ``` bash
+./build
 ./launch
 ```
+
+After doing this once, you should never need to run ./build again. Only ./launch to get into the container
 
 # Running Cell Commands
 
