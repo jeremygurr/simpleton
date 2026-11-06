@@ -19,7 +19,8 @@ if (( BASH_VERSINFO < 5 )); then
   exit 1
 fi
 
-if [[ ! -v fd_original_in ]]; then
+if [[ ! "${fd_original_in:-}" || ! "${fd_original_out:-}" ]]; then
+  unset fd_original_in fd_original_out fd_original_err
   exec {fd_original_in}<&0
   exec {fd_original_out}>&1
   exec {fd_original_err}>&2
@@ -30,9 +31,9 @@ shopt -s expand_aliases extglob dotglob globstar huponexit
 
 alias zombie_debug=debug
 
-yolo=${yolo:-t}
-if [[ $yolo == f ]]; then
-  echo "|||| YOLO MODE IS OFF, DEBUGGING FUNCTIONALITY ENABLED ||||" >&2
+yolo=${yolo:-f}
+if [[ $yolo == t ]]; then
+  echo "|||| YOLO MODE IS ON, DEBUGGING FUNCTIONALITY DISABLED ||||" >&2
 fi
 
 # don't actually need the fds, only need the allocated descriptor numbers
@@ -188,6 +189,7 @@ lifted_bash_init_light() {
   fi
 
   log_level_filter=${log_level_filter:-info}
+  resolve_log_var
 }
 
 # Run this near the top of scripts using this functionality, after the commandline parameters 
@@ -300,7 +302,7 @@ debugger_init() {
 }
 
 resolve_log_var() {
-  case $log in
+  case ${log:-} in
     o|f|e|w|i|v|t|a)
       log_level_filter=$log
       ;;
@@ -1027,11 +1029,11 @@ alias begin_function='
   struct_type=start debug_id_inc
   stack_debug_id[$stack_pos]=$fork_debug_id
   while true; do
-  if [[ ${debug_step_to_mid_function:-f} == t ]]; then
+  if [[ ${debug_step_to_mid_function:-f} == t || "${1:-}" == debug ]]; then
     debug_id=t
     debug_immediate=t
     debug_skip_breakpoints=f
-    debug_start n
+    debug_start # n
   fi
   (( no_trace_depth-- )) || true
 '
@@ -7445,7 +7447,7 @@ top_level() {
 # Usage: pack_scripts >/path/to/packed_file
 pack_scripts() {
   local file short files
-  files=$(find . -depth 1 -name "*.bash" | sort -g) || return 1
+  files=$(fd -d1 -g "*.bash" . | sort -g) || return 1
   echo "#!/usr/bin/env bash"
   echo
   for file in $files; do
@@ -7466,6 +7468,9 @@ unpack_scripts() {
         mkdir -p $folder || return 1
       else
         folder=
+      fi
+      if [[ -f "$current_file" ]]; then
+        rm $current_file || return 1
       fi
     else
       if [[ "${current_file:-}" ]]; then
@@ -11141,8 +11146,1116 @@ jwalk() {
 
 }
 
-### file: ./10-main-command.bash
-if [[ ${auto_setup_lifted:-f} == t || $0 == */c2 ]]; then
+### file: ./10-os-setup.bash
+export DOCKER=${DOCKER:-docker}
+
+# output: OS     # space separated OS words (e.g. "Linux Debian Ubuntu 24.04.5")
+identify_os() {
+  local uname_s
+  uname_s=$(uname -s 2>/dev/null)
+  OS=Unknown
+  PACKAGE_MANAGER=Unknown
+  case "${uname_s:-unknown}" in
+    Linux)
+      OS=Linux
+      if [[ -e /etc/os-release ]]; then
+        source /etc/os-release
+        if [[ "${ID_LIKE:-}" ]]; then
+          OS+=" $ID_LIKE"
+        fi
+        if [[ "${ID:-}" ]]; then
+          OS+=" $ID"
+        fi
+        if [[ "${VERSION:-}" ]]; then
+          OS+=" $VERSION"
+        fi
+      fi
+      if [[ " ${OS,,} " == *" debian "* ]]; then
+        PACKAGE_MANAGER=apt
+      fi
+    ;;
+    Darwin)
+      OS="MacOS $(uname -r)"
+      PACKAGE_MANAGER=brew
+    ;;
+    *)
+      OS=Unknown
+      echo "Could not identify OS." >&2
+      return 1
+    ;;
+  esac
+}
+
+# inputs: user
+user_create_if_missing() {
+  local uid=${uid:-} key_path=${key_path:-} clean=${clean:-f}
+  if [[ " $OS " == *"MacOS"* ]]; then
+    if ! dscl . -read /Users/$user RealName &>/dev/null; then
+      echo "Can't create a user on MacOS." >&2
+      return 1
+    fi
+  else
+
+    if [[ $clean == t ]]; then
+      log_verbose "Cleaning user $user"
+      if grep $user /etc/passwd &>/dev/null; then
+        local i=0
+        while pgrep -u $user &>/dev/null; do
+          if (( i == 0 )); then
+            log_verbose "Killing processes owned by $user"
+          fi
+          pkill -u $user
+          if (( i++ > 5 )); then
+            log_verbose "Failed to kill processes owned by $user"
+            break
+          fi
+          sleep 1
+        done
+        deluser $user
+      fi
+      if [[ -d /home/$user ]]; then
+        rm -rf /home/$user
+      fi
+    fi
+
+    if ! grep $user /etc/passwd &>/dev/null; then
+      local extra=
+      if [[ "$uid" ]]; then
+        extra="-u $uid"
+      fi
+      #adduser -h /home/$user -s /bin/bash $extra $user || return 1
+      useradd -m -d /home/$user -s /bin/bash $extra $user || return 1
+    fi
+
+    if [[ ! -d /home/$user ]]; then
+      mkdir -p /home/$user || return 1
+      chown -R $user /home/$user || return 1
+    fi
+
+    local auth_file=/home/$user/.ssh/authorized_keys \
+      key_file=$key_path/$user.pub \
+
+    if [[ -f $key_file && ! -f $auth_file ]]; then
+      mkdir -p /home/$user/.ssh || return 1
+      cp $key_file $auth_file || return 1
+      chown -R $user /home/$user/.ssh || return 1
+    fi
+  fi
+}
+
+npx_skills_add_if_missing() {
+  begin_function
+    local repo=${repo:-} \
+      skills=${skills:-} \
+      update=${update:-f} \
+      clean=${clean:-f} \
+
+    if [[ ! "$repo" ]]; then
+      log_fatal "Missing repo parameter for npx_skills_add_if_missing"
+      fail1
+    fi
+
+    if [[ ! "$skills" ]]; then
+      log_fatal "Missing skills parameter for npx_skills_add_if_missing"
+      fail1
+    fi
+
+    local target_path=$HOME/.pi/agent/skills skill \
+      general_target_path=$HOME/.agents/skills \
+
+    if [[ ! -d $target_path ]]; then
+      mkdir -p $target_path || fail
+    fi
+
+    for skill in $skills; do
+      if [[ $clean == t && -f $target_path/$skill ]]; then
+        rm -rf $target_path/$skill || fail
+      fi
+      if [[ ! -e $target_path/$skill && ! -e $general_target_path/$skill || $update == t ]]; then
+        log_verbose "Adding npx skill $skill"
+        npx skills add $repo --skill $skill -a pi -g -y || fail
+      fi
+    done
+
+  end_function
+  handle_return
+}
+
+repo_skills_add_if_missing() {
+  begin_function
+    local repo=${repo:-} \
+      skills=${skills:-} \
+      repo_path=${repo_path:-} \
+      update=${update:-f} \
+      clean=${clean:-f} \
+
+    if [[ ! "$repo" ]]; then
+      log_fatal "Missing repo parameter for repo_skills_add_if_missing"
+      fail1
+    fi
+
+    if [[ ! "$repo_path" ]]; then
+      log_fatal "Missing repo_path parameter for repo_skills_add_if_missing"
+      fail1
+    fi
+
+    if [[ $clean == t && -d $repo_path ]]; then
+      rm -rf $repo_path || fail
+    fi
+
+    local target_path=$HOME/.pi/agent/skills
+
+    if [[ ! -d $target_path ]]; then
+      mkdir -p $target_path || fail
+    fi
+
+    if [[ ! -d $repo_path ]]; then
+      git clone $repo $repo_path || fail
+    elif [[ $update ==  t ]]; then
+      git -C $repo_path pull || fail
+    fi
+
+    if [[ ! "$skills" ]]; then
+      if [[ -d $repo_path/skills ]]; then
+        skills=skills
+      else
+        log_fatal "Couldn't find skills in $repo_path. Specify the subfolders containing skills in the skills var."
+        fail1
+      fi
+    fi
+
+    local skill_path found_skills= skill_name
+    begin_for skill_path in $skills; doo
+      found_skills+=" $(find1 $repo_path/$skill_path -type d)" || fail
+    end_for
+    
+    begin_for skill_path in $found_skills; doo
+      if [[ -f $skill_path/SKILL.md ]]; then
+        skill_name=${skill_path##*/}
+        if [[ $clean == t && -d $target_path/$skill_name ]]; then
+          rm -rf $target_path/$skill_name || fail
+        fi
+        if [[ $update == t || ! -d $target_path/$skill_name ]]; then
+          log_verbose "Adding repo skill $skill_name"
+          rsync -a --delete $skill_path/ $target_path/$skill_name/ || fail
+        fi
+      fi
+    end_for
+
+  end_function
+  handle_return
+}
+
+# inputs: packages
+install_if_missing() {
+  local packages=$packages
+  begin_function
+    if [[ " $OS " == *"MacOS"* ]]; then
+      echo "Can't check or install packages on MacOS yet." >&2
+      fail1
+    else
+      case $PACKAGE_MANAGER in
+        apt)
+          if ! dpkg -s $packages &>/dev/null; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y $packages || fail
+          fi
+        ;;
+        *)
+          echo "I don't know how to handle this PACKAGE_MANAGER yet: $PACKAGE_MANAGER" >&2
+          fail1
+        ;;
+      esac
+    fi
+  end_function
+  handle_return
+}
+
+docker_network_create_if_missing() {
+  local clean=${clean:-f} name=$name
+  begin_function
+    if [[ $DOCKER == podman ]]; then
+      if ! $DOCKER network exists $name; then
+        log_verbose "Creating docker network $name"
+        $DOCKER network create $name || fail
+      fi
+    else
+      if ! $DOCKER network ls | grep $name &>/dev/null ; then
+        log_verbose "Creating docker network $name"
+        $DOCKER network create $name || fail
+      fi
+    fi
+  end_function
+  handle_return
+}
+
+# inputs: 
+#   image 
+#   dockerfile
+#   base_folder
+#   build_args
+docker_image_create_if_missing() {
+  local clean=${clean:-f} force=${force:-f} build_args=${build_args:-}
+  begin_function
+    local base_folder=${base_folder:-.} \
+      dockerfile=${dockerfile:-Dockerfile} \
+
+    if [[ ! -f "$dockerfile" ]]; then
+      log_fatal "Missing Dockerfile: $dockerfile . PWD=$PWD."
+      fail1
+    fi
+
+    if [[ $clean == t ]]; then
+      if $DOCKER container inspect -f '{{.State.Running}}' $image 2>/dev/null | grep -q true; then
+        $DOCKER stop $image || fail
+      fi
+      $DOCKER image rm $image &>/dev/null
+    fi
+
+    local flags=
+    if [[ "$build_args" ]]; then
+      local build_arg
+      for build_arg in $build_args; do
+        local -n v=$build_arg
+        if [[ "${v:-}" ]]; then
+          flags+="--build-arg $build_arg=$v "
+        fi
+      done
+    fi
+
+    if [[ $force == t ]] || ! $DOCKER image inspect $image &>/dev/null; then
+      if [[ $clean == t ]]; then
+        flags+="--no-cache "
+      fi
+      log_verbose "$DOCKER build $flags -f - -t $image $base_folder <$dockerfile"
+      $DOCKER build $flags -f - -t $image $base_folder <$dockerfile || return 1
+    fi
+  end_function
+  handle_return
+}
+
+# inputs: 
+#   background
+#   command
+#   env
+#   image 
+#   name 
+#   ports
+#   volumes
+docker_run_if_missing() {
+
+  local \
+    background=${background:-t} \
+    command=${command:-} \
+    envs=${envs:-} \
+    image=$image \
+    name=$name \
+    ports=${ports:-} \
+    volumes=${volumes:-} \
+    network=${network:-} \
+
+  begin_function
+    local flags="--name $name "
+
+    if [[ $background == t ]]; then
+      flags+="-d --restart unless-stopped "
+    else
+      flags+="--rm -it "
+    fi
+
+    if [[ "$network" ]]; then
+      flags+="--network $network "
+    fi
+
+    if [[ "$ports" ]]; then
+      local port
+      for port in $ports; do
+        flags+="-p $port "
+      done
+    fi
+
+    if [[ "$envs" ]]; then
+      local env OIFS=$IFS
+      local IFS=$'\n'
+      for env in $envs; do
+        IFS=$OIFS
+        trim_ws env
+        if [[ "$env" ]]; then
+          flags+="-e '$env' "
+        fi
+      done
+      IFS=$OIFS
+    fi
+
+    if [[ "$volumes" ]]; then
+      local volume
+      for volume in $volumes; do
+        flags+="-v $volume "
+      done
+    fi
+
+    if ! $DOCKER container inspect -f '{{.State.Running}}' $name 2>/dev/null | grep -q true; then
+      if $DOCKER container inspect $name &>/dev/null; then
+        log_verbose "$DOCKER container rm $name"
+        $DOCKER container rm $name || fail
+      fi
+      log_verbose "$DOCKER run $flags $image $command"
+      eval "$DOCKER run $flags $image $command" || fail
+    fi
+  end_function
+  handle_return
+}
+
+### file: ./11-shell-profile.bash
+#!/usr/bin/env bash
+
+shell_profile_init() {
+
+COMP_WORDBREAKS=${COMP_WORDBREAKS//:}
+
+if [[ "${ADD_PATH:-}" ]]; then
+  export PATH=$ADD_PATH:$PATH
+fi
+
+shopt -s extglob dotglob globstar huponexit
+set +o histexpand
+
+complete -r # remove built-in shell completion since it currently has problems
+
+if [[ -e /home/prompt_name ]]; then
+  prompt_name=$(</home/prompt_name)
+  prompt_name=${prompt_name%%*( )}
+else
+  prompt_name=util
+fi
+
+export prompt_name
+NL=$'\n'
+
+#export CHARSET=UTF-8
+#export LANG=en_US.UTF-8
+#export LC_ALL=en_US.UTF-8
+
+alias sp='source /etc/profile'
+alias ls='ls --color=auto'
+alias l='ls --color=auto -l'
+alias ltr='ls --color=auto -ltr'
+alias ll='ls --color=auto -la'
+alias rmr='rm -rf'
+alias u='builtin cd ..'
+alias uu='builtin cd ../..'
+alias uuu='builtin cd ../../..'
+alias vi=vim
+
+# used by /etc/profile, this avoids a warning
+BB_ASH_VERSION=
+ZSH_VERSION= 
+
+sum1() {
+  awk '{ s+=$1 } END { print s }'
+}
+
+sum2() {
+  awk 'k != "" && k != $1 { print k, t; t=0 } { k=$1; t+=$2 } END { print k, t }'
+}
+
+awk1() {
+  awk '{ print $1 }'
+}
+
+awk2() {
+  awk '{ print $2 }'
+}
+
+get_short_path() {
+  local p=$1
+  local o=$p
+  if [[ "$p" == */*/*/* ]]; then
+    p=${p#/work/*/}
+    p=${p#/cell/*/}
+    p=${p#/seed/*/}
+    o=$p
+  fi
+  #if [[ "$p" == */*/*/*/* ]]; then
+  #  p=${p%*/*/*/*/*}
+  #  p=${o#$p/}
+  #fi
+  short_path=$p
+}
+
+encrypt() {
+  local from=$1; shift
+  local to=$1; shift
+  if [[ ! "$to" ]]; then
+    echo "Usage: encrypt {from file} {to file}" >&2
+    return 1
+  fi
+  openssl enc -aes-256-cbc -iter 123456 -salt -pbkdf2 -in "$from" -out "$to"
+}
+
+decrypt() {
+  local from=$1; shift
+  local to=$1; shift
+  if [[ ! "$to" ]]; then
+    echo "Usage: decrypt {from file} {to file}" >&2
+    return 1
+  fi
+  openssl enc -d -aes-256-cbc -iter 123456 -salt -pbkdf2 -in "$from" -out "$to"
+}
+
+# saves existing dir before changing to the given dir
+cd() {
+
+  local target=${1:-} old=$PWD
+  if [[ ! "$target" ]]; then
+    target=$HOME
+  fi
+
+  target=$(unrealpath "$target") || return 1
+  if [[ -f "$target" || ! -e "$target" ]]; then
+    echo "Directory doesn't exist: $target, trying parent" >&2
+    target=${target%/*}
+  fi
+
+  if [[ ! -d "$target" ]]; then
+    echo "Error: target doesn't exist or is not a folder: $target" >&2
+    return 1
+  else
+    if [[ "$old" == "$target" \
+       || "${old%/*}" == "$target" \
+       || "$old" == "${target%/*}" \
+       || ! -d "$old" \
+       ]]; then
+      # don't need to record, since the change is small
+      :
+    else
+      pushd $PWD >/dev/null || return 1
+      local d=$(dirs)
+      if (( ${#d} > 2000 )); then
+        # remove bottom of stack so we don't grow too big
+        popd -n -0 >/dev/null
+      fi
+    fi
+    builtin cd "$target" || return 1
+  fi
+  return 0
+}
+
+window() {
+  local size=${1:-5} i line
+  while true; do
+    echo -n "$CLEAR_SCREEN"
+    for ((i=0; i<size; i++)); do
+      IFS= read line || break 2
+      echo "$line"
+      line=
+    done
+    read -u $fd_original_in -s -n 1 -p "-------- Press q to quit, any other key to continue --------" i
+    if [[ $i == q ]]; then
+      break
+    fi
+  done
+  if [[ "${line:-}" ]]; then
+    echo "$line"
+  fi
+}
+#alias win=window
+
+# inputs: 
+#   $1  path to search for broken links
+find_broken_links() {
+  find -L "$(realpath $1)" -type l -print -o -name '.*' -prune
+}
+
+back() {
+  popd &>/dev/null || { echo "Dir doesn't exist."; popd -n &>/dev/null; }
+}
+
+# reverse link
+#   rln {from} {to}
+# will move the file {from} to {to} and then link {from} to {to}
+rln() {
+  local from=$1 to=$2
+  local to_parent=${to%/*}
+  if [[ ! -e $from ]]; then
+    echo "$from doesn't exist" >&2
+    return 1
+  fi
+  if [[ ! -d $to_parent ]]; then
+    echo "Target folder $to_parent doesn't exist" >&2
+    return 1
+  fi
+  if [[ $to == */ ]]; then
+    to=$to${from##*/}
+  fi
+  if [[ -e $to ]]; then
+    echo "Target $to already exists exist" >&2
+    return 1
+  fi
+  mv $from $to || return 1
+  ln -s $to $from || return 1
+}
+
+# prefix move
+# usage: pmv {from} {to_prefix}
+# example:
+#   pmv 1-some-file 2
+# would be equivalent to:
+#   mv 1-some-file 2-some-file
+pmv() {
+  local from=$1 to=$2 postfix to_size
+  if [[ ! -e $from ]]; then
+    echo "Source doesn't exist: $from" >&2
+    return 1
+  fi
+  to_size=${#to}
+  postfix=${from:$to_size}
+  to=$to$postfix
+  mv "$from" "$to"
+}
+
+alias b=back
+
+# git stuff
+alias gc='git checkout'
+alias gb='git branch -vv'
+alias gs='git status -uno'
+alias gsu='git status'
+alias ga='git add'
+alias gcb='git checkout -B'
+alias gundo='git reset --hard && git clean -df'
+alias grm='git reset main'
+alias gsc='git clone --depth 1'
+alias gp='git pull'
+alias gd='git diff'
+alias push='git push'
+alias gbs='git bisect start'
+alias gbg='git bisect good'
+alias gbb='git bisect bad'
+alias gr='git remote'
+
+gl() {
+  git --no-pager log -n ${lines:-20} --decorate --pretty=tformat:"%Cblue %h %Creset %<(25)%ci %C(auto)%d%Creset %s" "$@"
+}
+
+gB() {
+  git --no-pager log -n ${lines:-20} --simplify-by-decoration --all --date-order --decorate --pretty=tformat:"%Cblue %h %Creset %<(25)%ci %C(auto)%d%Creset %s" "$@"
+}
+
+gcm() {
+  local message="$1"; shift
+  if [ "$message" ]; then
+      git commit -m "$message" "$@" || return 1
+  else
+      git commit || return 1
+  fi
+}
+
+gacp() {
+  local message=$*;
+  git add .;
+  git commit -m "$message";
+  git push
+}
+
+# usage: echo -e "\n\n blah  \n\n" | trim_newlines
+# will trim empty lines from beginning and end of given string
+# will leave exactly one trailing newline at the end
+trim_nl() {
+  local block
+  read -r -d '' block
+  block=${block##*($NL)}
+  block=${block%%*($NL)}
+  echo "$block"
+}
+
+real() {
+  cd $(realpath .)
+  pwd
+}
+
+# this unlinks a linked file by copying what it links to locally
+localize() {
+  for file; do
+
+    local target=$(realpath $file)
+
+    if [[ ! -e "$target" ]]; then
+      echo "Target of link $file doesn't exist: $target" >&2
+      return 1
+    fi
+
+    if [[ "$target" == "$file" ]]; then
+      echo "File $file is not a link" >&2
+      return 1
+    fi
+
+    rm "$file" || return 1
+    cp -R -a -p "$target" "$file" || return 1
+
+  done
+}
+
+vigr() {
+  files=$(grep -D skip -srIl "$@" *);
+  vim $files
+}
+
+rcp() {
+  local shell="ssh";
+  if [ "${port:-}" ]; then
+      shell="ssh -p $port"
+  fi
+  RSYNC_RSH="$shell" rsync -a --append --inplace --partial --progress "$@"
+}
+
+ifout() {
+  awk 'BEGIN { rc=1 } length($0) > 0 { rc=0; print } END { exit rc }'
+}
+
+fql() {
+  local return_code=0
+  if [ "$*" ]; then
+    find -L . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -name "$@" 2>/dev/null | ifout || return_code=1
+  elif [ "${depth:-}" ]; then
+    find -L . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -maxdepth $depth 2>/dev/null | ifout || return_code=1
+  else
+    find -L . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' 2>/dev/null | ifout || return_code=1
+  fi
+
+  return $return_code
+}
+
+fq() {
+  local return_code=0
+  if [ "$*" ]; then
+    find . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -name "$@" 2>/dev/null | ifout || return_code=1
+  elif [ "${depth:-}" ]; then
+    find . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' -maxdepth $depth 2>/dev/null | ifout || return_code=1
+  else
+    find . -not -path '*/.git/*' -not -path '*/.idea/*' -not -path '*/.gradle/*' 2>/dev/null | ifout || return_code=1
+  fi
+
+  return $return_code
+}
+
+fdepth() {
+  local depth=$1; shift
+  find . -mindepth $depth -maxdepth $depth -name "$@" 2>/dev/null | ifout 
+}
+
+ff() {
+  local i
+  for ((i = 1; i < 20; i++)); do
+    echo "searching depth $i..."
+    fdepth $i "$@"
+    if [ "$?" != 0 ]; then
+      echo -e "$MOVE_UP"
+    fi
+  done
+}
+
+grepr() {
+  grep -D skip -n -s -r -I "$@" *
+}
+
+grepri() {
+  grep -D skip -n -s -r -i -I "$@" *
+}
+
+alias cutf='cut -d " " -f'
+alias short='cut -c -160'
+alias short2='cut -c -320'
+alias short3='cut -c -640'
+
+set -o vi
+set +H
+export SHELL="/bin/bash"
+export LS_OPTIONS='--color=auto'
+
+parse_git_branch() {
+  local p=$PWD
+  while [[ "$p" =~ / ]]; do
+    if [ -d $p/.git ]; then
+      local r=$(cat $p/.git/HEAD)
+      if [[ "$r" =~ refs/heads ]]; then
+        echo "$r" | sed -E 's/.*refs\/heads\/(.*)/(\1) /'
+      else
+        git branch 2>/dev/null | sed -E -e '/^[^*]/d' -e 's/^\* (.*)/\1 /'
+      fi
+      break
+    fi
+    p=${p%/*}
+  done
+}
+
+# could be overridden by other components
+custom_prompt_status() {
+  :
+}
+
+out_exec() {
+  local p=( "$@" )
+  echo '' "${p[@]}" >&2
+  eval "${p[@]}"
+}
+
+# searches for anything which links to a given file/folder
+find_links() {
+  local from=$1 start_at=${start_at:-$PWD}
+  local links=( $(find "$start_at" -mindepth 1 -type l 2>/dev/null) ) || return 1
+  for link in "${links[@]}"; do
+    target=$(readlink $link)
+    if [[ "$target" == "$from" \
+       || "$target" == "$from"/* \
+       ]]; then
+       echo $link
+    fi
+  done
+}
+
+# moves a file or folder and updates all links pointing to it
+relink() {
+  local from=$1 to=$2 start_at=${start_at:-$PWD}
+
+  local link target 
+  local links=( $(find "$start_at" -mindepth 1 -type l 2>/dev/null) ) || return 1
+  for link in "${links[@]}"; do
+    target=$(readlink $link)
+    if [[ "$target" == "$from" \
+       || "$target" == "$from"/* \
+       ]]; then
+
+      local sub_path=
+      if [[ "$target" == "$from"/* ]]; then
+        sub_path=${target#$from}
+      fi
+
+      out_exec rm "$link" || return 1
+      out_exec ln -s "$to$sub_path" "$link" || return 1
+    fi
+  done
+
+  if [[ -e "$from" && ! -e "$to" && -d "${to%/*}" ]]; then
+    out_exec mv "$from" "$to" || return 1
+  fi
+
+  return 0
+}
+
+prompt_error_string() {
+  local rc=$?
+  (( rc > 0 )) && echo -n "err=$rc "
+}
+
+show_short_path() {
+  local p=$PWD
+  get_short_path $p
+  echo -n "$short_path "
+}
+
+pid_path() {
+  local result=$$ parent_pid parent_command current_pid=$$
+  while true; do
+    if [[ "${MAC:-}" ]]; then
+      parent_pid=$(ps -co ppid -p $current_pid | tail +2 | awk '{print $1}') || break
+      parent_command='('$(ps -co comm -p $parent_pid | tail +2 | awk '{print $1}')')' || break
+    else
+      parent_pid=$(awk '{print $4}' /proc/$current_pid/stat) || break
+      parent_command=$(awk '{print $2}' /proc/$current_pid/stat) || break
+    fi
+    if [[ $parent_command != '(bash)' || $parent_pid == 0 || $parent_pid == 1 ]]; then
+      break
+    fi
+    result="$parent_pid/$result"
+    current_pid=$parent_pid
+  done
+  echo "pid=$result "
+}
+
+big_prompt() {
+  if [ ! "$BASH" ]; then
+    return 0
+  fi
+
+  export PS1="
+| $GREEN\$prompt_name $BLUE\d \A $DIM_RED\$(prompt_error_string)$DIM_YELLOW\$(pid_path)$PURPLE\$(parse_git_branch 2>/dev/null)$YELLOW\$(show_short_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
+| $ "
+  export PS2='> '
+  export PS4='+ '
+}
+
+medium_prompt() {
+  if [ ! "$BASH" ]; then
+    return 0
+  fi
+
+  export PS1="
+| $GREEN\$prompt_name $DIM_RED\$(prompt_error_string)$PURPLE\$(parse_git_branch 2>/dev/null)$YELLOW\$(show_short_path)$DIM_CYAN\$(custom_prompt_status 2>/dev/null)$RESET
+| $ "
+  export PS2='> '
+  export PS4='+ '
+}
+
+small_prompt() {
+  if [ ! "$BASH" ]; then
+    return 0
+  fi
+
+  export PS1="$DIM_YELLOW\W $PURPLE\$(parse_git_branch 2>/dev/null)$RESET\\\$ "
+}
+
+big_prompt
+}
+
+### file: ./12-docker-util-image.bash
+build_docker_util_image() {
+begin_function
+
+  local path=/tmp/docker_util_image \
+    c2_path=${c2_path:-.} \
+    clean=${clean:-f} \
+    force=${force:-f} \
+
+  if $DOCKER image inspect util &>/dev/null && [[ $clean == f ]] && [[ $force == f ]]; then
+    return 0
+  fi
+
+  log_verbose "Building util image."
+
+  if [[ ! -f $c2_path/c2 ]]; then
+    log_fatal "Could not find c2. Either run this from the folder containing it, or give me the path with c2_path=..."
+    fail1
+  else
+    echo "c2_path: $c2_path"
+  fi
+
+  if [[ -d $path ]]; then
+    rm -rf $path || fail
+  fi
+
+  mkdir $path || fail
+  # write profile file
+  echo 'source ~/bin/c2
+export PATH=/home/bin:/home/.local/bin:$PATH
+shell_profile_init
+' | trim_stream >$path/profile || fail
+
+  cp $c2_path/c2 $path/ || fail
+
+  echo '
+set input-meta on
+set output-meta on
+
+# so that tab auto complete does not match .dna
+set match-hidden-files off
+
+# some defaults / modifications for the emacs mode
+$if mode=emacs
+
+# allow the use of the Home/End keys
+"\e[1~": beginning-of-line
+"\e[4~": end-of-line
+
+# allow the use of the Delete/Insert keys
+"\e[3~": delete-char
+"\e[2~": quoted-insert
+
+# mappings for Ctrl-left-arrow and Ctrl-right-arrow for word moving
+"\e[1;5C": forward-word
+"\e[1;5D": backward-word
+"\e[5C": forward-word
+"\e[5D": backward-word
+"\e\e[C": forward-word
+"\e\e[D": backward-word
+
+$endif
+
+# alternate mappings for "page up" and "page down" to search the history
+"\e[5~": history-search-backward
+"\e[6~": history-search-forward
+  ' | trim_stream >$path/inputrc || fail
+
+
+  echo '
+
+  ARG ALPINE_IMAGE=alpine:3.24.2
+  FROM $ALPINE_IMAGE
+
+  ARG ALPINE_REPO=https://dl-cdn.alpinelinux.org/alpine/
+
+  USER root
+
+  RUN sed -i "s@https://dl-cdn.alpinelinux.org/alpine/@$ALPINE_REPO@g" /etc/apk/repositories 
+
+  ENV LANG=en_US.UTF-8
+  ENV LANGUAGE=en_US.en
+  ENV LC_ALL=en_US.UTF-8
+
+  RUN ln -s /var/cache/apk /etc/apk/cache 
+
+  RUN --mount=type=cache,target=/var/cache/apk \
+    apk --allow-untrusted add \
+      alpine-conf \
+      apk-tools-doc \
+      bash \
+      bash-completion \
+      bash-completion-doc \
+      bash-doc \
+      bc \
+      bc-doc \
+      bind-tools \
+      binutils \
+      busybox \
+      busybox-doc \
+      $end_of_packages
+
+  RUN --mount=type=cache,target=/var/cache/apk \
+    apk --allow-untrusted add \
+      ca-certificates-doc \
+      coreutils \
+      coreutils-doc \ 
+      curl \
+      curl-doc \
+      dnsmasq \
+      dnsmasq-doc \
+      docker \
+      docs \
+      expat-doc \
+      fd \
+      file \
+      file-doc \
+      findutils \
+      findutils-doc \
+      fstrm-doc \
+      $end_of_packages
+
+  RUN --mount=type=cache,target=/var/cache/apk \
+    apk --allow-untrusted add \
+      git \
+      git-doc \
+      git-perl \
+      grep \
+      grep-doc \
+      ifupdown-ng \
+      ifupdown-ng-doc \
+      iproute2 \
+      jq \
+      jq-doc \
+      json-c-doc \
+      less \
+      less-doc \
+      libcap-ng-doc \
+      libedit-doc \
+      libretls-doc \
+      libxml2-doc \
+      linux-pam-doc \
+      $end_of_packages
+
+  RUN --mount=type=cache,target=/var/cache/apk \
+    apk --allow-untrusted add \
+      man-pages \
+      mandoc \
+      mandoc-doc \
+      musl-locales \
+      net-tools \
+      net-tools-doc \
+      nodejs \
+      npm \
+      openjdk21 \
+      openrc \
+      openrc-bash-completion \
+      openrc-doc \
+      openssh \
+      $end_of_packages
+
+  RUN --mount=type=cache,target=/var/cache/apk \
+    apk --allow-untrusted add \
+      openssh-doc \
+      openssl \
+      pciutils \
+      pcre-doc \
+      pcre2-doc \
+      pkgconf-doc \
+      podman \
+      procps \
+      python3 \
+      readline-doc \
+      ripgrep \
+      rsync \
+      $end_of_packages
+
+  RUN --mount=type=cache,target=/var/cache/apk \
+    apk --allow-untrusted add \
+      skalibs-doc \
+      source-highlight \
+      source-highlight-doc \
+      strace \
+      strace-doc \
+      sudo \
+      sudo-doc \
+      tar \
+      tar-doc \
+      texinfo \
+      texinfo-doc \
+      tzdata \
+      usbutils \
+      $end_of_packages
+
+  RUN --mount=type=cache,target=/var/cache/apk \
+    apk --allow-untrusted add \
+      util-linux \
+      util-linux-doc \
+      utmps-doc \
+      utmps-openrc \
+      vim \
+      vimdiff \
+      vim-doc \
+      yq \
+      zlib-doc \
+      $end_of_packages
+
+  ENV HOME=/home
+  ENV PAGER=less
+  ENV REPO_CACHE=/home/.m2/repository
+
+  RUN adduser -h $HOME -s /bin/bash -D util -u 9999
+  RUN mkdir -p $HOME/bin
+  COPY inputrc /etc/
+  COPY profile $HOME/.bashrc
+  RUN ln -s $HOME/.bashrc $HOME/.profile
+  COPY c2 $HOME/bin/c2
+  RUN chmod 755 $HOME/bin/c2
+  RUN mkdir -p $REPO_CACHE
+
+  ARG TIME_ZONE=UTC
+  RUN setup-timezone -z $TIME_ZONE
+  ENV TIME_ZONE=$TIME_ZONE
+
+  RUN mkdir -p $HOME/scripts $HOME/.ssh /work
+  RUN chmod 700 $HOME/.ssh
+  RUN chown -R util /work /home
+  RUN rm /etc/motd
+
+  USER util
+  WORKDIR /work
+  CMD [ "/bin/bash" ]
+
+  ' | trim_stream >$path/Dockerfile || fail
+
+  image=util \
+    base_folder=$path \
+    dockerfile=$path/Dockerfile \
+    build_args="TIME_ZONE ALPINE_IMAGE ALPINE_REPO NO_PROXY HTTPS_PROXY HTTP_PROXY" \
+    docker_image_create_if_missing || fail
+
+  rm -rf $path
+
+end_function
+handle_return
+}
+
+### file: ./90-main-command.bash
+if [[ ${auto_setup_lifted:-t} == t || $0 == */c2 ]]; then
   command_detail=${command_detail:-0}
   parameters_to_env "$@" || exit 1
   set -- "${real_params[@]}"
