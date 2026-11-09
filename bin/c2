@@ -12254,6 +12254,172 @@ end_function
 handle_return
 }
 
+### file: ./13-test-runner.bash
+
+test_mode=${test_mode:-serial}
+
+execute_test_content_previous() {
+if [[ "$previous_command" ]]; then
+  log_info "\$ ${previous_command//$NL/$NL  }"
+  local result=y
+  if [[ $test_mode == ask ]]; then
+    prompt_ynq "Execute command? " result
+  fi
+  case $result in
+    y)
+      eval "$previous_command" || return 1
+      ;;
+    n)
+      ;;
+    q)
+      testing_done=t
+      ;;
+    *)
+      log_fatal "Invalid result: $result" 
+      fail1
+      ;;
+  esac
+  previous_command=
+fi
+return 0
+}
+
+execute_test_content() {
+begin_function
+  split_to_array content
+  local previous_command= testing_done=f
+  begin_for line in "${content[@]}"; doo
+    if [[ "$line" ]]; then
+      case "$line" in
+        \$\ *)
+          execute_test_content_previous || fail
+          # allow for simpler escaped single quotes: '' instead of '\''
+          line=${line//\'\'/\'\\\'\'}
+          previous_command=${line#\$ }
+        ;; 
+        \#\ *)
+          # ignore comments
+        ;; 
+        \ \ *)
+          line=${line//\'\'/\'\\\'\'}
+          previous_command+=$NL${line#  }
+        ;; 
+        *)
+          log_fatal "Unknown test command:"
+          log_fatal "$line"
+          fail1
+        ;;
+      esac
+    fi
+    [[ $testing_done == t ]] && break
+  end_for
+  if [[ $testing_done == f ]]; then
+    execute_test_content_previous || fail
+  fi
+end_function
+handle_return
+}
+
+run_test() {
+local test_file=$1 \
+      test_tmp_path=${test_tmp_path:-/tmp/cell-test/$$} \
+      original_pwd=$PWD \
+      failed=f \
+      skipped=f
+local short_file=${test_file#$PWD/}
+log_info "Testing $short_file"
+begin_function
+  if [[ $test_mode == ask ]]; then
+    local result
+    prompt_ynq "Run test? " result 
+    case $result in
+      y)
+        ;;
+      n)
+        skipped=t
+        succeed
+        ;;
+      q)
+        skipped=t
+        testing_done=t
+        succeed
+        ;;
+      *)
+        log_fatal "Unknown result: $result"
+        fail1
+        ;;
+    esac
+  fi
+  if [[ -e $test_tmp_path ]]; then
+    rm -rf $test_tmp_path || fail
+  fi
+  mkdir -p $test_tmp_path || fail
+  cd $test_tmp_path || fail
+  local content=$(<$test_file)
+  ( execute_test_content ) || failed=t
+end_function
+
+if [[ $failed == t ]]; then
+  log_error "Test failed: $short_file"
+  log_error "Test temp path: $test_tmp_path"
+  let tests_failed++
+elif [[ $skipped == t ]]; then
+  let tests_skipped++
+else
+  let tests_passed++
+fi
+
+cd $original_pwd
+handle_return
+}
+
+run_tests_dir() {
+local test_path=$1
+begin_function
+  begin_for f in $(find1 $test_path); doo
+    if [[ -d "$f" ]]; then
+      run_tests_dir $f || fail
+    elif [[ -f "$f" && "$test_path" == */*.test ]]; then
+      run_test $f || fail
+    fi
+    [[ $testing_done == t ]] && succeed
+  end_for
+end_function
+handle_return
+}
+
+run_tests() {
+local test_path=${1:-$PWD} \
+  testing_done=f \
+  tests_failed=0 \
+  tests_skipped=0 \
+  tests_passed=0 \
+
+begin_function
+
+  if [[ -d "$test_path" ]]; then
+    begin_for f in $(find1 $test_path); doo
+      run_tests_dir $f || fail
+      [[ $testing_done == t ]] && succeed
+    end_for
+  elif [[ -f "$test_path" && "$test_path" == */*.test ]]; then
+    run_test $test_path || fail
+  fi
+
+  if (( tests_passed > 0 )); then
+    echo "Tests passed: $tests_passed"
+  fi
+  if (( tests_skipped > 0 )); then
+    echo "Tests skipped: $tests_skipped"
+  fi
+  if (( tests_failed > 0 )); then
+    echo "Tests failed: $tests_failed"
+  fi
+
+end_function
+handle_return
+}
+
 ### file: ./90-main-command.bash
 if [[ ${auto_setup_lifted:-t} == t || $0 == */c2 ]]; then
   command_detail=${command_detail:-0}
