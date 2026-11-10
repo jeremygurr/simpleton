@@ -129,6 +129,23 @@ region, zone, etc. can be derived from that host name. Or if you specified the d
 and zone, it can derive the matching hostnames that could fit. Multiple values can be specified for
 dimensions to make operations that span hundreds of cells easy to execute. 
 
+### Dimensions vs. Properties
+
+A different dimension value for a cell will possibly produce a different result. But two executions
+with the same dimension values but different properties must always produce the same result. For
+example, a dimension may refer to which host we are measuring cpu for. Different hosts of course may
+have different cpu usage values. An example property would be the login credentials for those hosts.
+Having different credentials, as long as those credentials are valid, will result in the same cpu
+measurement for a given host. 
+
+### Trunk Dims vs. Sub Dims
+
+Different values for trunk dims will map to different leaves of a cell, being stored in distinctly
+different directories. But sometimes a single cell retrieves many different values which can also be
+divided by a dimension. Those dimension are sub dimensions. Different sub dimension values will
+still be found in the same cell, just in a different part of the output file (for example). Sub dims
+can be used by the get command to filter out specific data points. 
+
 ## Parameters and Environment Variables
 
 All parameters used in the cell command can either be set as exported environment variables, or set
