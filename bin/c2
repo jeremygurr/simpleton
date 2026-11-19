@@ -367,14 +367,34 @@ reply_to_caller() {
   return 0
 }
 
+# inputs:
+#   prompt
+#   interrupt_ignore_key
+# outputs:
+#   interrupt_ignored
 handle_user_interrupt() {
-  local c silent=f prompt=${1:-Paused.}
+  local c silent=f prompt=${1:-Paused.} interrupt_ignore_key=${interrupt_ignore_key:-}
+
+  if [[ "$interrupt_ignore_key" ]]; then
+    if [[ ! "${interrupt_ignore_set:-}" ]] && ! is_set interrupt_ignore_set; then
+      unset interrupt_ignore_set &>/dev/null
+      declare -gA interrupt_ignore_set &>/dev/null
+    fi
+    if [[ -v interrupt_ignore_set[$interrupt_ignore_key] ]]; then
+      return 0
+    fi
+  fi
+
   echo >&$fd_original_err
   while true; do
     if [[ $silent == t ]]; then
       read -u $fd_original_in -sr -N 1 c >&$fd_original_err
     else
-      read -u $fd_original_in -sr -N 1 -p "${YELLOW}$prompt${RESET} (r)esume, (l)og level change, (d)ebug, (t) stack trace, (q)uit? " c >&$fd_original_err
+      local extra=
+      if [[ "$interrupt_ignore_key" ]]; then
+        extra=', (i)gnore'
+      fi
+      read -u $fd_original_in -sr -N 1 -p "${YELLOW}$prompt${RESET} (r)esume$extra, (l)og level change, (d)ebug, (t) stack trace, (q)uit? " c >&$fd_original_err
     fi
     silent=f
     case "$c" in
@@ -384,6 +404,11 @@ handle_user_interrupt() {
         unignore_this_function=3 \
         debug_skip_breakpoints=f \
         debug_start n
+      ;;
+      i)
+        echo "ignore" >&$fd_original_err
+        interrupt_ignore_set[$interrupt_ignore_key]=1
+        debug_up=f
       ;;
       l)
         echo "log level change" >&$fd_original_err
@@ -3703,6 +3728,12 @@ fork_inside() {
     if [[ "${trace_vars:-}" ]]; then
       copy_map trace_var_old trace_var_sub
       local s="unset trace_var_sub; $(declare -p trace_var_sub)" 
+      s=${s/ -A / -Ag }
+      reply_to_caller "$s" || fail
+    fi
+
+    if [[ "${interrupt_ignore_set[*]:-}" ]]; then
+      local s="unset interrupt_ignore_set; $(declare -p interrupt_ignore_set)" 
       s=${s/ -A / -Ag }
       reply_to_caller "$s" || fail
     fi
