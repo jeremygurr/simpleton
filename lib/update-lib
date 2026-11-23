@@ -97,6 +97,10 @@ load_upstream_vars() {
   handle_return
 }
 
+report_current_cell() {
+  strong_log=t log_verbose "$hbar_equals${NL} === Current cell: $short_cell$NL $hbar_equals"
+}
+
 execute_up_inner() {
   begin_function
 
@@ -164,6 +168,7 @@ execute_up_inner() {
 
       if [[ $needs_update == t ]]; then
         execute_commands "$up_cell_path" update || fail
+        report_current_cell
         update_successful=$command_successful
       else
         update_successful=t
@@ -306,11 +311,11 @@ validate_cell_check_conditions() {
       if [[ $validation_says_already_done == t ]]; then
         touch $status_path/last-validation-good || fail
         touch $status_path/last-validation-${target_var}-good || fail
-        strong_log=t log_verbose "${validate_type^}-validation result: DONE$validation_message"
+        log_verbose "${validate_type^}-validation result: DONE$validation_message"
       else
         touch $status_path/last-validation-bad || fail
         touch $status_path/last-validation-${target_var}-bad || fail
-        strong_log=t log_verbose "${validate_type^}-validation result: NOT DONE$validation_message"
+        log_verbose "${validate_type^}-validation result: NOT DONE$validation_message"
         break
       fi
 
@@ -334,7 +339,7 @@ validate_cell() {
         target_name=${target%%,*}
         target_var=${target_name//-/_}
 
-        strong_log=t log_verbose "${validate_type^}-validating using $target_var (from $short_cell)"
+        log_verbose "${validate_type^}-validating using $target_var (from $short_cell)"
 
         local conditions=
         if [[ $target_var != "$target" ]]; then
@@ -430,7 +435,7 @@ get_needs_update_internal() {
       for cell_to_clean in $clean_cells; do
         if [[ "$target_cell/" == */$cell_to_clean/* ]]; then
           needs_update=t
-          log_message="Needs update because output file doesn't exist"
+          log_message="Needs update because cell_to_clean ($cell_to_clean) matches $target_cell"
           abort
         fi
       done
@@ -1060,7 +1065,7 @@ update_member() {
     anchor_dims=${anchor_dims:-} \
     dim=$dim \
 
-  begin_function_hi
+  begin_function
 
     get_sane_value "$member" || fail
     member_path=$cell_path/$dim:$sane_value
@@ -1816,6 +1821,10 @@ update_command() {
 
     switch_context $cell_path || fail
     fence
+
+    if [[ $cell_is_leaf == t ]]; then
+      report_current_cell
+    fi
 
     if [[ $current_mock == disabled ]]; then
       log_fatal "Cell is disabled. Use mock command to change it if this is not intended."

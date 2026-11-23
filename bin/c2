@@ -394,7 +394,7 @@ handle_user_interrupt() {
       if [[ "$interrupt_ignore_key" ]]; then
         extra=', (i)gnore'
       fi
-      read -u $fd_original_in -sr -N 1 -p "${YELLOW}$prompt${RESET} (r)esume$extra, (l)og level change, (d)ebug, (t) stack trace, (q)uit? " c >&$fd_original_err
+      read -u $fd_original_in -sr -N 1 -p "${YELLOW}$prompt${RESET} (r)esume$extra, (l)og level change, (d)ebug, (t) stack trace, (I) show debug ids, (q)uit? " c >&$fd_original_err
     fi
     silent=f
     case "$c" in
@@ -409,6 +409,23 @@ handle_user_interrupt() {
         echo "ignore" >&$fd_original_err
         interrupt_ignore_set[$interrupt_ignore_key]=1
         debug_up=f
+      ;;
+      I)
+        case $show_debug_id in
+          t)
+            echo "showing all debug ids" >&$fd_original_err
+            show_debug_id=a
+          ;;
+          a)
+            echo "hiding debug ids" >&$fd_original_err
+            show_debug_id=f
+          ;;
+          *)
+            echo "showing debug ids" >&$fd_original_err
+            show_debug_id=t
+          ;;
+        esac
+        continue
       ;;
       l)
         echo "log level change" >&$fd_original_err
@@ -6925,6 +6942,9 @@ create_update_command() {
   name=up_only description="Only runs upstreams matching the given values
   " add_parameter
 
+  name=debug_up description="If set to true, pauses at each upstream before executing, allowing for debugging. If set to an upstream name, will stop at that upstream.
+  " add_parameter
+
   name=debug_log description="Starts debugger when a log line containing this string is written
   " add_parameter
 }
@@ -9204,24 +9224,39 @@ get_required_freshness() {
   return 0
 }
 
+# inputs:
+#   $1                     timestamp to check
+#   required_freshness
+get_is_stale_timestamp() {
+  local ts_to_check=$1
+
+  begin_function
+    is_stale=f
+    if [[ "${required_freshness:-}" && "$required_freshness" != inf ]]; then
+      local fresh_seconds
+      convert_to_seconds $required_freshness fresh_seconds || fail
+      local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds))
+      if (( ts_to_check < fresh_cutoff )); then
+        is_stale=t
+      fi
+    fi
+  end_function
+  handle_return
+}
+
+# inputs:
+#   $1                  path to status folder
+#   required_freshness
 get_is_stale() {
-  local status_path=$status_path
+  local status_path=$1
   begin_function
     is_stale=t
     if [[ ! "${required_freshness:-}" || "$required_freshness" == inf ]]; then
       is_stale=f
     elif [[ $required_freshness != 0 ]]; then
-      local fresh_seconds
-      convert_to_seconds $required_freshness fresh_seconds || fail
-      local fresh_cutoff=$((EPOCHSECONDS-fresh_seconds)) \
-        out_timestamp= 
-      is_stale=f
-      if [[ -f $status_path/last-good-update-end ]]; then
-        out_timestamp=$(date -r $status_path/last-good-update-end +%s)
-      fi
-      if [[ "$out_timestamp" && $out_timestamp -lt $fresh_cutoff ]]; then
-        is_stale=t
-      fi
+      local out_timestamp
+      out_timestamp=$(date -r $status_path/last-good-update-end +%s) || fail
+      get_is_stale_timestamp $out_timestamp || fail
     fi
   end_function
   handle_return
